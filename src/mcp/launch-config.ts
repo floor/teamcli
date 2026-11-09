@@ -4,6 +4,9 @@ import { randomBytes } from 'node:crypto';
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { readTeamConfig } from '../file/team-config.ts';
+import { isLegacyTrust } from '../file/paths.ts';
+import { isLeadSeat } from '../file/sections/lead.ts';
+import type { TeamFile } from '../file/types.ts';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import { currentBriefClaim } from '../launch/general-brief.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
@@ -11,17 +14,88 @@ import { verifyLobby } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { getTeam, registeredRootOf, teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
-import { CHANNEL_SERVER, channelLaunchEnabled } from './channel.ts';
+import { CHANNEL_SERVER } from './channel.ts';
 import { inboxServeArgs, selfRunner } from './register.ts';
 import { addJsonName, setJsonValue } from './json-text.ts';
 
-export function claudeChannelSeat(seat: { cli: string; launch: string }): boolean {
-  return seat.cli === 'claude-code' && channelLaunchEnabled(seat.launch);
+type ChannelSeat = { name?: string; cli: string; cwd?: string; launch?: string; channelOff?: boolean; human?: boolean; stopped?: boolean };
+
+/** Every claude-code seat, unless its record says `channel: off` or the pane is a person's. */
+export function claudeChannelSeat(seat: ChannelSeat): boolean {
+  return seat.cli === 'claude-code' && seat.channelOff !== true && seat.human !== true && seat.stopped !== true;
 }
 
 /** Used at placement and again after the existing lobby gate canonicalizes its root. */
-export function channelLobbyFolder(lobby: string, seat: { name: string; cli: string; launch: string }): string {
+export function channelLobbyFolder(lobby: string, seat: ChannelSeat & { name: string }): string {
   return claudeChannelSeat(seat) ? join(lobby, seat.name) : lobby;
+}
+
+function samePlace(left: string, right: string): boolean {
+  const a = resolve(left);
+  const b = resolve(right);
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return a === b;
+  }
+}
+
+/** The owner's checkout already holds this seat's team-inbox pair: both project files name it,
+ *  and the server entry is this seat's. Another seat's pair in that folder is not this one's. */
+export function channelPairPresent(dir: string, seat: string): boolean {
+  try {
+    const mcp = JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf8')) as { mcpServers?: Record<string, unknown> };
+    const server = mcp.mcpServers?.[CHANNEL_SERVER];
+    if (server === null || typeof server !== 'object' || Array.isArray(server)) return false;
+    const args = (server as { args?: unknown }).args;
+    const named = Array.isArray(args) && args[args.indexOf('--seat') + 1] === seat;
+    if (!named) return false;
+    const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8')) as {
+      enabledMcpjsonServers?: unknown;
+      enableAllProjectMcpServers?: unknown;
+    };
+    if (settings.enableAllProjectMcpServers === true) return true;
+    return Array.isArray(settings.enabledMcpjsonServers) && settings.enabledMcpjsonServers.includes(CHANNEL_SERVER);
+  } catch {
+    return false;
+  }
+}
+
+export type ChannelStart = { cwd: string; lobby: boolean };
+
+/**
+ * Where a Claude seat reads its channel pair. A lead keeps its project cwd, with or without a
+ * pair; other seats keep that checkout only when their own pair is already there. A seat with
+ * its own worktree uses that worktree. Every other seat uses its folder inside the lobby.
+ * Null when the seat is not a channel seat.
+ */
+export function channelStart(seat: ChannelSeat & { name: string; cwd: string }, root: string, lobby: string, keepProjectCwd = false): ChannelStart | null {
+  if (!claudeChannelSeat(seat)) return null;
+  const declared = isAbsolute(seat.cwd) ? resolve(seat.cwd) : resolve(root, seat.cwd);
+  const checkout = resolve(root);
+  if (samePlace(declared, checkout) && (keepProjectCwd || channelPairPresent(checkout, seat.name))) return { cwd: checkout, lobby: false };
+  const lobbyRoot = resolve(lobby);
+  if (seat.cwd === '.' || samePlace(declared, checkout) || samePlace(declared, lobbyRoot)) {
+    return { cwd: join(lobbyRoot, seat.name), lobby: true };
+  }
+  return { cwd: declared, lobby: false };
+}
+
+/** A default channel never changes an admitted legacy start or moves a lead out of its project.
+ *  The launch says and logs this repair once, while retaining the stored launch recipe. */
+export function channelLaunchFallback(
+  team: Pick<TeamFile, 'trust' | 'orchestrator' | 'operator'>,
+  seat: ChannelSeat & { name: string; cwd: string },
+  root: string,
+): string | undefined {
+  if (!claudeChannelSeat(seat)) return undefined;
+  if (isLegacyTrust(team.trust)) {
+    return 'its channel needs the current trust form. Launching without the channel; socket delivery remains available. Move trust to the current absolute-path form, or set channel: off to silence this warning.';
+  }
+  if (isLeadSeat(team, seat.name) && samePlace(resolve(root, seat.cwd), root) && !channelPairPresent(root, seat.name)) {
+    return "its project folder has no channel pair for this seat. Launching without the channel; socket delivery remains available. Add the seat's channel pair in this folder, or move the lead's cwd to opt in.";
+  }
+  return undefined;
 }
 
 export type ChannelLaunchScope = { root: string; home?: string; epoch?: string };
@@ -235,7 +309,14 @@ export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string;
     if (declared === undefined || declared.stopped || declared.human || !claudeChannelSeat(declared)) throw new ConfigRefusal('the registered seat does not declare a Claude channel launch');
     const lobby = lobbyOf(home, loaded.root, loaded.team);
     if (record.lobbies[input.session] !== lobby || !loaded.team.trust?.some((path) => resolve(path.replace(/^~(?=$|\/)/, home)) === resolve(lobby))) throw new ConfigRefusal('the channel lobby must already be registered and trusted by the team');
-    if (resolve(input.cwd) !== join(lobby, input.seat)) throw new ConfigRefusal('the channel must start in its own folder inside the team lobby');
+    const start = channelStart(declared, loaded.root, lobby, isLeadSeat(loaded.team, declared.name));
+    if (start === null) throw new ConfigRefusal('the registered seat does not declare a Claude channel launch');
+    const at = resolve(input.cwd);
+    if (!samePlace(at, start.cwd)) throw new ConfigRefusal('the channel must start in its own folder');
+    if (!start.lobby && samePlace(at, resolve(loaded.root))) {
+      if (!channelPairPresent(at, declared.name)) throw new ConfigRefusal('the project folder has no channel pair for this seat');
+      return { ok: true, lease: { check() {}, release() {} } };
+    }
     const gate = verifyLobby(home, { lobby, create: false });
     if (!gate.ok || !('path' in gate)) throw new ConfigRefusal('the registered channel lobby is unsafe or missing');
     const lobbySeen = channelDirectory(lobby);
@@ -245,8 +326,13 @@ export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string;
       if (current === null || current.epoch !== epoch) throw new ConfigRefusal('the channel launch epoch is no longer its current claim');
     };
     claimMatches();
-    try { mkdirSync(input.cwd, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-    return publishChannelPair(planChannelPair({ ...input, epoch }), claimMatches, [], () => {
+    // A lobby folder is one this run creates, so it stays private. A worktree already exists
+    // at the mode git gave it: owner-owned, with no group or other write, is enough.
+    const privateFolder = start.lobby;
+    if (privateFolder) {
+      try { mkdirSync(input.cwd, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    }
+    return publishChannelPair(planChannelPair({ ...input, epoch }, privateFolder), claimMatches, [], () => {
       if (!same(channelDirectory(lobby), lobbySeen)) throw new ConfigRefusal('the channel lobby changed');
     });
   } catch (error) {

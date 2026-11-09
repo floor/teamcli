@@ -521,6 +521,13 @@ waits in the drop file. `team send --wait` to such a seat writes the record on t
 nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a record that marks no seat keeps every digest
 it had.
 
+`channel` is optional on a seat: omitted, or `on`, every claude-code seat is given the team-inbox
+channel by `team up` and `team restart`. `off` leaves that seat's launch and its MCP pair alone.
+The pair is written in the seat's lobby folder, or in the seat's own worktree. A seat whose cwd
+is the owner's checkout keeps a pair that is already there, and no second pair is written. The
+key is part of the seat's digest only when it says `off`, and a record that writes none keeps
+every digest it had.
+
 `watch_wake` is optional on a seat: `on` or `off`, the seat's own word on the watch's typed
 retry. The retry is on exactly where the seat's CLI profile declares `typed_wake` (Muse, Cursor,
 Antigravity, Grok and Codex today) and the key is omitted; `on` on a profile with no typed wake is

@@ -78,7 +78,7 @@ import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { placedStartFolders, seatCwdRefusal, seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
-import { channelLobbyFolder } from '../mcp/launch-config.ts';
+import { channelLaunchFallback, channelLobbyFolder } from '../mcp/launch-config.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
@@ -1138,6 +1138,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const wouldLaunch = planned.stage === undefined || !planned.pane || (planned.stage === 'launched' && !planned.agentLive);
   const seatForPlan = {
     ...planned,
+    ...(built.seat.channelOff === true ? { channelOff: true as const } : {}),
     ...(recordedTree === undefined ? {} : { worktree: recordedTree.path }),
     ...(launchProblem && wouldLaunch
       ? { launchProblem, ...(launchProblemDetail ? { launchProblemDetail } : {}) }
@@ -1171,7 +1172,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
   }
   const trustCwd = verifiedLobby && seatForPlan.lobby ? verifiedLobby : seatForPlan.cwd;
-  const trustSeat = { ...seatForPlan, cwd: trustCwd };
+  const trustSeat = { ...seatForPlan, cwd: trustCwd,
+    ...(channelLaunchFallback(runTeam, built.seat, root) === undefined ? {} : { channelOff: true as const }) };
   // A CLI with no captured trust record is refused before the file is edited. A dry
   // run writes nothing and still shows that line. A CLI with a record is written
   // below, once the lobby exists.
@@ -1256,7 +1258,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     {
       const trustPath = verifiedLobby && seatForPlan.lobby ? verifiedLobby : seatForPlan.cwd;
       const line = lobbyPretrustLine(
-        { ...seatForPlan, cwd: trustPath },
+        { ...trustSeat, cwd: trustPath },
         sources.home,
         { write: true, now: sources.now() },
       );

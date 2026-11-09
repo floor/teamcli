@@ -78,6 +78,30 @@ export const CHANNEL_READ_BY = 'channel';
 export const CHANNEL_INSTRUCTIONS =
   'When a channel notification arrives, call the ack tool with the id from its meta in the same handling turn, before you read the message or act on it.';
 
+/** The same launch line with this team's channel server taken off it. A list that named only
+ *  that server loses the flag; a list that named others keeps those. */
+export function withoutChannel(launch: string, server: string = CHANNEL_SERVER): string {
+  const words = launch.split(/\s+/).filter((word) => word !== '');
+  const chosen = `server:${server}`;
+  const kept: string[] = [];
+  for (let at = 0; at < words.length; at += 1) {
+    const word = words[at]!;
+    if (word === CHANNEL_FLAG) {
+      const names = (words[at + 1] ?? '').split(',').filter((name) => name !== '' && name !== chosen);
+      if (names.length > 0) kept.push(word, names.join(','));
+      at += 1;
+      continue;
+    }
+    if (word.startsWith(`${CHANNEL_FLAG}=`)) {
+      const names = word.slice(CHANNEL_FLAG.length + 1).split(',').filter((name) => name !== '' && name !== chosen);
+      if (names.length > 0) kept.push(`${CHANNEL_FLAG}=${names.join(',')}`);
+      continue;
+    }
+    kept.push(word);
+  }
+  return kept.join(' ');
+}
+
 /**
  * Whether a launch line starts its CLI with the development channel naming this team server.
  * The flag is the one measured on the client; its value is `server:<name>`, one or more of them,

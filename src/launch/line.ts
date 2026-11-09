@@ -5,7 +5,9 @@ import { profileFor } from '../profiles/index.ts';
 import { lobbyPath, seatStart } from '../worktree/place.ts';
 import { worktreeOf, type SessionState } from '../state.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
-import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
+import { channelStart, claudeChannelSeat } from '../mcp/launch-config.ts';
+import { isLeadSeat } from '../file/sections/lead.ts';
+import { isLegacyTrust } from '../file/paths.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { shellWordsReason, shellWordSources } from './shell-words.ts';
 
@@ -329,8 +331,9 @@ export function launchLineFinding(
   const words = launch.trim().split(/\s+/).filter((word) => word !== '');
   const program = launchBinary(launch);
   if (program === null) return note('its launch line names no command');
-  const folder = start?.folder ?? (claudeChannelSeat(seat)
-    ? channelLobbyFolder(lobbyOf(sources.home, root, team), seat) : startFolder(team, seat));
+  const folder = start?.folder ?? (claudeChannelSeat(seat) && !isLegacyTrust(team.trust)
+    ? channelStart(seat, root, lobbyOf(sources.home, root, team), isLeadSeat(team, seat.name))?.cwd ?? startFolder(team, seat)
+    : startFolder(team, seat));
   const cwd = start?.cwd ?? resolve(root, folder);
   const naked = nakedWord(program);
   const missing = programFinding(naked, program, profileFor(seat.cli)?.binary ?? null, cwd, folder, sources);

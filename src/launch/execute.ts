@@ -38,6 +38,7 @@ import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
+import { withoutChannel } from '../mcp/channel.ts';
 import { prepareChannelConfig } from '../mcp/launch-config.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
@@ -636,6 +637,16 @@ export async function executePlan(
   const closing = options?.isClosing ?? (() => false);
   const places = new Map<string, Place>();
   const dropped = new Set<string>();
+  // A seat whose channel could not be prepared still launches. The reason is said and logged
+  // once, and the command that runs does not carry the channel.
+  const channelAside = new Map<string, string>();
+  const noteChannelAside = (seat: string, reason: string) => {
+    if (channelAside.has(seat)) return;
+    channelAside.set(seat, reason);
+    const line = `its channel was not prepared (${reason}). Launching without the channel. Make the folder owned by you with no group or other write, or set channel: off.`;
+    host.say(`${seat}: ${line}\n`);
+    host.log(seat, line);
+  };
   const invalidStart = new Set<string>();
   const launches = new Map(steps.flatMap(step => step.do?.do === 'launch' ? [[step.do.seat, step.do] as const] : []));
   const startProblem = (op: Extract<Op, { do: 'launch' }>): string | null => {
@@ -1321,14 +1332,10 @@ export async function executePlan(
             break;
           }
         }
-        if (op.seat && op.channel !== undefined) {
+        if (op.seat && op.channel !== undefined && !channelAside.has(op.seat)) {
           const configured = prepareChannelConfig({ ...op.channel, seat: op.seat, session, cwd: op.cwd });
-          if (!configured.ok) {
-            dropped.add(op.seat);
-            final(op.seat, { kind: 'left out', reason: `the channel config was not prepared: ${configured.reason}` });
-            break;
-          }
-          configured.lease.release();
+          if (!configured.ok) noteChannelAside(op.seat, configured.reason);
+          else configured.lease.release();
         }
         if (op.lobby && host.confirmLobby) {
           // The last look at the starting folder, with nothing between it and the create. The
@@ -1479,14 +1486,13 @@ export async function executePlan(
           break;
         }
         if (!guardStart(op)) break;
-        const channel = op.channel === undefined ? undefined
-          : op.cwd === undefined || !created.has(op.seat)
+        let channel: { ok: true; lease: { check(): void; release(): void } } | undefined;
+        if (op.channel !== undefined && !channelAside.has(op.seat)) {
+          const prepared = op.cwd === undefined || !created.has(op.seat)
             ? { ok: false as const, reason: 'a Claude channel requires a fresh scoped workspace; restart the seat' }
             : prepareChannelConfig({ ...op.channel, seat: op.seat, session, cwd: op.cwd });
-        if (channel !== undefined && !channel.ok) {
-          dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: `the channel config was not prepared: ${channel.reason}` });
-          break;
+          if (!prepared.ok) noteChannelAside(op.seat, prepared.reason);
+          else channel = prepared;
         }
         try {
         // The seat's inbox is registered before its command runs, in the folder the command
@@ -1548,7 +1554,7 @@ export async function executePlan(
           }
           if (!guardStart(op)) break;
         }
-        let command = op.command;
+        let command = channelAside.has(op.seat) ? withoutChannel(op.command) : op.command;
         let startedEndpoint = false;
         let attachedEndpoint = false;
         let freshFrom: string | undefined;
