@@ -99,7 +99,7 @@ export function clientOwnerAllows(command: 'grant' | 'revoke', rawIo: Io, io: Io
   // The owner's dev-mode admission for exactly this gate. The home is the
   // one the central resolver reads a governing policy or the machine record from; the command
   // always names it, so a herdr caller is not refused before the record can be read.
-  const lift = devModeOwnerLiftAtCwd(rawIo, { command, refusal: message, home });
+  const lift = devModeOwnerLiftAtCwd(rawIo, { command, gate: command, refusal: message, home });
   if (lift !== null && lift.lifted) {
     io.stderr(`${lift.warning}\n`);
     return true;

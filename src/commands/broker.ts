@@ -78,6 +78,7 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
     // orchestrator continues with the warning; every other caller keeps the refusal.
     const lift = devModeOwnerLiftAtCwd(io, {
       command: 'broker',
+      gate: 'start',
       refusal: placement,
       ...(sources.home !== undefined ? { home: sources.home } : {}),
     });

@@ -4,7 +4,7 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
-import { leadsOwnTeamAdmits } from '../leads-authority.ts';
+import { abandonGateOf, leadsOwnTeamAdmits } from '../leads-authority.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
@@ -724,7 +724,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
   let seatApproved = false;
   if (clientDown === null) {
-    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, seatSources, [charterTargetOf(io.cwd, args.values.file)]);
+    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason, gate: abandonGateOf('down', args.flags.has('abandon')) }, io, seatSources, [charterTargetOf(io.cwd, args.values.file)]);
     if (seat.kind === 'requested') {
       // exit: down.approval-requested
       return 0;
@@ -1158,19 +1158,20 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     home: sources.home ?? homedir(),
     root,
     command: 'down',
+    gate: abandonGateOf('down', true),
     now: sources.now(),
     dir,
     teamFile: team,
   }) !== null;
   if (abandon && !leadAbandons && !callerOwns(caller) && !clientAbandons && !seatApproved && verdict === undefined) {
-    // The owner's dev-mode admission for exactly this gate: a placed lead or
-    // orchestrator continues with the warning; every other caller keeps the refusal.
+    // Abandoning a team is owner-reserved. Dev mode does not lift it: the warning is not
+    // printed and the refusal below stands, for a lead and for every other caller.
     const lift = devModeOwnerLiftAtCwd(io, {
       command: 'down',
+      gate: 'abandon-team',
       refusal: 'only the owner abandons a team, from a terminal outside herdr',
       ...(sources.home !== undefined ? { home: sources.home } : {}),
       now: sources.now(),
-      // The placed operator may abandon, under the lead-gates policy.
       admitsOperator: true,
     });
     if (lift === null || !lift.lifted) {

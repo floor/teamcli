@@ -429,6 +429,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       // orchestrator continues with the warning; the owner's own path above never reaches here.
       const lift = devModeOwnerLift(io, {
         command: 'check',
+        gate: 'repair',
         refusal: msg,
         ...(sources.home !== undefined ? { home: sources.home } : {}),
         team: current.team,

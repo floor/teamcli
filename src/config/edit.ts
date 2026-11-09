@@ -252,6 +252,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       // before the change is validated, and a refused or unchanged run writes no record line.
       const lift = devModeOwnerLiftAtCwd(rawIo, {
         command: 'config',
+        gate: path[0] === 'trust' ? 'trust' : 'record',
         refusal: message,
         home,
         audit: 'later',
