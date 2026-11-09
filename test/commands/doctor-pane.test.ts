@@ -5,10 +5,16 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runApprove } from '../../src/approve/command.ts';
+import type { WatchSources } from '../../src/commands/watch.ts';
 import { blocksLaunch, processComm, runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
+import { createHostedWatch } from '../../src/daemon/watch.ts';
+import { hostedWatchRun } from '../../src/daemon/watch-run.ts';
+import { routeOf } from '../../src/daemon/routes.ts';
 import { setHerdrRun, type HerdrAgent } from '../../src/herdr.ts';
-import { emptySession, updateState } from '../../src/state.ts';
+import { approvalStanding } from '../../src/store/store.ts';
+import { emptySession, readState, updateState } from '../../src/state.ts';
+import { forgetIdleEpisodes } from '../../src/watch/dispatch.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
 import { CLAUDE_IDLE, testIo } from '../helpers.ts';
@@ -44,6 +50,7 @@ afterEach(() => {
   setHerdrRun(null);
   if (sleeper && sleeper.exitCode === null) sleeper.kill();
   sleeper = null;
+  forgetIdleEpisodes();
   rmSync(base, { recursive: true, force: true });
 });
 
@@ -114,8 +121,58 @@ describe('doctor names a watch whose pane is gone', () => {
     const after = testIo(root, { kind: 'owner' });
     const afterCode = await runUp(FILE, after, upSources(repaired, () => false));
     expect({ code: afterCode, err: after.err, out: after.out }).toMatchObject({ code: 0 });
-    expect(repaired.creates).toContain(watchLabel('acme-web'));
-    expect(after.err).toContain('watch: started\n');
+    // Daemon-only watch: `up` plans no watch pane of its own — the daemon hosts the watch.
+    expect(repaired.creates).not.toContain(watchLabel('acme-web'));
+    expect(after.err).not.toContain('watch: started');
+
+    // The hosted watch is the repair: it takes over the dead pane record — no pane started,
+    // the record dropped, the takeover named in the team log — and its passes run.
+    forgetIdleEpisodes();
+    const hostedAt = new Date(NOW.getTime() + 10 * 60_000); // the planted heartbeat is stale
+    const route = routeOf(root, 'acme-web', 'acme-web', ['claude-coordinator-acme', 'codex-acme', 'deepseek-acme', 'grok-acme']);
+    const log: string[] = [];
+    const watchSources: WatchSources = {
+      live: () => ({ running: true, agents: agents(), workspaces: READY.map(([, , id]) => ({ id, label: id })), screens: {} }),
+      machine: () => fine,
+      standing: (asked) => approvalStanding(asked, home),
+      readChecks: () => [],
+      screen: () => IDLE,
+      status: () => 'idle',
+      foreground: () => ['claude'],
+      paneVerdict: () => 'gone',
+      typeText: () => true,
+      pressEnter: () => true,
+      sleep: async () => {},
+      notify: () => {},
+      now: () => hostedAt,
+      wait: async () => false,
+      alive: () => false,
+      pid: 4242,
+      home,
+    };
+    const host = createHostedWatch({
+      route,
+      now: () => hostedAt,
+      effects: 'open',
+      run: hostedWatchRun({ route, log: (text) => log.push(text), base: watchSources, pid: 4242 }),
+    });
+    // A hosted watch has no timer of its own: the pass ends at a heartbeat tick.
+    const deadline = Date.now() + 3000;
+    let beats = 0;
+    while (host.state().cycles < 1) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the hosted watch: ${JSON.stringify(host.state())}`);
+      beats += 1;
+      host.tick(new Date(hostedAt.getTime() + beats * 130_000));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(host.state().phase).toBe('running');
+    expect(host.state().cycles).toBeGreaterThanOrEqual(1);
+    expect(readState(join(root, '.agents')).sessions['acme-web']?.watch).toBeUndefined();
+    const teamLog = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(teamLog).toContain('pane watch w9:p1 not alive: gone; the daemon\'s watch is active\n');
+    expect(log.some((line) => line.includes('watching the session "acme-web"'))).toBe(true);
+    await host.stop('the daemon is closing');
+    expect(host.state()).toMatchObject({ phase: 'stopped' });
   });
 });
 

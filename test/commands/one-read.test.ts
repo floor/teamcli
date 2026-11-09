@@ -20,7 +20,11 @@ import { runInit } from '../../src/commands/init.ts';
 import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
 import { runStatus, type StatusSources } from '../../src/commands/status.ts';
 import { runUp, type UpSources } from '../../src/commands/up.ts';
-import { runWatch, type WatchSources } from '../../src/commands/watch.ts';
+import type { WatchSources } from '../../src/commands/watch.ts';
+import { createHostedWatch } from '../../src/daemon/watch.ts';
+import { hostedWatchRun } from '../../src/daemon/watch-run.ts';
+import { routeOf } from '../../src/daemon/routes.ts';
+import { forgetIdleEpisodes } from '../../src/watch/dispatch.ts';
 import { runWorktree, type WorktreeSources } from '../../src/commands/worktree.ts';
 import type { Launch } from '../../src/commands/up.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
@@ -113,7 +117,10 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => rmSync(base, { recursive: true, force: true }));
+afterEach(() => {
+  forgetIdleEpisodes();
+  rmSync(base, { recursive: true, force: true });
+});
 
 const owner = { kind: 'owner' } as const;
 
@@ -323,10 +330,34 @@ describe('one read of the approval store per command', () => {
   });
 });
 
-describe('the watch reads the store once per pass', () => {
+describe('the hosted watch reads the store once per pass', () => {
+  /** A hosted watch over this root: the daemon's own binding, its lines collected in `log`.
+   *  A hosted watch has no timer of its own, so ticks drive its passes. */
+  async function hostedPasses(
+    base: WatchSources, passes: number,
+  ): Promise<{ log: string; stop: () => Promise<void>; state: () => { phase: string; cycles: number } }> {
+    const route = routeOf(project, 'acme', 'acme', ['lead', 'worker']);
+    const log: string[] = [];
+    const host = createHostedWatch({
+      route,
+      now: base.now,
+      effects: 'open',
+      run: hostedWatchRun({ route, log: (text) => log.push(text), base, pid: 4242 }),
+    });
+    const deadline = Date.now() + 5000;
+    let beats = 0;
+    const started = base.now().getTime();
+    while (host.state().cycles < passes) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the hosted watch: ${JSON.stringify(host.state())}`);
+      beats += 1;
+      host.tick(new Date(started + beats * 130_000));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return { log: log.join(''), stop: () => host.stop('the daemon is closing'), state: () => host.state() };
+  }
+
   test('two passes, two reads, one announce', async () => {
     let asks = 0;
-    let passes = 2;
     const agent = (name: string): HerdrAgent => ({ name, agent: 'claude', pane: `${name}:p1`, workspace: name, status: 'working', cwd: null });
     const scene: Live = {
       running: true,
@@ -334,8 +365,10 @@ describe('the watch reads the store once per pass', () => {
       workspaces: [{ id: 'lead', label: 'lead' }, { id: 'worker', label: 'worker' }],
       screens: { 'lead:p1': IDLE, 'worker:p1': IDLE },
     };
-    const io = testIo(project, owner);
-    const code = await runWatch(['--file', file], io, {
+    // Daemon-only watch: the passes run in the daemon's hosted loop, so the count is the
+    // hosted loop's own — one read of the store per pass.
+    forgetIdleEpisodes();
+    const watched = await hostedPasses({
       live: () => scene,
       machine: () => fine,
       standing: (root) => {
@@ -351,13 +384,14 @@ describe('the watch reads the store once per pass', () => {
       sleep: async () => {},
       notify: () => {},
       now: () => NOW,
-      wait: async () => --passes > 0,
+      wait: async () => false,
       alive: () => false,
       pid: 4242,
-    } satisfies WatchSources);
-    expect(code).toBe(0);
+      home,
+    } satisfies WatchSources, 2);
     expect(asks).toBe(2);
-    expect(io.out.match(/watching the session "acme"/g)?.length).toBe(1);
+    expect(watched.log.match(/watching the session "acme"/g)?.length).toBe(1);
+    await watched.stop();
   });
 });
 
@@ -444,26 +478,50 @@ describe('a record with a signed number past the safe range is refused, never a 
     expect(worktree).toBe(1);
     expect(worktreeIo.err).toContain(`team worktree: the approval record cannot be read`);
 
-    const watchIo = testIo(project, owner);
-    const watch = await runWatch(['--file', file], watchIo, {
-      live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
-      machine: () => fine,
-      standing: (root) => approvalStanding(root, home),
-      readChecks: () => [],
-      screen: () => IDLE,
-      status: () => 'working',
-      foreground: () => ['claude'],
-      typeText: () => true,
-      pressEnter: () => true,
-      sleep: async () => {},
-      notify: () => {},
+    // Daemon-only watch: the pass runs in the daemon's hosted loop; the refused record is
+    // said there and the loop keeps watching — no crash, no exit.
+    forgetIdleEpisodes();
+    const route = routeOf(project, 'acme', 'acme', ['lead', 'worker']);
+    const watchLog: string[] = [];
+    const watchHost = createHostedWatch({
+      route,
       now: () => NOW,
-      wait: async () => false,
-      alive: () => false,
-      pid: 4242,
-    } satisfies WatchSources);
-    expect(watch).toBe(0);
-    expect(watchIo.out).toContain(named);
+      effects: 'open',
+      run: hostedWatchRun({
+        route,
+        log: (text) => watchLog.push(text),
+        base: {
+          live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
+          machine: () => fine,
+          standing: (root) => approvalStanding(root, home),
+          readChecks: () => [],
+          screen: () => IDLE,
+          status: () => 'working',
+          foreground: () => ['claude'],
+          typeText: () => true,
+          pressEnter: () => true,
+          sleep: async () => {},
+          notify: () => {},
+          now: () => NOW,
+          wait: async () => false,
+          alive: () => false,
+          pid: 4242,
+          home,
+        } satisfies WatchSources,
+        pid: 4242,
+      }),
+    });
+    const deadline = Date.now() + 5000;
+    let beats = 0;
+    while (watchHost.state().cycles < 1) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the hosted watch: ${JSON.stringify(watchHost.state())}`);
+      beats += 1;
+      watchHost.tick(new Date(NOW.getTime() + beats * 130_000));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(watchHost.state().phase).toBe('running');
+    expect(watchLog.join('')).toContain(named);
+    await watchHost.stop('the daemon is closing');
 
     // The restore reads the same record and refuses in its own words.
     unlinkSync(file);

@@ -14,6 +14,7 @@ import type { DoctorSources } from '../../src/commands/doctor.ts';
 import { NOT_A_REPO } from '../../src/file/load.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import { readState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import { CLAUDE_IDLE, recordRenames, testIo } from '../helpers.ts';
@@ -85,6 +86,13 @@ seats:
 }
 
 const IDLE = CLAUDE_IDLE;
+
+/** The release default admits the own-team lead; `owner-asks` restores the owner-only map
+ *  this file's refusal scenes were written against. */
+function ownerAsks(home: string, root: string): void {
+  const asked = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+  if (!asked.ok) throw new Error(asked.why);
+}
 
 function approve(home: string, root: string, text: string): string {
   const file = join(root, '.agents', 'team.yaml');
@@ -186,6 +194,9 @@ describe('a lead in the lobby of a plain folder', () => {
     const root = join(base, 'acme');
     mkdirSync(root);
     const { file, pane } = await bringUp(home, root, teamText(root, SESSION, 'acme'), 'w');
+    // `owner-asks` keeps this scene on the owner-only map it was written against; the
+    // default admission is pinned in its own test below.
+    ownerAsks(home, root);
     const state = readState(join(root, '.agents')).sessions[SESSION];
     expect(state?.launched_file).toBe(file);
 
@@ -233,6 +244,29 @@ describe('a lead in the lobby of a plain folder', () => {
     } satisfies DownSources);
     expect(down.err).not.toContain(NOT_A_REPO);
     expect(downCode).not.toBe(2);
+  });
+
+  test('the release default admits the own-team lead\'s add from the lobby', async () => {
+    // `leads.authority: own-team` (the default) admits the team's lead from the recorded
+    // file with no owner gate: the add runs and readies the seat, not the old refusal.
+    const { home, lobby } = fresh();
+    const root = join(base, 'acme');
+    mkdirSync(root);
+    const { pane } = await bringUp(home, root, teamText(root, SESSION, 'acme'), 'w');
+    const lead = { kind: 'seat' as const, name: LEAD, pane, session: SESSION };
+    const added = testIo(lobby, lead);
+    const addCode = await runAdd(['claude-operator-acme'], added, {
+      home,
+      sessionState: () => 'running',
+      agents: () => [{ name: LEAD, agent: null, pane, workspace: 'w1', status: 'idle', cwd: lobby }],
+      workspaces: () => [],
+      doctor: doctor(home),
+      now: () => NOW,
+      launch: world('n'),
+    } satisfies AddSources);
+    expect(addCode).toBe(0);
+    expect(added.err).toBe('');
+    expect(added.out).toContain('claude-operator-acme: ready\n');
   });
 
   test("a lead's --file is still the owner's, and the other project is not opened", async () => {

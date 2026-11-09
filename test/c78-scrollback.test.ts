@@ -139,11 +139,14 @@ afterEach(() => {
   base = '';
 });
 
-function teamText(root: string, lobby: string, helperExtra = ''): string {
+// The operator defaults to the coordinator: an operator field naming helper makes helper a
+// lead-class seat that wakes through the lead path, not the ordinary one this file's scroll-back
+// coverage pins; the lead route has its own describe below with operator: helper.
+function teamText(root: string, lobby: string, helperExtra = '', operator = 'lead'): string {
   return `format: 1
 project: acme
 coordinator: lead
-operator: helper
+operator: ${operator}
 session: acme
 workspace:
   mode: shared
@@ -170,7 +173,7 @@ ${helperExtra}`;
 
 type World = { root: string; dir: string; home: string };
 
-function world(helperExtra = ''): { made: World; team: ReturnType<typeof validateTeamFile> & { ok: true } } {
+function world(helperExtra = '', operator = 'lead'): { made: World; team: ReturnType<typeof validateTeamFile> & { ok: true } } {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-scrollback-')));
   const root = join(base, 'acme');
   const home = join(base, 'home');
@@ -178,7 +181,7 @@ function world(helperExtra = ''): { made: World; team: ReturnType<typeof validat
   mkdirSync(home, { recursive: true });
   mkdirSync(lobbyDir(home), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  const text = teamText(root, lobbyDir(home), helperExtra);
+  const text = teamText(root, lobbyDir(home), helperExtra, operator);
   writeFileSync(join(root, '.agents', 'team.yaml'), text);
   const validated = validateTeamFile(text);
   if (!validated.ok) throw new Error(JSON.stringify(validated.errors));
@@ -213,13 +216,13 @@ function live(status: string): Live {
   return { running: true, agents, workspaces: [], screens: {} };
 }
 
-function seed(made: World, ageMin: number): string {
-  const dropDir = join(made.dir, 'send-drops', 'acme', 'helper');
+function seed(made: World, ageMin: number, seat = 'helper'): string {
+  const dropDir = join(made.dir, 'send-drops', 'acme', seat);
   const at = new Date(NOW.getTime() - ageMin * MIN);
   const record = signRecord({
     kind: 'message',
     id: UNREAD,
-    to: 'helper',
+    to: seat,
     to_id: null,
     root: realpathSync(made.root),
     session: 'acme',
@@ -723,5 +726,95 @@ describe('an unrecognised screen for a due message tells the lead', () => {
     expect(calls).toEqual([]);
     expect(said).toEqual([]);
     expect(leadDrops(made.dir)).toEqual([]);
+  });
+});
+
+/** The sources a lead-class seat's wake runs through: no `typedWake` seam is bound, because the
+ *  lead path types through the ordinary seams after its bus nudge finds no bus. */
+function leadSources(screens: string[]): {
+  sources: RetrySources;
+  keys: string[];
+  typed: string[];
+  enters: () => number;
+} {
+  let read = 0;
+  const keys: string[] = [];
+  const typed: string[] = [];
+  let enters = 0;
+  const sources: RetrySources = {
+    screen: () => screens[Math.min(read++, screens.length - 1)] ?? null,
+    status: () => 'idle',
+    typeText: (_pane: string, text: string) => {
+      typed.push(text);
+      return true;
+    },
+    pressEnter: () => {
+      enters += 1;
+      return true;
+    },
+    sleep: async () => {},
+    sendKey: (_pane: string, key: string) => {
+      keys.push(key);
+      return true;
+    },
+  };
+  return { sources, keys, typed, enters: () => enters };
+}
+
+describe('the operator seat takes the team lead unread window', () => {
+  // The line the pass types is the team's message-display rendering of the message, not the
+  // body alone.
+  const WAKE_LINE = 'Message from owner (owner@acme): from the owner Read it with: team drops --read.';
+
+  test('a message past the lead window and inside the passed one wakes the operator seat', async () => {
+    // The operator seat's window is the team's lead window (the 180s default), not the pass's
+    // ordinary one: a 200-second message is due though `unreadAfter: 600` alone would leave it
+    // waiting, and the wake is the lead path — the bus nudge finds no bus and the typed wake
+    // runs through the ordinary seams, one escape out of the scroll, the line, one Enter.
+    const { made, team } = world('', 'helper');
+    const dropDir = seed(made, 200 / 60, 'helper');
+    const wake = leadSources([SCROLL_BACK, SCROLL_BACK, SCROLL_BACK, IDLE, IDLE, holding(WAKE_LINE), holding(WAKE_LINE), WORKING, WORKING]);
+    const said: string[] = [];
+    await wakeUnreadDrops(scene(made, team, said, wake.sources, NOW, 'idle'), { unreadAfter: N });
+    expect(wake.keys).toEqual(['escape']);
+    expect(wake.typed).toEqual([WAKE_LINE]);
+    expect(wake.enters()).toBe(1);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('one wake was delivered');
+    expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+    const episode = JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { at?: unknown; climbed?: unknown };
+    expect(typeof episode.at).toBe('number');
+    expect(episode.climbed).toBe(false);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries).toHaveLength(1);
+      expect(history.entries[0]).toMatchObject({ outcome: 'awaiting receipt', via: 'typed' });
+    }
+  });
+
+  test('five minutes after the first wake with no receipt, the episode climbs once and nothing more is typed', async () => {
+    // The lead's receipt clock: the first wake starts it, a later pass with the message still
+    // unread and unspent-of-nothing — its one wake is sent — climbs the episode marker once and
+    // types no second line.
+    const { made, team } = world('', 'helper');
+    const dropDir = seed(made, 200 / 60, 'helper');
+    const first = leadSources([SCROLL_BACK, SCROLL_BACK, SCROLL_BACK, IDLE, IDLE, holding(WAKE_LINE), holding(WAKE_LINE), WORKING, WORKING]);
+    const said: string[] = [];
+    await wakeUnreadDrops(scene(made, team, said, first.sources, NOW, 'idle'), { unreadAfter: N });
+    expect(first.typed).toEqual([WAKE_LINE]);
+
+    const later = leadSources([]);
+    const laterSaid: string[] = [];
+    await wakeUnreadDrops(scene(made, team, laterSaid, later.sources, new Date(NOW.getTime() + 6 * MIN), 'idle'), { unreadAfter: N });
+    expect(later.keys).toEqual([]);
+    expect(later.typed).toEqual([]);
+    expect(later.enters()).toBe(0);
+    expect(laterSaid).toEqual([]);
+    const episode = JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { at?: unknown; climbed?: unknown };
+    expect(episode.climbed).toBe(true);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) expect(history.entries).toHaveLength(1);
   });
 });
