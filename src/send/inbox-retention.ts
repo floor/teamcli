@@ -1,0 +1,510 @@
+// Moves settled inbox mail out of the live seat folder.
+//
+// A read and an acknowledgement are different. A read receipt — including one that names the
+// channel, and one that names no reader — waits seven days. An acknowledgement is separate
+// evidence: the note `team ack` writes, a lead's clearance, or a reply. That moves at once.
+// Unread mail stays. Nothing is deleted. Receipts are placed in
+// `<root>/.agents/send-drops/<session>/<seat>/archive/<YYYY-MM>/` first and the record last,
+// by a link that does not replace a file already there. A lookup by id still reads them there.
+//
+// The one-time pass marks unread drops whose delivery receipt (or, failing that, read receipt)
+// is older than the seat's channel start. The record's own sent time is not that proof. A dry
+// run lists both sets and writes nothing. A real run writes one audit line, including a move
+// that stopped part way.
+import { linkSync, lstatSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import type { KeyObject } from 'node:crypto';
+import { readListener } from '../mcp/inbox.ts';
+import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
+import { heldAt } from '../launch/rules-file.ts';
+import { isGeneralBriefRecord } from '../launch/general-brief.ts';
+import { logLine } from '../log.ts';
+import { messageKeyState } from '../store/keys.ts';
+import { DROP_MONTH_ARCHIVE, folderOfDrop } from './drop-folder.ts';
+import { publishRecordRead } from './read-receipt.ts';
+import {
+  isLeadAckReadBy,
+  readRecord,
+  readVerifiedReceipt,
+  sameFolder,
+  signReceiptPayload,
+  verifyRecord,
+  type StatusContext,
+} from './record.ts';
+import { clearUnread } from './unread-hint.ts';
+
+/** `read_by` on the note `team ack` writes. A plain read receipt does not carry it. */
+export const EXPLICIT_ACK_READ_BY = 'ack';
+
+/** The note beside a record that `team ack` acknowledged, including one a channel had already read. */
+export function ackNotePath(folder: string, id: string): string {
+  return join(folder, `${id}.ack.json`);
+}
+
+/** A read receipt younger than this stays in the live folder unless the message was acknowledged. */
+export const INBOX_READ_KEEP_MS = 7 * 86_400_000;
+
+const MONTH = /^(\d{4})-(\d{2})$/;
+const ID_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+
+export type InboxArchiveMove = { seat: string; id: string; month: string; files: string[] };
+export type InboxArchiveMark = { seat: string; id: string };
+
+export type InboxArchiveReport = {
+  dryRun: boolean;
+  move: InboxArchiveMove[];
+  markRead: InboxArchiveMark[];
+  /** Ids whose move or mark stopped before it finished. The files already placed stay. */
+  partial: string[];
+  refused: string | null;
+};
+
+/** The month folder a record's signed `at` belongs in, or null when `at` is not an instant. */
+export function archiveMonth(at: string): string | null {
+  const ms = Date.parse(at);
+  if (!Number.isFinite(ms)) return null;
+  const month = new Date(ms).toISOString().slice(0, 7);
+  return MONTH.test(month) ? month : null;
+}
+
+type Family = { id: string; files: string[] };
+
+function familiesOf(dropDir: string): Family[] | null {
+  let names: string[];
+  try {
+    names = readdirSync(dropDir);
+  } catch {
+    return null;
+  }
+  const byId = new Map<string, string[]>();
+  for (const name of names) {
+    if (name === DROP_MONTH_ARCHIVE || name.startsWith('.')) continue;
+    const dot = name.indexOf('.');
+    const id = dot < 0 ? name : name.slice(0, dot);
+    if (!ID_NAME.test(id)) continue;
+    const list = byId.get(id);
+    if (list === undefined) byId.set(id, [name]);
+    else list.push(name);
+  }
+  return [...byId.entries()]
+    .filter(([id, files]) => files.includes(id))
+    .map(([id, files]) => ({ id, files: files.slice().sort() }));
+}
+
+function blocked(id: string, files: readonly string[]): boolean {
+  return files.some((name) =>
+    name === `${id}.pending`
+    || name === `${id}.taken`
+    || name === `${id}.fallback.json`
+    || name.startsWith(`${id}.fallback-note-`),
+  );
+}
+
+/**
+ * What one seat folder would archive and what it would mark read. `channelStartMs` is the
+ * listener's own time when that listener declared the channel; otherwise nothing is marked.
+ */
+export function planSeatArchive(
+  dropDir: string,
+  seat: string,
+  context: StatusContext,
+  key: KeyObject,
+  nowMs: number,
+  channelStartMs: number | null,
+): { move: InboxArchiveMove[]; markRead: InboxArchiveMark[] } | { refused: string } {
+  const families = familiesOf(dropDir);
+  if (families === null) return { refused: `${seat}: the drop folder cannot be read` };
+  const move: InboxArchiveMove[] = [];
+  const markRead: InboxArchiveMark[] = [];
+  for (const family of families) {
+    if (!family.files.includes(family.id)) continue;
+    if (blocked(family.id, family.files)) continue;
+    const looked = readRecord(join(dropDir, family.id), family.id);
+    if (!looked.ok || looked.record === null || !verifyRecord(looked.record, key)) continue;
+    const payload = looked.record.payload;
+    if (isGeneralBriefRecord(payload)) continue;
+    if (payload.from_client !== undefined || payload.to_client !== undefined) continue;
+    const read = readVerifiedReceipt(join(dropDir, `${family.id}.read.json`), family.id, 'read', context, key);
+    const replied = readVerifiedReceipt(join(dropDir, `${family.id}.replied.json`), family.id, 'replied', context, key);
+    const delivered = readVerifiedReceipt(join(dropDir, `${family.id}.delivered.json`), family.id, 'delivered', context, key);
+    const note = readVerifiedReceipt(ackNotePath(dropDir, family.id), family.id, 'read', context, key);
+    // A read receipt is not an acknowledgement, whether or not it names the channel. `team ack`
+    // writes a separate note. A lead's clearance and a reply are acknowledgements too.
+    const acked = replied !== null
+      || (note !== null && note.payload.read_by === EXPLICIT_ACK_READ_BY)
+      || (read !== null && (read.payload.read_by === EXPLICIT_ACK_READ_BY || isLeadAckReadBy(read.payload.read_by) || read.payload.read_by === 'reply' || read.payload.read_by === 'answered-by-send'));
+    const readAt = read?.payload.at ?? null;
+    const readMs = readAt === null ? Number.NaN : Date.parse(readAt);
+    const readOld = !acked && read !== null && Number.isFinite(readMs) && nowMs - readMs > INBOX_READ_KEEP_MS;
+    if (acked || readOld) {
+      const month = archiveMonth(payload.at);
+      if (month === null) continue;
+      move.push({ seat, id: family.id, month, files: family.files });
+      continue;
+    }
+    if (read !== null || replied !== null) continue;
+    if (channelStartMs === null) continue;
+    // A read receipt already settled the message above. What is still unread was delivered only
+    // when its delivered receipt says so. The record's sent time is not that proof.
+    const proofAt = delivered?.payload.at ?? null;
+    const proofMs = proofAt === null ? Number.NaN : Date.parse(proofAt);
+    if (!Number.isFinite(proofMs) || proofMs >= channelStartMs) continue;
+    markRead.push({ seat, id: family.id });
+  }
+  return { move, markRead };
+}
+
+function channelStartMs(dropDir: string, context: StatusContext): number | null {
+  const listener = readListener(dropDir);
+  if (listener === null || listener.channel !== true) return null;
+  if (listener.seat !== context.to || listener.session !== context.session) return null;
+  if (!sameFolder(listener.root, context.root)) return null;
+  const ms = Date.parse(listener.ts);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function sameInode(left: string, right: string): boolean {
+  try {
+    const a = lstatSync(left);
+    const b = lstatSync(right);
+    return a.isFile() && b.isFile() && a.dev === b.dev && a.ino === b.ino;
+  } catch {
+    return false;
+  }
+}
+
+/** Links `from` onto `to` without replacing an existing different file. A copy already there, or
+ *  a source that has already left, is success. The live name is not removed here. */
+function placeFile(from: string, to: string): string | null {
+  const src = heldAt(from);
+  const dest = heldAt(to);
+  if (src.kind === 'link' || dest.kind === 'link') return 'a link was not followed';
+  if (src.kind === 'missing') return dest.kind === 'file' ? null : 'is missing';
+  if (src.kind !== 'file') return 'is not a file';
+  if (dest.kind === 'file') return sameInode(from, to) ? null : 'is already in the archive';
+  if (dest.kind !== 'missing') return 'is not a free name in the archive';
+  try {
+    linkSync(from, to);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') return sameInode(from, to) ? null : 'is already in the archive';
+    return 'could not be placed';
+  }
+  return null;
+}
+
+function releaseLive(from: string, to: string): string | null {
+  if (heldAt(from).kind === 'missing') return null;
+  if (heldAt(to).kind !== 'file' || !sameInode(from, to)) return 'the archive copy is not this file';
+  try {
+    unlinkSync(from);
+  } catch {
+    return 'could not leave the live folder';
+  }
+  return null;
+}
+
+function moveFamily(dropDir: string, planned: InboxArchiveMove): string | null {
+  const destDir = join(dropDir, DROP_MONTH_ARCHIVE, planned.month);
+  if (heldAt(join(dropDir, DROP_MONTH_ARCHIVE)).kind === 'link') return `${planned.id}: archive is a link`;
+  try {
+    mkdirSync(destDir, { recursive: true, mode: 0o700 });
+  } catch {
+    return `${planned.id}: the archive folder could not be created`;
+  }
+  if (heldAt(destDir).kind !== 'folder') return `${planned.id}: the archive month is not a folder`;
+  const arriving = join(destDir, `.${planned.id}.arriving`);
+  const finalName = join(destDir, planned.id);
+  // A crash may have left the record under its temp name. Publish that name before anything else.
+  if (heldAt(arriving).kind === 'file' && heldAt(finalName).kind === 'missing') {
+    const staged = placeFile(arriving, finalName);
+    if (staged !== null) return `${planned.id}: ${staged}`;
+  }
+  const sidecars = planned.files.filter((name) => name !== planned.id);
+  for (const name of sidecars) {
+    const problem = placeFile(join(dropDir, name), join(destDir, name));
+    if (problem !== null) return `${planned.id}: ${name} ${problem}`;
+  }
+  // The record is the name a lookup finds. It is published last, from a temp link, so a crash
+  // before this leaves the live record in place with its receipts already in the archive.
+  if (heldAt(finalName).kind === 'missing') {
+    const staged = placeFile(join(dropDir, planned.id), arriving);
+    if (staged !== null) return `${planned.id}: ${staged}`;
+    const published = placeFile(arriving, finalName);
+    if (published !== null) return `${planned.id}: ${published}`;
+  } else if (heldAt(join(dropDir, planned.id)).kind === 'file' && !sameInode(join(dropDir, planned.id), finalName)) {
+    return `${planned.id}: is already in the archive`;
+  }
+  if (heldAt(arriving).kind === 'file' && heldAt(finalName).kind === 'file' && sameInode(arriving, finalName)) {
+    try {
+      unlinkSync(arriving);
+    } catch {
+      // The final name is in place. The next pass removes the temp name.
+    }
+  }
+  // Drop the live record first, so a lookup switches to the archive where the receipts already are.
+  const recordGone = releaseLive(join(dropDir, planned.id), finalName);
+  if (recordGone !== null) return `${planned.id}: ${recordGone}`;
+  for (const name of sidecars) {
+    const problem = releaseLive(join(dropDir, name), join(destDir, name));
+    if (problem !== null) return `${planned.id}: ${name} ${problem}`;
+  }
+  clearUnread(dropDir, planned.id);
+  return null;
+}
+
+/** A temp name left from a crash, published onto the record's final name when that name is free. */
+function retireTemps(dropDir: string): void {
+  const root = join(dropDir, DROP_MONTH_ARCHIVE);
+  if (heldAt(root).kind !== 'folder') return;
+  let months: string[];
+  try {
+    months = readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const month of months) {
+    if (!/^\d{4}-\d{2}$/.test(month)) continue;
+    const dir = join(root, month);
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.startsWith('.') || !name.endsWith('.arriving')) continue;
+      const id = name.slice(1, -'.arriving'.length);
+      const tmp = join(dir, name);
+      const finalName = join(dir, id);
+      if (heldAt(finalName).kind === 'missing') {
+        if (placeFile(tmp, finalName) !== null) continue;
+      }
+      if (heldAt(finalName).kind === 'file' && sameInode(tmp, finalName)) {
+        try {
+          unlinkSync(tmp);
+        } catch {
+          // The final name is in place. The next pass removes the temp name.
+        }
+      }
+    }
+  }
+}
+
+/** Sidecars left in the live folder after their record reached the archive. Place any the
+ *  archive does not have, then drop the live name. Returns the ids this pass finished. */
+function finishOrphans(dropDir: string): string[] {
+  retireTemps(dropDir);
+  let names: string[];
+  try {
+    names = readdirSync(dropDir);
+  } catch {
+    return [];
+  }
+  const done = new Set<string>();
+  for (const name of names) {
+    if (name === DROP_MONTH_ARCHIVE || name.startsWith('.')) continue;
+    const dot = name.indexOf('.');
+    if (dot <= 0) continue;
+    const id = name.slice(0, dot);
+    if (!ID_NAME.test(id) || heldAt(join(dropDir, id)).kind === 'file') continue;
+    const monthDir = folderOfDrop(dropDir, id);
+    if (monthDir === dropDir) continue;
+    const from = join(dropDir, name);
+    const to = join(monthDir, name);
+    if (placeFile(from, to) !== null) continue;
+    if (releaseLive(from, to) !== null) continue;
+    clearUnread(dropDir, id);
+    done.add(id);
+  }
+  return [...done];
+}
+
+/**
+ * Archives one seat's settled mail and marks its pre-channel unread drops read.
+ * A dry run returns the plan and leaves the folder untouched.
+ */
+export function archiveSeatInbox(input: {
+  dropDir: string;
+  seat: string;
+  context: StatusContext;
+  key: KeyObject;
+  home: string;
+  now: Date;
+  dryRun: boolean;
+}): InboxArchiveReport {
+  const nowMs = input.now.getTime();
+  const planned = planSeatArchive(
+    input.dropDir,
+    input.seat,
+    input.context,
+    input.key,
+    nowMs,
+    channelStartMs(input.dropDir, input.context),
+  );
+  if ('refused' in planned) {
+    return { dryRun: input.dryRun, move: [], markRead: [], partial: [], refused: planned.refused };
+  }
+  if (input.dryRun) {
+    return { dryRun: true, move: planned.move, markRead: planned.markRead, partial: [], refused: null };
+  }
+  const moved: InboxArchiveMove[] = finishOrphans(input.dropDir).map((id) => ({
+    seat: input.seat,
+    id,
+    month: '',
+    files: [],
+  }));
+  const partial: string[] = [];
+  for (const family of planned.move) {
+    const problem = moveFamily(input.dropDir, family);
+    if (problem !== null) {
+      partial.push(family.id);
+      return { dryRun: false, move: moved, markRead: [], partial, refused: problem };
+    }
+    moved.push(family);
+  }
+  const marked: InboxArchiveMark[] = [];
+  for (const item of planned.markRead) {
+    const outcome = publishRecordRead({
+      dropDir: input.dropDir,
+      id: item.id,
+      to: input.context.to,
+      root: input.context.root,
+      session: input.context.session,
+      home: input.home,
+      key: input.key,
+      at: input.now.toISOString(),
+      ...(input.context.lead === undefined ? {} : { lead: input.context.lead }),
+    });
+    if (outcome.kind === 'held' || outcome.kind === 'unwritten') {
+      partial.push(item.id);
+      return {
+        dryRun: false,
+        move: moved,
+        markRead: marked,
+        partial,
+        refused: `${item.id}: it was not marked read`,
+      };
+    }
+    marked.push(item);
+  }
+  return { dryRun: false, move: moved, markRead: marked, partial, refused: null };
+}
+
+/** Writes the acknowledgement note beside the record. A read receipt already there is left as
+ *  it is, including a channel read. The note is the evidence a later archive pass looks for. */
+export function writeExplicitAck(input: {
+  folder: string;
+  id: string;
+  to: string;
+  root: string;
+  session: string;
+  home: string;
+  key: KeyObject;
+  at: string;
+}): boolean {
+  const path = ackNotePath(input.folder, input.id);
+  const context: StatusContext = { to: input.to, root: input.root, session: input.session };
+  const existing = readVerifiedReceipt(path, input.id, 'read', context, input.key);
+  if (existing !== null && existing.payload.read_by === EXPLICIT_ACK_READ_BY) return true;
+  if (heldAt(path).kind !== 'missing') return false;
+  const signed = signReceiptPayload({
+    kind: 'receipt',
+    status: 'read',
+    id: input.id,
+    to: input.to,
+    root: input.root,
+    session: input.session,
+    at: input.at,
+    read_by: EXPLICIT_ACK_READ_BY,
+  }, input.home);
+  const published = publishReadReceipt(path, `${JSON.stringify(signed, null, 2)}\n`);
+  if (published === 'failed') return false;
+  if (published === 'written' && !flushReceipt(path, input.folder)) return false;
+  const noted = readVerifiedReceipt(path, input.id, 'read', context, input.key);
+  return noted !== null && noted.payload.read_by === EXPLICIT_ACK_READ_BY;
+}
+
+/**
+ * Archives settled mail under `root` and marks unread drops delivered before each seat's
+ * channel started. A dry run changes nothing and writes no audit line. The ids are the
+ * message names, in seat-folder order.
+ */
+export function runInboxRetention(
+  root: string,
+  options: { now: Date; home: string; dryRun?: boolean; seats?: readonly string[] },
+): { move: string[]; markRead: string[]; partial: string[]; refused: string | null } {
+  const key = messageKeyState(options.home);
+  if (key.kind !== 'key') return { move: [], markRead: [], partial: [], refused: null };
+  const base = join(root, '.agents', 'send-drops');
+  if (heldAt(base).kind !== 'folder') return { move: [], markRead: [], partial: [], refused: null };
+  let sessions: string[];
+  try {
+    sessions = readdirSync(base);
+  } catch {
+    return { move: [], markRead: [], partial: [], refused: null };
+  }
+  const move: string[] = [];
+  const markRead: string[] = [];
+  const partial: string[] = [];
+  const refusals: string[] = [];
+  const dryRun = options.dryRun === true;
+  for (const session of sessions) {
+    if (session.startsWith('.') || !ID_NAME.test(session)) continue;
+    const sessionDir = join(base, session);
+    if (heldAt(sessionDir).kind !== 'folder') continue;
+    let seats: string[];
+    try {
+      seats = readdirSync(sessionDir);
+    } catch {
+      continue;
+    }
+    for (const seat of seats) {
+      if (seat.startsWith('.') || seat === DROP_MONTH_ARCHIVE || !ID_NAME.test(seat)) continue;
+      if (options.seats !== undefined && !options.seats.includes(seat)) continue;
+      const dropDir = join(sessionDir, seat);
+      if (heldAt(dropDir).kind !== 'folder') continue;
+      const context: StatusContext = { to: seat, root, session };
+      const report = archiveSeatInbox({
+        dropDir,
+        seat,
+        context,
+        key: key.key,
+        home: options.home,
+        now: options.now,
+        dryRun,
+      });
+      move.push(...report.move.map((item) => item.id));
+      markRead.push(...report.markRead.map((item) => item.id));
+      partial.push(...report.partial);
+      if (report.refused !== null) refusals.push(report.refused);
+    }
+  }
+  if (!dryRun) {
+    const line = [
+      `moved ${move.join(' ')}`,
+      `marked ${markRead.join(' ')} read`,
+      ...(partial.length === 0 ? [] : [`partial ${partial.join(' ')}`]),
+      ...refusals,
+    ].join('; ');
+    logLine(join(root, '.agents'), 'drops archive', 'retention', line, options.now);
+  }
+  return { move, markRead, partial, refused: refusals.length === 0 ? null : refusals.join('; ') };
+}
+
+/** One audit line for a real archive run. A dry run does not call this. */
+export function auditInboxArchive(
+  dir: string,
+  caller: string,
+  moved: number,
+  marked: number,
+  now: Date,
+): void {
+  logLine(
+    dir,
+    'drops archive',
+    caller,
+    `moved ${moved} message(s) into archive/<YYYY-MM> and marked ${marked} pre-channel drop(s) read`,
+    now,
+  );
+}

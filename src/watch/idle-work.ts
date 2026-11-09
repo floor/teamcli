@@ -146,6 +146,8 @@ function idleSeatsOf(
           const agents = live.agents.filter((candidate) => candidate.name === seat.name);
           const pane = agents.length === 1 ? agents[0]?.pane : undefined;
           if (pane !== undefined && readScreen(seat.cli, live.screens[pane]).kind === 'rate limit') continue;
+          // Unsent text with work behind it is `blocked: unsent input`, never an idle worker.
+          if (pane !== undefined && readScreen(seat.cli, live.screens[pane]).kind === 'unsent') continue;
         }
         if (since === null) {
           // The verdict proved the persisted stamp parses; a missing value here is still a hold,

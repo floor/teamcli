@@ -314,6 +314,11 @@ export type PassInput = {
    * team's pause, when it stands too, is still the one notice every seat gets.
    */
   seatPauses?: Readonly<Record<string, PauseRecord>> | null;
+  /** Seats with a drop still queued. The unsent-input state needs this and the held-text clock. */
+  queued?: ReadonlySet<string>;
+  /** The first instant a seat's box held unsent text, or null once it does not. The caller
+   *  persists it; the pass itself only reports the reading. */
+  onUnsent?(name: string, since: number | null): void;
 };
 
 // One pass of the watch. Pure: it reads what it is handed and changes only `memory`.
@@ -348,6 +353,8 @@ export function pass({
   pause,
   seatPauses = null,
   modelRule: rule = null,
+  queued,
+  onUnsent,
 }: PassInput): PassResult {
   const reports: Report[] = [];
   const current = new Set<string>();
@@ -460,6 +467,7 @@ export function pass({
         model: null,
         history: { lastWorking: undefined, idleSince: undefined },
         liveness,
+        queued: false,
       });
       continue;
     }
@@ -480,7 +488,19 @@ export function pass({
     // status says.
     const working = agent.status === 'working' || screen.kind === 'working';
     const prompt = screen.kind === 'permission' || screen.kind === 'plan approval' || screen.kind === 'confirmation' || screen.kind === 'login' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit';
-    if (!lead && !parked) workers.push({ idle: quiet && !working && !prompt });
+    const holding = quiet && !working && !prompt && screen.kind === 'unsent';
+    const clock = (memory.slots['unsent'] ??= {}) as Record<string, number>;
+    if (!holding) {
+      delete clock[name];
+      onUnsent?.(name, null);
+    } else {
+      clock[name] ??= now;
+      onUnsent?.(name, clock[name] as number);
+    }
+    const blockedUnsent = holding
+      && queued?.has(name) === true
+      && now - (clock[name] as number) >= watch.unsentAfter * 1000;
+    if (!lead && !parked) workers.push({ idle: quiet && !working && !prompt && !blockedUnsent });
 
     // The history the idle clock counts from. A seat seen working starts it again; a seat quiet
     // with no work behind it was already idle when the watch started, and counts from then. A
@@ -527,6 +547,7 @@ export function pass({
       prompt,
       lead,
       parked,
+      blocked: blockedUnsent,
       stopped,
       attention: attentionOf(screen, agent.status, quiet, theirWord),
       dialogText: questionText(cli, pane),
@@ -543,6 +564,7 @@ export function pass({
         : null,
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
       liveness,
+      queued: queued?.has(name) === true,
     });
     if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory, continuity === 'restored'));
   }
@@ -751,7 +773,13 @@ function workDrops(
   const due: PassResult['work'] = [];
   for (const obs of observations) {
     const fileSeat = team.seats.find((item) => item.name === obs.name);
-    if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
+    // A lead is not nudged in its pane: that would write over a draft. Its unread mail is the
+    // wake in wakeUnreadDrops, at lead_unread_after, which leaves a draft in place.
+    if (obs.lead) {
+      delete sent[obs.name];
+      continue;
+    }
+    if (obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
       delete sent[obs.name];
       continue;
     }
@@ -824,7 +852,10 @@ function pauseDrops(
   const due: PassResult['work'] = [];
   for (const obs of observations) {
     const fileSeat = team.seats.find((item) => item.name === obs.name);
-    if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) continue;
+    // A pause notice is typed too, and a lead's pane is not where it goes. The unread wake
+    // covers the lead.
+    if (obs.lead) continue;
+    if (obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) continue;
     // The pause's notice is typed too: a seat the native store holds is skipped and stays due
     // when the hold lifts, because no stamp is written for it here.
     if (nativeHeld?.has(obs.name) === true) continue;

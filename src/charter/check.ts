@@ -1,9 +1,11 @@
 // The charter checker. Absent: the command keeps its old gate. Invalid: fail closed. Inside the
-// charter: admit, with no prompt. Outside: refuse, and name `team setup --edit`. The owner at a
-// terminal is not a way around a charter that does not cover the run.
+// charter: admit, with no prompt. Outside: a seat is refused, and the refusal names
+// `team setup --edit`. The owner is never refused: one warning names the charter and the repair,
+// and the same words are the audit line.
 
 import { realpathSync } from 'node:fs';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { logLine } from '../log.ts';
 import { pathInsideRoot, type CharterLifetimes, type CharterOp } from './body.ts';
 import { readCharter } from './store.ts';
 
@@ -86,6 +88,40 @@ export function charterGate(home: string, ask: CharterAsk, store?: OwnerSeatKeyS
     return { kind: 'block', message: `this is outside the owner charter (${path} is not under a charter root); the owner widens it with ${EDIT}` };
   }
   return { kind: 'admit', signer: read.charter.signer };
+}
+
+/**
+ * The folder half of the charter, for a write the operation list does not name. Absent stays
+ * absent. Invalid, expired, and a folder outside the roots block, with the same repair.
+ */
+export function charterRootsGate(home: string, folder: string, store?: OwnerSeatKeyStore): CharterGate {
+  const read = readCharter(home, store ?? systemOwnerSeatKeyStore());
+  if (read.kind === 'absent') return { kind: 'absent' };
+  if (read.kind === 'invalid') {
+    return { kind: 'block', message: `the owner charter does not verify (${read.why}); nothing runs until the owner signs again with ${EDIT}` };
+  }
+  const body = read.charter.body;
+  if (body.expires_at !== null && Date.parse(body.expires_at) <= Date.now()) {
+    return { kind: 'block', message: `the owner charter expired at ${body.expires_at}; the owner signs again with ${EDIT}` };
+  }
+  const path = located(folder);
+  const inside = body.roots.some((root) => pathInsideRoot(located(root), path));
+  if (!inside) {
+    return { kind: 'block', message: `this is outside the owner charter (${path} is not under a charter root); the owner widens it with ${EDIT}` };
+  }
+  return { kind: 'admit', signer: read.charter.signer };
+}
+
+/** The owner passes a blocking charter. One warning names the charter and the repair, and the
+ *  same words are written to the team log. */
+export function passCharterOwner(
+  io: { stderr: (text: string) => void },
+  message: string,
+  audit: { dir: string; command: string; caller: string; now?: Date },
+): void {
+  const line = `warning: ${message}`;
+  io.stderr(`${line}\n`);
+  logLine(audit.dir, audit.command, audit.caller, line, audit.now);
 }
 
 /** A standing grant that would reach past the charter, or null when no charter is in force. */

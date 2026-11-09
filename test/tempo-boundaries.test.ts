@@ -76,6 +76,7 @@ describe('the scaling stays inside its bounds', () => {
     nudgeWait: 600,
     unsentAfter: 60,
     unreadAfter: 600,
+    leadUnreadAfter: 180,
     stuckAfter: 900,
     quotaMarks: [],
     checks: [],
@@ -83,10 +84,10 @@ describe('the scaling stays inside its bounds', () => {
   });
 
   test('the smallest whole-second table never scales below one second', () => {
-    const smallest = watch({ idleFirst: 1, idleRepeat: 1, teamIdle: 1, nudgeWait: 1, unsentAfter: 1, unreadAfter: 1 });
+    const smallest = watch({ idleFirst: 1, idleRepeat: 1, teamIdle: 1, nudgeWait: 1, unsentAfter: 1, unreadAfter: 1, leadUnreadAfter: 1 });
     for (const word of ['relaxed', 'urgent'] as const) {
       const scaled = applyTempo(smallest, word);
-      for (const key of ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter', 'unreadAfter'] as const) {
+      for (const key of ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter', 'unreadAfter', 'leadUnreadAfter'] as const) {
         expect(scaled[key]).toBe(word === 'relaxed' ? 2 : 1);
       }
     }
@@ -99,10 +100,10 @@ describe('the scaling stays inside its bounds', () => {
   });
 
   test('every scaled value stays a whole number at or above one, both directions', () => {
-    const odd = watch({ idleFirst: 5, idleRepeat: 15, teamIdle: 25, nudgeWait: 45, unsentAfter: 90, unreadAfter: 55 });
+    const odd = watch({ idleFirst: 5, idleRepeat: 15, teamIdle: 25, nudgeWait: 45, unsentAfter: 90, unreadAfter: 55, leadUnreadAfter: 55 });
     for (const word of ['relaxed', 'urgent'] as const) {
       const scaled = applyTempo(odd, word);
-      for (const key of ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter', 'unreadAfter'] as const) {
+      for (const key of ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter', 'unreadAfter', 'leadUnreadAfter'] as const) {
         expect(Number.isInteger(scaled[key])).toBe(true);
         expect(scaled[key] as number).toBeGreaterThanOrEqual(1);
       }

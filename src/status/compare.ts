@@ -119,6 +119,7 @@ function waitingView(
   name: string,
   recorded: SeatState | undefined,
   trust: boolean,
+  lead = false,
 ): { state: string; stored: string; difference: Difference } | null {
   const waiting = recorded?.waiting;
   if (!waiting) return null;
@@ -149,11 +150,14 @@ function waitingView(
   const phrase = `waiting for owner (${waiting.classification})`;
   const isTrust = waiting.classification === 'trust';
   const answer = trust && isTrust;
-  const repair = answer
-    ? `team answer ${name} trust, or the owner answers the dialog in the pane, then team up`
-    : isTrust
-      ? 'the owner answers the dialog in the pane, then team up'
-      : 'the owner runs team up';
+  const asks = 'the lead asks its parent orchestrator (team send)';
+  const repair = lead
+    ? asks
+    : answer
+      ? `team answer ${name} trust, or the owner answers the dialog in the pane, then team up`
+      : isTrust
+        ? 'the owner answers the dialog in the pane, then team up'
+        : 'the owner runs team up';
   return {
     state: phrase,
     stored: 'waiting-owner',
@@ -323,6 +327,11 @@ export function compare(
   continuityIds?: ReadonlyMap<string, string | null>,
   route?: ReachRoute,
   daemon?: WatchDaemonReading,
+  queuedDrops?: ReadonlySet<string>,
+  /** The daemon health reading says this session's hosted watch is running: the same phase the
+   *  status note `watch: running in the daemon` reports. A session with no pane-watch record is
+   *  not missing a watch while that is true. */
+  hostedWatchRunning = false,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -401,7 +410,13 @@ export function compare(
       // A shell has no model to compare. Reading it would add an "unread" note beside the
       // repair that already says the pane runs no CLI.
       const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified, registered);
-      const held = waitingView(seat.name, recorded, trust);
+      const held = waitingView(
+        seat.name,
+        recorded,
+        trust,
+        (team.orchestrator !== '' && seat.name === team.orchestrator)
+          || (team.operator !== '' && seat.name === team.operator),
+      );
       if (held) {
         rows.push({
           name: seat.name,
@@ -442,15 +457,23 @@ export function compare(
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
       const quiet = word === 'idle' || word === 'done';
       const isUnsent = quiet && screen.kind === 'unsent';
+      const unsentSince = recorded?.unsent_since === undefined ? NaN : Date.parse(recorded.unsent_since);
+      // Held past `unsent_after`, with a drop still queued: the row is this state, never idle.
+      const blockedUnsent = isUnsent
+        && queuedDrops?.has(seat.name) === true
+        && !Number.isNaN(unsentSince)
+        && now.getTime() - unsentSince >= watch.unsentAfter * 1000;
       // A quiet seat on a screen no profile reads: herdr's word alone would show a bare done (the
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
       const quotaOut = quiet && switchReason === undefined ? quotaOutText(screen) : null;
       const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : switchReason !== undefined ? ` (${switchReason})` : '';
-      const stateText = quotaOut !== null
-        ? `${quotaOut}${seat.parked ? ', parked' : ''}`
-        : `${word}${mark}${seat.parked ? ', parked' : ''}`;
+      const stateText = blockedUnsent
+        ? `blocked: unsent input${seat.parked ? ', parked' : ''}`
+        : quotaOut !== null
+          ? `${quotaOut}${seat.parked ? ', parked' : ''}`
+          : `${word}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
         ...idField,
@@ -736,13 +759,21 @@ export function compare(
 
   if (live.running && anyRunning) {
     const beat = state.watch ? Date.parse(state.watch.heartbeat) : NaN;
-    if (!state.watch) {
-      differences.push({ what: 'no watch has run for this session', repair: `team watch --session ${session}` });
-    } else if (!(now.getTime() - beat <= 2 * watch.interval * 1000)) {
+    // A pane-watch record is one watch. The daemon's hosted watch for this session is the
+    // other, and `up` writes no pane record once the daemon carries it. The gap is real only
+    // when neither is running. The repair is the daemon's, not a pane `team watch`.
+    if (!state.watch && !hostedWatchRunning) {
+      differences.push({
+        what: 'no watch has run for this session',
+        repair: 'team daemon status, or the lead runs team daemon install',
+        who: "the team's lead",
+      });
+    } else if (state.watch && !(now.getTime() - beat <= 2 * watch.interval * 1000)) {
       const minutes = Number.isFinite(beat) ? Math.round((now.getTime() - beat) / 60_000) : null;
       differences.push({
         what: `the watch's last pass was ${minutes === null ? 'never recorded' : `${pluralCount(minutes, 'minute')} ago`}`,
-        repair: `team watch --session ${session}`,
+        repair: 'team daemon status, or the lead runs team daemon install',
+        who: "the team's lead",
       });
     }
   }

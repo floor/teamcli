@@ -4,9 +4,9 @@ import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner, type C
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findRoot, loadTeamText, TEAM_FILE } from '../file/load.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import { admitOwnerAction, createOwnerActionRequest, OWNER_ACTION_TTL_MS } from '../client/owner-action.ts';
-import { headOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, headOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { actionRequestsFolder } from '../client/team-create.ts';
 import { retireTeamFile, type Retired } from '../file/retire.ts';
@@ -284,10 +284,33 @@ export async function runTeamImport(
   }
   const file = mode === 'import' ? args.rest[0] : undefined;
   const caller = callerOf(io);
+  // A request is recorded only when the named file can be imported. A dry read writes
+  // nothing; a file that cannot be read refuses here, so the owner gets no card.
+  if (mode === 'import' && args.flags.has('request')) {
+    const home = sources.home ?? homedir();
+    const looked = importTeamFile({
+      cwd: io.cwd,
+      home,
+      mode,
+      ...(file !== undefined ? { file } : {}),
+      dryRun: true,
+      now: sources.now?.() ?? new Date(),
+    });
+    if (!looked.ok) {
+      const message = looked.errors.map((p) => (p.line ? `line ${p.line}: ` : '') + p.message).join('; ');
+      const where = looked.reason === 'invalid' && looked.from ? `${looked.from}: ` : '';
+      refuse(io, json, mode, {
+        id: `${mode}.${looked.reason}`,
+        message: `${where}${message}`,
+        repair: looked.reason === 'already-migrated' ? 'team import' : null,
+      });
+      return looked.reason;
+    }
+  }
   // The owner-seat door, for `import` (src/client/owner-action-step.ts): `--request` asks the owner
   // seat; `--approval <id>` runs the import the owner seat signed for, with no owner terminal.
   const seat = mode === 'import'
-    ? ownerSeatStep('import', 'team-import', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, sources)
+    ? ownerSeatStep('import', 'team-import', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, sources, [charterTargetOf(io.cwd)])
     : { kind: 'none' as const };
   if (seat.kind === 'requested') return 'approval-requested';
   if (seat.kind === 'refused') return 'approval-refused';
@@ -298,12 +321,21 @@ export async function runTeamImport(
   let charterAdmitted = false;
   // A dry run only reads. A blocking charter stops a real migrate before any card is written.
   if (mode === 'migrate' && !dryRun) {
-    const gate = charterGate(home, { operation: 'migrate', cwd: io.cwd }, sources.ownerSeatStore);
-    if (gate.kind === 'block') {
+    const gate = charterGate(home, { operation: 'migrate', cwd: io.cwd, path: charterTargetOf(io.cwd) }, sources.ownerSeatStore);
+    // A charter block refuses a seat. The owner goes through with one warning and an audit line.
+    if (gate.kind === 'block' && !isOwner(caller)) {
       refuse(io, json, mode, { id: `${mode}.not-owner`, message: gate.message, repair: null });
       return 'not-owner';
     }
-    charterAdmitted = gate.kind === 'admit';
+    if (gate.kind === 'block') {
+      passCharterOwner(io, gate.message, {
+        dir: join(findRoot(io.cwd) ?? io.cwd, '.agents'),
+        command: mode,
+        caller: callerLabel(caller),
+        now: now(),
+      });
+    }
+    charterAdmitted = gate.kind === 'admit' && !isOwner(caller);
   }
   const ownerTerminal = isOwner(caller);
   let doorAdmitted = false;

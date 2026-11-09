@@ -80,12 +80,14 @@ describe('tempo', () => {
     expect(relaxed.nudgeWait).toBe(1200);
     expect(relaxed.unsentAfter).toBe(120);
     expect(relaxed.unreadAfter).toBe(1200);
+    expect(relaxed.leadUnreadAfter).toBe(360);
     expect(relaxed.interval).toBe(watch.interval);
     const urgent = applyTempo(watch, 'urgent');
     expect(urgent.idleFirst).toBe(300);
     expect(urgent.idleRepeat).toBe(600);
     expect(urgent.unsentAfter).toBe(30);
     expect(urgent.unreadAfter).toBe(300);
+    expect(urgent.leadUnreadAfter).toBe(90);
     expect(urgent.interval).toBe(watch.interval);
     const off = defaultWatch();
     expect(applyTempo(off, 'relaxed').idleRepeat).toBeUndefined();

@@ -26,6 +26,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.ceilings` | `add` | 1 | a record that does not verify is not in force | `team add worker` |
 | `add.changed` | `add` | 1 | the file changed while add was checking | `team add worker` |
 | `add.client-refused` | `add` | 1 | the owner-signed manager grant, or the client add it admits, did not verify, or the seat is a lead seat | `team add Desk --like worker --client grant.json --key client.key --team docs` |
+| `add.coordinator` | `add` | 1 | only the owner changes the orchestrator's seat | `team add lead` |
 | `add.cwd` | `add` | 1 | the seat's cwd is outside the project and matches no trust path | `team add worker` |
 | `add.default-session` | `add` | 1 | the session can't be "default" | `team add worker --session default` |
 | `add.delegate` | `add` | 1 | the caller is not the approved delegate | `team add worker` |
@@ -230,7 +231,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
 | `config.approval-requested` | `config` | 0 | an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written | `team config set <path> <value> --request` |
-| `config.entity.composed-value` | `config` | 0 | the team file's composed rules are printed | `team config get composed.rules` |
+| `config.entity.composed-value` | `config` | 0 | the team file's composed rules are printed | `team config get @composed.rules` |
 | `config.entity.unchanged` | `config` | 0 | the entity already writes that value; nothing was written | `team config set <entity>.names.unique off` |
 | `config.entity.value` | `config` | 0 | the entity's value is printed | `team config get <entity>.names.unique` |
 | `config.entity.written` | `config` | 0 | the entity's value was written | `team config set <entity>.names.unique off` |
@@ -257,6 +258,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.name-taken` | `config` | 1 | a nickname the change sets is already held by another team's seat; nothing was written | `team config set seats.worker.label "Cicero · implementer"` |
 | `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
 | `config.not-owner` | `config` | 1 | an edit was run by a caller that is not the owner | `team config set watch.unread_after 5m` |
+| `config.orchestrator` | `config` | 1 | a caller other than the owner changed the orchestrator's seat | `team config set coordinator ops` |
 | `config.path` | `config` | 1 | the path cannot be set (a value on the way, or no such list item); nothing was written | `team config set seats.ghost.cli claude` |
 | `config.plan-invalid` | `config` | 1 | internal config preflight found an invalid proposed configuration and wrote nothing | `team mcp setup worker --dry-run` |
 | `config.editor` | `config` | 2 | the editor exited non-zero; nothing was written | `team config edit` |
@@ -359,10 +361,17 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.herdr` | `down` | 2 | herdr doesn't answer | `team down` |
 | `down.invocation` | `down` | 2 | the invocation can't be read | `team down extra` |
 | `down.not-a-repo` | `down` | 2 | not inside a git repository | `team down` |
+| `drops.archive.ok` | `drops` | 0 | the inbox archive and migration finished | `team drops archive` |
 | `drops.ok` | `drops` | 0 | the caller's unread drops were listed, or followed until it stopped | `team drops` |
+| `drops.archive.file` | `drops` | 1 | the team file can't be read | `team drops archive` |
+| `drops.archive.key` | `drops` | 1 | no message key stands, so nothing was archived | `team drops archive` |
+| `drops.archive.migration` | `drops` | 1 | an archive move or a migration mark could not be finished | `team drops archive` |
+| `drops.archive.refused` | `drops` | 1 | archive is not the owner, a lead, or the seat itself | `team drops archive` |
 | `drops.file` | `drops` | 1 | the team file can't be read | `team drops` |
 | `drops.refused` | `drops` | 1 | the caller is not a placed seat of this team | `team drops` |
 | `drops.unreadable` | `drops` | 1 | the drop folder can't be read | `team drops` |
+| `drops.archive.invocation` | `drops` | 2 | archive was given an option it does not take | `team drops archive --follow` |
+| `drops.archive.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops archive` |
 | `drops.invocation` | `drops` | 2 | the invocation can't be read | `team drops extra` |
 | `drops.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops` |
 | `fallback.plan` | `fallback` | 0 | the dry run found no finished episode to retire | `team fallback prune` |
@@ -729,7 +738,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.client-refused` | `restart` | 1 | the owner-signed manager grant, or the client restart it admits, did not verify | `team restart worker --client grant.json --key client.key` |
 | `restart.detached` | `restart` | 1 | a run with no terminal | `team restart worker` |
 | `restart.herdr` | `restart` | 1 | herdr doesn't answer | `team restart worker` |
-| `restart.lead` | `restart` | 1 | a seat caller passed --abandon for the orchestrator's or the operator's seat | `team restart lead --abandon` |
+| `restart.lead` | `restart` | 1 | a seat caller passed --abandon for the orchestrator's seat | `team restart lead --abandon` |
 | `restart.no-session` | `restart` | 1 | the herdr session is not running | `team restart worker` |
 | `restart.not-ready` | `restart` | 1 | preflight or launch did not produce a ready seat | `team restart worker` |
 | `restart.replaced` | `restart` | 1 | the old pane holds a process that is not the seat's CLI | `team restart worker` |
@@ -869,6 +878,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.cancelled` | `swap` | 0 | the queued swap was taken out of the queue | `team swap cancel builder-1` |
 | `swap.forced` | `swap` | 0 | the owner forced the queued swap to run at once | `team swap now builder-1` |
 | `swap.listed` | `swap` | 0 | the queue or the entity's rule listing was shown | `team swap` |
+| `swap.preset-planned` | `swap` | 0 | a preset swap was planned and nothing was written | `team swap worker lead --dry-run` |
+| `swap.preset-swapped` | `swap` | 0 | the seat was swapped onto the preset and started fresh | `team swap worker lead` |
 | `swap.queued` | `swap` | 0 | a model swap was queued for the seat's boundary | `team swap queue builder-1` |
 | `swap.ran` | `swap` | 0 | the queued swaps due now were carried out, or none was due | `team swap --run` |
 | `swap.caller` | `swap` | 1 | not the owner, the orchestrator or the operator, or not a seat of the team for the view | `team swap queue builder-1` |
@@ -876,6 +887,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.herdr` | `swap` | 1 | herdr cannot be read, so no swap can be run | `team swap --run` |
 | `swap.io` | `swap` | 1 | the state can't be read or written | `team swap queue builder-1` |
 | `swap.not-queued` | `swap` | 1 | no swap waits for the seat | `team swap cancel builder-1` |
+| `swap.preset-refused` | `swap` | 1 | a preset swap was refused | `team swap nobody lead` |
 | `swap.rule` | `swap` | 1 | the entity's model rule can't be read or none is declared | `team swap queue builder-1` |
 | `swap.run-failed` | `swap` | 1 | a due swap did not run: a preflight refusal, a read-back mismatch, or the seat is signed off or no longer declared | `team swap --run` |
 | `swap.seat` | `swap` | 1 | no such seat in the team | `team swap queue nobody` |
@@ -883,6 +895,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.unchanged` | `swap` | 1 | the seat already declares a model the rule allows | `team swap queue builder-1` |
 | `swap.file` | `swap` | 2 | the team file or a --file path can't be read | `team swap --rule` |
 | `swap.invocation` | `swap` | 2 | the invocation can't be read | `team swap queue` |
+| `swap.preset-unreadable` | `swap` | 2 | a preset swap's invocation or team file can't be read | `team swap worker lead extra` |
 | `team.command-help` | `team` | 0 | a command's help was printed | `team status --help` |
 | `team.help` | `team` | 0 | help was printed | `team --help` |
 | `team.mcp-serve-handed-over` | `team` | 0 | a stale inbox server started its fresh replacement on the same stdio and left | `team mcp serve` |
@@ -959,7 +972,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.server` | `up` | 1 | the session's server did not start | `team up` |
 | `up.stopped` | `up` | 1 | the session is stopped | `team up` |
 | `up.unknown` | `up` | 1 | a running agent is not in this file's state | `team up` |
-| `up.watch` | `up` | 1 | the watch did not start | `team up` |
 | `up.file` | `up` | 2 | the team file can't be read | `team up --file missing.yaml` |
 | `up.file-invalid` | `up` | 2 | the team file can't be parsed | `team up --file team.yaml` |
 | `up.invocation` | `up` | 2 | the invocation can't be read | `team up extra` |
@@ -972,15 +984,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `waits.configuration` | `waits` | 2 | the team file, the registry or the retention policy can't be read | `team waits` |
 | `waits.usage` | `waits` | 2 | the invocation can't be read | `team waits --all` |
 | `watch.standby` | `watch` | 0 | a hosted watch stood down for a running watch | `team watch` |
-| `watch.started` | `watch` | 0 | the watch started in its own workspace | `team watch` |
+| `watch.started` | `watch` | 0 | the daemon's watch was printed | `team watch` |
 | `watch.stopped` | `watch` | 0 | the watch ran and stopped | `team watch` |
-| `watch.already` | `watch` | 1 | a watch already runs | `team watch` |
-| `watch.caller` | `watch` | 1 | a run with no terminal | `team watch` |
 | `watch.file-owner` | `watch` | 1 | --file is the owner's | `team watch --file .agents/team.yaml` |
 | `watch.no-notify` | `watch` | 1 | a seat passed --no-notify | `team watch --no-notify` |
 | `watch.no-nudge` | `watch` | 1 | a seat passed --no-nudge | `team watch --no-nudge` |
-| `watch.watchdog` | `watch` | 1 | only the recorded watch may read the file up recorded | `team watch --session acme` |
-| `watch.workspace` | `watch` | 1 | the watch did not start in its workspace | `team watch` |
 | `watch.file` | `watch` | 2 | the team file can't be read | `team watch --file missing.yaml` |
 | `watch.file-invalid` | `watch` | 2 | the team file can't be parsed | `team watch --file team.yaml` |
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |

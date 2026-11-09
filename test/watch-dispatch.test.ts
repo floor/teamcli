@@ -36,6 +36,7 @@ import {
   type IdleDispatchInput, type WorkPush, type WorkPushRequest,
 } from '../src/watch/dispatch.ts';
 import { testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const MIN = 60_000;
 const NOW = Date.parse('2026-10-20T03:00:00Z');
@@ -1061,7 +1062,7 @@ describe('the watch seam', () => {
       workspaces: [{ id: 'first', label: 'first' }, { id: 'second', label: 'second' }],
       screens: { 'first:pane': idle, 'second:pane': idle },
     };
-    return {
+    return withHostedLoop({
       live: () => scene,
       machine: () => fine,
       standing: () => ({ kind: 'none' }),
@@ -1079,7 +1080,7 @@ describe('the watch seam', () => {
       pid: 4242,
       home: dir,
       ...over,
-    };
+    });
   }
 
   beforeEach(() => {
@@ -1138,13 +1139,13 @@ describe('the watch seam', () => {
     expect(existsSync(join(dir, '.agents', 'send-drops', 'acme-web', 'deepseek-acme'))).toBe(false);
   });
 
-  test('with no route wired nothing is typed for the episode and the fallback record is left', async () => {
+  test('with no route wired a hosted watch types nothing and writes no fallback record', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources());
     expect(code).toBe(0);
     expect(typed.filter((line) => line.includes('and do that.'))).toEqual([]);
     expect(existsSync(join(dir, '.agents', 'send-drops', 'acme-web', 'deepseek-acme'))).toBe(false);
-    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(2);
+    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(0);
   });
 
   test('an unread record does not ring a seat whose work episode the dispatcher owns', async () => {
@@ -1152,22 +1153,20 @@ describe('the watch seam', () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources());
     expect(code).toBe(0);
-    // The queue holds t1 and no route is wired: the seat's episode is the dispatcher's, and its
-    // undelivered outcome is announced there. The unread record waits for its seat; it never
-    // becomes a second typed path into the same episode.
+    // A hosted watch with no route holds the dispatch, so the unread record is not a typed path
+    // and no fallback record is written for it.
     expect(typed.filter((line) => line.includes('Team: run team drops --read'))).toEqual([]);
-    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(2);
+    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(0);
   });
 
-  test('a stamped idle seat outside any work episode is still rung', async () => {
+  test('a stamped idle seat outside any work episode is not rung by a hosted pass', async () => {
     rmSync(join(dir, '.agents', 'queue.yaml'));
     waitingMail('22222222-2222-4222-8222-222222222222', 'deepseek-acme-2');
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources());
     expect(code).toBe(0);
-    // The guard is narrow: with nothing to dispatch and a truthful clock, the mail ring is the
-    // one typed path left, and it types.
-    expect(typed.some((line) => line.includes('Read it with: team drops --read.'))).toBe(true);
+    // The mail is younger than the unread window, and a hosted pass types no ring.
+    expect(typed.some((line) => line.includes('Read it with: team drops --read.'))).toBe(false);
   });
 
   /** The same team file with its source moved to a tracker. Its records exist only in the

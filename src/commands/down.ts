@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
+import { abandonGateOf, leadsOwnTeamAdmits } from '../leads-authority.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
@@ -19,6 +20,7 @@ import { currentLaunchedTeam, currentTeam, rememberCurrent, type Current } from 
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
+import { teamBinding } from '../registry/binding.ts';
 import { getTeam, noteTeam, teamIdOf } from '../registry/teams.ts';
 import { registerEnd, registerSessionEnd } from '../registry/sync.ts';
 import {
@@ -722,7 +724,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
   let seatApproved = false;
   if (clientDown === null) {
-    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, seatSources);
+    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason, gate: abandonGateOf('down', args.flags.has('abandon')) }, io, seatSources, [charterTargetOf(io.cwd, args.values.file)]);
     if (seat.kind === 'requested') {
       // exit: down.approval-requested
       return 0;
@@ -739,7 +741,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // reader to the owner. An owner-seat answer has already admitted this run.
   const detached = clientDown !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
-    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
+    seatApproved = ownerSeatRuleCovers(io.cwd, [charterTargetOf(io.cwd, args.values.file)]) && ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
     if (!seatApproved) {
       refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
       // exit: down.detached
@@ -859,8 +861,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A launched pointer names where this session was launched from, not a copy to read: the run
   // reads the team where the edits write it, so the session it stops and the seats it knows are
   // the registry's record, never missed over the file the session launched from. A `--file`
-  // names its file, and is read as that file.
-  const pointer = branching() ? undefined : launched;
+  // names its file, and is read as that file. A cwd inside a registered root binds to that
+  // team instead, the longest root when they nest.
+  const binding = args.values.file !== undefined || clientDown !== null || branching()
+    ? { kind: 'unbound' as const }
+    : teamBinding(sources.home ?? homedir(), io.cwd, undefined, io);
+  const pointer = branching() || binding.kind === 'bound' ? undefined : launched;
   const file = branching() ? undefined : args.values.file;
   const sessionFlag = branching() ? undefined : args.values.session;
 
@@ -879,9 +885,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // One clock reading serves the run's own file and the policy chain read beside it; the
   // remembering below keeps its own, later reading.
   const loadedAt = liveCurrent === undefined ? sources.now() : undefined;
-  const current: Current = liveCurrent ?? (pointer !== undefined
-    ? currentLaunchedTeam(pointer, loadedAt!, sources.home, false)
-    : currentTeam(io.cwd, file, loadedAt!, sources.home, false));
+  const current: Current = liveCurrent ?? (binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false, errors: [{ line: 0, message: binding.message }] }
+    : binding.kind === 'bound'
+      ? currentTeam(binding.team.root, undefined, loadedAt!, sources.home, false)
+      : pointer !== undefined
+        ? currentLaunchedTeam(pointer, loadedAt!, sources.home, false)
+        : currentTeam(io.cwd, file, loadedAt!, sources.home, false));
   if (!current.ok) {
     const said = current.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     const id = current.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
@@ -1141,15 +1151,27 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // has answered is the run's only refusal: today's abandon line stays out of the way of its own.
   const abandon = args.flags.has('abandon') && granted === undefined;
   let abandonLifted = false;
-  if (abandon && !callerOwns(caller) && !clientAbandons && !seatApproved && verdict === undefined) {
-    // The owner's dev-mode admission for exactly this gate: a placed lead or
-    // orchestrator continues with the warning; every other caller keeps the refusal.
+  const leadAbandons = abandon && leadsOwnTeamAdmits({
+    caller,
+    team,
+    at: standingOf(dir, session, caller),
+    home: sources.home ?? homedir(),
+    root,
+    command: 'down',
+    gate: abandonGateOf('down', true),
+    now: sources.now(),
+    dir,
+    teamFile: team,
+  }) !== null;
+  if (abandon && !leadAbandons && !callerOwns(caller) && !clientAbandons && !seatApproved && verdict === undefined) {
+    // Abandoning a team is owner-reserved. Dev mode does not lift it: the warning is not
+    // printed and the refusal below stands, for a lead and for every other caller.
     const lift = devModeOwnerLiftAtCwd(io, {
       command: 'down',
+      gate: 'abandon-team',
       refusal: 'only the owner abandons a team, from a terminal outside herdr',
       ...(sources.home !== undefined ? { home: sources.home } : {}),
       now: sources.now(),
-      // The placed operator may abandon, under the lead-gates policy.
       admitsOperator: true,
     });
     if (lift === null || !lift.lifted) {
@@ -1356,7 +1378,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // `--abandon` only: a prompt the profile answers itself, or a box of unsent text saved under
     // `.agents/abandoned-input/` and then cleared, so the seat can be asked to exit and close fully.
     let abandonPlan: { answerKeys?: readonly string[]; unsentText?: string; saveTo?: string } = {};
-    if (args.flags.has('abandon') && profile !== null && !humanOf.has(name)) {
+    // The orchestrator stays out of a default-rule abandon. A delegate, a grant and a client keep
+    // the plan base built, orchestrator included.
+    if (args.flags.has('abandon') && profile !== null && !humanOf.has(name) && !(name === team.orchestrator && !callerOwns(caller) && leadAbandons)) {
       const text = sources.screenText(session, agent.pane, cli);
       const answer = abandonAnswerKeys(profile, text);
       if (answer !== null) abandonPlan = { answerKeys: answer };

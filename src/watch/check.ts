@@ -136,6 +136,12 @@ export type SeatObservation = {
   // the seat's own word, resolved in the one `stateThresholds` call the pass makes for it. The
   // idle check reports at these windows, and every seat is handed its own answer.
   liveness: LivenessThresholds;
+  /** A drop is still queued for this seat. With unsent text held past `unsent_after`, the
+   *  seat is `blocked: unsent input`. Absent a caller that listed the folder, false. */
+  queued: boolean;
+  /** Unsent text held past `unsent_after` with mail still queued. The idle row and the idle
+   *  count both leave this seat out. Absent when the pass did not decide it. */
+  blocked?: boolean;
 };
 
 // Everything a team check may read about the team it is handed, built after the seat loop.

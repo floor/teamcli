@@ -7,7 +7,7 @@
 
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { hasJsonFlag } from '../output/index.ts';
@@ -23,10 +23,12 @@ a project name, or a session name; a word that names more than one team is refus
 repeated team. Each team's place in any project record is dropped with it. Panes are not stopped
 and the team file is not deleted. A bad word removes nothing.
 
-The owner runs it from a terminal outside herdr. --request records every id as one request
-(--reason <text> is the short reason the card shows) and removes nothing; --approval <request-id> runs it once the owner has answered on the owner page.
-One card and one Touch ID cover the whole list. A signed always rule for team-forget covering
-this folder admits the run with no request.
+The owner runs it from a terminal outside herdr, and a charter never refuses that run. A charter
+admits anyone else only when it covers every team being forgotten, not the caller's folder. --request records every id as one request
+(--reason <text> is the short reason the card shows) and removes nothing, including when that
+charter covers the teams; --approval <request-id> runs it once the owner has answered on the owner page.
+One card and one Touch ID cover the whole list. A signed always rule for team-forget admits the
+run only when it covers every team being forgotten.
 
 Exits 0 when the records are removed or a request is recorded, 1 when it is refused or a record
 is not there, 2 when the invocation can't be read.
@@ -52,31 +54,40 @@ export async function runForget(argv: string[], io: Io, sources: ForgetSources =
   const caller = callerOf(io);
   let seatApproved = false;
   let seatRefused = false;
-  const seat = ownerSeatStep('forget', 'team-forget', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.values.approval !== undefined, json, reason: args.values.reason }, io, seatSources);
+  // Every key is resolved before the charter is asked, and before a request is recorded,
+  // so one bad word removes nothing and the owner is never sent a card for a team that is
+  // not there. A missing id on a real forget is said only to the owner. Anyone else gets
+  // the owner answers and learns nothing about whether the record is there. A --request
+  // is not that hide: the ask itself refuses, and nothing is recorded.
+  const resolved = resolveKeys(home, keys);
+  const hiddenMiss = !args.flags.has('request') && !resolved.ok && resolved.missing === true && !isOwner(caller);
+  if (!resolved.ok && !hiddenMiss) return resolved.missing ? missing(io, json, resolved.key) : refused(io, json, `${resolved.why}; nothing was forgotten`);
+  const targets = resolved.ok ? resolved.teams.map((team) => team.root) : [];
+  const seat = ownerSeatStep('forget', 'team-forget', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.values.approval !== undefined, json, reason: args.values.reason }, io, seatSources, targets);
   if (seat.kind === 'requested') {
     // exit: forget.approval-requested
     return 0;
   }
   if (seat.kind === 'refused') seatRefused = true;
   else if (seat.kind === 'admitted') seatApproved = true;
-  else if (!isOwner(caller)) seatApproved = ownerSeatRuleAdmits('team-forget', io.cwd, false, io, seatSources);
+  else if (!isOwner(caller)) {
+    seatApproved = ownerSeatRuleCovers(io.cwd, targets) && ownerSeatRuleAdmits('team-forget', io.cwd, false, io, seatSources);
+  }
   if (!seatRefused && !seatApproved && args.values.approval === undefined) {
     const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside herdr' });
     if (detached !== undefined) return refused(io, json, detached);
     if (!isOwner(caller)) return refused(io, json, `only the owner forgets a team record, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
     seatApproved = true;
   }
-  // Every key is resolved before the approval is claimed, so one bad word removes nothing.
-  const resolved = seatRefused ? { ok: true as const, teams: [] } : resolveKeys(home, keys);
-  if (!resolved.ok) return resolved.missing ? missing(io, json, resolved.key) : refused(io, json, `${resolved.why}; nothing was forgotten`);
   if (args.values.approval !== undefined && !seatRefused) {
-    const seat = ownerSeatStep('forget', 'team-forget', argv, { request: false, approval: args.values.approval, dry: false, json }, io, seatSources);
-    if (seat.kind !== 'admitted') seatRefused = true;
+    const claimed = ownerSeatStep('forget', 'team-forget', argv, { request: false, approval: args.values.approval, dry: false, json }, io, seatSources, targets);
+    if (claimed.kind !== 'admitted') seatRefused = true;
   }
   if (seatRefused) {
     // exit: forget.approval-refused
     return 1;
   }
+  if (!resolved.ok) return refused(io, json, `only the owner forgets a team record, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
   const forgot: { id: string; project: string }[] = [];
   for (const team of resolved.teams) {
     let removed;
@@ -95,8 +106,8 @@ export async function runForget(argv: string[], io: Io, sources: ForgetSources =
   return 0;
 }
 
-function resolveKeys(home: string, keys: string[]): { ok: true; teams: { id: string }[] } | { ok: false; missing?: boolean; key: string; why: string } {
-  const teams: { id: string }[] = [];
+function resolveKeys(home: string, keys: string[]): { ok: true; teams: { id: string; root: string }[] } | { ok: false; missing?: boolean; key: string; why: string } {
+  const teams: { id: string; root: string }[] = [];
   const seen = new Set<string>();
   for (const key of keys) {
     let found;
@@ -111,7 +122,7 @@ function resolveKeys(home: string, keys: string[]): { ok: true; teams: { id: str
     if (id === undefined) return { ok: false, key, why: 'the team record has no id' };
     if (seen.has(id)) return { ok: false, key, why: `"${key}" names ${id}, which is already in this forget` };
     seen.add(id);
-    teams.push({ id });
+    teams.push({ id, root: found[0]!.root });
   }
   return { ok: true, teams };
 }

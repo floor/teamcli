@@ -11,6 +11,7 @@ import { validateTeamFile } from '../../src/file/validate.ts';
 import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { rulesFileHash, rulesFilePathOf, writeRulesFile } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import type { DownLaunch } from '../../src/commands/down.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
@@ -942,9 +943,13 @@ describe('team remove', () => {
   });
 
   test('--abandon closes an unknown screen without typing; a coordinator may not', async () => {
+    // `owner-asks` keeps this premise. Under the default the placed lead abandons an ordinary seat, which the catalogue's twin covers.
+    recordLead();
+    const asked = writePolicySet(home, { level: 'team', target: dir, teamRoot: dir, name: 'leads.authority', value: 'owner-asks' }, { now: new Date(0) });
+    expect(asked.ok).toBe(true);
+    approveCurrent();
     const made = world({ kind: 'unknown' }, 'idle');
     made.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
-    recordLead();
     const seat = testIo(dir, lead);
     expect(await runRemove(['worker', '--abandon'], seat, made.sources)).toBe(1);
     expect(seat.err).toContain('only the owner abandons');
@@ -994,7 +999,7 @@ describe('team remove', () => {
     expect(seat.err).toContain('only the owner');
     expect(readFileSync(file, 'utf8')).toContain('name: lead');
     const abandon = testIo(dir, lead);
-    expect(await runRemove(['worker', '--abandon'], abandon, world({ kind: 'permission' }, 'idle').sources)).toBe(1);
+    expect(await runRemove(['lead', '--abandon'], abandon, world({ kind: 'permission' }, 'idle').sources)).toBe(1);
     expect(abandon.err).toContain('only the owner abandons');
   });
 
@@ -1183,7 +1188,7 @@ describe('team remove', () => {
     made.agents.push({ name: 'lead', agent: 'claude', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null });
     const io = testIo(dir, lead);
     expect(await runRemove(['lead'], io, made.sources)).toBe(1);
-    expect(io.err).toBe('team remove: only the owner removes the orchestrator\'s or the operator\'s seat; this call is lead\n');
+    expect(io.err).toBe('team remove: only the owner changes the orchestrator\'s seat; this call is lead\n');
     expect(made.typed).toEqual([]);
     expect(readFileSync(file, 'utf8')).toContain('name: lead');
   });

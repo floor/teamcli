@@ -442,21 +442,23 @@ test('a session started before its accept declaration is skipped, and the trigge
   expect(pane.typed.length).toBe(0);
 });
 
-test('a declared order’s typed word wakes through the seat’s accepted socket, and nothing is typed', async () => {
-  // The word asks for a wake. With typing retired, the seat's own event adapter stands where the
-  // word stood: the live channel, then the socket its launch accepts. The frame's reader line
-  // names the record's own id, so an owner-origin send needs no reply address to dial it.
+test('a declared order whose first word is the retired inbox name does not dial the socket', async () => {
+  // The word names no socket. The retired inbox name means the channel is the route, and with
+  // no channel server connected the socket is not a fallback. Nothing is typed into the pane.
   const made = world(['mcp-inbox', 'typed']);
   cleanup = made.cleanup;
   declare(made, 'accept');
   const pane = scripted(['idle', 'working']);
   const host = fake(made, { native: pane });
+  const io = owner(made.root);
 
-  const code = await runSend(['lead', 'hello'], owner(made.root), host);
+  const code = await runSend(['lead', 'hello'], io, host);
 
   expect(code).toBe(0);
-  expect(host.frames.length).toBe(1);
-  expect(pane.typed.length).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(pane.typed).toEqual([]);
+  expect(io.out).toContain('queued, not woken (drop');
+  expect(io.out).not.toContain('delivered (socket)');
 });
 
 test('a declared order may place socket first, and it is walked there', async () => {
@@ -1035,11 +1037,10 @@ test('a held socket is no wake the send reports either: the class it appends is 
   );
 });
 
-test('no pane messaging: a declared order whose wake word is typed reaches an accepting seat by its socket', async () => {
-  // The order names typed for the wake; typing is retired, so the seat's own event adapter, the
-  // socket its launch accepts, stands where typed stood. Nothing is typed into the pane. The word
-  // is a record an older build wrote — `mcp-inbox, typed` — and today's chain reads it as the
-  // `typed` word alone: declared, walked as written.
+test('no pane messaging: an older word that begins with the retired inbox name does not dial the socket', async () => {
+  // The word is a record an older build wrote — the retired inbox name, then typed — and it
+  // names no socket. The channel is the route, and with no channel server connected the socket
+  // is not a fallback. Nothing is typed into the pane.
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
@@ -1052,8 +1053,9 @@ test('no pane messaging: a declared order whose wake word is typed reaches an ac
   const code = await runSend(['lead', 'a note'], io, host);
 
   expect(code).toBe(0);
-  expect(io.out).toContain('lead: delivered (socket)');
-  expect(io.err).not.toContain('queued, no event adapter');
-  expect(host.frames.length).toBe(1);
+  expect(io.out).toContain('queued, not woken (drop');
+  expect(io.out).not.toContain('delivered (socket)');
+  expect(io.err).toContain('queued, no event adapter');
+  expect(host.frames).toEqual([]);
   expect(pane.typed).toEqual([]);
 });

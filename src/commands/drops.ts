@@ -61,12 +61,14 @@ import {
   writeJson,
   writeJsonError,
 } from '../output/index.ts';
+import { runInboxRetention } from '../send/inbox-retention.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, settledReadOf, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
        team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
+       team drops archive [--dry-run] [--json]
 
 Lists the drop files waiting in the calling seat's own drop folder,
 .agents/send-drops/<session>/<seat>: one row each, with the sender the message
@@ -102,6 +104,16 @@ Options:
   --session  the launch's session, which must be the team file's own
   --epoch    the runtime epoch the launch started this reader under; when
              given, only a brief delivered under that epoch is served
+  archive    move settled mail into send-drops/<session>/<seat>/archive/<YYYY-MM>/
+             and mark unread drops delivered before the seat's channel started
+             as read. An acknowledged message moves at once. A read message
+             moves once its receipt is older than 7 days. Unread mail stays,
+             and nothing is deleted. --dry-run lists what would move and what
+             it would mark read, and writes nothing. Without it, the moves and
+             the marks are done and one audit line is written. The owner, the
+             orchestrator or the operator archives every seat; a seat archives
+             only its own folder.
+  --dry-run  with archive, list the moves and the marks and write nothing
   --id       read this one id. An id a receipt already settled prints
              \`<id>: already read at <time> (<reader>)\` and no body. The time
              is kept only when it is an ISO instant; the reader is a known
@@ -474,8 +486,100 @@ function settledFacts(dropDir: string, context: StatusContext, home: string): { 
  * listing as one document; `--follow` prints each file that appears while it runs, and never
  * the ones already there, so a Monitor starts quiet.
  */
+async function runArchive(
+  args: { error?: string; rest: readonly string[]; flags: ReadonlySet<string>; values: { seat?: string; session?: string; epoch?: string; id?: string } },
+  io: Io,
+  sources: DropsSources,
+  json: boolean,
+): Promise<number> {
+  const extra = args.rest.length > 1
+    || args.flags.has('follow')
+    || args.flags.has('read')
+    || args.values.seat !== undefined
+    || args.values.session !== undefined
+    || args.values.epoch !== undefined
+    || args.values.id !== undefined;
+  if (args.error || extra) {
+    const problem = args.error ?? (args.rest.length > 1 ? `unexpected "${args.rest[1] ?? ''}"` : 'archive takes no other options');
+    if (json) writeJsonError(io, 'drops.invocation', problem, null);
+    else io.stderr(`team drops: ${problem}\n${USAGE}`);
+    // exit: drops.archive.invocation
+    return 2;
+  }
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
+  if (!loaded.ok) {
+    const message = loaded.errors[0]?.message ?? "the team file can't be read";
+    if (message.startsWith(NOT_A_REPO)) {
+      const shown = withoutFileOffer(message);
+      if (json) writeJsonError(io, 'drops.not-a-repo', shown, null);
+      else io.stderr(`team drops: ${shown}\n`);
+      // exit: drops.archive.not-a-repo
+      return 2;
+    }
+    if (json) writeJsonError(io, 'drops.file', message, null);
+    else io.stderr(`team drops: ${message}\n`);
+    // exit: drops.archive.file
+    return 1;
+  }
+  const dir = dirname(loaded.path);
+  const session = loaded.team.session;
+  const { caller, shown } = judgeCallerOf(io, session);
+  const names = loaded.team.seats.map((seat) => seat.name);
+  const standing = standingOf(dir, session, caller);
+  const lead = caller.kind === 'owner' || (caller.kind === 'seat' && mayChangeTeamVerdict(caller, loaded.team, standing).kind === 'ok');
+  const own = caller.kind === 'seat' && names.includes(caller.name) && callerVerdict(caller, caller.name, standing).kind === 'ok';
+  if (!lead && !own) {
+    refuse(io, json, `archive is the owner, a lead, or the seat itself; this call is ${describeCaller(shown)}`);
+    // exit: drops.archive.refused
+    return 1;
+  }
+  const seats = lead ? names : [caller.kind === 'seat' ? caller.name : ''];
+  const key = messageKeyState(sources.home);
+  if (key.kind !== 'key') {
+    const why = key.kind === 'unreadable' ? key.why : 'no message key; nothing was archived';
+    refuse(io, json, why);
+    // exit: drops.archive.key
+    return 1;
+  }
+  const dryRun = args.flags.has('dry-run');
+  const now = new Date();
+  const report = runInboxRetention(loaded.root, { now, home: sources.home, dryRun, seats });
+  if (report.refused !== null) {
+    if (!json) {
+      const verbWord = dryRun ? 'would move' : 'moved';
+      const markWord = dryRun ? 'would mark read' : 'marked read';
+      for (const id of report.move) io.stdout(`${verbWord} ${id}\n`);
+      for (const id of report.markRead) io.stdout(`${markWord} ${id}\n`);
+      for (const id of report.partial) io.stdout(`partial ${id}\n`);
+    }
+    const why = report.partial.length === 0 ? report.refused : `${report.refused}; partial ${report.partial.join(' ')}`;
+    refuse(io, json, why);
+    // exit: drops.archive.migration
+    return 1;
+  }
+  if (json) {
+    writeJson(io, 'team.drops.archive', {
+      format: 1 as const,
+      dry_run: dryRun,
+      move: report.move,
+      mark_read: report.markRead,
+      partial: report.partial,
+    });
+  } else {
+    const verbWord = dryRun ? 'would move' : 'moved';
+    const markWord = dryRun ? 'would mark read' : 'marked read';
+    for (const id of report.move) io.stdout(`${verbWord} ${id}\n`);
+    for (const id of report.markRead) io.stdout(`${markWord} ${id}\n`);
+    for (const id of report.partial) io.stdout(`partial ${id}\n`);
+  }
+  // exit: drops.archive.ok
+  return 0;
+}
+
 export async function runDrops(argv: string[], io: Io, sources: DropsSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read']);
+  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read', 'dry-run']);
+  const verb = args.rest[0];
+  if (verb === 'archive') return runArchive(args, io, sources, hasJsonFlag(argv) || args.flags.has('json'));
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
@@ -492,9 +596,10 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         : !read && args.values.id !== undefined ? 'id' : null;
   const epoch = args.values.epoch;
   const badEpoch = read && epoch !== undefined && !isBriefEpoch(epoch);
-  if (args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
+  if (args.flags.has('dry-run') || args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
     const problem = args.error
-      ?? (args.rest.length ? `unexpected "${args.rest[0] ?? ''}"`
+      ?? (args.flags.has('dry-run') ? 'unknown option --dry-run'
+        : args.rest.length ? `unexpected "${args.rest[0] ?? ''}"`
         : stray !== null ? `unknown option --${stray}`
           : badEpoch ? `--epoch ${JSON.stringify(epoch)} is not a runtime epoch`
             : read

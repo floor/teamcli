@@ -37,7 +37,7 @@
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { ensureClientInbox, scanClientInbox, writeClientInboxFile } from '../client/inbox.ts';
@@ -65,6 +65,7 @@ import {
   closeFile,
   readClose,
   readRecord,
+  recordFile,
   recordAuthOfSealed,
   recordNameOk,
   isRecordSidecarName,
@@ -154,6 +155,23 @@ export function samePath(a: string, b: string): boolean {
   } catch {
     return a === b;
   }
+}
+
+/** The live seat folder, or `archive/<YYYY-MM>` directly under it. A link that resolves outside
+ *  that seat, or any other subfolder, is not this mailbox. */
+function inOwnMailbox(seatDir: string, folder: string): boolean {
+  let live: string;
+  let held: string;
+  try {
+    live = realpathSync(seatDir);
+    held = realpathSync(folder);
+  } catch {
+    return false;
+  }
+  if (held === live) return true;
+  const tail = relative(live, held);
+  const parts = tail.split(sep);
+  return parts.length === 2 && parts[0] === 'archive' && /^\d{4}-\d{2}$/.test(parts[1] ?? '');
 }
 
 /**
@@ -251,13 +269,27 @@ function seatNamesOf(root: string, session: string): string[] {
  *  `stat` per seat folder — the session's folder lists its seats, not its records — so an id
  *  costs a couple of dozen file tests whatever the tree holds, never a walk of it. */
 export function recordHits(root: string, session: string, id: string): { seat: string; path: string }[] {
-  if (!NAME.test(id) || isRecordSidecarName(id) || id.startsWith('work-')) return [];
+  // A channel handoff marker is not a record. Naming it points at the signed record beside it,
+  // which still has to verify; the marker itself is never read as one. Any other sidecar is
+  // not a lookup.
+  const emittedSuffix = '.channel-emitted';
+  const emitted = id.endsWith(emittedSuffix);
+  const looked = emitted ? id.slice(0, -emittedSuffix.length) : id;
+  if (!NAME.test(looked) || looked.startsWith('work-')) return [];
+  if (!emitted && isRecordSidecarName(id)) return [];
+  if (emitted && !NAME.test(id)) return [];
   const hits: { seat: string; path: string }[] = [];
   for (const seat of seatNamesOf(root, session)) {
-    const path = join(root, '.agents', 'send-drops', session, seat, id);
+    const seatDir = join(root, '.agents', 'send-drops', session, seat);
+    const path = recordFile(seatDir, looked);
+    if (emitted) {
+      const marker = join(dirname(path), id);
+      if (isFile(marker) && isFile(path)) hits.push({ seat, path });
+      continue;
+    }
     if (isFile(path)) hits.push({ seat, path });
   }
-  if (hits.length > 0 || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return hits;
+  if (emitted || hits.length > 0 || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(looked)) return hits;
   return candidatesOf(root, session).filter((candidate) => basename(candidate.path).startsWith(id));
 }
 
@@ -297,7 +329,7 @@ export function findRecord(hits: { seat: string; path: string }[], root: string,
   if (mine.length === 0) {
     return { kind: 'refused', why: `record ${verified[0]?.record.payload.id ?? id} is addressed to ${verified[0]?.record.payload.to ?? 'nobody'}, not to ${me}` };
   }
-  const seated = mine.filter((found) => samePath(recordDir(root, session, me), dirname(found.path)));
+  const seated = mine.filter((found) => inOwnMailbox(recordDir(root, session, me), dirname(found.path)));
   if (seated.length === 0) {
     return { kind: 'refused', why: `record ${mine[0]?.record.payload.id ?? id} is addressed to ${me}, and it waits in another seat's folder` };
   }

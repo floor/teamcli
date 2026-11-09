@@ -1,8 +1,8 @@
 // Which route `team send` picks for each vendor's CLI when the team declares no order, read
 // from the send's own dry run: the Claude seat with the development channel and a live channel
-// listener takes the push first, then its socket; Codex walks its native runtime queue first;
-// the other CLIs walk the build's default. One matrix, so a change to any vendor's implied
-// order shows up here. Fixtures only: a synthetic checkout and home; nothing is written.
+// listener takes the push, and does not also dial its socket; Codex walks its native runtime
+// queue first; the other CLIs walk the build's default. One matrix, so a change to any vendor's
+// implied order shows up here. Fixtures only: a synthetic checkout and home; nothing is written.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

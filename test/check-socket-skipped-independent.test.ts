@@ -315,11 +315,25 @@ test('a seat with no socket is a note naming its class, and the exit stays clear
   expect(sent.frames).toEqual([]);
 });
 
+/** The worker's own order: neither the socket nor the typed wake, so the check treats that as
+ *  the worker's choice. The lead keeps the build's order, which can still wake it. */
+function orderOnWorker(made: World): void {
+  const path = join(made.dir, 'team.yaml');
+  const text = readFileSync(path, 'utf8');
+  const at = text.indexOf('    name: wrapped\n');
+  if (at < 0) throw new Error('the wrapped seat was not in the team file');
+  const launch = text.indexOf('\n    launch:', at);
+  const end = launch < 0 ? -1 : text.indexOf('\n', launch + 1);
+  if (end < 0) throw new Error('the wrapped seat has no launch');
+  writeFileSync(path, `${text.slice(0, end)}\n    delivery_order: [session, drop]${text.slice(end)}`);
+}
+
 test('a declared delivery order that names neither socket nor typed is a choice, not a finding', async () => {
   // The same wrapper seat as the first scene, which the check flags when the build's own order
   // stands: a declared order that leaves the socket out silences that finding, and the send's
   // walk follows the order, so all three readers agree the socket is not taken.
-  const { made, names } = fixture([{ name: 'wrapped', role: 'implementer', launch: wrapper('accept') }], ['mcp-inbox', 'drop']);
+  const { made, names } = fixture([{ name: 'wrapped', role: 'implementer', launch: wrapper('accept') }], null);
+  orderOnWorker(made);
   settle(made, names);
   placeSocket(made);
   const { status, sent } = await agree(made, 'wrapped', names, 'typed');

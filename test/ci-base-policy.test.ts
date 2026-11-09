@@ -139,14 +139,13 @@ test('a PR that admits a bad signer still fails against the base policy', () => 
   expect(JSON.parse(readFileSync(fixture.argsFile, 'utf8')).at(-1)).toBe(join(fixture.temp, 'policy.yaml'));
 }, 30_000);
 
-test('the first policy PR uses only the legacy team file from its base and rejects its bad signer', () => {
+test('a base with only a legacy team file has no checking policy', () => {
   const fixture = scene({ 'team.yaml': LEGACY });
   expect(fixture.ownPolicy().status).toBe(0);
   const result = fixture.run();
   expect(result.status).toBe(1);
-  expect(result.stdout + result.stderr).toContain('a signature no seat of this team has had');
-  expect(readFileSync(join(fixture.temp, 'team.yaml'), 'utf8')).toBe(LEGACY);
-  expect(JSON.parse(readFileSync(fixture.argsFile, 'utf8')).at(-1)).toBe(join(fixture.temp, 'team.yaml'));
+  expect(result.stderr).toContain('the base branch has no checking policy');
+  expect(existsSync(fixture.argsFile)).toBe(false);
 }, 30_000);
 
 test('a base with neither policy format fails closed despite the valid policy in the PR tree', () => {

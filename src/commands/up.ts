@@ -7,7 +7,7 @@ import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type Clie
 import { verifyClientUp } from '../client/up-grant.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import { spawnInheritedBus } from '../bus/supervise.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { readArgs, type Args } from '../args.ts';
@@ -75,7 +75,7 @@ import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBin
 import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers, rawAgentSession } from '../launch/resolve-flag.ts';
-import { channelLobbyFolder } from '../mcp/launch-config.ts';
+import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
@@ -113,6 +113,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { defaultSocketsDirs, refreshAgentAddressFrom } from '../send/address.ts';
@@ -695,6 +696,8 @@ function seatPlan(
    *  own launch line would start one now: the pane must be relaunched in place for it, never
    *  adopted on the endpoint it lost. */
   endpointRelaunch: (seat: Seat, recorded: SeatState, launch: string) => boolean = () => false,
+  /** The seat's recorded worktree, when one is recorded. Cursor and Grok start there when their cwd is `.`. */
+  worktree?: string,
 ): UpSeat {
   // After `team down` the seat has no state record, only what down retained. That is still the
   // state's half of the resume binding: without it the registry's recorded conversation was
@@ -1239,7 +1242,7 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         ...(listed ? { pane: listed.pane, workspace: listed.workspace } : {}),
-        ...restartNote(team, seat.name, recorded, home, root, session),
+        ...restartNote(team, seat, recorded, home, root, session, worktree),
       };
     }
     return planned;
@@ -1277,22 +1280,44 @@ function restoredDetail(
 }
 
 function restartNote(
-  team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby'>,
-  name: string,
+  team: TeamFile,
+  seat: Seat,
   recorded: SeatState,
   home: string,
   root: string,
   session: string,
+  worktree?: string,
 ): { restartNote: string } | Record<string, never> {
-  const fix = relaunchRepair(team, name, 'plain');
+  const fix = relaunchRepair(team, seat.name, 'plain');
   // The identity a launch predating the record could not write is `team register`'s to write:
   // the seat is ready on its pane, and recording it is one per-seat command — never a
   // whole-team restart for one seat's bookkeeping, and a lead runs it for its own seat too.
-  if (!recorded.launched) return { restartNote: `its process was never recorded: run team register ${name} to record it, nothing relaunched` };
+  if (!recorded.launched) return { restartNote: `its process was never recorded: run team register ${seat.name} to record it, nothing relaunched` };
+  if (!recorded.start_cwd) return {};
+  // A Claude channel seat starts in its lobby folder. The cwd on the seat is not that folder,
+  // so the note follows the start, not the cwd.
+  if (claudeChannelSeat(seat)) {
+    const start = seatStart({ ...team, session }, seat, root, home);
+    if ('problem' in start || recorded.start_cwd === start.cwd) return {};
+    return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
+  }
+  // Cursor and Grok with "." start in the recorded worktree. A record that already names it
+  // needs no note, and a record that names the lobby is moved to that folder, not into the lobby.
+  if ((seat.cli === 'grok' || seat.cli === 'cursor') && seat.cwd === '.' && worktree !== undefined) {
+    if (recorded.start_cwd === worktree) return {};
+    return { restartNote: `a relaunch moves it to its own folder: ${fix}` };
+  }
+  // A seat with its own folder is not waiting in the lobby. A relaunch stays there when the
+  // record already names it, and otherwise moves to that folder, not into the lobby.
+  if (seat.cwd !== '.') {
+    const own = resolve(root, seat.cwd);
+    if (recorded.start_cwd === own) return {};
+    return { restartNote: `a relaunch moves it to its own folder: ${fix}` };
+  }
   // A running lead is at home in the lobby or in the project. Either recording is left as it
   // is. Every other seat still outside the lobby is told how to move.
-  if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
-    if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
+  if (recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
+    if (isLeadSeat(team, seat.name) && recorded.start_cwd === root) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
   return {};
@@ -1472,6 +1497,7 @@ async function runUpAll(
     if (walked.kind !== 'owner') {
       let lift = devModeOwnerLiftAtCwd(io, {
         command: 'up',
+        gate: 'all',
         refusal,
         home,
         now,
@@ -1494,6 +1520,7 @@ async function runUpAll(
             if (!loaded.ok) continue;
             const candidate = devModeOwnerLift(io, {
               command: 'up',
+              gate: 'all',
               refusal,
               home,
               team: loaded.team,
@@ -1829,6 +1856,18 @@ async function runUpAll(
 }
 
 export async function runUp(argv: string[], io: Io, sources: UpSources, internal?: UpInternal): Promise<number> {
+  // The run reads the owner's entities and projects files once and composes every seat's rules
+  // from that one read. The scope is entered here and discarded in `finally`, so nothing crosses
+  // a run boundary.
+  enterRunMemo();
+  try {
+    return await runUpInMemo(argv, io, sources, internal);
+  } finally {
+    leaveRunMemo();
+  }
+}
+
+async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?: UpInternal): Promise<number> {
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(io);
@@ -1926,7 +1965,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ? { kind: 'admitted' as const }
     : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources);
+    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources, [charterTargetOf(io.cwd, args.values.file)]);
   if (badInvocation || allCode === 2) {
     if (badInvocation) {
       refuse(io, json, 'up', {
@@ -1985,7 +2024,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
-  if (detached !== undefined && aimed) {
+  if (detached !== undefined && aimed && !(ownerSeatRuleCovers(io.cwd, [charterTargetOf(io.cwd, args.values.file)]) && ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources))) {
     refuse(io, json, 'up', { id: 'up.detached', message: detached, repair: null });
     // exit: up.detached
     return 1;
@@ -2207,13 +2246,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // other door refused.
   const ownerSeat = seatApproved || (
     detached === undefined && clientUp === null && !ordinaryAdmitted && !ownerToken && verdict === null && grantedSeat === null &&
-    ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources));
+    ownerSeatRuleCovers(io.cwd, [root]) && ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources));
 
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane
   // the live file names for `up`, or the seat whose own registry record an active entity
-  // create-grant names. A grant is not a constraint on an admitted run: it was never asked, and
-  // its audit line is never written.
+  // create-grant names. A grant is a second door, read only where the map refused. Under
+  // own-team it neither adds nor removes an admission the default rule already gave.
   const named =
     ordinaryAdmitted ||
     ownerToken ||
@@ -2520,6 +2559,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       recorded?.seats[seat.name] === undefined ? recorded?.retained_seats?.[seat.name] : undefined,
       (pane) => sources.launch?.foreground(session, pane) ?? null,
       endpointRelaunch,
+      worktreeOf(recorded, seat.name)?.path,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
@@ -2795,6 +2835,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ? `watch: ${identity.why}; nothing was signalled and no replacement is started`
     : null;
   const watchUnknown = sitting.kind === 'unknown' && !watchAlive;
+  // A dead pane-watch record is cleared on the admitted run, after a dry run and a refusal
+  // have returned. Neither of those writes the record or an audit line.
   // The watch starts in `root` and runs `watch` with no `--file`. When that load would miss
   // this file, or read another one, the resolved path is recorded for the pane.
   const watchFile = watchWouldRead(root, loaded.path, sources.home) ? undefined : loaded.path;
@@ -2849,6 +2891,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     startFolders: placedStartFolders(team.seats, recorded),
     watchLabel: watchLabel(team.project),
     watchAlive,
+    // The daemon is the only watch. `up` opens no Watch pane and starts no `team watch`.
+    startWatch: false,
     ...(watchPid !== null ? { watchPid } : {}),
     ...(watchHold !== null ? { watchHold } : {}),
     ...(watchUnknown ? { watchUnknown: true } : {}),
@@ -3121,6 +3165,47 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     return 1;
   }
   try {
+    // A restore whose daemon already hosts this session's watch drops a dead pane-watch record.
+    // The pane and the pid go; one audit line names the pane. A live or fresh record stays.
+    // Under the lock the holder is read again: the same pane and pid, no epoch, the beat still
+    // stale, the pid still dead. A daemon that took the record over in the meantime — an epoch,
+    // a new pid, a fresh beat, a live process — is left as it is.
+    if (sitting.kind === 'hosted' && sitting.watch.session === session && watch?.pane !== undefined && watch.epoch === undefined) {
+      const intervalMs = watchInForceOf(standing, team).interval * 1000;
+      const nowMs = (sources.now?.() ?? new Date()).getTime();
+      const beat = Date.parse(watch.heartbeat);
+      const age = nowMs - beat;
+      const stale = !Number.isFinite(age) || age > 3 * intervalMs;
+      const pidDead = watch.pid === undefined || !(sources.alive?.(watch.pid) ?? false);
+      if (stale && pidDead) {
+        const pane = watch.pane;
+        const pid = watch.pid;
+        const heartbeat = watch.heartbeat;
+        const dropped = updateState(dir, (state) => {
+          const current = state.sessions[session];
+          const held = current?.watch;
+          if (current === undefined || held === undefined) return false;
+          if (held.epoch !== undefined) return false;
+          if (held.pane !== pane || held.pid !== pid) return false;
+          if (held.heartbeat !== heartbeat) return false;
+          const heldAge = nowMs - Date.parse(held.heartbeat);
+          if (Number.isFinite(heldAge) && heldAge <= 3 * intervalMs) return false;
+          if (held.pid !== undefined && (sources.alive?.(held.pid) ?? false)) return false;
+          delete held.pane;
+          delete held.pid;
+          return true;
+        }, { writeWhen: (wrote) => wrote });
+        if (dropped) {
+          logLine(
+            dir,
+            'up',
+            'daemon',
+            `cleared pane watch ${pane}: the daemon hosts this session's watch`,
+            sources.now?.() ?? new Date(),
+          );
+        }
+      }
+    }
     // The audit line of a delegated run: the gate passed it and this run is about to have effects,
     // so the delegation is on the record before the first workspace is made. A dry run returned
     // above and writes nothing; a run that refused never got here.
@@ -3485,6 +3570,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
           foreground: () => launch.foreground(session, pane),
           report: (why) => { stopped.why = why; },
+          leadPane: (team.orchestrator !== '' && file.seat === team.orchestrator)
+            || (team.operator !== '' && file.seat === team.operator),
           now: () => now().getTime(),
           sleep: sharedSleep,
         });
@@ -4020,19 +4107,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     if (!json) out.stderr(`${summaryLine}\n`);
     // A seat the plan left behind (a repair it would not close, a dialog it timed out at) is a
     // seat left short of ready even when its state still says ready: `held` makes that exit 1.
-    const failed = pending.length > 0 || report.serverFailed || report.watchFailed || report.held;
+    // `up` never plans a watch step (`startWatch: false`), so the executor's watchFailed flag
+    // stays false for this command and is not an exit.
+    const failed = pending.length > 0 || report.serverFailed || report.held;
     if (json) {
       if (failed) {
         // The run's own failure named by its row: the seats short of ready first, then what the
         // plan reported; a held step with nothing pending is the pending row too.
         const id = pending.length > 0
           ? 'up.pending'
-          : report.serverFailed ? 'up.server' : report.watchFailed ? 'up.watch' : 'up.pending';
+          : report.serverFailed ? 'up.server' : 'up.pending';
         const message = pending.length > 0
           ? `${pending.length} seat${pending.length === 1 ? '' : 's'} not ready: ${pending.map((seat) => seat.name).join(', ')} (${summaryLine})`
           : report.serverFailed ? 'the herdr server did not start'
-            : report.watchFailed ? 'the watch did not start'
-              : restoreSummary.refused > 0 ? summaryLine : `a step was held (${summaryLine})`;
+            : restoreSummary.refused > 0 ? summaryLine : `a step was held (${summaryLine})`;
         refuse(io, true, 'up', { id, message, repair: null });
       } else {
         writeJson(io, 'team.up', {
@@ -4052,7 +4140,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // exit: up.ready
     // exit: up.pending
     // exit: up.server
-    // exit: up.watch
     return failed ? 1 : 0;
   } finally {
     if (runLock !== null && 'release' in runLock) runLock.release();

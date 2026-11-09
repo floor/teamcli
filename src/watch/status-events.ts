@@ -651,6 +651,32 @@ export function seatHasAssignedWorkOnDisk(
   return false;
 }
 
+/** The lead climb the blocked-seat branch writes (`evt-prompt-lead-` through
+ *  `writeRuntimeMailboxRecord`): one record to the entity's orchestrator, once per episode.
+ *  The unread wake calls it when a lead's drop still has no read receipt five minutes after
+ *  the first wake. The same seat is not told about itself. */
+export function climbUnreadLead(input: {
+  home: string;
+  root: string;
+  project: string;
+  seat: string;
+  episode: string;
+  why: string;
+  at: string;
+}): void {
+  const target = readEntityOrchestrator(input.home, teamIdOf(input.root));
+  if (target === null || target.seat === input.seat) return;
+  writeRuntimeMailboxRecord({
+    root: target.root,
+    home: input.home,
+    to: target.seat,
+    id: `evt-prompt-lead-${input.seat}-${input.episode}`,
+    text: `${input.project}: ${input.why}`,
+    session: target.session,
+    at: input.at,
+  });
+}
+
 export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatusEngine {
   const { team } = input;
   const session = input.session ?? team.session;
