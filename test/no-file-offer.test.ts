@@ -74,6 +74,8 @@ const REACHED = [
   'bus',
   'delegate',
   'drops',
+  // `drops archive` is a declared command the census reaches.
+  'drops archive',
   'fallback prune',
   'feed',
   'grant',
