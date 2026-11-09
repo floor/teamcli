@@ -28,6 +28,7 @@ import type { HerdrAgent } from '../../src/herdr.ts';
 import type { Live } from '../../src/status/compare.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor } from '../../src/profiles/index.ts';
+import { fixtureLaunchPlace } from '../helpers.ts';
 import * as projectRegistry from '../../src/registry/projects.ts';
 import { readScreen } from '../../src/watch/screen.ts';
 import type { ScreenKind, Spec, ToolState } from './spec.ts';
@@ -826,6 +827,7 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         standing: standingSource(home),
         now,
         home,
+        launchPlace: fixtureLaunchPlace(root, home),
         // A recorded watch's liveness is the fixture's process table too: a page whose state
         // records a watch says whether its process runs, and the machine never answers.
         alive: alivePid,

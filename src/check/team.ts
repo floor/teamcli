@@ -25,6 +25,7 @@ import {
   recordStartMatches,
   unmanagedEndpointNotes,
 } from '../launch/codex-endpoint.ts';
+import { launchLineProblem, realLaunchPlace, type LaunchPlace } from '../launch/launcher-home.ts';
 import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig, managedCodexLaunch } from '../launch/plan.ts';
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { sandboxUnappliedNotes } from '../launch/grok-sandbox.ts';
@@ -220,6 +221,10 @@ export type CheckSources = {
    *  the stop signals and the waits between them. Absent when no producer is wired: a run then
    *  refuses `--close-orphans` rather than touching a process it cannot re-prove. */
   closeOrphans?: OrphanCloseSources;
+  /** Temp-folder and repository detection for a launch line that runs a script. Absent: the
+   *  real temp roots (`os.tmpdir()`, `TMPDIR`, `/tmp`, `/private/tmp`) and a walk for a git
+   *  directory. A fixture world supplies a detector that treats its own base as neither. */
+  launchPlace?: LaunchPlace;
 };
 
 export type CodexEndpointCheckSources = {
@@ -254,6 +259,7 @@ function heldIn(session: string): ReadonlySet<number> | null {
  * names the seat there. The rest is the same code, not a copy of it.
  */
 export const realCheckSources: CheckSources = {
+  launchPlace: realLaunchPlace(),
   live(session, team, state) {
     const running = sessionRunning(session);
     if (running === null) return null;
@@ -740,6 +746,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // repair. Under dev mode both fold into the quiet notes above.
     ...record.differences,
     ...rulesFileDifferences(standing, team, root, sources.home, rulesOriginOf(current.source)),
+    ...launchLineDifferences(team, root, sources.home ?? homedir(), sources.launchPlace ?? realLaunchPlace()),
     ...staleDifferences(stale),
     ...unrecordedWorkspaceDifferences(team, state, live, root, sources.home, session, sources),
     // A live agent CLI no pane holds: named with its pid, age and the record it answers to, with
@@ -2422,6 +2429,18 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
         repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order for ${seat.name} in team config`,
       });
     }
+  }
+  return out;
+}
+
+/** A launch line that runs a script from a repository or a temp folder. The repair is the
+ *  migration command, which rewrites the line. */
+function launchLineDifferences(team: TeamFile, root: string, home: string, place: LaunchPlace): Difference[] {
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    const problem = launchLineProblem(seat.launch, root, home, place);
+    if (problem === null) continue;
+    out.push({ what: `${seat.name}: ${problem}`, repair: 'team launchers migrate' });
   }
   return out;
 }

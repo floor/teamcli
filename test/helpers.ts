@@ -9,6 +9,7 @@ import { DAEMON_LABEL } from '../src/daemon/paths.ts';
 import type { ServiceJobRecord, ServiceUnitRecord } from '../src/daemon/service.ts';
 import type { Io } from '../src/io.ts';
 import { currentBriefClaim, deliverBriefForAttribution } from '../src/launch/general-brief.ts';
+import { realLaunchPlace, type LaunchPlace } from '../src/launch/launcher-home.ts';
 import { rulesText } from '../src/launch/rules.ts';
 import { readMessage } from '../src/mcp/inbox.ts';
 import { readAgents } from '../src/registry/agents.ts';
@@ -443,6 +444,29 @@ export function fixtureBase(prefix: string): string {
     throw new Error(`the fixture scratch root "${real}" is inside the checkout; name a root outside it with TEAMCLI_TEST_SCRATCH`);
   }
   return realpathSync(mkdtempSync(join(real, prefix)));
+}
+
+/** A launch-line detector for a fixture world. A path inside any of `bases` is neither a temp
+ *  folder nor a repository: the world itself is the fixture, and a script it wrote is not a
+ *  launch the migration is about. A path outside those bases uses the real temp roots and the
+ *  git walk. */
+export function fixtureLaunchPlace(...bases: string[]): LaunchPlace {
+  const roots = bases.map((base) => {
+    try {
+      return realpathSync(base);
+    } catch {
+      return resolve(base);
+    }
+  });
+  const held = (path: string): boolean => {
+    const resolved = resolve(path);
+    return roots.some((root) => resolved === root || resolved.startsWith(`${root}${sep}`));
+  };
+  const real = realLaunchPlace();
+  return {
+    inTemp: (path) => (held(path) ? false : real.inTemp(path)),
+    insideRepo: (path) => (held(path) ? false : real.insideRepo(path)),
+  };
 }
 
 /** Run `write` while the fixture's team is registered, so an address policy can name it.
