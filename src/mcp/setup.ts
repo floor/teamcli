@@ -14,7 +14,7 @@ import { shellWords } from '../launch/shell-words.ts';
 import { plainLine } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { refuse, writeJson } from '../output/index.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 import { CHANNEL_FLAG, CHANNEL_SERVER, channelLaunchEnabled } from './channel.ts';
@@ -34,8 +34,9 @@ function errorText(value: unknown): string { return value instanceof SyntaxError
 function contains(root: string, cwd: string): boolean {
   return cwd === root || cwd.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 }
-/** Setup changes its starting folder, so the folder selects the team, never the seat name.
- * A local definition wins; otherwise the closest containing registered root owns the folder.
+/** Setup changes its starting folder, so a seat name never selects the team.
+ * A local definition wins. Otherwise one team whose state records this caller on its pane
+ * owns the folder. None leaves the closest containing registered root.
  * The ordinary config reader still decides the source and validates the chosen root. */
 function setupRoot(home: string, cwd: string, io?: Io): string | null {
   try {
@@ -47,7 +48,7 @@ function setupRoot(home: string, cwd: string, io?: Io): string | null {
       return cwd;
     }
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-  const binding = teamBinding(home, cwd, undefined, io);
+  const binding = addressedTeam(home, cwd, undefined, io);
   if (binding.kind === 'unreadable' || binding.kind === 'ambiguous') throw new ConfigRefusal(binding.message);
   return binding.kind === 'bound' ? resolve(binding.team.root) : null;
 }

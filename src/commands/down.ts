@@ -19,8 +19,9 @@ import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from
 import { currentLaunchedTeam, currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { readLaunchedTeam } from '../file/team-text.ts';
 import type { TeamFile } from '../file/types.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { getTeam, noteTeam, teamIdOf } from '../registry/teams.ts';
 import { registerEnd, registerSessionEnd } from '../registry/sync.ts';
 import {
@@ -718,13 +719,38 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (!json) io.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, ${expiryPhrase(verified.grant.expires)}\n`);
   }
   const dry = args.flags.has('dry-run');
+  // The team this stop will act on, before any owner-seat, charter, approval, or leads door.
+  // A pane that records this caller is that team. A `--file` or a client grant names its own
+  // folder and does not ask the pane. None leaves the launched pointer, then this checkout.
+  // An ambiguous registry names no team, so no door below is asked for the cwd instead.
+  const bindingHome = sources.home ?? homedir();
+  const targetBinding = args.values.file !== undefined || clientDown !== null
+    ? { kind: 'unbound' as const }
+    : addressedTeam(bindingHome, io.cwd, undefined, io);
+  const launchedForTarget = args.values.file !== undefined || clientDown !== null || targetBinding.kind !== 'unbound'
+    ? undefined
+    : launchedTeamFile(io, sources.home);
+  const launchedRead = launchedForTarget === undefined
+    ? undefined
+    : readLaunchedTeam(launchedForTarget, { ...(sources.home ? { home: sources.home } : {}) });
+  const targetKnown = targetBinding.kind !== 'ambiguous' && targetBinding.kind !== 'unreadable';
+  const targetRoot = clientDown !== null
+    ? io.cwd
+    : targetBinding.kind === 'bound'
+      ? targetBinding.team.root
+      : args.values.file !== undefined
+        ? charterTargetOf(io.cwd, args.values.file)
+        : launchedRead?.ok === true
+          ? launchedRead.root
+          : charterTargetOf(io.cwd, args.values.file);
   // The owner-seat door, for a stop that is not a client grant. `--request` records the stop and
   // returns; `--approval` and an always rule admit it, so the owner never has to be at a terminal.
-  // A leads seat on its own pane is admitted by the gate below, as before.
-  const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
+  // Every one of those is asked for the target root only. A leads seat on its own pane is
+  // admitted by the gate below, for that same team.
+  const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), root: targetRoot };
   let seatApproved = false;
-  if (clientDown === null) {
-    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, seatSources, [charterTargetOf(io.cwd, args.values.file)]);
+  if (clientDown === null && targetKnown) {
+    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, seatSources, [targetRoot]);
     if (seat.kind === 'requested') {
       // exit: down.approval-requested
       return 0;
@@ -741,7 +767,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // reader to the owner. An owner-seat answer has already admitted this run.
   const detached = clientDown !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
-    seatApproved = ownerSeatRuleCovers(io.cwd, [charterTargetOf(io.cwd, args.values.file)]) && ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
+    seatApproved = targetKnown && ownerSeatRuleCovers(targetRoot, [targetRoot]) && ownerSeatRuleAdmits('team-down', targetRoot, dry, io, seatSources);
     if (!seatApproved) {
       refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
       // exit: down.detached
@@ -857,15 +883,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   // Both flags are dropped once the branch has decided the run: the gate has refused them, and a
   // delegated run judges the file's own session, as any delegated `down` does.
-  const launched = args.values.file || clientDown !== null ? undefined : launchedTeamFile(io, sources.home);
-  // A launched pointer names where this session was launched from, not a copy to read: the run
-  // reads the team where the edits write it, so the session it stops and the seats it knows are
-  // the registry's record, never missed over the file the session launched from. A `--file`
-  // names its file, and is read as that file. A cwd inside a registered root binds to that
-  // team instead, the longest root when they nest.
-  const binding = args.values.file !== undefined || clientDown !== null || branching()
-    ? { kind: 'unbound' as const }
-    : teamBinding(sources.home ?? homedir(), io.cwd, undefined, io);
+  // The target was chosen before the owner-seat door. A delegate branch, decided above, stops
+  // the live file and does not reuse that pane team. An admission for the pane team does not
+  // carry onto a different live file. Every other run keeps the same root the door was asked for.
+  if (branching() && live?.root !== undefined && resolve(live.root) !== resolve(targetRoot)) {
+    seatApproved = false;
+  }
+  const launched = branching() ? undefined : launchedForTarget;
+  const binding = branching() ? { kind: 'unbound' as const } : targetBinding;
   const pointer = branching() || binding.kind === 'bound' ? undefined : launched;
   const file = branching() ? undefined : args.values.file;
   const sessionFlag = branching() ? undefined : args.values.session;
@@ -971,7 +996,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   const createGranted = clientDown !== null || seatApproved || (!branching() && rule.kind !== 'ok'
     && readEntityCreateGrants(sources.home ?? homedir()).length > 0
-    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
+    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: root }));
 
   // The load above wrote nothing. A refused caller, a dry run, and a run that finds the
   // session lock held leave the state file as it was. An allowed run that is not a dry run
@@ -987,7 +1012,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // The approval line a dev-mode grant fold owed: printed and logged with the placement fold.
   let grantApproval: string | null = null;
   if (!branching() && rule.kind === 'ok' && caller.kind === 'seat' && caller.name === team.orchestrator && team.grant) {
-    const said = (sources.grantGate ?? grantGate)({ act: 'down', io, home: sources.home, dev });
+    const said = (sources.grantGate ?? grantGate)({ act: 'down', io: { ...io, cwd: root }, home: sources.home, dev });
     if (said.kind === 'passed') {
       grantSeat = said.grant.seat;
       if (said.devApproval !== undefined) grantApproval = said.devApproval;

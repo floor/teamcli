@@ -15,7 +15,7 @@ import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { readSeatSettings } from '../config/read.ts';
 import { sayApply, sayConfigOrigin, sayConfigValue } from '../config/text.ts';
 import { currentTeam } from '../file/current.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
@@ -181,7 +181,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
   }
 
   const now = sources.now();
-  const binding = read.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(sources.home ?? homedir(), io.cwd, seatName, io);
+  const binding = read.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(sources.home ?? homedir(), io.cwd, seatName, io);
   const current = binding.kind === 'ambiguous' || binding.kind === 'unreadable'
     ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
     : currentTeam(binding.kind === 'bound' ? binding.team.root : io.cwd, owner ? read.values.file : undefined, now, sources.home, owner);

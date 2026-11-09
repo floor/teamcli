@@ -12,7 +12,7 @@ import { readArgs } from '../args.ts';
 import { ownerSeatStep } from '../client/owner-action-step.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import {
   callerLabel,
   callerOf,
@@ -102,7 +102,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   const home = sources.home ?? homedir();
   const env = sources.env ?? process.env;
   const seat = path[0] === 'seats' && path[1] !== undefined && !/^\d+$/.test(path[1]) ? path[1] : undefined;
-  const binding = teamBinding(home, io.cwd, seat, io);
+  const binding = addressedTeam(home, io.cwd, seat, io);
   if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') return refuseUnreadable(io, json, binding.message);
   const root = binding.kind === 'bound' ? binding.team.root : realRoot(io.cwd);
   const file = join(root, TEAM_FILE);

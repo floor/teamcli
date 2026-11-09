@@ -7,6 +7,7 @@ import { recordSeatDigestOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerLabel, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { charterGate, passCharterOwner } from '../charter/check.ts';
+import { charterTargetOf } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
@@ -16,7 +17,7 @@ import { leadsOwnTeamAdmits } from '../leads-authority.ts';
 import { plainLine } from '../launch/plain.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
 import type { Problem, Seat } from '../file/types.ts';
@@ -212,12 +213,37 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     noteIo = json ? { ...io, stdout: (text: string) => collect(text), stderr: (text: string) => collect(text) } : io;
     if (!json) io.stderr(`client grant ${clientRun.grant.grantId}: ${clientRun.grant.clientId} for team ${clientRun.grant.up.project} at ${clientRun.root}, until ${clientRun.grant.expires}\n`);
   }
+  // The team this remove will change, before the charter. A pane that records this caller is
+  // that root. A `--file` or a client grant names its own folder. None leaves the launched
+  // pointer, then this checkout. The charter is asked for that root only.
+  const bindingHome = sources.home ?? homedir();
+  const seatName = args.rest[0] ?? '';
+  const targetBinding = args.values.file !== undefined || clientRun !== null
+    ? { kind: 'unbound' as const }
+    : addressedTeam(bindingHome, io.cwd, seatName, io);
+  const launchedForTarget = args.values.file !== undefined || clientRun !== null || targetBinding.kind !== 'unbound'
+    ? undefined
+    : launchedTeamFile(io, sources.home);
+  const launchedRead = launchedForTarget === undefined
+    ? undefined
+    : readLaunchedTeam(launchedForTarget, { ...(sources.home ? { home: sources.home } : {}) });
+  const targetRoot = clientRun !== null
+    ? io.cwd
+    : targetBinding.kind === 'bound'
+      ? targetBinding.team.root
+      : args.values.file !== undefined
+        ? charterTargetOf(io.cwd, args.values.file)
+        : launchedRead?.ok === true
+          ? launchedRead.root
+          : io.cwd;
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
-  // record, and a caller outside herdr has none. This sentence is answered before any file is
-  // read, as `down` and `init` ask it —
+  // record, and a caller outside herdr has none. This sentence is answered before the team file
+  // is read, as `down` and `init` ask it —
   // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
-  // order.
-  const charter = clientRun !== null ? { kind: 'absent' as const } : charterGate(sources.home ?? homedir(), { operation: 'remove', cwd: io.cwd }, sources.ownerSeatStore);
+  // order. The target root above is the registry's, so the charter is not asked for another team.
+  const charter = clientRun !== null || targetBinding.kind === 'ambiguous' || targetBinding.kind === 'unreadable'
+    ? { kind: 'absent' as const }
+    : charterGate(sources.home ?? homedir(), { operation: 'remove', cwd: targetRoot, path: targetRoot }, sources.ownerSeatStore);
   // A charter block refuses a seat. The owner goes through with one warning and an audit line.
   if (charter.kind === 'block' && !isOwner(walkCaller(io))) {
     refuse(io, json, 'remove', { id: 'remove.charter', message: charter.message, repair: null });
@@ -226,7 +252,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   if (charter.kind === 'block') {
     passCharterOwner(io, charter.message, {
-      dir: join(io.cwd, '.agents'),
+      dir: join(targetRoot, '.agents'),
       command: 'remove',
       caller: callerLabel(walkCaller(io)),
       now: sources.now(),
@@ -239,7 +265,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // exit: remove.detached
     return 1;
   }
-  const name = args.rest[0] ?? '';
+  const name = seatName;
   // The `--file` check is the walk's, and it runs before that file is read: a non-owner aiming
   // `--file` must not make this command read and validate another project's team file, nor leave
   // its `last_valid` in that project's state. The one place every command whose `--file` is the owner's
@@ -277,9 +303,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // exit: remove.session-owner
     return 1;
   }
-  const bindingHome = sources.home ?? homedir();
-  const binding = args.values.file !== undefined || clientRun !== null ? { kind: 'unbound' as const } : teamBinding(bindingHome, io.cwd, name, io);
-  const launched = args.values.file !== undefined || clientRun !== null || binding.kind === 'bound' ? undefined : launchedTeamFile(io, sources.home);
+  const binding = targetBinding;
+  const launched = launchedForTarget;
   const readOptions = { ...(sources.home ? { home: sources.home } : {}) };
   // A launched pointer names where this session was launched from, not a copy to read: the team
   // is read where the edits write it, so a seat `team add` put into the registry's record is
@@ -387,7 +412,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const createGranted = clientRun !== null || charterAdmitted || (verdict.kind !== 'ok'
     && !(args.flags.has('keep') && !swap)
     && readEntityCreateGrants(sources.home).length > 0
-    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
+    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: root }));
   if (verdict.kind !== 'ok' && team.delegates && !createGranted) {
     const decided = (sources.delegateGate ?? delegateGate)({
       command: 'remove',
@@ -532,7 +557,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       return 1;
     }
     if (delegatePane === null) {
-      const said = (sources.grantGate ?? grantGate)({ act: 'swap', io, home: sources.home, dev });
+      const said = (sources.grantGate ?? grantGate)({ act: 'swap', io: { ...io, cwd: root }, home: sources.home, dev });
       if (said.kind === 'refused') {
         refuse(io, json, 'remove', {
           id: 'remove.swap-grant',

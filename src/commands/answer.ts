@@ -8,7 +8,7 @@ import { devModeLevelNote, devModeState, leadGatesAdmitOperator } from '../dev_m
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
 import { canonicalTeam, readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentRename, agentStatus, paneForeground, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey as herdrSendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
@@ -221,7 +221,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       );
     }
   }
-  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(host.home, io.cwd, seatName, io);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(host.home, io.cwd, seatName, io);
   const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, host.home);
   const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
     ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }

@@ -101,7 +101,7 @@ import { refreshAgentAddress } from '../send/address.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
 import { approvalStanding, findStore, readApproval, type Ceilings, type Standing } from '../store/store.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
-import { teamBinding, teamHoldsSeat } from '../registry/binding.ts';
+import { placedCallerTeam, teamBinding, teamHoldsSeat } from '../registry/binding.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -342,13 +342,20 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (flagRefusal !== undefined) return callerRefused(out, json, flagRefusal, undefined, 'owner-only');
 
   const home = sources.home ?? homedir();
-  // The folder binds the team before a launched pointer or a shared seat name can. A `--file`
-  // still names its file. Nested roots take the longest one that holds this cwd.
-  const binding = args.values.file === undefined ? teamBinding(home, io.cwd, name, io) : { kind: 'unbound' as const };
+  // The pane is asked before the folder. One team whose state records this caller on its pane
+  // is the team, and the launched pointer is not read. None leaves the folder binding. A `--file`
+  // still names its file. On the folder path only a place that holds the cwd is the team: a
+  // caller binding from that path still falls through to the pointer.
+  const paneTeam = args.values.file === undefined ? placedCallerTeam(home, io) : null;
+  const binding = paneTeam !== null
+    ? { kind: 'bound' as const, team: paneTeam, by: 'caller' as const }
+    : args.values.file === undefined
+      ? teamBinding(home, io.cwd, name, io)
+      : { kind: 'unbound' as const };
   if (binding.kind === 'unreadable' || binding.kind === 'ambiguous') return configuration(out, json, binding.message);
-  // A place that holds the cwd is the team. The caller's own placement is not: the launched
-  // pointer is still read, and a seat it does not declare falls through to that placed team.
-  const placed = binding.kind === 'bound' && binding.by === 'place' ? binding : undefined;
+  const placed = paneTeam !== null
+    ? { kind: 'bound' as const, team: paneTeam, by: 'caller' as const }
+    : binding.kind === 'bound' && binding.by === 'place' ? binding : undefined;
   const launched = args.values.file !== undefined || placed !== undefined ? undefined : launchedTeamFile(io, sources.home);
   const readOptions = {
     home: sources.home,
@@ -357,8 +364,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   };
   // A launched pointer names where this session was launched from, not a copy to read: a team
   // the registry holds is read there, so a sign-off an edit wrote is never missed over the file
-  // `up` launched from. A `--file` names its file, and is read as that file. A cwd inside a
-  // registered root does not consult the pointer: the seat is read only in that team.
+  // `up` launched from. A `--file` names its file, and is read as that file. A pane that
+  // records this caller, or a cwd inside a registered root, does not consult the pointer:
+  // the seat is read only in that team.
   const namedFile = args.values.file !== undefined
     ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
     : placed !== undefined
