@@ -4105,19 +4105,20 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     if (!json) out.stderr(`${summaryLine}\n`);
     // A seat the plan left behind (a repair it would not close, a dialog it timed out at) is a
     // seat left short of ready even when its state still says ready: `held` makes that exit 1.
-    const failed = pending.length > 0 || report.serverFailed || report.watchFailed || report.held;
+    // `up` never plans a watch step (`startWatch: false`), so the executor's watchFailed flag
+    // stays false for this command and is not an exit.
+    const failed = pending.length > 0 || report.serverFailed || report.held;
     if (json) {
       if (failed) {
         // The run's own failure named by its row: the seats short of ready first, then what the
         // plan reported; a held step with nothing pending is the pending row too.
         const id = pending.length > 0
           ? 'up.pending'
-          : report.serverFailed ? 'up.server' : report.watchFailed ? 'up.watch' : 'up.pending';
+          : report.serverFailed ? 'up.server' : 'up.pending';
         const message = pending.length > 0
           ? `${pending.length} seat${pending.length === 1 ? '' : 's'} not ready: ${pending.map((seat) => seat.name).join(', ')} (${summaryLine})`
           : report.serverFailed ? 'the herdr server did not start'
-            : report.watchFailed ? 'the watch did not start'
-              : restoreSummary.refused > 0 ? summaryLine : `a step was held (${summaryLine})`;
+            : restoreSummary.refused > 0 ? summaryLine : `a step was held (${summaryLine})`;
         refuse(io, true, 'up', { id, message, repair: null });
       } else {
         writeJson(io, 'team.up', {
