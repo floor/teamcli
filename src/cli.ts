@@ -37,6 +37,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   seats: () => import('./commands/seats.ts'),
   seat: () => import('./commands/seat.ts'),
   list: () => import('./commands/list.ts'),
+  launchers: () => import('./commands/launchers.ts'),
   up: () => import('./commands/up.ts'),
   watch: () => import('./commands/watch.ts'),
   messages: () => import('./commands/messages.ts'),
