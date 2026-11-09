@@ -172,7 +172,7 @@ function sources(live: string, opts: { pane?: string; status?: string } = {}): {
       return true;
     },
     renameAgent(session, pane, name) {
-      expect(session).toBe(live);
+      expect(session).toBe(SESSION);
       trace.named.push({ pane, name });
       return true;
     },

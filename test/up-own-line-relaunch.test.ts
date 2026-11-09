@@ -9,7 +9,7 @@
 // keeps the conversation the records name. All of it is synthetic: no live host, no CLI.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
@@ -155,7 +155,8 @@ function setup(spec: Spec, registered = false): void {
     home,
   );
   if (!registered) return;
-  mkdirSync(lobby, { recursive: true });
+  mkdirSync(lobby, { recursive: true, mode: 0o700 });
+  chmodSync(lobby, 0o700);
   upsertTeam(home, teamIdOf(root), {
     root,
     project: 'acme',

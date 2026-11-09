@@ -4,14 +4,18 @@
 // the launch names no resume id. A claude seat whose record declares a channel, and whose channel
 // answers nothing, is launched again when it is idle, and the channel answers once that line
 // runs. The same seat while it is working, or while its box holds unsent text, is left where it
-// stands: the one step is logged and nothing is typed. The session each scene starts from is the
-// captured one, and the screens are the captured claude frames.
-import { afterEach, expect, test } from 'bun:test';
+// stands: the one step is logged and nothing is typed. A dialog that is not on the screen while
+// the plan is built, and is there when the relaunch runs — a shipped permission, a shipped
+// question, or a shipped screen the reader does not know — types nothing, presses no Enter,
+// and holds the seat. The session each scene starts from is the captured one, and the screens
+// are the captured claude frames.
+import { afterEach, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
+import * as execution from '../src/launch/execute.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
@@ -24,6 +28,7 @@ import { LOG_FILE, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
+import { readScreen, type Screen } from '../src/watch/screen.ts';
 import { CLAUDE_IDLE, claudeBox, fixtureBase, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-08T12:00:00Z');
@@ -322,6 +327,10 @@ function seatRuns(trace: Trace): Trace['runs'] {
   return trace.runs.filter((run) => !/\/src\/cli\.ts (watch|bus)\b/.test(run.command));
 }
 
+function firstWord(command: string): string {
+  return command.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*/, '').split(/\s/)[0] ?? '';
+}
+
 function seatOf(made: Scene) {
   return readState(made.dir).sessions[SESSION]?.seats[made.spec.name];
 }
@@ -368,7 +377,7 @@ test('a GLM seat restored as plain claude is exited and relaunched from its reco
   const runs = seatRuns(host.trace);
   expect(runs).toHaveLength(1);
   expect(runs[0]?.pane).toBe('pane-slate');
-  expect(runs[0]?.command.startsWith(GLM_LAUNCH)).toBe(true);
+  expect(firstWord(runs[0]?.command ?? '')).toBe(GLM_LAUNCH);
   expect(runs[0]?.command).toContain(`--resume ${CONVERSATION}`);
   const line = seatOf(made)?.launch_line ?? '';
   expect(line.startsWith(GLM_LAUNCH)).toBe(true);
@@ -412,4 +421,62 @@ test('a claude seat restored without its channel is left alone while working or 
     expect(inboxLive(drop, made.root, SESSION, 'pebble').live).toBe(false);
     expect(seatOf(made)?.pane).toBe('pane-pebble');
   }
+});
+
+function shippedScreen(name: string): string {
+  return readFileSync(new URL(`./fixtures/claude-code/2.1.302/${name}.txt`, import.meta.url), 'utf8');
+}
+
+// The plan is built against the idle screen hostFor already returns. The relaunch then reads
+// the shipped frame, which was not the screen the plan decided on.
+async function holdDialog(file: string, kind: Screen['kind']): Promise<void> {
+  const screen = shippedScreen(file);
+  expect(readScreen('claude-code', screen).kind).toBe(kind);
+  const made = scene(glm());
+  const host = hostFor(made);
+  const io = testIo(made.root, { kind: 'owner' });
+  const launch = host.sources.launch;
+  if (launch === undefined) throw new Error('the scene has no launch host');
+  let entered = 0;
+  launch.pressEnter = () => {
+    entered += 1;
+    return true;
+  };
+  let plannedRelaunch = false;
+  const original = execution.executePlan;
+  const spy = spyOn(execution, 'executePlan').mockImplementation(async (steps, session, source, options) => {
+    plannedRelaunch = steps.some((step) => step.do?.do === 'relaunch');
+    return original(steps, session, {
+      ...source,
+      classify: () => execution.launchKind(readScreen('claude-code', screen).kind),
+      paneText: () => screen,
+    }, options);
+  });
+  try {
+    const code = await runUp([], io, host.sources);
+    const said = `${io.out}\n${io.err}`;
+    expect(plannedRelaunch, said).toBe(true);
+    expect(code, said).toBe(1);
+    expect(host.trace.typed).toEqual([]);
+    expect(entered).toBe(0);
+    expect(host.trace.closed).toEqual([]);
+    expect(seatRuns(host.trace)).toEqual([]);
+    expect(said).toContain('is not at an idle prompt; nothing typed');
+    expect(seatOf(made)?.stage).toBe('ready');
+    expect(seatOf(made)?.pane).toBe('pane-slate');
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+test('a permission dialog that appears when a relaunch runs types nothing and holds the seat', async () => {
+  await holdDialog('permission', 'permission');
+});
+
+test('a question that appears when a relaunch runs types nothing and holds the seat', async () => {
+  await holdDialog('question', 'question');
+});
+
+test('an unknown screen that appears when a relaunch runs types nothing and holds the seat', async () => {
+  await holdDialog('exit', 'unknown');
 });

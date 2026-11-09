@@ -29,7 +29,7 @@ import type { DaemonHealth } from '../src/daemon/health.ts';
 import { canonicalRoot } from '../src/daemon/routes.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
-import { fixtureBase, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, fixtureBase, gitEnv, testIo } from './helpers.ts';
 
 const SESSION = 'crate';
 const CONVERSATION = 'conversation-cobble';
@@ -514,8 +514,12 @@ test('a reboot leaves the daemon watch active and starts no watch pane, and the 
   expect(created.filter((label) => label === 'Watch · crate')).toEqual([]);
   expect(runs.filter((command) => command.includes('team watch'))).toHaveLength(0);
   const left = readState(made.dir).sessions[SESSION];
-  expect(left?.watch?.pane).toBe(recordedWatch.pane);
+  expect(left?.watch?.workspace).toBe(recordedWatch.workspace);
+  expect(left?.watch?.pane).toBeUndefined();
   expect(left?.watch?.pid).toBeUndefined();
+  expect(readFileSync(join(made.dir, LOG_FILE), 'utf8')).toContain(
+    `cleared pane watch ${recordedWatch.pane}: the daemon hosts this session's watch`,
+  );
   expect(created.filter((label) => label === 'Bus · crate')).toEqual(['Bus · crate']);
   expect(runs.filter((command) => command.trim().split(/\s+/).at(-1) === 'bus')).toHaveLength(1);
   expect(left?.bus?.pane).toBe('pane-bus');
@@ -609,7 +613,7 @@ function channelHost(made: Restored, now: Date, busy: boolean): { sources: UpSou
       if (workspace === 'ws-cobble') return [BEFORE];
       return null;
     },
-    paneText: () => '',
+    paneText: () => CLAUDE_IDLE,
     foreground: (_session, pane) => (pane === SAME ? ['claude'] : pane === BEFORE ? ['codex'] : null),
     processInfo: (_session, pane) => {
       if (pane === SAME && exited) return { shell: 91, foreground: [91] };
