@@ -1,10 +1,7 @@
-// The owner's urgent dev-mode admission reaches the three authority-source
-// commands: while dev mode is on, the team's placed orchestrator runs `grant`, `delegate` and
-// `revoke` past the owner-only gate, with the same `dev mode continues` warning and the same
-// audit line the other lifted commands write. The admission is the shared one — the effective
-// `dev-mode` policy or the legacy variable, a caller the walk places on its recorded pane in
-// the team's session, and the file's resolved lead — never a role name alone. Every seat,
-// file, pane and home below is synthetic, and no command here touches the live machine.
+// 1364 keeps grant, delegate and revoke owner-reserved. Dev mode, a governing policy and the
+// machine local-fast record do not admit a placed lead or a herdr walk to them. The refusal is
+// the owner sentence, with no dev-lift warning and no admission line. Every seat, file, pane
+// and home below is synthetic, and no command here touches the live machine.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -118,71 +115,70 @@ const DELEGATES_RECORD = `delegates:
     commands: [up, down]
 `;
 
-test('the variable admits a placed orchestrator to grant: the dry run plans, warns, logs, and writes nothing', async () => {
+test('the variable does not admit a placed orchestrator to grant', async () => {
   const { root, home, file } = repo();
   const before = readFileSync(file, 'utf8');
   const io = testIo(root, LEAD);
   io.env = { TEAMCLI_DEV_MODE: '1' };
-  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(0);
-  expect(io.out).toBe('grant: would change\n');
-  expect(io.err).toBe(`warning: ${OWNER_GRANT}; this call is lead; dev mode continues\n`);
+  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(1);
+  expect(io.out).toBe('');
+  expect(io.err).toBe(`team grant: ${OWNER_GRANT}; this call is lead\n`);
   expect(readFileSync(file, 'utf8')).toBe(before);
-  expect(logOf(root)).toContain(`grant [lead] warning: ${OWNER_GRANT}; this call is lead; dev mode continues; admitted as lead\n`);
+  expect(logOf(root)).toBe('');
 });
 
-test('the variable admits the real grant write', async () => {
+test('the variable does not admit the real grant write', async () => {
   const { root, home, file } = repo();
+  const before = readFileSync(file, 'utf8');
   const io = testIo(root, LEAD);
   io.env = { TEAMCLI_DEV_MODE: '1' };
-  expect(await runGrant(['lead', '--scope', 'up,down'], io, { home })).toBe(0);
-  expect(io.out).toBe('grant: updated\n');
-  const after = readFileSync(file, 'utf8');
-  expect(after).toContain('grant:\n');
-  expect(after).toContain('seat: "lead"');
-  expect(logOf(root)).toContain('grant [lead]');
-  expect(logOf(root)).toContain('admitted as lead');
+  expect(await runGrant(['lead', '--scope', 'up,down'], io, { home })).toBe(1);
+  expect(io.err).toBe(`team grant: ${OWNER_GRANT}; this call is lead\n`);
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(logOf(root)).toBe('');
 });
 
-test('delegate is admitted by the same lift and logs its own command', async () => {
+test('delegate stays refused under the same variable', async () => {
   const { root, home, file } = repo();
+  const before = readFileSync(file, 'utf8');
   const io = testIo(root, LEAD);
   io.env = { TEAMCLI_DEV_MODE: '1' };
-  expect(await runDelegate(['outside/first', '--commands', 'up', '--dry-run'], io, { home })).toBe(0);
-  expect(io.out).toBe('delegate: would change\n');
-  expect(io.err).toBe(`warning: ${OWNER_GRANT}; this call is lead; dev mode continues\n`);
-  expect(logOf(root)).toContain('delegate [lead]');
-  expect(readFileSync(file, 'utf8')).not.toContain('outside/first');
+  expect(await runDelegate(['outside/first', '--commands', 'up', '--dry-run'], io, { home })).toBe(1);
+  expect(io.err).toBe(`team delegate: ${OWNER_GRANT}; this call is lead\n`);
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(logOf(root)).toBe('');
 });
 
-test('revoke is admitted by the same lift and removes the record it names', async () => {
+test('revoke stays refused and leaves the grant record', async () => {
   const { root, home, file } = repo(GRANT_RECORD);
+  const before = readFileSync(file, 'utf8');
   const io = testIo(root, LEAD);
   io.env = { TEAMCLI_DEV_MODE: '1' };
-  expect(await runRevoke(['grant'], io, { home })).toBe(0);
-  expect(io.out).toBe('revoke: updated\n');
-  expect(readFileSync(file, 'utf8')).not.toContain('grant:');
-  expect(logOf(root)).toContain('revoke [lead]');
-  expect(logOf(root)).toContain('admitted as lead');
+  expect(await runRevoke(['grant'], io, { home })).toBe(1);
+  expect(io.err).toBe(`team revoke: ${OWNER_GRANT}; this call is lead\n`);
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(logOf(root)).toBe('');
 });
 
-test('revoke of a delegate record is admitted by the same lift', async () => {
+test('revoke of a delegate record stays refused', async () => {
   const { root, home, file } = repo(DELEGATES_RECORD);
+  const before = readFileSync(file, 'utf8');
   const io = testIo(root, LEAD);
   io.env = { TEAMCLI_DEV_MODE: '1' };
-  expect(await runRevoke(['delegate', 'outside/first'], io, { home })).toBe(0);
-  expect(io.out).toBe('revoke: updated\n');
-  expect(readFileSync(file, 'utf8')).not.toContain('outside/first');
-  expect(logOf(root)).toContain('revoke [lead]');
+  expect(await runRevoke(['delegate', 'outside/first'], io, { home })).toBe(1);
+  expect(io.err).toBe(`team revoke: ${OWNER_GRANT}; this call is lead\n`);
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(logOf(root)).toBe('');
 });
 
-test('the placement comes from the pane walk, not from a name: the herdr route is admitted', async () => {
+test('the herdr route is refused the same way, with no dev-lift warning', async () => {
   const { root, home } = repo();
   const io = testIo(root);
   io.env = { TEAMCLI_DEV_MODE: '1' };
   io.callerSources = () => herdrSources('lead', 'w1:p1');
-  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(0);
-  expect(io.err).toContain('dev mode continues');
-  expect(logOf(root)).toContain('admitted as lead');
+  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(1);
+  expect(io.err).toBe(`team grant: ${OWNER_GRANT}; this call is unplaced (it runs under herdr)\n`);
+  expect(logOf(root)).toBe('');
 });
 
 test('an ordinary seat is refused with dev mode on, and nothing is written or logged', async () => {
@@ -213,38 +209,37 @@ test('dev mode off keeps every one of the three refusals, even for the orchestra
   expect(logOf(root)).toBe('');
 });
 
-test('a governing dev-mode on admits the authority commands with its level note, the variable unset', async () => {
+test('a governing dev-mode on still refuses the authority commands', async () => {
   const { root, home } = repo();
   const written = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'dev-mode', value: 'on' }, { now: NOW });
   if (!written.ok) throw new Error(written.why);
   const io = testIo(root, LEAD);
-  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(0);
-  expect(io.err).toBe(`warning: ${OWNER_GRANT}; this call is lead; dev mode continues (dev-mode on at team level)\n`);
-  expect(logOf(root)).toContain('dev mode continues (dev-mode on at team level); admitted as lead');
+  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(1);
+  expect(io.err).toBe(`team grant: ${OWNER_GRANT}; this call is lead\n`);
+  expect(logOf(root)).toBe('');
 });
 
-test('the herdr route reads a governing dev-mode on without the variable', async () => {
+test('the herdr route stays refused under a governing dev-mode on', async () => {
   const { root, home } = repo();
   const written = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'dev-mode', value: 'on' }, { now: NOW });
   if (!written.ok) throw new Error(written.why);
   const io = testIo(root);
   io.env = {};
   io.callerSources = () => herdrSources('lead', 'w1:p1');
-  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(0);
-  expect(io.err).toBe(`warning: ${OWNER_GRANT}; this call is unplaced (it runs under herdr); dev mode continues (dev-mode on at team level)\n`);
-  expect(logOf(root)).toContain('grant [lead]');
-  expect(logOf(root)).toContain('admitted as lead');
+  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(1);
+  expect(io.err).toBe(`team grant: ${OWNER_GRANT}; this call is unplaced (it runs under herdr)\n`);
+  expect(logOf(root)).toBe('');
 });
 
-test('the herdr route reads the machine local-fast record without the variable', async () => {
+test('the herdr route stays refused under the machine local-fast record', async () => {
   const { root, home } = repo();
   seedMachine(home, 'local-fast');
   const io = testIo(root);
   io.env = {};
   io.callerSources = () => herdrSources('lead', 'w1:p1');
-  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(0);
-  expect(io.err).toBe(`warning: ${OWNER_GRANT}; this call is unplaced (it runs under herdr); dev mode continues (dev-mode on at machine level)\n`);
-  expect(logOf(root)).toContain('dev mode continues (dev-mode on at machine level); admitted as lead');
+  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(1);
+  expect(io.err).toBe(`team grant: ${OWNER_GRANT}; this call is unplaced (it runs under herdr)\n`);
+  expect(logOf(root)).toBe('');
 });
 
 test('the herdr route keeps the refusal under the machine off record, even with the variable set', async () => {

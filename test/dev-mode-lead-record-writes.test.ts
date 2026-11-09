@@ -358,7 +358,7 @@ test('settings set: a lifted dry run writes neither the audit nor the remembered
 
 // --- grant, delegate and revoke: already lifted by the same call -------------------------------
 
-test('grant, delegate and revoke: the placed lead is admitted under the variable, refused off', async () => {
+test('grant, delegate and revoke: the placed lead is refused with the variable on or off', async () => {
   const { root, home } = repo();
   const cases: { command: 'grant' | 'delegate' | 'revoke'; run: (io: ReturnType<typeof testIo>) => Promise<number> }[] = [
     { command: 'revoke', run: (io) => runRevoke(['grant'], io, { home }) },
@@ -372,12 +372,14 @@ test('grant, delegate and revoke: the placed lead is admitted under the variable
     expect(off.err).toBe(`team ${one.command}: ${AUTHORITY_LINE}\n`);
     expect(off.out).toBe('');
 
+    // 1364: the variable does not lift an authority-record write.
     const on = testIo(root, LEAD);
     on.env = { TEAMCLI_DEV_MODE: '1' };
-    expect(await one.run(on)).toBe(0);
-    expect(on.err).toBe(`warning: ${AUTHORITY_LINE}; dev mode continues\n`);
-    expect(logOf(root)).toContain(`${one.command} [lead] warning: ${AUTHORITY_LINE}; dev mode continues; admitted as lead\n`);
+    expect(await one.run(on)).toBe(1);
+    expect(on.err).toBe(`team ${one.command}: ${AUTHORITY_LINE}\n`);
+    expect(on.out).toBe('');
+    expect(logOf(root)).not.toContain('admitted as lead');
   }
-  expect(teamFile(root)).toContain('grant:');
-  expect(teamFile(root)).toContain('delegates:');
+  expect(teamFile(root)).not.toContain('grant:');
+  expect(teamFile(root)).not.toContain('delegates:');
 });

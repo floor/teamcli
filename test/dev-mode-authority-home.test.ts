@@ -118,41 +118,42 @@ async function ioAt(root: string) {
   return io;
 }
 
-test('no supplied home: the herdr route still reads the machine local-fast record for grant', async () => {
+test('no supplied home: the machine local-fast record does not admit grant', async () => {
   const { root, home } = repo();
   seedMachine(home, 'local-fast');
   fakeHome = home;
   const { runGrant } = await import('../src/commands/grant.ts');
   const io = await ioAt(root);
-  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io)).toBe(0);
-  expect(io.err).toContain(`this call is ${UNPLACED}; dev mode continues (dev-mode on at machine level)`);
-  expect(logOf(root)).toContain('admitted as lead');
+  // 1364: grant stays owner-reserved, so the machine record does not admit it.
+  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io)).toBe(1);
+  expect(io.err).toBe(`team grant: ${OWNER_GRANT}; this call is ${UNPLACED}\n`);
+  expect(logOf(root)).toBe('');
 });
 
-test('no supplied home: the herdr route reads the machine record for delegate and revoke too', async () => {
+test('no supplied home: the herdr route refuses delegate and revoke under the machine record', async () => {
   const { root, home } = repo();
   seedMachine(home, 'local-fast');
   fakeHome = home;
   const { runDelegate } = await import('../src/commands/delegate.ts');
   const delegateIo = await ioAt(root);
-  expect(await runDelegate(['outside/first', '--commands', 'up', '--dry-run'], delegateIo)).toBe(0);
-  expect(delegateIo.err).toContain('dev mode continues (dev-mode on at machine level)');
+  expect(await runDelegate(['outside/first', '--commands', 'up', '--dry-run'], delegateIo)).toBe(1);
+  expect(delegateIo.err).toBe(`team delegate: ${OWNER_GRANT}; this call is ${UNPLACED}\n`);
   const { runRevoke } = await import('../src/commands/revoke.ts');
   const revokeIo = await ioAt(root);
-  expect(await runRevoke(['grant'], revokeIo)).toBe(0);
-  expect(revokeIo.err).toContain('dev mode continues (dev-mode on at machine level)');
+  expect(await runRevoke(['grant'], revokeIo)).toBe(1);
+  expect(revokeIo.err).toBe(`team revoke: ${OWNER_GRANT}; this call is ${UNPLACED}\n`);
 });
 
-test('no supplied home: the herdr route reads a governing team policy', async () => {
+test('no supplied home: a governing team policy does not admit grant', async () => {
   const { root, home } = repo();
   const written = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'dev-mode', value: 'on' }, { now: NOW });
   if (!written.ok) throw new Error(written.why);
   fakeHome = home;
   const { runGrant } = await import('../src/commands/grant.ts');
   const io = await ioAt(root);
-  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io)).toBe(0);
-  expect(io.err).toContain('dev mode continues (dev-mode on at team level)');
-  expect(logOf(root)).toContain('admitted as lead');
+  expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io)).toBe(1);
+  expect(io.err).toBe(`team grant: ${OWNER_GRANT}; this call is ${UNPLACED}\n`);
+  expect(logOf(root)).toBe('');
 });
 
 test('no supplied home: the machine off record keeps the refusal, and the variable cannot revive it', async () => {
