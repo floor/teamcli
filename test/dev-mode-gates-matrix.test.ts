@@ -592,23 +592,25 @@ test('register: unset, the caller gate refuses; set, it warns and the run reads 
 });
 
 // --- the owner-only edits ---------------------------------------------------------------------
-// Dev mode waives caller gates; the owner's widening adds one admission of its own — a placed
-// orchestrator, while the mode is on, may run the owner-only command and the run says so. A
-// caller the walk cannot place is no admission in either mode, and `approve` is not in the
-// widening: it stays the owner's in every mode.
+// Grant is reserved for the owner. Dev mode does not admit a placed lead: the run refuses,
+// writes nothing, and says so as `grant.refused`. A development check in this file still
+// lifts (the caller-gate scenes above, and the owner-lift table for a gate that is not reserved).
 
-describe('the owner-only edits: the widening admits one placed orchestrator, and nobody else', () => {
-  test('grant: the placed orchestrator is admitted under dev mode, and the warned run writes the grant', async () => {
+describe('the owner-only edits: grant stays the owner\'s, and an unplaced caller is refused', () => {
+  test('grant: a placed lead is refused under dev mode, and the record is unchanged', async () => {
     const { root, home } = placedRepo();
+    const teamFile = join(root, '.agents', 'team.yaml');
+    const before = readFileSync(teamFile, 'utf8');
     const line = 'only the owner runs this, from a terminal outside herdr; this call is lead';
     const io = testIo(root, PLACED_LEAD);
     io.env = { TEAMCLI_DEV_MODE: '1' };
-    expect(await runGrant(['lead', '--scope', 'up'], io, { home })).toBe(0);
-    expect(io.err).toBe(`warning: ${line}; dev mode continues\n`);
-    expect(io.out).toBe('grant: updated\n');
-    // The audit line names the command, the caller and the role the widening proved.
-    expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8'))
-      .toContain(` grant [lead] warning: ${line}; dev mode continues; admitted as lead\n`);
+    expect(await runGrant(['lead', '--scope', 'up', '--json'], io, { home })).toBe(1);
+    expect(io.out).toContain('grant.refused');
+    expect(io.out).toContain(line);
+    expect(io.out).not.toContain('dev mode continues');
+    expect(io.err).toBe('');
+    expect(readFileSync(teamFile, 'utf8')).toBe(before);
+    expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
   });
 
   test('grant refuses an unplaced caller with the mode unset and with it set', async () => {
