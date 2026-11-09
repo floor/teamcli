@@ -637,14 +637,14 @@ describe('trust dialog resume and pane naming', () => {
       return { code, out: `${io.out}${io.err}` };
     };
 
-    // Without dialogs.trust grant: the owner answers the dialog in the pane, then team up.
+    // a8966b2c2: a lead or operator waiting on trust is repaired by its parent, not by team up.
     const withoutGrant = checkOnce();
     expect(withoutGrant.code).toBe(1);
     expect(withoutGrant.out).toContain(
-      'difference: operator-1: waiting for owner (trust)\n  repair: the owner answers the dialog in the pane, then team up\n',
+      'difference: operator-1: waiting for owner (trust)\n  repair: the lead asks its parent orchestrator (team send)\n',
     );
 
-    // With dialogs.trust grant in force: team answer operator-1 trust, or the owner answers the dialog in the pane, then team up.
+    // The same seat is the operator, so the grant does not put the owner/team-up wording back.
     const written = writeGrant(
       w.home,
       {
@@ -661,7 +661,7 @@ describe('trust dialog resume and pane naming', () => {
     const withGrant = checkOnce();
     expect(withGrant.code).toBe(1);
     expect(withGrant.out).toContain(
-      'difference: operator-1: waiting for owner (trust)\n  repair: team answer operator-1 trust, or the owner answers the dialog in the pane, then team up\n',
+      'difference: operator-1: waiting for owner (trust)\n  repair: the lead asks its parent orchestrator (team send)\n',
     );
   });
 });
