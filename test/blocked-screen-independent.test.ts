@@ -53,13 +53,14 @@ afterEach(() => {
 });
 
 function teamText(root: string, lobby: string, cli: 'claude-code' | 'antigravity'): string {
+  // Screen-control scenes target a worker; operator wakes use the separate lead/receipt path.
   const seat = cli === 'antigravity'
     ? { vendor: 'google', model: 'Gemini 4 Argon', launch: 'agy' }
     : { vendor: 'test', model: 'Test', launch: 'claude' };
   return `format: 1
 project: acme
 coordinator: lead
-operator: helper
+operator: lead
 session: acme
 workspace:
   mode: shared
