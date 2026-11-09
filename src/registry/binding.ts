@@ -152,6 +152,23 @@ export function teamHoldsSeat(team: TeamRecord, seat: string): boolean {
   return declaredSeatNames(team.root).includes(seat);
 }
 
+/**
+ * The one team whose state records this caller on its pane. The pane is asked
+ * before any folder: herdr's name, that team's session, and the recorded pane.
+ * None, or more than one, is no placement, and the folder decides. `teamBinding`
+ * itself stays folder-then-caller; a send is what asks here first.
+ */
+export function placedCallerTeam(home: string, io: BindingIo): TeamRecord | null {
+  let teams: Record<string, TeamRecord>;
+  try {
+    teams = readTeams(home);
+  } catch {
+    return null;
+  }
+  const placed = Object.values(teams).filter((team) => callerStandsIn(io, team));
+  return placed.length === 1 ? placed[0]! : null;
+}
+
 /** Whether the caller stands on the pane `team`'s state records for it, in that team's session. */
 function callerStandsIn(io: BindingIo, team: TeamRecord): boolean {
   const caller = callerOf({
