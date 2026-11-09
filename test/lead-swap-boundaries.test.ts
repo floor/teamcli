@@ -1,7 +1,7 @@
 // The swap's second half and the edges of its stop, at the sentences the pages carry: `add`
 // closes the record the stop opened (and a launch that never reached ready keeps it), a prompt
-// and an unrecognised screen are left as they are, an operator the map never admits to a swap
-// (it is not a lead, so no grant is read), and an approved delegate's `remove` word never
+// and an unrecognised screen are left as they are, an operator whose swap grant names another
+// seat is refused, and an approved delegate's `remove` word never
 // reaches a lead — only `swap` does.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -259,7 +259,7 @@ describe('the swap across its two halves', () => {
     expect(session()?.swapping).toBeUndefined();
   });
 
-  test('the operator is not a lead: the map refuses it before any grant is read, and no swap is recorded', async () => {
+  test('the operator cannot use a swap grant naming another seat, and no swap is recorded', async () => {
     approve(GRANTED);
     record('lead', 'w0:p1', 'w0');
     record('op', 'w5:p1', 'w5');
@@ -267,9 +267,9 @@ describe('the swap across its two halves', () => {
     made.agents.push({ name: 'lead', agent: 'claude', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null });
     const io = testIo(dir, op);
     expect(await runRemove(['lead', '--keep'], io, made.sources)).toBe(1);
-    // The map admits the owner or this team's `leads`; the operator is neither, so the run
-    // stops there and the grant's own swap gate is never asked.
-    expect(io.err).toBe('team remove: only the owner or `leads` removes a seat; this call is op\n');
+    // The operator now reaches the swap gate, whose grant still names lead alone.
+    expect(io.err).toBe("team remove: only the owner, the granted seat or an approved delegate swaps the orchestrator's or the operator's seat: only the seat the grant names runs this: this call is op\n");
+    expect(made.typed).toEqual([]);
     expect(made.closed).toEqual([]);
     expect(session()?.swapping).toBeUndefined();
   });

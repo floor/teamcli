@@ -249,7 +249,9 @@ describe('each mapped row pins the module function its kind names', () => {
     const { root, home, id } = world();
     const team = fileTeam(id);
     const rows = Object.entries(COMMAND_GATES).filter(([, gate]) => gate.kind === 'team-change');
+    // Archiving drops now shares the team-change gate and must pass the same placement matrix.
     expect(rows.map(([command]) => command).sort()).toEqual([
+      'drops:archive',
       'hold',
       'swap:cancel',
       'swap:queue',
