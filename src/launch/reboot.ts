@@ -12,7 +12,7 @@ import { isNotStartedScreen } from '../profiles/profile.ts';
 import { readAgents } from '../registry/agents.ts';
 import { readScreen } from '../watch/screen.ts';
 
-/** The dialog Codex shows when a front end does not share the pinned feature set. The sentence
+/** The dialog Codex shows when a front end does not share the server feature set. The sentence
  *  alone is not the dialog: the profile's startup screen is, option rows included. A working
  *  pane that quotes the sentence is not it. A relaunch never answers it. */
 export const FEATURE_DIALOG = 'background server has incompatible feature settings';
@@ -36,7 +36,7 @@ export function featureDialogClose(input: {
   recordedSession: string | undefined;
   status?: string | null;
 }): boolean {
-  if (!featureDialog(input.screen)) return false;
+  if (input.cli !== 'codex' || !featureDialog(input.screen)) return false;
   if (input.status === 'working') return false;
   if (input.recordedSession === undefined || input.recordedSession === '') return false;
   if (input.liveSession !== input.recordedSession) return false;

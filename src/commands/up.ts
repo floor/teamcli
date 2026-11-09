@@ -886,6 +886,20 @@ function seatPlan(
   // reported, with the repair that works, and is not closed and not launched again.
   const hold = unidentifiedHold(team, seat, recorded, processes, screenOf);
   if (hold) return { ...planned, stage: recorded.stage, unidentifiedHold: hold };
+  const dialogClose = (pane: string, paneProcesses: PaneProcesses | null): boolean => {
+    if (callerSeat === seat.name || isLeadSeat(team, seat.name)) return false;
+    const entry = agents?.find((agent) => agent.pane === pane);
+    return featureDialogClose({
+      screen: screenOf(pane),
+      cli: seat.cli,
+      launched: recorded?.launched,
+      processes: paneProcesses,
+      foreground: foregroundOf(pane),
+      liveSession: entry?.session,
+      recordedSession: continuitySession ?? undefined,
+      status: entry?.status,
+    });
+  };
   // The host can bring a restored seat back on another pane. Its recorded pane is gone, so the
   // recorded process identity proves nothing; the pane the host names for the seat is the seat
   // only while its live agent session is the recorded conversation itself. A pane that cannot be
@@ -963,6 +977,12 @@ function seatPlan(
     }
     if (candidate !== undefined && next !== null) {
       const movedRecord = { ...recorded, pane: candidate.pane, workspace: candidate.workspace || movedWorkspace };
+      if (recorded.launched && seat.cli === 'codex' && dialogClose(candidate.pane, movedProcesses[seat.name] ?? null)) {
+        const resumeHold = uncarryableResume(planned, continuitySession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return { ...planned, repair: { pane: candidate.pane, workspace: movedRecord.workspace,
+          launched: recorded.launched, cli: seat.cli, dialog: true, session: continuitySession }, resume: continuitySession };
+      }
       const drift = modelDrift(team, seat, movedRecord, known, processes, screenOf, owner, registry ?? seat, true, callerSeat);
       if (drift.kind === 'refuse') return { ...planned, stage: 'ready', driftRefused: drift.detail };
       if (drift.kind === 'cycle') {
@@ -1017,6 +1037,25 @@ function seatPlan(
     recordedSession: continuitySession ?? undefined,
     liveSession: onRecordedPane?.session,
   });
+  if (recorded.pane && recorded.workspace && recorded.launched && seat.cli === 'codex' && dialogClose(recorded.pane, processes[seat.name] ?? null)) {
+    const resumeHold = continuitySession === null ? undefined : uncarryableResume(planned, continuitySession);
+    if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+    return {
+      ...planned,
+      stage: undefined,
+      pane: undefined,
+      workspace: undefined,
+      repair: {
+        pane: recorded.pane,
+        workspace: recorded.workspace,
+        launched: recorded.launched,
+        cli: seat.cli,
+        dialog: true,
+        ...(continuitySession === null ? {} : { session: continuitySession }),
+      },
+      ...(continuitySession === null ? {} : { resume: continuitySession }),
+    };
+  }
   const restoredSession = continuity === 'restored' ? continuitySession : null;
   // A program is in front and its agent session is the one the records bind. The pids changed;
   // the seat did not. Nothing is closed, and the record takes the pids the pane holds now.
@@ -1123,38 +1162,6 @@ function seatPlan(
   // so the drift reading (which decides closes) is not consulted here; the next `up` reads the
   // seat as the record's own and handles a drift the way it always does.
   let restoreRefusal: string | undefined;
-  const dialogClose = (pane: string, paneProcesses: PaneProcesses | null): boolean => {
-    const entry = agents?.find((agent) => agent.pane === pane);
-    return featureDialogClose({
-      screen: screenOf(pane),
-      cli: seat.cli,
-      launched: recorded?.launched,
-      processes: paneProcesses,
-      foreground: foregroundOf(pane),
-      liveSession: entry?.session,
-      recordedSession: continuitySession ?? undefined,
-      status: entry?.status,
-    });
-  };
-  if (recorded.pane && recorded.workspace && recorded.launched && seat.cli === 'codex' && dialogClose(recorded.pane, processes[seat.name] ?? null)) {
-    const resumeHold = continuitySession === null ? undefined : uncarryableResume(planned, continuitySession);
-    if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
-    return {
-      ...planned,
-      stage: undefined,
-      pane: undefined,
-      workspace: undefined,
-      repair: {
-        pane: recorded.pane,
-        workspace: recorded.workspace,
-        launched: recorded.launched,
-        cli: seat.cli,
-        dialog: true,
-        ...(continuitySession === null ? {} : { session: continuitySession }),
-      },
-      ...(continuitySession === null ? {} : { resume: continuitySession }),
-    };
-  }
   if (
     recorded.pane && recorded.workspace && recorded.launched && continuitySession !== null
     && agents !== null && !agents.some((agent) => agent.pane === recorded.pane)

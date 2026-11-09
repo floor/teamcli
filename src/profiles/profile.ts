@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import type { SessionCliSpec } from '../send/session-cli.ts';
-import { pinnedWords } from '../launch/features.ts';
+import { currentCodexRecipe, pinnedWords } from '../launch/features.ts';
 import {
   appendOnLaunchLine,
   appendPositionalOnLaunchLine,
@@ -502,6 +502,11 @@ export function launchCommandOrRefusal(
    *  takes 0.5.10's placement even where a launch would be refused: nothing runs it. */
   launching = true,
 ): { command: string; refusal?: string } {
+  if (profile.cli === 'codex') {
+    const current = currentCodexRecipe(launch);
+    if (current === null) return { command: '', refusal: 'its obsolete Codex feature override cannot be safely removed from its launch line; update that recipe before restarting' };
+    launch = current;
+  }
   // A word the shell computes may be the CLI's delimiter, and a line this reader cannot read to
   // its end may name one in the part it cannot see. Words written after such a line reach the
   // CLI as prompt text, not options, so the launch is refused rather than launched with its
@@ -645,6 +650,7 @@ export function supportsCliHook(cli: string): boolean {
  * the pin took effect.
  */
 export function pinnedRecordLine(cli: string, line: string, features: readonly string[]): string {
+  if (cli === 'codex') line = currentCodexRecipe(line) ?? line;
   const profile = profileFor(cli);
   const addition = pinnedWords(features).map(shellQuote).join(' ');
   if (profile === null || addition === '') return line;
