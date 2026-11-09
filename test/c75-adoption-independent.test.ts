@@ -676,7 +676,8 @@ describe('2. names cleared, new pids, same panes and workspaces: strong and weak
     assertNoRegisterOrLaunchEffects(liveHarness.trace, liveIo.out, liveIo.err);
     expect(liveIo.err).toContain('restored and re-tied: its conversation is the one the record names');
     expect(liveIo.err).toContain('restored and re-tied: its pane runs codex alone in its workspace, at an idle prompt');
-    expect(liveIo.err).toContain('0 seats repaired, 0 skipped (working), 0 refused\n');
+    // A restore names the daemon's missing watch and bus after the counters.
+    expect(liveIo.err).toContain("0 seats repaired, 0 skipped (working), 0 refused; watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root\n");
 
     expect(seatRecordOf(SEAT_ALPHA)).toMatchObject({
       stage: 'ready',
@@ -1027,7 +1028,8 @@ describe('3. refusals preserve the record unchanged and never call register', ()
     const whyBeta = `its pane reports no conversation; the record's launch ran ${SESSION_BETA}`;
     expect(io.out).toContain(`${SEAT_ALPHA}: ready\n`);
     expect(io.out).toContain(`${SEAT_BETA}: left out: ${whyBeta}\n`);
-    expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT_BETA}: ${whyBeta})\n`);
+    // A restore names the daemon's missing watch and bus after the refused reason.
+    expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT_BETA}: ${whyBeta}); watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root\n`);
     expect(harness.trace.renamed).toEqual([{ pane: PANE_ALPHA, name: SEAT_ALPHA }]);
     assertNoRegisterOrLaunchEffects(harness.trace, io.out, io.err);
 
