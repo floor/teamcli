@@ -3,12 +3,14 @@
 // pattern it is given on stdin.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { dirname, join } from 'node:path';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { placeCaller, readAncestors, readWithPs } from '../src/caller.ts';
 import { selectCommits } from '../src/check/git.ts';
 import { scanPrivateTree } from '../src/check/private-names.ts';
 import { syncChildTimeout } from '../src/child.ts';
+import * as processTools from '../src/process-tools-adapter.ts';
+import { createProcessToolsAdapter } from '../src/process-tools-adapter.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase, gitEnv } from './helpers.ts';
@@ -72,16 +74,17 @@ function withPs(body: string, timeoutMs: string | undefined, run: () => void): v
   const dir = join(scratch(), 'bin');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'ps'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
-  const path = process.env.PATH;
+  // Identity tools ignore PATH; inject only this owned fixture through the trusted adapter seam.
+  const ps = join(dir, 'ps');
+  const adapter = createProcessToolsAdapter({ ps: [ps] }, (candidate) => candidate === ps);
+  const tool = spyOn(processTools, 'execProcessToolSync').mockImplementation(adapter.execSync);
   const bound = process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
-  process.env.PATH = `${dir}${delimiter}${path ?? ''}`;
   if (timeoutMs === undefined) delete process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
   else process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = timeoutMs;
   try {
     run();
   } finally {
-    if (path === undefined) delete process.env.PATH;
-    else process.env.PATH = path;
+    tool.mockRestore();
     if (bound === undefined) delete process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
     else process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = bound;
   }
