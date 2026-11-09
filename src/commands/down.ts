@@ -718,6 +718,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (!json) io.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, ${expiryPhrase(verified.grant.expires)}\n`);
   }
   const dry = args.flags.has('dry-run');
+  const ownerFlagRefused = (file: boolean, message: string): number => {
+    refuse(io, json, 'down', { id: file ? 'down.file-owner' : 'down.session-owner', message, repair: null });
+    // exit: down.file-owner
+    // exit: down.session-owner
+    return 1;
+  };
   // `--file` and `--session` are the owner's. The walk decides that before any caller placement,
   // charter, approval, or lead admission, so a lead rule cannot spend those flags and the agent
   // list is not read to refuse them. A no-terminal owner keeps the detached sentence below.
@@ -729,14 +735,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (!isOwner(walked) && detachedRefusal(walked) === undefined) {
       const live = liveTeam(io, sources.home);
       if (live === undefined || live.team.delegates === null) {
-        refuse(io, json, 'down', {
-          id: args.values.file !== undefined ? 'down.file-owner' : 'down.session-owner',
-          message: args.values.file !== undefined ? fileOwnerRefusal(io, args.values.file) ?? '' : sessionOwnerRefusal(walked),
-          repair: null,
-        });
-        // exit: down.file-owner
-        // exit: down.session-owner
-        return 1;
+        return ownerFlagRefused(args.values.file !== undefined,
+          args.values.file !== undefined ? fileOwnerRefusal(io, args.values.file) ?? '' : sessionOwnerRefusal(walked));
       }
       ownerFlagsFirst = true;
     }
@@ -856,9 +856,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (said?.kind === 'refused' && placed) {
       refusals.push({ id: said.id, message: said.text });
     } else {
-      refuse(io, json, 'down', { id: 'down.file-owner', message: fileRefusal, repair: null });
-      // exit: down.file-owner
-      return 1;
+      return ownerFlagRefused(true, fileRefusal);
     }
   }
   // The owner is a terminal outside herdr, and the walk alone decides that: a non-owner aiming
@@ -874,9 +872,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       if (said?.kind === 'refused' && placed) {
         refusals.push({ id: said.id, message: said.text });
       } else {
-        refuse(io, json, 'down', { id: 'down.session-owner', message: sessionOwnerRefusal(walked), repair: null });
-        // exit: down.session-owner
-        return 1;
+        return ownerFlagRefused(false, sessionOwnerRefusal(walked));
       }
     }
   }
