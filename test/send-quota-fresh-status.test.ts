@@ -1,7 +1,7 @@
 // Synthetic screens and hosts only. The active typed wake uses an injected in-memory host;
 // the legacy trigger remains retired, and no key leaves the process.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
@@ -169,14 +169,19 @@ describe('a fresh quota reading on the same pane', () => {
   }
 });
 
-describe('send preflight with a synthetic recipient', () => {
-  test('after refusal a fresh row on the same pane permits a signed inbox delivery', async () => {
+describe('send availability with a synthetic recipient', () => {
+  test('after a durable hold a fresh row on the same pane permits a signed inbox delivery', async () => {
     const made = fixture();
     const pane = paneHost(made, frame(EMPTY));
     const refused = owner(made.root);
     expect(await runSend(['native', 'first note'], refused, pane.host)).toBe(1);
-    expect(refused.err).toContain('quota out');
-    expect(existsSync(dropDir(made.dir))).toBe(false);
+    expect(refused.err).toContain('not delivered: out of tokens');
+    expect(refused.err).toContain("kept in native's inbox");
+    expect(existsSync(dropDir(made.dir))).toBe(true);
+    const heldIds = readdirSync(dropDir(made.dir)).filter((name) => !name.includes('.'));
+    expect(heldIds).toHaveLength(1);
+    expect(readFileSync(join(dropDir(made.dir), heldIds[0]!), 'utf8')).toContain('first note');
+    expect(existsSync(join(dropDir(made.dir), `${heldIds[0]!}.read.json`))).toBe(false);
     expect(pane.typed).toEqual([]);
     expect(pane.entered).toEqual([]);
     expect(pane.wakeReads).toEqual([]);
@@ -195,13 +200,16 @@ describe('send preflight with a synthetic recipient', () => {
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
     if (history.ok) {
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'native', outcome: 'delivered (typed wake)', via: 'typed' });
+      expect(history.entries).toHaveLength(2);
+      expect(history.entries[0]).toMatchObject({ to: 'native', outcome: 'queued, not woken', via: 'drop' });
+      expect(history.entries[1]).toMatchObject({ to: 'native', outcome: 'delivered (typed wake)', via: 'typed' });
     }
     const drops = dropDir(made.dir);
     const messages = readdirSync(drops).filter((name) => !name.includes('.'));
-    expect(messages).toHaveLength(1);
-    const id = messages[0]!;
+    expect(messages).toHaveLength(2);
+    const freshIds = messages.filter((id) => !heldIds.includes(id));
+    expect(freshIds).toHaveLength(1);
+    const id = freshIds[0]!;
     const read = readMessage({ root: made.root, dropDir: drops, session: 'acme', seat: 'native' }, id, made.home);
     expect(read.ok).toBe(true);
     expect(JSON.stringify(read)).toContain('fresh note');
@@ -218,15 +226,26 @@ describe('send preflight with a synthetic recipient', () => {
     ['no status row', null],
     ['an unreadable status row', UNREADABLE],
   ] as const) {
-    test(`${name} refuses before staging a message or reaching a transport`, async () => {
+    test(`${name} keeps a signed message in the inbox without reaching a transport`, async () => {
       const made = fixture();
       const pane = paneHost(made, frame(row));
       const io = owner(made.root);
       expect(await runSend(['native', 'held note'], io, pane.host)).toBe(1);
-      expect(io.err).toContain('quota out');
-      expect(io.err).toContain('resets at 3:05 PM; nothing was sent');
+      expect(io.err).toContain('not delivered: out of tokens');
+      expect(io.err).toContain("kept in native's inbox");
       expect(io.out).toBe('');
-      expect(existsSync(dropDir(made.dir))).toBe(false);
+      expect(existsSync(dropDir(made.dir))).toBe(true);
+      const messages = readdirSync(dropDir(made.dir)).filter((id) => !id.includes('.'));
+      expect(messages).toHaveLength(1);
+      const id = messages[0]!;
+      expect(readFileSync(join(dropDir(made.dir), id), 'utf8')).toContain('held note');
+      expect(existsSync(join(dropDir(made.dir), `${id}.read.json`))).toBe(false);
+      const history = readHistory('acme', made.root, made.home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        expect(history.entries).toHaveLength(1);
+        expect(history.entries[0]).toMatchObject({ to: 'native', outcome: 'queued, not woken', via: 'drop' });
+      }
       expect(pane.host.frames).toEqual([]);
       expect(pane.writes).toEqual([]);
       expect(pane.typed).toEqual([]);
