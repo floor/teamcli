@@ -118,6 +118,8 @@ export function legacyWatchDigest(team: Approvable, omittedIdleFirst = false): s
   delete rest.unreadAfter;
   delete rest.stuckAfter;
   delete rest.leadUnreadAfter;
+  delete rest.watchStartLimit;
+  delete rest.childLateLimit;
   if (omittedIdleFirst && rest.idleFirst === 300) rest.idleFirst = 600;
   return digest(rest);
 }
@@ -139,10 +141,11 @@ export function legacyWatchDigests(team: Approvable, omittedIdleFirst: boolean):
     return rest;
   };
   const shapes = [
-    without('checks', 'idleOwner', 'blindAfter', 'unreadAfter', 'stuckAfter', 'leadUnreadAfter'),
-    without('checks', 'unreadAfter', 'stuckAfter', 'leadUnreadAfter'),
-    without('checks', 'stuckAfter', 'leadUnreadAfter'),
-    without('checks', 'leadUnreadAfter'),
+    without('checks', 'watchStartLimit', 'childLateLimit'),
+    without('checks', 'idleOwner', 'blindAfter', 'unreadAfter', 'stuckAfter', 'leadUnreadAfter', 'watchStartLimit', 'childLateLimit'),
+    without('checks', 'unreadAfter', 'stuckAfter', 'leadUnreadAfter', 'watchStartLimit', 'childLateLimit'),
+    without('checks', 'stuckAfter', 'leadUnreadAfter', 'watchStartLimit', 'childLateLimit'),
+    without('checks', 'leadUnreadAfter', 'watchStartLimit', 'childLateLimit'),
   ];
   const out = new Set<string>();
   for (const rest of shapes) {
