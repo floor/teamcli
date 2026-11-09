@@ -514,6 +514,22 @@ function uncarryableResume(seat: { name: string; cli: string; launch: string }, 
   return `its recorded conversation cannot be resumed: ${carried.why}; left as it is (${way})`;
 }
 
+/** The one warning a fresh start says, on the terminal and in the team log. */
+const FRESH_START = 'started fresh: its CLI cannot resume the recorded conversation';
+
+/** The CLI has no measured way to carry a conversation. A line that names one, or resumes
+ *  without naming one, is a different refusal and is not this. */
+function noMeasuredResumeForm(seat: { cli: string; launch: string }, session: string): boolean {
+  const carried = resumeCarry(seat.cli, seat.launch, session);
+  return carried.kind === 'refuse' && carried.why === 'its launch line has no measured resume form';
+}
+
+/** Nothing of the seat's CLI is in the pane: no reading, an empty foreground, or the shell alone. */
+function paneHasNoCli(process: PaneProcesses | null | undefined): boolean {
+  if (process == null || process.foreground.length === 0) return true;
+  return paneHoldsOnlyShell(process);
+}
+
 /** What a caller is told when a drifted seat is working and this `up` will not close it. */
 function driftWay(owner: boolean, name: string): string {
   return owner
@@ -898,11 +914,18 @@ function seatPlan(
       // pane when the launch line can carry it — never replaced by a blank one — and the
       // replaced pane is named only on that path: a record with no conversation to protect
       // takes the ordinary fresh launch, with no notice about a pane nothing was resumed from.
-      // A line that cannot carry the conversation stops before anything is launched. The
-      // recorded workspace, when the host still lists it, is closed only after the seat is
-      // ready on its replacement (`plan.ts`'s close-leftover step), never before it: this
-      // reading only says the host listed it then, and the close re-reads everything itself.
+      // A CLI with no measured resume form takes that same fresh launch: the pane is already
+      // empty, so nothing live is closed. A line that names another conversation, or resumes
+      // without naming one, still stops before anything is launched. The recorded workspace,
+      // when the host still lists it, is closed only after the seat is ready on its replacement
+      // (`plan.ts`'s close-leftover step), never before it: this reading only says the host
+      // listed it then, and the close re-reads everything itself.
       if (continuitySession === null) return planned;
+      // The pane is already gone. A CLI with no resume form starts fresh from its recorded
+      // line: nothing live is closed. A line that names another conversation still refuses.
+      if (paneHasNoCli(processes[seat.name] ?? null) && noMeasuredResumeForm(planned, continuitySession)) {
+        return { ...planned, freshStart: FRESH_START };
+      }
       const resumeHold = uncarryableResume(planned, continuitySession);
       if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
       const leftWorkspace = workspaces?.some((item) => item.id === movedWorkspace) ? movedWorkspace : undefined;
@@ -1355,6 +1378,47 @@ function seatPlan(
         stage: recorded.stage,
         sessionDoubt: `its agent record names ${elsewhere.reach.pane === null ? 'no pane' : `pane ${elsewhere.reach.pane}`} in session ${elsewhere.reach.session}, not this one; this run leaves the seat to that session`,
       };
+    }
+    // The shell is alone. A recorded conversation this CLI cannot carry is a fresh start in
+    // this same pane, with no resume id. A line that names another conversation, or resumes
+    // without naming one, keeps that refusal and nothing runs — the line this repair would
+    // launch, and the recorded line when it differs, each compared with the conversation the
+    // records name.
+    const registrySession = elsewhere !== null
+      && elsewhere.reach.session === session
+      && typeof elsewhere.reach.agent_session === 'string'
+      && elsewhere.reach.agent_session !== ''
+      ? elsewhere.reach.agent_session
+      : null;
+    const stateSession = typeof recorded.agent_session === 'string' && recorded.agent_session !== ''
+      ? recorded.agent_session
+      : null;
+    const recordedConversation = continuitySession ?? registrySession ?? stateSession;
+    if (recordedConversation !== null) {
+      if (
+        continuitySession !== null
+        && paneHasNoCli(processes[seat.name] ?? null)
+        && noMeasuredResumeForm(planned, recordedConversation)
+      ) {
+        return {
+          ...planned,
+          repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli, reuse: true },
+          freshStart: FRESH_START,
+        };
+      }
+      const lines = recorded.launch_line !== undefined && recorded.launch_line !== planned.launch
+        ? [planned.launch, recorded.launch_line]
+        : [planned.launch];
+      for (const line of lines) {
+        const named = namedResumeTarget(seat.cli, line);
+        if (named !== null && named !== recordedConversation) {
+          const resumeHold = uncarryableResume(
+            { name: seat.name, cli: seat.cli, launch: line },
+            recordedConversation,
+          );
+          if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        }
+      }
     }
     return {
       ...planned,

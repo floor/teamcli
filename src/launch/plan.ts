@@ -538,10 +538,16 @@ export interface UpSeat {
   resume?: string;
   /**
    * A proven conversation this seat's launch line cannot carry: it names another resume id, or
-   * resumes without naming one, or the CLI has no measured resume form. Nothing is closed and
-   * nothing is launched; the record stays ready and the run exits 1.
+   * resumes without naming one, or the CLI has no measured resume form and a live CLI is still
+   * in the pane. Nothing is closed and nothing is launched; the record stays ready and the run
+   * exits 1.
    */
   resumeHold?: string;
+  /**
+   * The CLI has no measured resume form and the restored pane holds no CLI of the seat. The
+   * launch is the recorded line with no resume id. The words are one warning and one log line.
+   */
+  freshStart?: string;
   /**
    * The pane holds a program this record cannot tie to the launch. Nothing is closed and
    * the stored process is left as it is.
@@ -1338,8 +1344,30 @@ export function upPlan(input: UpInput): Step[] {
     // The id a proven conversation writes into the launch line: the state-agreeing record's
     // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
     // form cannot carry either; the plan says so on the launch rather than losing it silently.
-    const resumeId = seat.registry?.sessionId ?? seat.resume;
+    const resumeId = seat.freshStart === undefined ? seat.registry?.sessionId ?? seat.resume : undefined;
     const carried = resumeId === undefined ? undefined : resumeCarry(profile.cli, seat.launch, resumeId);
+    // A line that names another conversation, or resumes without naming one, is not rewritten
+    // and is not run. A line with no measured form still launches; the fresh-start exception
+    // never reaches here, because it carries no resume id.
+    if (
+      carried?.kind === 'refuse'
+      && (carried.why === 'its launch line resumes a different conversation'
+        || carried.why === 'its launch line resumes without naming the recorded conversation')
+    ) {
+      const why = `its recorded conversation cannot be resumed: ${carried.why}; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`;
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: ${why}`,
+        do: {
+          do: 'record',
+          seat: seat.name,
+          record: { kind: 'ready' },
+          detail: `  ${why}\n`,
+          held: true,
+        },
+      });
+      continue;
+    }
     const recordedLine = carried?.kind === 'line' ? carried.line : seat.launch;
     const resumeGap = carried?.kind === 'refuse'
       ? `its recorded conversation cannot be resumed: ${carried.why}`
@@ -1508,7 +1536,7 @@ export function upPlan(input: UpInput): Step[] {
           : `its recorded pane ${seat.replacedPane} was gone and was replaced`;
       notice = notice ? `${notice}; ${gone}` : gone;
     }
-    if (reuse !== undefined) {
+    if (reuse !== undefined && seat.freshStart === undefined) {
       const same = `its recorded pane ${reuse.pane} was at its shell; launched in the same pane`;
       notice = notice ? `${notice}; ${same}` : same;
     }
@@ -1587,6 +1615,9 @@ export function upPlan(input: UpInput): Step[] {
         });
       }
     }
+    // A fresh start says its one sentence on the launch, which prints it and logs it once.
+    // The create step does not take it, so the log is not split from the warning.
+    if (seat.freshStart !== undefined) notice = seat.freshStart;
     // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
     // options after it; the seat says so on the launch step rather than losing the words.
     for (const text of launchWarnings) notice = notice ? `${notice}; ${text}` : text;

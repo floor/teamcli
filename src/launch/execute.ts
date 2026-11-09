@@ -12,7 +12,7 @@ function saveTextFile(path: string, text: string): boolean {
   }
 }
 import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
-import { refusalReport, type Refusal } from './deliver.ts';
+import { boxHoldsText, refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { ownStartFolderProblem } from '../worktree/place.ts';
@@ -2523,8 +2523,9 @@ export async function executePlan(
         // launch the seat through its own line there, resuming the conversation where one is
         // proven. The plan's reading may be minutes
         // old, so the host is read again with nothing between the readings and the exit, and the
-        // same proof decides: a changed world is a refusal, never a partial exit. A working turn
-        // or unsent text is left where it stands.
+        // same proof decides: a changed world is a refusal, never a partial exit. The exit word
+        // is typed only into a fresh idle prompt. A working turn, unsent text, or any other
+        // screen is left where it stands, and nothing is typed.
         const agentsNow = host.agentList?.(session) ?? null;
         const processNow = host.processInfo?.(session, op.pane) ?? null;
         const proof = restoreProof({
@@ -2556,7 +2557,8 @@ export async function executePlan(
           break;
         }
         const listedNow = agentsNow?.find((agent) => agent.pane === op.pane && (agent.name === null || agent.name === op.seat));
-        const kind = host.classify(session, op.pane, op.cli);
+        const screenKind = (): ScreenKind => host.classify(session, op.pane, op.cli);
+        const kind = screenKind();
         if (listedNow?.status === 'working' || kind === 'working') {
           // A seat that came back working is left to finish its turn: nothing is typed and the
           // run does not fail on it (the restore sweep reports it as skipped working).
@@ -2569,6 +2571,15 @@ export async function executePlan(
           held = true;
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'holds unsent text; nothing typed' });
+          break;
+        }
+        // Allow-list: the profile idle prompt is the only screen that may be typed into. A
+        // permission, trust, question, or unknown dialog that appeared after the plan holds
+        // here, with nothing typed.
+        if (kind !== 'idle') {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'is not at an idle prompt; nothing typed' });
           break;
         }
         const profile = profileFor(op.cli);
@@ -2599,14 +2610,40 @@ export async function executePlan(
           preparedChannels.delete(op.seat);
         };
         // The CLI's own way out, exactly as its profile measured it: the exit word and Enter,
-        // or the profile's keys at its idle screen. Nothing else is typed into the pane.
+        // or the profile's keys at its idle screen. Nothing else is typed into the pane. The
+        // screen is read again immediately before the word, again immediately before Enter, and
+        // again before each further key: a dialog that appeared in between takes nothing.
         let refused: string | null = null;
+        const idlePrompt = (): boolean => screenKind() === 'idle';
         if (profile.exit !== null) {
-          const typed = await host.typeText?.(session, op.pane, profile.exit);
-          const pressed = typed === true && (await host.pressEnter?.(session, op.pane)) === true;
-          if (!pressed) refused = 'its exit was not typed; left as it is';
+          const exitWord = profile.exit;
+          if (!idlePrompt()) {
+            refused = 'is not at an idle prompt; nothing typed';
+          } else {
+            const typed = await host.typeText?.(session, op.pane, exitWord);
+            if (typed !== true) {
+              refused = 'its exit was not typed; left as it is';
+            } else {
+              // One fresh frame. Idle: the word is not drawn yet. Unsent: that same frame's
+              // composer rows are exactly the exit word. A working turn, a transcript mention,
+              // or any other draft does not get Enter.
+              const frame = host.paneText?.(session, op.pane) ?? undefined;
+              const beforeEnter = launchKind(readScreen(op.cli, frame).kind);
+              const composerIsExit = beforeEnter === 'unsent' && boxHoldsText(op.cli, exitWord, frame);
+              const pressed = (beforeEnter === 'idle' || composerIsExit) && (await host.pressEnter?.(session, op.pane)) === true;
+              if (!pressed) {
+                refused = beforeEnter === 'idle' || composerIsExit
+                  ? 'its exit was not typed; left as it is'
+                  : 'is not at an idle prompt; the exit was not confirmed';
+              }
+            }
+          }
         } else {
           for (const key of profile.exitKeys) {
+            if (!idlePrompt()) {
+              refused = 'is not at an idle prompt; nothing typed';
+              break;
+            }
             if (!(host.sendKey?.(session, op.pane, key) ?? false)) {
               refused = 'its exit was not sent; left as it is';
               break;
