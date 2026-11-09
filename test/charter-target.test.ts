@@ -174,9 +174,13 @@ test('a covered checkout cannot revoke, send, stop, swap or launch a team outsid
 
   const file = join(outside, '.agents', 'team.yaml');
   const before = readFileSync(file, 'utf8');
+  // Owner-only flags refuse before the charter is read, so `down --file` never reaches the
+  // outside target. The charter-refusal shape stays judged by the no-flag runs above (revoke,
+  // send) and by the swap aim below, whose read still reaches the charter.
   const down = testIo(covered, AGENT);
   expect(await runDown(['--file', file], down, downSources(home, store)), down.err).toBe(1);
-  expect(down.err).toContain('team setup --edit');
+  expect(down.err).toContain(`team down: --file is the owner's, from a terminal outside herdr`);
+  expect(down.err).toContain('a seat in the covered checkout');
   expect(readFileSync(file, 'utf8')).toBe(before);
 
   const swap = testIo(covered, AGENT);
@@ -184,6 +188,8 @@ test('a covered checkout cannot revoke, send, stop, swap or launch a team outsid
   expect(swap.err).toContain('team setup --edit');
   expect(readFileSync(file, 'utf8')).toBe(before);
 
+  // The aimed up never reaches the charter either: its dry-run plan renders the admission
+  // refusal, and the outside team file is never changed.
   const upSources: UpSources = {
     home,
     ownerSeatStore: store,
@@ -193,7 +199,7 @@ test('a covered checkout cannot revoke, send, stop, swap or launch a team outsid
   };
   const up = testIo(covered, AGENT);
   expect(await runUp(['--file', file, '--dry-run'], up, upSources), up.err).toBe(1);
-  expect(up.err).toContain('team setup --edit');
+  expect(up.out).toContain('only the owner or `leads` starts the team');
   expect(readFileSync(file, 'utf8')).toBe(before);
 });
 
