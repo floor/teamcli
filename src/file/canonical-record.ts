@@ -103,8 +103,9 @@ export function canonicalRecordBytes(value: unknown): Buffer {
 }
 
 /** A validated team as a record: the same value without the seats' source positions. Empty
- *  messaging and alsoIn are loaded defaults for omitted words; leave them out so old files keep
- *  their frozen record bytes. Nonempty declarations keep their meaning. Pure. */
+ *  messaging and alsoIn, and later watch keys at their arrival defaults, are loaded values for
+ *  omitted words; leave them out so old files keep their frozen record bytes. Non-default
+ *  declarations keep their meaning. Pure. */
 export function teamRecordOf(team: { seats?: readonly object[] } & Record<string, unknown>): Record<string, unknown> {
   const copy: Record<string, unknown> = { ...team };
   const messaging = copy.messaging;
@@ -112,6 +113,16 @@ export function teamRecordOf(team: { seats?: readonly object[] } & Record<string
     delete copy.messaging;
   }
   if (Array.isArray(copy.alsoIn) && copy.alsoIn.length === 0) delete copy.alsoIn;
+  const watch = copy.watch;
+  if (watch !== null && typeof watch === 'object' && !Array.isArray(watch)
+    && (Object.getPrototypeOf(watch) === Object.prototype || Object.getPrototypeOf(watch) === null)) {
+    const projected: Record<string, unknown> = { ...watch };
+    // These are the defaults when the keys arrived, not whatever a later reader defaults to.
+    if (projected.leadUnreadAfter === 180) delete projected.leadUnreadAfter;
+    if (projected.watchStartLimit === 120) delete projected.watchStartLimit;
+    if (projected.childLateLimit === 30) delete projected.childLateLimit;
+    copy.watch = projected;
+  }
   if (!Array.isArray(copy.seats)) return copy;
   return {
     ...copy,
