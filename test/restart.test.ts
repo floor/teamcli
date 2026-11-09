@@ -2425,7 +2425,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
     expect(io.err).toContain('not resuming its recorded session (the record is another agent for this seat)');
-    expect(run.did.runs.join('\n')).not.toContain('resume');
+    expect(run.did.runs.join('\n')).not.toMatch(/(^|\s)(--resume|-r|resume)(=|\s|$)/);
     const seat = readState(fixture.dir).sessions.acme?.seats.worker;
     expect(seat?.id).toBe('seat_0123456789ab');
     expect(seat?.agent_session).toBe('ses_new');
@@ -3263,9 +3263,51 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toBe('');
   });
 
-  test('--fresh refuses a launch line that itself names a conversation, before the stop', async () => {
-    // A fresh start cannot run a line that selects a conversation of its own: the stop is not
-    // made and nothing is typed.
+  test('--fresh strips a codex launch line that names another conversation, and starts fresh', async () => {
+    const { fixture, run, agentId } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      launch: 'codex -m gpt-6.1-sol resume ses_other',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--fresh'], io, run.sources), io.err + io.out).toBe(0);
+    const record = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(record?.launch ?? '').not.toMatch(/(^|\s)(--resume|-r|resume)(=|\s|$)/);
+    expect(readFileSync(join(agentsDir(fixture.home), `${agentId}.yaml`), 'utf8')).toContain('agent_session: null');
+    expect(run.did.runs).toHaveLength(1);
+    expect(run.did.runs[0] ?? '').not.toMatch(/(^|\s)(--resume|-r|resume)(=|\s|$)/);
+  });
+
+  test('--fresh refuses a bare codex resume line it cannot prove, and changes nothing', async () => {
+    const { fixture, run, agentId } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      launch: 'codex resume',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const path = join(agentsDir(fixture.home), `${agentId}.yaml`);
+    const before = readFileSync(path, 'utf8');
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    const code = await runRestart(['worker', '--fresh'], io, run.sources);
+    expect(code, io.err + io.out).toBe(1);
+    expect(io.err).toContain('worker: its launch line itself names a conversation, so --fresh cannot start a new one; left as it is (clear the resume selection from its launch line for a fresh start)');
+    expect(run.did.runs).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(run.did.typed).toEqual([]);
+    expect(readFileSync(path, 'utf8')).toBe(before);
+  });
+
+  test('without --fresh a codex launch line that names another conversation is still refused', async () => {
     const { fixture, run } = seeded({
       registry: 'ses_codex',
       declaredCli: 'codex',
@@ -3274,15 +3316,19 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       launch: 'codex -m gpt-6.1-sol resume ses_other',
     });
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const before = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
     const io = testIo(fixture.root, { kind: 'owner' });
 
-    const code = await runRestart(['worker', '--fresh'], io, run.sources);
+    const code = await runRestart(['worker'], io, run.sources);
+    expect(code, io.err + io.out).toBe(1);
+    expect(io.err).toContain('worker: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)');
     expect(run.did.runs).toEqual([]);
-    expect(code).toBe(1);
     expect(run.did.closed).toEqual([]);
     expect(run.did.created).toBe(0);
     expect(run.did.typed).toEqual([]);
-    expect(io.err).toContain('worker: its launch line itself names a conversation, so --fresh cannot start a new one; left as it is (clear the resume selection from its launch line for a fresh start)');
+    const after = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(after?.launch).toBe(before?.launch);
+    expect(after?.reach.agent_session).toBe('ses_codex');
   });
 
   test('--fresh starts fresh when the launch line itself sets a new session id', async () => {
