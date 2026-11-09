@@ -451,25 +451,26 @@ describe('3. an owner-seat always rule still admits what it admitted before', ()
     expect(entry).toMatchObject({ action: 'team-down', via: 'rule', rule_id: ruleId });
   });
 
-  test('add: the target team lead is refused without the rule and admitted with it; a plain seat keeps the refusal', async () => {
+  test('add: the target team lead is admitted without the rule; a plain seat keeps the refusal', async () => {
     const fx = setupHierarchy({ devMode: false });
     const yamlPath = join(fx.acmeRoot, '.agents', 'team.yaml');
 
+    // f02bd84b3: a placed own-team lead adds with no owner-seat rule.
     const withoutRule = fakeLaunch();
     const refusedIo = testIo(fx.acmeRoot, fx.callers.acmeLead);
     const refusedCode = await runAdd(['apprentice', '--like', 'builder'], refusedIo, makeAddSources(fx.home, withoutRule, fx.store));
-    expect(refusedCode).toBe(1);
-    expect(refusedIo.err).toBe(`team add: ${ADD_REFUSAL_PREFIX}lead\n`);
-    expect(withoutRule.creates).toEqual([]);
-    expect(readFileSync(yamlPath, 'utf8')).not.toContain('    name: apprentice\n');
+    expect(refusedCode, refusedIo.out + refusedIo.err).toBe(0);
+    expect(refusedIo.err).toBe('');
+    expect(withoutRule.creates).toEqual(['apprentice']);
+    expect(readFileSync(yamlPath, 'utf8')).toContain('    name: apprentice\n');
 
     const addRule = signAlwaysRule(fx.home, fx.store, fx.acmeRoot, 'acme', 'team-add');
     const admitted = fakeLaunch();
     const admittedIo = testIo(fx.acmeRoot, fx.callers.acmeLead);
-    const admittedCode = await runAdd(['apprentice', '--like', 'builder'], admittedIo, makeAddSources(fx.home, admitted, fx.store));
+    const admittedCode = await runAdd(['scout', '--like', 'builder'], admittedIo, makeAddSources(fx.home, admitted, fx.store));
     expect(admittedCode, admittedIo.out + admittedIo.err).toBe(0);
-    expect(readFileSync(yamlPath, 'utf8')).toContain('    name: apprentice\n');
-    expect(admitted.creates).toEqual(['apprentice']);
+    expect(readFileSync(yamlPath, 'utf8')).toContain('    name: scout\n');
+    expect(admitted.creates).toEqual(['scout']);
 
     const worker = fakeLaunch();
     const workerIo = testIo(fx.acmeRoot, fx.callers.acmeWorker);
@@ -491,11 +492,10 @@ describe('4. the dev-mode lift is unchanged', () => {
     const leadIo = testIo(fx.acmeRoot, fx.callers.acmeLead);
     const leadCode = await runAdd(['apprentice', '--like', 'builder'], leadIo, makeAddSources(fx.home, launched, fx.store));
     expect(leadCode, leadIo.out + leadIo.err).toBe(0);
-    expect(leadIo.err).toBe(`team add: warning: ${ADD_REFUSAL_PREFIX}lead; dev mode continues (dev-mode on at machine level)\n`);
+    // f02bd84b3: ordinary own-team add writes no dev-lift warning.
+    expect(leadIo.err).toBe('');
     expect(launched.creates).toEqual(['apprentice']);
-    expect(teamLog(fx.acmeRoot)).toContain(
-      `add [lead] warning: ${ADD_REFUSAL_PREFIX}lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`,
-    );
+    expect(teamLog(fx.acmeRoot)).not.toContain('dev mode continues');
     expect(pendingCards(fx.home)).toEqual([]);
 
     const worker = fakeLaunch();
@@ -512,12 +512,12 @@ describe('4. the dev-mode lift is unchanged', () => {
     const atlasIo = testIo(fx.acmeRoot, fx.callers.atlas);
     const atlasCode = await runDown(['--abandon'], atlasIo, downSources(fx.home, fx.store));
     expect(atlasCode).toBe(1);
+    // 1364: abandon stays the owner's. The down warning remains; the abandon itself is a refusal.
     expect(atlasIo.err).toBe(
-      `warning: ${ABANDON_REFUSAL}; dev mode continues (dev-mode on at machine level)\n`
-      + `team down: warning: ${DOWN_CALLER_PREFIX} atlas (dev-mode on at machine level)\n`
-      + `team down: ${NO_LAUNCH}\n`,
+      `team down: warning: ${DOWN_CALLER_PREFIX} atlas (dev-mode on at machine level)\n`
+      + `team down: ${ABANDON_REFUSAL}\n`,
     );
-    expect(teamLog(fx.acmeRoot)).toContain('admitted as lead\n');
+    expect(teamLog(fx.acmeRoot)).not.toContain('admitted as lead');
 
     const workerIo = testIo(fx.acmeRoot, fx.callers.acmeWorker);
     const workerCode = await runDown(['--abandon'], workerIo, downSources(fx.home, fx.store));
