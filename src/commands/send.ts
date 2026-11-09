@@ -26,6 +26,9 @@ import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, holderText, seatLockHolder, seatLockPath, type LockHolder } from '../launch/seat-lock.ts';
 import { readState, type SeatState } from '../state.ts';
 import { logLine } from '../log.ts';
+import { tokenMark } from '../quota/out-of-tokens.ts';
+import { messageKeyOf } from '../store/keys.ts';
+import { seatCanWork, type CantWorkReason } from '../watch/seat-can-work.ts';
 import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
 import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
@@ -43,7 +46,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, isRecordSidecarName, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, isRead, isRecordSidecarName, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -74,7 +77,7 @@ import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
-import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
+import { quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
 import {
@@ -385,8 +388,8 @@ export type DaemonSendPrincipal = {
   /** The roots the daemon hosted when the principal was established. */
   roots: readonly string[];
   recheck(): { ok: true } | { ok: false; why: string };
-  /** A stuck-child notice addresses the loaded team's lead and nobody else. Absent on a reminder. */
-  notice?: 'stuck-child';
+  /** A daemon notice addresses the loaded team's lead and nobody else. Absent on a reminder. */
+  notice?: 'stuck-child' | 'seat-blocked';
 };
 
 export type SendHost = {
@@ -441,6 +444,15 @@ export type SendHost = {
    *  (beside a listener it also writes) to see the unconfirmed ending without waiting, or a
    *  small number to watch the receipt land. */
   inboxGraceMs?: number;
+  /** Out of tokens. The real host reads FLO-961's mark; a test injects the observation and
+   *  absent is none. */
+  tokens?: (session: string, seat: string, dir: string) => { reason: 'out of tokens' } | undefined;
+  /** How long a typed wake waits for a working screen or a read receipt. Absent, the wake's own bound. */
+  wakeVerifyMs?: number;
+  /** The poll interval inside that bound. Absent, the wake's own interval. */
+  wakePollMs?: number;
+  /** Whether the drop's read receipt is already verified. Absent, the wake does not ask. */
+  wakeReceipt?: (input: { dropDir: string; id: string; seat: string; root: string; session: string; home: string }) => boolean;
   /** How long the channel leg waits for the seat server's push marker, in milliseconds. The real
    *  host leaves it at `CHANNEL_PUSH_GRACE_MS`; a test sets 0 to see the ending without waiting,
    *  with the marker it also writes already in place. */
@@ -498,6 +510,14 @@ export const realHost: SendHost = {
   home: homedir(),
   projects: realProjectSources,
   build: () => buildIdentity(),
+  tokens: (_session, _seat, dir) => tokenMark(dir, _seat),
+  wakeReceipt: (input) => {
+    try {
+      return isRead(input.dropDir, input.id, { to: input.seat, root: input.root, session: input.session }, messageKeyOf(input.home));
+    } catch {
+      return false;
+    }
+  },
 };
 
 const send: Command = (argv, io) => runSend(argv, io, realHost);
@@ -591,6 +611,44 @@ function seatStateOf(dir: string, session: string, seat: string): SeatState | un
   } catch {
     return undefined;
   }
+}
+
+/** A seat that cannot take work, read once before any route. Wake-not-taken is not decided
+ *  here: that reason exists only after a typed wake. No pane is not "no CLI". `seen` is the
+ *  pane text this send already read; when it is passed, this check does not read the pane again. */
+function workBlock(
+  host: SendHost,
+  dir: string,
+  session: string,
+  seat: string,
+  cli: string,
+  seen?: { raw: string | null },
+): { reason: CantWorkReason; line: string } | null {
+  const marked = host.tokens ? host.tokens(session, seat, dir) : tokenMark(dir, seat);
+  const canRead = typeof host.agents === 'function' && typeof host.processInfo === 'function';
+  if (!canRead && marked === undefined) return null;
+  const found = canRead ? findAgent(host, session, seat) : { ok: false as const };
+  const pane = found.ok ? found.pane : undefined;
+  const processes = pane === undefined ? null : host.processInfo(session, pane);
+  const raw = seen !== undefined
+    ? seen.raw
+    : pane === undefined ? null : host.native.paneText?.(session, pane) ?? null;
+  const screen = raw ?? { kind: 'idle' as const };
+  // A usage wall is the detector's out-of-tokens reason. The old preflight returned
+  // on its own, before this reading, and a cross-team send must judge the recipient.
+  const wall = typeof raw === 'string' && raw !== '' ? quotaOutOf(cli, raw) : null;
+  const tokens = marked ?? (wall !== null ? { reason: 'out of tokens' as const } : undefined);
+  const recorded = canRead ? seatStateOf(dir, session, seat)?.launched : undefined;
+  const verdict = seatCanWork({
+    seat,
+    cli,
+    screen,
+    processes,
+    ...(recorded === undefined ? {} : { recorded }),
+    ...(tokens === undefined ? {} : { tokens }),
+  });
+  if (verdict.ok || verdict.reason === 'wake not taken') return null;
+  return { reason: verdict.reason, line: verdict.line };
 }
 
 /** The class a class read ended in, whether the seat's webhook adapter is the only route the
@@ -1633,16 +1691,11 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       return held(io, dir, who, to.seat, `model drift: ${declaredModel} vs ${runningLabel}`, host, report);
     }
   }
-  // The quota preflight: a walled seat is refused before the body is read into a send, before
-  // a drop file, a socket frame or a key exists. Only a positive read of the seat's own pane
-  // refuses; an absent agent or a pane that does not read leaves the existing delivery-time
-  // cautions, and that gap is the named limitation, not a safe outcome. The host's status is
-  // not consulted: a wall the screen proves holds even while the terminal host still calls the
-  // seat working, so no socket or drop effect can start ahead of the old caution.
-  if (preflightLive.ok) {
-    const quota = quotaOutOf(to.cli, preflightScreen);
-    if (quota !== null) return refuse(io, dir, who, `${to.seat}: ${quotaOutDetail(declared, quota)}`, host, report);
-  }
+  // A seat that cannot take work is not refused here. The body has not been read yet, and
+  // the message has to stay in the recipient's inbox: the walk's gate, once the record
+  // exists, writes that drop and then reports the detector's reason. The folder that gate
+  // reads is the recipient's, so a cross-team send does not use the sender's mark. A human's
+  // pane is not judged.
   // A `--brief` send reads the receiving team's `brief-transport` before it reads the draft or
   // writes anything durable. `message` and `file` both deliver the whole body as an ordinary
   // send — the walk is the same one — while `memory` is refused with nothing written on either
@@ -1822,9 +1875,24 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // push and the webhook wake it to read one, and the typed wake and the drop file leave a
   // trigger — so each is set aside with its reason, before anything is written.
   const BODY_CARRYING_LEGS: readonly WalkLeg[] = ['socket', 'session'];
-  const walk: readonly WalkLeg[] = store === 'none'
+  const walkLegs: WalkLeg[] = store === 'none'
     ? declaredWalk.filter((leg) => BODY_CARRYING_LEGS.includes(leg))
     : [...declaredWalk];
+  // A declared `typed` word is the wake when no event adapter is what this host will type
+  // through. The profile-gated wake stays as it was. A lead whose profile names no typed
+  // wake — claude-code — still walks it when this host can type one, so the order is not
+  // left as the drop. A socket or channel that takes the send stops before this leg.
+  if (
+    !human
+    && store !== 'none'
+    && typeof host.typedWake === 'function'
+    && order.includes('typed')
+    && !walkLegs.includes('typed')
+  ) {
+    const dropAt = walkLegs.indexOf('drop');
+    walkLegs.splice(dropAt < 0 ? walkLegs.length : dropAt, 0, 'typed');
+  }
+  const walk: readonly WalkLeg[] = walkLegs;
   // The legs that put the message in front of the seat themselves: a typed trigger, a frame, a
   // socket, or the seat's own webhook adapter. When one of them takes the send, a channel push
   // for the same id would wake the seat a second time, so a stale serving channel is held off
@@ -2212,6 +2280,60 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     report.deliveryClass = classWithout(to, host.home, walkLost, declared).cls;
     report.deliveryWords = wordsNow(wakeOutcome);
   };
+  // The detector's refusal still keeps the message: the same drop the drop leg writes, and
+  // no key is typed. The history line is the drop's own word, so a restart and the watch's
+  // retry find the record. The console line is the detector's reason.
+  const journalKept = (failed?: readonly string[]): void => {
+    const ms = host.now().getTime() - startedAt;
+    appendHistory(to.project, to.root, host.home, {
+      ts: host.now().toISOString(),
+      from,
+      to: to.seat,
+      ...(to.sentAs === null ? {} : to.sentAs),
+      ...historySender(report),
+      body: record.body,
+      id: record.id,
+      thread: record.thread,
+      outcome: 'queued, not woken',
+      ms,
+      via: 'drop',
+      ...(failed !== undefined && failed.length > 0 ? { failed: [...failed] } : {}),
+    });
+  };
+  const keepBlocked = async (): Promise<void> => {
+    // messaging.store none keeps no copy. The refusal says so and writes nothing.
+    if (store === 'none') return;
+    const stored = await storeDropRecord(
+      to.dir,
+      who,
+      to.session,
+      to.seat,
+      dropDir,
+      record,
+      from,
+      host,
+      report,
+      to.sentAs,
+      human,
+      startedAt,
+      note,
+      'the record is stored; the seat cannot take it',
+      to.project,
+    );
+    if (!stored.ok) return;
+    stored.release();
+    journalKept();
+  };
+  if (!human) {
+    const blocked = workBlock(
+      host, to.dir, to.session, to.seat, to.cli,
+      preflightLive.ok ? { raw: preflightScreen ?? null } : undefined,
+    );
+    if (blocked !== null) {
+      await keepBlocked();
+      return notDelivered(io, dir, who, to.seat, blocked.reason, host, report, store === 'none');
+    }
+  }
   for (const [at, leg] of walk.entries()) {
     // A reminder send stands on the daemon principal its internal entry established, and that
     // identity is rechecked before every leg, whatever the leg can do: a daemon that stopped, a
@@ -3027,7 +3149,26 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       note(walkAttempt('typed', 'unreachable', false, host.now(), startedAt, { reason: found.reason }));
       return unreachable(io, dir, who, to.seat, found.reason, host, report);
     }
-    if (isBareShellPane(to.dir, to.session, to.seat, host.processInfo(to.session, found.pane))) {
+    const paneProcs = host.processInfo(to.session, found.pane);
+    // The usage wall already read this pane. A second look would be a second read of the same box.
+    const preScreen = preflightLive.ok && preflightLive.pane === found.pane
+      ? (preflightScreen ?? null)
+      : host.native.paneText?.(to.session, found.pane);
+    const recorded = seatStateOf(to.dir, to.session, to.seat)?.launched;
+    const marked = host.tokens ? host.tokens(to.session, to.seat, to.dir) : tokenMark(to.dir, to.seat);
+    const blocked = seatCanWork({
+      seat: to.seat,
+      cli: to.cli,
+      screen: preScreen ?? { kind: 'idle' },
+      processes: paneProcs,
+      ...(recorded === undefined ? {} : { recorded }),
+      ...(marked === undefined ? {} : { tokens: marked }),
+    });
+    if (!blocked.ok && blocked.reason !== 'wake not taken') {
+      await keepBlocked();
+      return notDelivered(io, dir, who, to.seat, blocked.reason, host, report, store === 'none');
+    }
+    if (isBareShellPane(to.dir, to.session, to.seat, paneProcs)) {
       const why = 'the seat is back at its shell; nothing was typed';
       if (typedWake !== null && at + 1 < walk.length) {
         failures.push(`typed: ${why}`);
@@ -3043,7 +3184,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       return unreachable(io, dir, who, to.seat, 'the seat is back at its shell; nothing was typed', host, report);
     }
     report.sent = msgId;
-    if (typedWake !== null) {
+    if (typedWake !== null || host.typedWake !== undefined) {
       // The profile-gated typed wake: one line into the empty idle box the wake saw twice, and a
       // delivery only when the profile's working screen shows. A wake that does not deliver is
       // not the walk's ending — the message is in the bus inbox, and the drop leg behind this one
@@ -3061,6 +3202,13 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       if (wake.delivered) {
         markLeg('typed', 'attempted');
         return delivered(io, to.seat, report, 'typed wake', 'typed');
+      }
+      if (wake.typed || wake.reason.startsWith('the screen stayed working')) {
+        // The drop is already in the inbox. The history line is the same one the keep
+        // path writes, plus the wake's own reason, so a later read is not an empty journal.
+        const failed = [...failures, `typed: ${wake.reason}`];
+        journalKept(failed);
+        return notDelivered(io, dir, who, to.seat, 'wake not taken', host, report);
       }
       wakeOutcome = { attempted: true, reason: wake.reason };
       failures.push(`typed: ${wake.reason}`);
@@ -4873,27 +5021,34 @@ async function deliverTypedWakeSeat(
    *  cascade): this leg then records nothing. A send leaves it true. */
   writeHistory = true,
   staged?: RecordWritten | null,
-): Promise<{ delivered: true } | { delivered: false; reason: string }> {
+): Promise<{ delivered: true } | { delivered: false; reason: string; typed: boolean }> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
-    return { delivered: false, reason: `another command holds the seat (${holderText(lock)}); nothing was typed` };
+    return { delivered: false, typed: false, reason: `another command holds the seat (${holderText(lock)}); nothing was typed` };
   }
   try {
     try {
       sealDropTree(dir, session, seatName);
     } catch {
-      return { delivered: false, reason: 'the record could not be written; nothing was typed' };
+      return { delivered: false, typed: false, reason: 'the record could not be written; nothing was typed' };
     }
     const written = staged !== undefined
       ? (staged ?? { ok: false as const, reason: 'the record was not staged' })
       : await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
-      return { delivered: false, reason: `the record could not be written (${written.reason}); nothing was typed` };
+      return { delivered: false, typed: false, reason: `the record could not be written (${written.reason}); nothing was typed` };
     }
     const wakeHost = host.typedWake?.(session);
-    if (wakeHost === undefined) return { delivered: false, reason: 'the send host binds no pane writer; nothing was typed' };
-    const wake = await deliverTypedWake(wakeHost, pane, trigger, cli);
-    if (!wake.delivered) return { delivered: false, reason: wake.reason };
+    if (wakeHost === undefined) return { delivered: false, typed: false, reason: 'the send host binds no pane writer; nothing was typed' };
+    const wake = await deliverTypedWake(wakeHost, pane, trigger, cli, {
+      ...(host.wakeVerifyMs === undefined ? {} : { verifyMs: host.wakeVerifyMs, workingBoundMs: host.wakeVerifyMs }),
+      ...(host.wakePollMs === undefined ? {} : { pollMs: host.wakePollMs }),
+      ...(host.wakeReceipt === undefined ? {} : {
+        receipt: () => host.wakeReceipt!({ dropDir, id: payload.id, seat: seatName, root, session, home: host.home }),
+      }),
+      draftFile: join(dropDir, `${payload.id}.draft`),
+    });
+    if (!wake.delivered) return { delivered: false, typed: wake.typed, reason: wake.reason };
     const ms = host.now().getTime() - startedAt;
     logLine(dir, 'send', who, `${seatName}: delivered (typed wake) (drop ${String(payload.body.length)} characters, typed; ${wake.reason})`, host.now());
     if (writeHistory) {
@@ -5171,6 +5326,10 @@ export async function walkBriefDelivery(input: {
       else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
     }
   }
+  if (!human) {
+    const blocked = workBlock(input.host, input.dir, input.session, seatName, input.cli);
+    if (blocked !== null) return { via: null, walked: false, exit: 1, failures: [blocked.line] };
+  }
   for (const leg of walk) {
     if (leg === 'native') {
       // This build's send reads `native` as the frame on a cross-session socket — a socket write
@@ -5401,6 +5560,11 @@ async function deliverClientRecord(
   const canPane = typeof host.agents === 'function' && typeof host.processInfo === 'function';
   const canSocket = canPane && typeof host.deliver === 'function' && host.native !== undefined;
   const canType = canPane && host.native !== undefined;
+  const clientBlocked = workBlock(host, dir, session, seatName, cli);
+  if (clientBlocked !== null) {
+    logLine(dir, 'send', record.from, `${seatName}: ${clientBlocked.line}`, host.now());
+    return;
+  }
   for (const leg of walk) {
     if (leg === 'socket') {
       // The socket dials only a receiving Claude session whose launch declares
@@ -5719,6 +5883,13 @@ export async function walkReplyDelivery(input: {
     root: input.root,
     cross: false,
   };
+  if (!human) {
+    const blocked = workBlock(input.host, input.dir, input.session, seatName, cli);
+    if (blocked !== null) {
+      failures.push(blocked.line);
+      return ended({ via: 'drop', walked: false, unconfirmed: false, summary: blocked.line });
+    }
+  }
   for (const [at, leg] of chosen.entries()) {
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The marker beside the record
@@ -7016,19 +7187,24 @@ function daemonAdmissionOf(
   // to name that lead, so the principal cannot be reused for any other seat. The lead is who the
   // notice is for, including when that seat is a person's: the seat's own delivery order decides
   // the transport, and no other seat is admitted by this notice.
-  if (daemon.principal.notice === 'stuck-child') {
+  if (daemon.principal.notice === 'stuck-child' || daemon.principal.notice === 'seat-blocked') {
+    const notice = daemon.principal.notice === 'stuck-child' ? 'a stuck-child notice' : 'a blocked-episode notice';
     if (team.orchestrator === '' || seat !== team.orchestrator) {
-      return { ok: false, why: `${seat}: a stuck-child notice goes to this team's lead and to nobody else` };
+      return { ok: false, why: `${seat}: ${notice} goes to this team's lead and to nobody else` };
     }
     const addressed = daemon.principal.recipients.some((entry) => samePath(entry.root, daemon.root) && entry.session === team.session && entry.seat === seat);
     if (!addressed) {
-      return { ok: false, why: `${seat}: a stuck-child notice names the lead in the checkout the daemon hosted` };
+      return { ok: false, why: `${seat}: ${notice} names the lead in the checkout the daemon hosted` };
     }
     const declared = team.seats.find((entry) => entry.name === seat);
     if (declared === undefined) {
       return { ok: false, why: `${seat}: it is not a declared seat; the daemon addresses a seat of a team it hosts only` };
     }
-    return { ok: true, rule: "the daemon's stuck-child notice", sender: 'daemon' };
+    return {
+      ok: true,
+      rule: daemon.principal.notice === 'stuck-child' ? "the daemon's stuck-child notice" : "the daemon's blocked-episode notice",
+      sender: 'daemon',
+    };
   }
   // The recipient list the due instant carries is the whole of what this principal may address:
   // a declared seat that is not on it was not due, and is refused before anything is staged.
@@ -7403,6 +7579,30 @@ function refuseAdmission(io: Io, dir: string | null, who: string, admission: Ext
     return 1; // exit: send.grant-invalid
   }
   return refuse(io, dir, who, admission.why, host, report);
+}
+
+/** The detector refused the send, or a typed wake was not taken. The drop is already in the
+ *  recipient's inbox when this line is reached: the sentence says so, and nothing is typed.
+ *  Exit 1. */
+function notDelivered(
+  io: Io,
+  dir: string,
+  who: string,
+  seat: string,
+  reason: CantWorkReason,
+  host: SendHost,
+  report: Report,
+  /** The recipient's store is `none`: nothing was written, and the line says so. */
+  unstored = false,
+): number {
+  const kept = unstored
+    ? '; not kept (store none)'
+    : report.sent !== null && report.sent !== '' ? `; kept in ${seat}'s inbox` : '';
+  const message = withId(`${seat}: not delivered: ${reason}${kept}`, report);
+  logLine(dir, 'send', who, message, host.now());
+  if (report.json) writeSendError(io, 'send.not-delivered', message, report);
+  else io.stderr(`team send: ${message}\n`);
+  return 1; // exit: send.not-delivered
 }
 
 /** The seat's channel was not open, and nothing was sent. A dialog is the one unreachable the

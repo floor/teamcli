@@ -35,6 +35,8 @@ import { beatWatch, ownWatchPane, placedWatch, watchRunning } from '../watch/pan
 import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand } from './up.ts';
 import { realHost, redeliverChannelOnSocket } from './send.ts';
+import { sendDaemonDirect } from '../reminder/direct-send.ts';
+import { runRestart } from './restart.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, readTriggerLine, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
@@ -211,6 +213,10 @@ export type WatchSources = {
   /** The live world a queued swap's run reads: the restart path's own sources. Absent, the
    *  watch queues the rule's breaches but carries no swap out (a test without a faked launch). */
   swapSources?: RestartSources;
+  /** Restarts one seat from its record, resumed, that seat alone. Absent, the watch does not
+   *  restart: a test that does not inject this never launches a real seat. The real watch
+   *  wires `team restart` over its own restart sources. A hosted watch leaves it unset. */
+  restartSeat?(seat: string, io: Io): Promise<number>;
   /**
    * A hand-run `team watch` does not call this. No path starts a pane watch; the daemon's
    * hosted loop is the only watch this command runs.
@@ -438,6 +444,7 @@ export const realWatchSources: WatchSources = {
   ownPane: ownWatchPane,
   home: homedir(),
   swapSources: restartSources,
+  restartSeat: (seat, io) => runRestart([seat], { ...io, stdout: () => {}, stderr: () => {} }, restartSources),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, session === 'default' ? undefined : session),
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
     reportDisplayAgent(pane, text, session === 'default' ? undefined : session, ttlMs),
@@ -1566,6 +1573,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // mail notification is never a second typed path into an episode already delivered (or
         // reported undelivered) by the dispatcher.
         const suppressed = new Set(idleDispatch.suppressed ?? []);
+        // One report per episode. The dispatcher's record is the report for a seat it owns,
+        // so the cant-work event does not also fire. A seat with no such episode still reports.
+        if (suppressed.size > 0) {
+          result.reports = result.reports.filter((report) => {
+            if (!report.key.startsWith('cant-work:')) return true;
+            return !suppressed.has(report.key.slice('cant-work:'.length));
+          });
+        }
         // The legacy automatic work typing is retired: every automatic work request goes through
         // the shared dispatcher reading above. A seat the reading cannot prove idle (no truthful
         // stamp, unknown window, unreadable source) or cannot offer work to (an empty source) is
@@ -1594,9 +1609,40 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           if (report.to === 'owner') ownerTold.add(report.text);
           tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
         }
+        for (const item of result.cantWork ?? []) {
+          // The lead's copy is a signed record in the lead's mailbox and, when this team has
+          // a parent, in that orchestrator's. The report loop above already printed the line;
+          // the bus publish below carries the same report. A hold still reports. A restart
+          // does not: it is an effect, and it waits for a watch whose effects are open.
+          if (item.tellLead && !suppressed.has(item.seat) && !foreign && sources.home !== undefined && hosted === undefined) {
+            tellLeadCantWork(sources.home, root, team, session, item.seat, `${item.seat}: ${item.line}`, reportTs);
+          }
+          // A wake the seat did not take is retried by the unread pass below, under the same
+          // hold. This loop does not type a second one.
+          if (item.restart === undefined || foreign || quiet || hosted !== undefined || sources.restartSeat === undefined) continue;
+          // Marked only once the restart is actually asked for. A held pass leaves it unset,
+          // so the next open pass still carries the plan.
+          const workEpisodes = memory.slots['seat-cant-work'] as Record<string, { restarted?: boolean }> | undefined;
+          const workEpisode = workEpisodes?.[item.seat];
+          if (workEpisode) workEpisode.restarted = true;
+          logLine(dir, 'watch', 'watch', item.restart.audit, sources.now());
+          try {
+            const code = await sources.restartSeat(item.seat, io);
+            logLine(dir, 'watch', 'watch', `restart ${item.seat} ended ${String(code)}`, sources.now());
+          } catch (error) {
+            logLine(dir, 'watch', 'watch', `restart ${item.seat} failed: ${(error as Error).message}`, sources.now());
+          }
+        }
         // What the pass saw goes on the bus whatever started this watch: a report is the watch's
         // contribution, not a privileged delivery, and a bus that is not running answers
-        // `unavailable` without making the pass wait.
+        // `unavailable` without making the pass wait. A hosted watch does not publish that bus
+        // and does not write the lead's mailbox itself. One blocked episode for a seat the
+        // dispatcher does not own goes out as the daemon's own notice, to the lead alone.
+        if (!foreign && hosted !== undefined && sources.home !== undefined) {
+          await sendHostedBlockedEpisodes(
+            sources.home, root, team, session, result.reports, reportTs, suppressed, memory, dir, sources.now,
+          );
+        }
         if (!foreign && sources.busPublish !== undefined && hosted === undefined) {
           await publishWatchReportsToBus(root, session, result.reports, reportTs, sources.busPublish);
         }
@@ -2423,6 +2469,17 @@ export function watchReportEvent(
       reason: report.text,
     };
   }
+  if (prefix === 'cant-work') {
+    return {
+      ts,
+      kind: 'seat.blocked',
+      session,
+      record_id: `watch:cant-work:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      reason: report.text,
+    };
+  }
   if (prefix === 'provider-error') {
     return {
       ts,
@@ -2437,10 +2494,164 @@ export function watchReportEvent(
   return null;
 }
 
+/** One signed record for the team lead, and the same record for the parent orchestrator when
+ *  the registry names one and it is not already the lead. `once` keeps the episode's repeat
+ *  pass from writing a second copy. A team with no lead and no parent writes nothing here;
+ *  the bus event still names the lead through the routing table. */
+function tellLeadCantWork(
+  home: string,
+  root: string,
+  team: TeamFile,
+  session: string,
+  seat: string,
+  text: string,
+  at: string,
+): void {
+  const id = `evt-cant-work-${seat}-${text.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)}`;
+  const write = (target: { root: string; session: string; seat: string }): void => {
+    writeRuntimeMailboxRecord({
+      root: target.root,
+      home,
+      to: target.seat,
+      id,
+      text,
+      session: target.session,
+      at,
+      once: true,
+    });
+  };
+  if (team.orchestrator !== '') write({ root, session, seat: team.orchestrator });
+  const main = readEntityOrchestrator(home, teamIdOf(root));
+  if (main !== null && !(main.root === root && main.session === session && main.seat === team.orchestrator)) write(main);
+}
+
+/** A provider error and the can't-work line for that same seat are one episode. The map keeps
+ *  one `seat.blocked` event for them. Anything else stays on its own record id. */
+function blockedEpisodeKey(event: EventAppendInput): string {
+  const id = event.record_id;
+  if (
+    event.kind === 'seat.blocked'
+    && event.seat !== undefined
+    && event.seat !== ''
+    && (id.startsWith('watch:provider-error:') || id.startsWith('watch:cant-work:'))
+  ) {
+    return `blocked-episode:${event.seat}`;
+  }
+  return event.record_id;
+}
+
+/** The can't-work record is the episode's event. An owner-addressed copy adds the owner and
+ *  leaves the lead and the operator on the same event. */
+function keepBlockedEpisode(current: EventAppendInput, next: EventAppendInput, nextToOwner: boolean): EventAppendInput {
+  const kept = next.record_id.startsWith('watch:cant-work:') ? next : current;
+  if (nextToOwner || current.to === 'owner') kept.to = 'owner';
+  return kept;
+}
+
+/** One folded event per observation. A provider error and the can't-work report of one seat
+ *  share one event. An owner-addressed copy marks that event for the owner. */
+function foldedWatchEvents(
+  reports: readonly { key: string; text: string; to: string }[],
+  session: string,
+  ts: string,
+): EventAppendInput[] {
+  const events = new Map<string, EventAppendInput>();
+  for (const report of reports) {
+    const event = watchReportEvent(report, session, ts);
+    if (event === null) continue;
+    const key = blockedEpisodeKey(event);
+    const existing = events.get(key);
+    if (existing !== undefined) {
+      events.set(key, keepBlockedEpisode(existing, event, report.to === 'owner'));
+      continue;
+    }
+    if (report.to === 'owner') event.to = 'owner';
+    events.set(key, event);
+  }
+  return [...events.values()];
+}
+
+/** One blocked episode waiting on a daemon notice. `id` is the episode's start. `sent` is
+ *  set only after a send succeeds, so a refusal keeps this same id for the next pass. */
+type PendingBlockedNotice = { body: string; id: string; sent: boolean };
+
+/** A hosted watch's blocked episodes: one daemon notice per episode, to the team's lead and
+ *  to nobody else. A seat the dispatcher owns is not among them. The notice id is the
+ *  episode's start, the `since` the can't-work plan stored. A send that does not succeed
+ *  stays pending and is tried again on each pass that still observes the seat blocked, under
+ *  that same id. The episode ends only when the plan has dropped it, which is an observed
+ *  recovery: a pass that does not repeat the report leaves the episode in place. The next
+ *  blocked stretch is a new start and a new notice even when the words are the same. The raw
+ *  bus and the direct mailbox write stay closed on this path. */
+async function sendHostedBlockedEpisodes(
+  home: string,
+  root: string,
+  team: TeamFile,
+  session: string,
+  reports: readonly { key: string; text: string; to: string }[],
+  ts: string,
+  suppressed: ReadonlySet<string>,
+  memory: Memory,
+  dir: string,
+  now: () => Date,
+): Promise<void> {
+  const lead = team.orchestrator;
+  if (lead === '') return;
+  const episodes = memory.slots['seat-cant-work'] as Record<string, { since?: number; open?: boolean }> | undefined;
+  const pending = (memory.slots['blocked-notice'] ??= {}) as Record<string, PendingBlockedNotice>;
+  for (const seat of Object.keys(pending)) {
+    if (episodes?.[seat] === undefined) delete pending[seat];
+  }
+  const deliver = async (seat: string, body: string, id: string): Promise<void> => {
+    const held = pending[seat];
+    if (held !== undefined && held.id === id && held.sent) return;
+    try {
+      const sent = await sendDaemonDirect(
+        {
+          reminder: 'seat-blocked',
+          due: ts,
+          recipients: [{ root, session, seat: lead }],
+          notice: 'seat-blocked',
+        },
+        { root, seat: lead, body, id },
+        { ...realHost, home, now: () => now() },
+      );
+      if (sent.ok) pending[seat] = { body, id, sent: true };
+      else {
+        pending[seat] = { body, id, sent: false };
+        logLine(dir, 'watch', 'watch', `${seat}: the blocked episode was not sent — ${sent.text}`, now());
+      }
+    } catch (error) {
+      pending[seat] = { body, id, sent: false };
+      logLine(dir, 'watch', 'watch', `${seat}: the blocked episode was not sent — ${(error as Error).message}`, now());
+    }
+  };
+  const seen = new Set<string>();
+  for (const event of foldedWatchEvents(reports, session, ts)) {
+    if (event.kind !== 'seat.blocked' || event.seat === undefined || event.seat === '') continue;
+    seen.add(event.seat);
+    if (suppressed.has(event.seat)) continue;
+    const body = event.reason ?? `${event.seat}: can't work`;
+    const start = episodes?.[event.seat]?.since;
+    const identity = typeof start === 'number'
+      ? String(start)
+      : body.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
+    await deliver(event.seat, body, `blocked-episode-${event.seat}-${identity}`);
+  }
+  for (const seat of Object.keys(pending)) {
+    if (seen.has(seat) || suppressed.has(seat)) continue;
+    const held = pending[seat];
+    if (held === undefined || held.sent) continue;
+    if (episodes?.[seat]?.open !== true) continue;
+    await deliver(seat, held.body, held.id);
+  }
+}
+
 /** Publishes one event per observation, even when a check emits an operator line and an owner
  *  line for it: both lines share a record id, and an owner-addressed copy marks the event
  *  addressed to `owner` (§4.5), so the watch's owner reports reach the owner's list as events,
- *  one list with the rest. */
+ *  one list with the rest. A provider error and the can't-work report of that seat are one
+ *  episode: one `seat.blocked` event, with the owner added to the lead and the operator. */
 export async function publishWatchReportsToBus(
   root: string,
   session: string,
@@ -2448,19 +2659,7 @@ export async function publishWatchReportsToBus(
   ts: string,
   publish: (root: string, event: EventAppendInput) => Promise<BusPublishOutcome>,
 ): Promise<void> {
-  const events = new Map<string, EventAppendInput>();
-  for (const report of reports) {
-    const event = watchReportEvent(report, session, ts);
-    if (event === null) continue;
-    const existing = events.get(event.record_id);
-    if (existing !== undefined) {
-      if (report.to === 'owner') existing.to = 'owner';
-      continue;
-    }
-    if (report.to === 'owner') event.to = 'owner';
-    events.set(event.record_id, event);
-  }
-  for (const event of events.values()) await publish(root, event).catch(() => {});
+  for (const event of foldedWatchEvents(reports, session, ts)) await publish(root, event).catch(() => {});
 }
 
 /** The climb: the one place the watch leaves an escalation in another team's mailbox. A team's

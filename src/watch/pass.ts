@@ -25,6 +25,7 @@ import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
 import { recordSignedModel, runningModel, seatModel } from '../status/statusline.ts';
 import { liveDisplayAgent } from './seat-label.ts';
+import { seatCanWork, type SeatWorkRestart } from './seat-can-work.ts';
 import {
   ALWAYS_ON,
   type Attention,
@@ -184,6 +185,17 @@ export type PassResult = {
   // Liveness words the chain set aside, each with the rule it broke. Not reports: they are
   // configuration facts, said once by the command, never nudged into a seat.
   refusals: ThresholdRefusal[];
+  /** Seats the detector says cannot take work. Absent when every seat can. The command
+   *  restarts, tells the lead, and retries from these plans. */
+  cantWork?: SeatCantWork[];
+};
+
+export type SeatCantWork = {
+  seat: string;
+  line: string;
+  tellLead: boolean;
+  retry: boolean;
+  restart?: SeatWorkRestart;
 };
 
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
@@ -740,6 +752,7 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
+  const cantWork = seatWorkPlans(observations, state, processes, mailbox, now, memory, reports, once, keep);
   return {
     reports,
     ...(queueDepths ? { queueSummary: enabled('team-idle') ? idleQueueSummary(teamObservation) : null } : {}),
@@ -750,7 +763,76 @@ export function pass({
     machineReadings,
     labels,
     refusals: refused,
+    ...(cantWork.length > 0 ? { cantWork } : {}),
   };
+}
+
+/** The detector's plans for this pass. A seat that can work clears its episode. The lead is
+ *  told once, inside three minutes of the first sighting, and that report follows the pass's
+ *  once-mark: a later pass of the same episode does not say it again. A reading herdr cannot
+ *  give is no change — it neither fires nor clears the mark. A missing CLI is restarted once,
+ *  and that mark is set by the command only when the restart runs: a held pass can tell the
+ *  lead and still restart after the hold lifts. An unread drop that the screen has not taken
+ *  is a wake to retry. The line is the watch's own: nothing was being delivered, so it says
+ *  the seat can't work. `not delivered` stays the send's sentence. */
+function seatWorkPlans(
+  observations: SeatObservation[],
+  state: SessionState,
+  processes: PassInput['processes'],
+  mailbox: readonly MailboxWaiting[],
+  now: number,
+  memory: Memory,
+  reports: Report[],
+  once: (key: string, text: string, to?: Report['to']) => Report | null,
+  keep: (key: string) => void,
+): SeatCantWork[] {
+  const episodes = (memory.slots['seat-cant-work'] ??= {}) as Record<string, { since: number; told: boolean; restarted: boolean; open: boolean }>;
+  for (const episode of Object.values(episodes)) episode.open = false;
+  const waiting = new Set(mailbox.map((record) => record.to));
+  const plans: SeatCantWork[] = [];
+  for (const obs of observations) {
+    if (!obs.agent || obs.lead) continue;
+    const key = `cant-work:${obs.name}`;
+    const pane = processes?.[obs.agent.pane];
+    if (pane == null || pane.foreground.length === 0) {
+      keep(key);
+      continue;
+    }
+    const prior = episodes[obs.name];
+    const unread = waiting.has(obs.name) && obs.screen.kind !== 'working';
+    const found = seatCanWork({
+      seat: obs.name,
+      cli: obs.cli,
+      screen: obs.screen,
+      recorded: state.seats[obs.name]?.launched,
+      processes: pane,
+      elapsedMs: prior === undefined ? 0 : now - prior.since,
+      told: prior?.told === true,
+      restarted: prior?.restarted === true,
+      ...(unread ? { wake: { submitted: false, working: false, receipt: false } } : {}),
+    });
+    if (found.ok) {
+      delete episodes[obs.name];
+      continue;
+    }
+    const note = found.restart === undefined ? '' : ` — ${found.restart.audit}`;
+    const line = `can't work: ${found.reason}${note}`;
+    const episode = (episodes[obs.name] ??= { since: now, told: false, restarted: false, open: false });
+    episode.open = true;
+    const announced = found.tellLead ? once(key, `${obs.name}: ${line}`, 'orchestrator') : null;
+    if (announced) {
+      reports.push(announced);
+      episode.told = true;
+    } else keep(key);
+    plans.push({
+      seat: obs.name,
+      line,
+      tellLead: announced !== null,
+      retry: found.retry,
+      ...(found.restart === undefined ? {} : { restart: found.restart }),
+    });
+  }
+  return plans;
 }
 
 /** Idle workers due a work drop this pass. Leads, parked and stopped seats, a seat whose pane is

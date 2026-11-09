@@ -126,6 +126,7 @@ export function compactRule(rule: string): string {
     case "the daemon's reminder authority":
       return 'reminder';
     case "the daemon's stuck-child notice":
+    case "the daemon's blocked-episode notice":
       return 'daemon';
     default: {
       const grantMatch = /^an owner-signed grant naming send \((.+)\)$/.exec(trimmed);
@@ -134,6 +135,15 @@ export function compactRule(rule: string): string {
       return trimmed;
     }
   }
+}
+
+/** The reader label shared by the daemon's notices. The record keeps the reserved word
+ *  `daemon`; the line a person reads is `from the daemon (daemon):`, for the stuck-child
+ *  notice and the blocked-episode notice. A seat admission rule never reaches this. */
+function daemonNoticeDisplay(rule: string, claimed: string): string | null {
+  if (rule !== "the daemon's stuck-child notice" && rule !== "the daemon's blocked-episode notice") return null;
+  if (claimed !== 'daemon' && claimed !== 'the daemon') return null;
+  return 'the daemon';
 }
 
 /**
@@ -289,6 +299,8 @@ export function attributedBody(body: string, claimed: string, context: SenderRen
   }
   const registered = registrySenderName(context);
   if (registered !== null && registered !== '') verifiedNames.push(registered);
+  const noticeDisplay = daemonNoticeDisplay(rule, claimed);
+  if (noticeDisplay !== null) verifiedNames.push('daemon', 'the daemon');
   const sameSender = (left: string, right: string): boolean =>
     normalizedSenderName(left) === normalizedSenderName(right);
   const openingName = header?.[1] ?? '';
@@ -306,12 +318,13 @@ export function attributedBody(body: string, claimed: string, context: SenderRen
         : clientDisplayName(claimed, context.record?.from_client?.client_id);
     return `${compactSenderHeader(display, rule, { client: true })}\n\n${rest}`;
   }
-  const display =
+  const display = noticeDisplay ?? (
     context.displayName && context.displayName !== ''
       ? context.displayName
       : registered !== null && registered !== ''
         ? registered
-        : claimed;
+        : claimed
+  );
   const cli = isSystemOrOwner(claimed, display) ? null : resolveSenderCli(context, claimed);
   return `${compactSenderHeader(display, rule, { cli })}\n\n${rest}`;
 }

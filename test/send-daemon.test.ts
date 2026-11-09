@@ -1239,8 +1239,10 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     // Direct
     const directIo = ownerIo(w.root);
     const retired = await runSend(['native', 'shell guard direct'], directIo, host);
-    expect(await retired).toBe(0);
-    expect(directIo.err).toContain('queued, no event adapter');
+    expect(await retired, directIo.err + directIo.out).toBe(1);
+    expect(directIo.err + directIo.out).toContain('team send: native: not delivered: no CLI');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
     expectKeptInBus(w, 'native', 'shell guard direct');
   });
 

@@ -24,8 +24,8 @@ export type DaemonDirectContext = {
   reminder: string;
   due: string;
   recipients: readonly DaemonRecipient[];
-  /** Set only for the stuck-child notice. Admission then admits the loaded team's lead alone. */
-  notice?: 'stuck-child';
+  /** Set for a daemon notice. Admission then admits the loaded team's lead alone. */
+  notice?: 'stuck-child' | 'seat-blocked';
 };
 
 /** One reminder delivery: the recipient's checkout, the declared seat, and the body the reminder
