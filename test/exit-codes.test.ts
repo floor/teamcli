@@ -2301,11 +2301,14 @@ scene('remove.caller', async (place) => {
 });
 scene('remove.charter', async (place) => {
   write(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: leadSeat.pane };
+  });
   const store = fakeOwnerStore();
   const signed = testIo(place.root, owner);
   const code = await runSetup(['--signer', 'touch-id', '--team', 'floor', '--roots', join(place.home, 'Code')], signed, { home: place.home, store, now: () => NOW });
   if (code !== 0) throw new Error(signed.err);
-  return show(await removed(place, ['worker'], owner, downSources({ home: place.home, ownerSeatStore: store })), 'team setup --edit');
+  return show(await removed(place, ['worker'], leadSeat, downSources({ home: place.home, ownerSeatStore: store })), 'team setup --edit');
 });
 scene('remove.no-pane', async (place) => {
   write(place, TWO);
@@ -2777,11 +2780,14 @@ scene('seats.not-yours', async (place) => {
   });
   scene('config.charter', async (place) => {
     write(place, TEAM);
+    updateState(join(place.root, '.agents'), (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: leadSeat.pane };
+    });
     const store = fakeOwnerStore();
     const signed = testIo(place.root, owner);
     const code = await runSetup(['--signer', 'touch-id', '--team', 'floor', '--roots', join(place.home, 'Code')], signed, { home: place.home, store, now: () => NOW });
     if (code !== 0) throw new Error(signed.err);
-    const io = testIo(place.root, owner);
+    const io = testIo(place.root, leadSeat);
     const env = { ...process.env, TEAM_CONFIG_SOURCE: 'file' };
     return show(
       { code: await runConfig(['set', 'project', 'other'], io, { home: place.home, env, now: () => NOW, ownerSeatStore: store }), out: io.out, err: io.err },
@@ -8461,9 +8467,12 @@ scene('migrate.approval-refused', async (place) => {
 });
 scene('migrate.not-owner', async (place) => {
   write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: leadSeat.pane };
+  });
   mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
   writeFileSync(join(place.home, '.config', 'team', 'charter.json'), '{}\n');
-  return show(await imported(place, 'migrate', []), 'owner charter');
+  return show(await imported(place, 'migrate', [], leadSeat), 'owner charter');
 });
 scene('migrate.invalid', async (place) => {
   writeFileSync(join(place.root, '.agents', 'team.yaml'), 'format: [\n');
