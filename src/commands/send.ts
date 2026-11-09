@@ -385,6 +385,8 @@ export type DaemonSendPrincipal = {
   /** The roots the daemon hosted when the principal was established. */
   roots: readonly string[];
   recheck(): { ok: true } | { ok: false; why: string };
+  /** A stuck-child notice addresses the loaded team's lead and nobody else. Absent on a reminder. */
+  notice?: 'stuck-child';
 };
 
 export type SendHost = {
@@ -7009,6 +7011,24 @@ function daemonAdmissionOf(
   const seat = target === null ? seatName : target.agent.reach.seat;
   if (seat === 'owner') {
     return { ok: false, why: 'owner: the daemon addresses a declared seat of a team it hosts, never the owner' };
+  }
+  // A stuck-child notice is one message to the loaded team's lead. The recipient list still has
+  // to name that lead, so the principal cannot be reused for any other seat. The lead is who the
+  // notice is for, including when that seat is a person's: the seat's own delivery order decides
+  // the transport, and no other seat is admitted by this notice.
+  if (daemon.principal.notice === 'stuck-child') {
+    if (team.orchestrator === '' || seat !== team.orchestrator) {
+      return { ok: false, why: `${seat}: a stuck-child notice goes to this team's lead and to nobody else` };
+    }
+    const addressed = daemon.principal.recipients.some((entry) => samePath(entry.root, daemon.root) && entry.session === team.session && entry.seat === seat);
+    if (!addressed) {
+      return { ok: false, why: `${seat}: a stuck-child notice names the lead in the checkout the daemon hosted` };
+    }
+    const declared = team.seats.find((entry) => entry.name === seat);
+    if (declared === undefined) {
+      return { ok: false, why: `${seat}: it is not a declared seat; the daemon addresses a seat of a team it hosts only` };
+    }
+    return { ok: true, rule: "the daemon's stuck-child notice", sender: 'daemon' };
   }
   // The recipient list the due instant carries is the whole of what this principal may address:
   // a declared seat that is not on it was not due, and is refused before anything is staged.
