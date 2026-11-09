@@ -403,18 +403,17 @@ describe('the placement walk decides the granted seat', () => {
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
-  test('down of the operator\'s seat: the map refuses it, and nothing is stopped', async () => {
+  test('down of a seat outside lead and operator: the map refuses it, and nothing is stopped', async () => {
     record({
       lead: { pane: 'lead-pane', workspace: 'lead-ws' },
       pilot: { pane: 'pilot-pane', workspace: 'pilot-ws' },
       worker: { pane: 'worker-pane', workspace: 'worker-ws' },
     });
     const { sources, trace } = downTrace(() => people());
-    const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
+    // Own-team admission covers the lead and the operator. A worker is outside it, so the map still refuses.
+    const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [WORKER.root], WORKER.pane);
     const code = await runDown([], io, sources);
     expect(code).toBe(1);
-    // The operator is no longer the rule's second leg: `down` admits the owner or `leads`, and
-    // the operator holds neither. Nothing is closed and no grant line is written.
     expect(io.err).toContain('team down: only the owner or `leads` stops the team; this call is ');
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -459,12 +458,11 @@ describe('the scope the approval signed', () => {
     // The map's row admits the orchestrator: no grant section means no grant to constrain it,
     // and the run is the lead's, with no audit line behind it.
     expect(code, io.err + io.out).toBe(0);
+    // 1352 starts the three seats and no watch workspace.
     expect(trace.workspaces).toEqual([
       { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
       { label: 'worker', cwd: lobby },
-      // Last, the watch's own workspace: the pane that runs the watch for the session.
-      { label: 'Watch · acme', cwd: root },
     ]);
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -500,13 +498,11 @@ describe('the approval the grant rides on', () => {
     expect(code, io.err + io.out).toBe(0);
     expect(io.err).not.toContain('never approved');
     expect(io.err).not.toContain('deny');
-    // The session starts down, so the ready records are not kept and the three seats launch.
+    // 1352 starts the three seats and no watch workspace. The session starts down, so the ready records are not kept.
     expect(trace.workspaces).toEqual([
       { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
       { label: 'worker', cwd: lobby },
-      // Last, the watch's own workspace: the pane that runs the watch for the session.
-      { label: 'Watch · acme', cwd: root },
     ]);
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -527,8 +523,6 @@ describe('the approval the grant rides on', () => {
     expect(trace.workspaces).toEqual([
       { label: 'pilot', cwd: root },
       { label: 'worker', cwd: lobby },
-      // Last, the watch's own workspace.
-      { label: 'Watch · acme', cwd: root },
     ]);
     expect(trace.audits).toEqual([{ seat: 'lead', act: 'up' }]);
     const doctorIo = testIo(root);
