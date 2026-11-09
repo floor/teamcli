@@ -49,7 +49,7 @@ export type WatchPaceInput = {
 };
 
 /**
- * The watch with a pace applied: the sweep is the pace's final interval and the six waits scale
+ * The watch with a pace applied: the sweep is the pace's final interval and the seven waits scale
  * by the preset's factor, to the nearest second, never below one and never above a day. An
  * omitted `idleRepeat` stays off. No other field is touched.
  */

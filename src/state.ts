@@ -87,6 +87,9 @@ export type SeatState = {
   watcher?: CliWatcher;
   /** ISO 8601 timestamp when the seat last reached ready or was seen working. */
   last_active?: string;
+  /** When the watch first saw this seat's box holding unsent text, while that reading stands.
+   *  Cleared the moment the box is anything else. Status reads it against `unsent_after`. */
+  unsent_since?: string;
   pane?: string;
   /** The herdr workspace, so a later command can close it without listing agents. */
   workspace?: string;

@@ -188,13 +188,14 @@ describe('the pace in force', () => {
         nudgeWait: 600,
         unsentAfter: 1,
         unreadAfter: 86_400,
+        leadUnreadAfter: 180,
         stuckAfter: 900,
         quotaMarks: [50, 75, 90],
         checks: [],
       };
       const paced = applyWatchPace(base, { preset, sweepSeconds: 500 });
       expect(paced.interval).toBe(500);
-      // The stuck bound is not one of the six paced waits: a slow sweep must not let a held
+      // The stuck bound is not one of the paced waits: a slow sweep must not let a held
       // seat's presence look fresh for longer.
       expect(paced.stuckAfter).toBe(900);
       expect(paced.idleFirst).toBe(Math.min(86_400, Math.max(1, Math.round(300 * WATCH_RHYTHM_FACTOR[preset]))));
@@ -202,6 +203,7 @@ describe('the pace in force', () => {
       expect(paced.blindAfter).toBe(300);
       expect(paced.unsentAfter).toBe(Math.min(86_400, Math.max(1, Math.round(1 * WATCH_RHYTHM_FACTOR[preset]))));
       expect(paced.unreadAfter).toBe(Math.min(86_400, Math.max(1, Math.round(86_400 * WATCH_RHYTHM_FACTOR[preset]))));
+      expect(paced.leadUnreadAfter).toBe(Math.min(86_400, Math.max(1, Math.round(180 * WATCH_RHYTHM_FACTOR[preset]))));
       expect(paced.idleRepeat).toBeUndefined();
     }
     // An omitted idleRepeat in the file stays omitted through the pass values too.

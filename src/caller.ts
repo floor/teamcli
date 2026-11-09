@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename } from 'node:path';
 import { syncChildTimeout } from './child.ts';
 import type { TeamFile } from './file/types.ts';
-import { activeHerdrSnapshotId, agentList, paneRootPid, paneProcesses } from './herdr.ts';
+import { activeHerdrSnapshotId, agentList, paneForeground, paneRootPid, paneProcesses } from './herdr.ts';
+import { reapplyHerdrName, recordedCliAtPane } from './placement/recorded-cli.ts';
 import type { HerdrAgent, PaneProcesses } from './herdr.ts';
 import type { Io } from './io.ts';
 import { readState, type SeatState } from './state.ts';
@@ -70,6 +72,12 @@ export type CallerSources = {
   seatAtPane?(pane: string): SeatAtPane | null;
   /** A pane's own shell and foreground pids, as herdr reports them; null when it can't be read. */
   paneProcesses?(pane: string): PaneProcesses | null;
+  /** argv0 of each foreground process, in herdr's order; null when the pane can't be read.
+   *  The unnamed-pane placement reads these the way `team register` does. */
+  foreground?(pane: string): string[] | null;
+  /** The registry home. When it is set, an unnamed pane whose record holds it and whose
+   *  process is that seat's CLI is placed as the seat, and the host name is re-applied. */
+  home?: string;
   /** The instant a process started, in epoch milliseconds; null when it is gone or its start
    *  line is unreadable. */
   processStartOf?(pid: number): number | null;
@@ -146,6 +154,27 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
         return session === undefined
           ? { kind: 'seat', name: agent.name, pane: agent.pane }
           : { kind: 'seat', name: agent.name, pane: agent.pane, session };
+      }
+      // The host listed the pane and dropped its name. The seat's record (its reach pane, in
+      // this session) plus the pane's own CLI place the caller, and the name is put back.
+      // A bare shell or another CLI on that pane stays unplaced: the shell anchor below must
+      // not adopt it. No record, or a process that cannot be read, keeps the shell anchor,
+      // which is the window a seat's MCP server starts in before the record exists.
+      if (sources.home !== undefined && session !== undefined) {
+        const proved = recordedCliAtPane({
+          home: sources.home,
+          session,
+          pane: agent.pane,
+          processes: sources.paneProcesses?.(agent.pane) ?? null,
+          foreground: sources.foreground?.(agent.pane) ?? null,
+        });
+        if (proved.kind === 'seat') {
+          reapplyHerdrName({ session, pane: agent.pane, name: proved.name, root: proved.root });
+          return { kind: 'seat', name: proved.name, pane: agent.pane, session };
+        }
+        if (proved.kind === 'refused') {
+          return { kind: 'unplaced', reason: `it runs in pane ${agent.pane}, whose agent has no herdr name` };
+        }
       }
       // The pane is listed with no agent name: herdr has not detected the CLI yet, which is the
       // window a seat's MCP server starts in. A seat record that anchors this pane's shell places
@@ -793,6 +822,8 @@ export function currentCaller(
     stdinIsTTY: io.stdinIsTTY,
     managedEndpointSeat: (pid) => seatOfManagedEndpoint(pid),
     paneProcesses: (pane) => paneProcesses(pane, session),
+    foreground: (pane) => paneForeground(pane, session),
+    home: homedir(),
     processStartOf: (pid) => processStartOf(pid),
   };
   if (extra !== undefined) return placeCaller({ ...sources, ...extra }, session);

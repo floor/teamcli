@@ -16,6 +16,7 @@ import type { Launch } from '../../src/commands/up.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, updateState } from '../../src/state.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import { claudeBox, testIo } from '../helpers.ts';
 
@@ -74,6 +75,12 @@ function approve(text: string, root: string, home: string): void {
     loaded.team.seats,
     home,
   );
+}
+
+/** Keeps a scene on the old owner wall. The default admits this team's lead and operator. */
+function ownerAsks(home: string, root: string): void {
+  const asked = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+  if (!asked.ok) throw new Error(asked.why);
 }
 
 function record(root: string, panes: Record<string, string>): void {
@@ -162,6 +169,7 @@ describe('a lead written role: coordinator', () => {
   test('the coordinator seat may not add another seat: the map\'s row is the owner\'s alone', async () => {
     const { base, root, home } = place();
     approve(teamYaml(true), root, home);
+    ownerAsks(home, root);
     record(root, { coordinator: coordinator.pane, operator: operator.pane });
     // `role: coordinator` is a role, not a standing grant: the map's `add` row refuses the
     // coordinator's seat like every other, and a dry run says the refusal and the way out.
@@ -209,6 +217,7 @@ describe('a lead written role: coordinator', () => {
   test('the lead may remove another seat, and only the owner removes the orchestrator or the operator', async () => {
     const { base, root, home } = place();
     approve(teamYaml(false), root, home);
+    ownerAsks(home, root);
     record(root, { coordinator: coordinator.pane, operator: operator.pane, worker: worker.pane });
     const agents: HerdrAgent[] = [
       { name: 'worker', agent: 'claude', pane: worker.pane, workspace: 'worker-ws', status: 'idle', cwd: null },

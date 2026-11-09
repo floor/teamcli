@@ -590,15 +590,15 @@ async function removed(place: Place, argv: string[], caller: Caller, sources: Do
 }
 
 describe('the protected seats', () => {
-  test("the operator's seat stays: a lead meets the clamp, the owner the file's own validation", async () => {
+  test("the operator's seat stays in the file: the lead and the owner both meet the file's own validation", async () => {
     const here = layout();
     writeFileSync(here.file, protectedFile(here));
     const before = readFileSync(here.file, 'utf8');
-    // A lead that may remove every ordinary seat of its team is stopped here: the seat being
-    // removed is the operator's, and the clamp admits only the owner's own call.
+    // The operator seat is the lead's. Taking it out of the file still fails the file's own
+    // validation: `operator:` would name nothing, so nothing is written.
     const ran = await removed(here, ['lead-b'], leadA, removal(here.home));
-    expect(ran.code).toBe(1);
-    expect(ran.err).toBe("team remove: only the owner removes the orchestrator's or the operator's seat; this call is lead-a\n");
+    expect(ran.code).toBe(2);
+    expect(ran.err).toBe('team remove: line 5: operator "lead-b" names no declared seat\n');
     expect(ran.out).toBe('');
     expect(readFileSync(here.file, 'utf8')).toBe(before);
     // The owner passes the clamp and meets the file's own validation: taking the seat out would

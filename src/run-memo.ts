@@ -15,6 +15,10 @@ export type RunMemo = {
   teamsTolerant: Map<string, Record<string, TeamRecord>>;
   projects: Map<string, Record<string, ProjectRecord>>;
   projectsRaw: Map<string, YamlValue | null>;
+  /** The declared entity rules, keyed by home then entity name. A write under the home drops it. */
+  entityRules: Map<string, Map<string, string[]>>;
+  /** The declared project rules, keyed by home then project name. A write under the home drops it. */
+  projectRules: Map<string, Map<string, string[]>>;
   messageKeys: Map<string, KeyState>;
   gitRoots: Map<string, string>;
 };
@@ -29,6 +33,8 @@ function createRunMemo(): RunMemo {
     teamsTolerant: new Map(),
     projects: new Map(),
     projectsRaw: new Map(),
+    entityRules: new Map(),
+    projectRules: new Map(),
     messageKeys: new Map(),
     gitRoots: new Map(),
   };
@@ -54,4 +60,10 @@ export function leaveRunMemo(): void {
 /** Returns the active run's memo table, or null when called outside a memoised CLI run. */
 export function currentRunMemo(): RunMemo | null {
   return activeMemo;
+}
+
+/** A copy of one rules map a caller can keep or mutate without reaching the memo's own lists:
+ *  the entry cloned on the way in and again on the way out. */
+export function cloneRulesMap(map: Map<string, string[]>): Map<string, string[]> {
+  return new Map([...map].map(([name, rules]) => [name, [...rules]]));
 }

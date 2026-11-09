@@ -261,9 +261,9 @@ test('a channel push writes no marker and sends no notification for a record ope
     open = (path) => {
       if (path !== join(w.drop, ID_PUSH_REFUSED)) return;
       opens += 1;
-      // The inbox listing opens a record once; the second open is the push's own verification,
-      // after the call's first declaration check.
-      if (opens === 2) {
+      // The push verifies the record with one open. Stopping on that open is the seat
+      // going away while the record is being read.
+      if (opens === 1) {
         open = null;
         flipped = true;
         w.stop();

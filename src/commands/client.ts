@@ -23,8 +23,9 @@ key isolation: enforced against team panes (key file still readable by same-user
 general-grant issues a general grant: every entity (or the listed ones) and every op (or the listed
 ones: any command's name, or abandon for down --abandon), applied with no per-action request: every
 command but this one takes --general <grant.json> --key <client.key>. Without --ops the grant carries the wildcard \`*\`: every op, including ops later releases add.
-The owner issues one through the owner seat (--request, Touch ID; --reason <text> is the short
-reason the card shows); a holder whose grant may issue
+The owner issues one through the owner seat. --request records the card and issues nothing in
+that run (--reason <text> is the short reason the card shows); --approval issues it once the
+owner has answered. A charter never admits this grant. A holder whose grant may issue
 gives another principal a grant within its own (--via, --key): never to itself, never wider.
 
 Exits 0 when the key is written, 1 when refused, 2 when the invocation is invalid.
@@ -130,7 +131,7 @@ function runGeneralGrant(argv: string[], args: Args, io: Io, home: string): numb
       : { ok: false, why: pane.why };
   } else {
     if (!args.flags.has('request') && args.values.approval === undefined) return bad('the owner issues through the owner seat (--request), or a holder issues with --via and --key');
-    const step = ownerSeatStep('client', 'team-general-grant', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home });
+    const step = ownerSeatStep('client', 'team-general-grant', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home }, []);
     if (step.kind === 'requested') return 0; // exit: client.general-grant.requested
     if (step.kind !== 'admitted') {
       return 1; // exit: client.general-grant.refused

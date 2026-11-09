@@ -27,6 +27,7 @@ import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/b
 import { heldAt } from '../launch/rules-file.ts';
 import { messageKeyOf, messageKeyState, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { version } from '../version.ts';
+import { folderOfDrop } from './drop-folder.ts';
 import { readNoFollow, type MessageStatus } from './history.ts';
 import { dropMessage } from './native.ts';
 
@@ -326,7 +327,7 @@ function nonEmpty(value: unknown): value is string {
 /** A file name's own bound: one directory entry, not a path. */
 const RECORD_NAME_MAX = 255;
 
-const RECORD_SIDECAR_SUFFIXES = ['.pending', '.taken', '.read', '.wake', '.woken', '.reported', '.json', '.new'];
+const RECORD_SIDECAR_SUFFIXES = ['.pending', '.taken', '.read', '.wake', '.woken', '.reported', '.json', '.new', '.channel-emitted', '.channel-abort'];
 
 /** Watcher, receipt and private publication sidecars are never message candidates. */
 export function isRecordSidecarName(name: string): boolean {
@@ -604,19 +605,20 @@ function signedCloseFromSealed(sealed: Sealed): SignedClose | null {
   return withRaw({ payload: projected.payload, signature: sealed.signature }, sealed.payload, projected.unknown);
 }
 
-/** The record's path: the folder `team send` writes to, and the id as the file's name. */
+/** The record's path: the live folder `team send` writes to, or the archive month that
+ *  already holds this id. A missing id names the live folder. */
 export function recordFile(dropDir: string, id: string): string {
-  return join(dropDir, id);
+  return join(folderOfDrop(dropDir, id), id);
 }
 
-/** A receipt's path beside its message: `<id>.<status>.json`. */
+/** A receipt's path beside its message: `<id>.<status>.json`, in the folder that holds the record. */
 export function receiptFile(dropDir: string, id: string, status: ReceiptStatus): string {
-  return join(dropDir, `${id}.${status}.json`);
+  return join(folderOfDrop(dropDir, id), `${id}.${status}.json`);
 }
 
-/** A close's path beside the record it answers: `<id>.closed.json`. */
+/** A close's path beside the record it answers: `<id>.closed.json`, in the folder that holds the record. */
 export function closeFile(dropDir: string, id: string): string {
-  return join(dropDir, `${id}.closed.json`);
+  return join(folderOfDrop(dropDir, id), `${id}.closed.json`);
 }
 
 /** Signs a payload with the checkout's message key. The key is created on the first sign. */
@@ -1168,7 +1170,7 @@ export function readVerifiedReceipt(
 const SHOWN_SEAT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** Words this build writes on `read_by` that are not themselves seat names. */
-const KNOWN_READER = new Set(['answered-by-send', 'channel', 'reply']);
+const KNOWN_READER = new Set(['ack', 'answered-by-send', 'channel', 'reply']);
 
 /** Role words a receipt must not print. The shared message key can sign any of them, and none is
  *  a claim that the owner, the lead, or the orchestrator read the message. */

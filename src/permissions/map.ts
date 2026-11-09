@@ -298,6 +298,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'seat-only',
       why: 'a drop folder is one seat\'s mailbox: the seat the team declares, on the pane the state records for it, and never the owner; --read is the launch line\'s own invocation and asks for no caller',
     },
+    'drops:archive': {
+      kind: 'team-change',
+      why: 'the owner, the orchestrator or the operator archives every seat folder; a seat on its own pane archives only its own',
+    },
     help: {
       kind: 'any-caller',
       why: 'the help text reads no team file and asks for no caller',

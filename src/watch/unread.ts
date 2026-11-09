@@ -47,9 +47,10 @@
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent } from '../bus/log.ts';
+import { nudgeBus } from '../bus/server.ts';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { postArrivalWebhook } from '../bus/webhook.ts';
 import type { Seat, SeatWebhook } from '../file/types.ts';
@@ -64,6 +65,8 @@ import { RUNTIME_RULE as LEAD_REPORT_RULE } from '../send/endpoint-notice.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory, readHistory, type HistoryEntry } from '../send/history.ts';
 import { dropMessage, readTriggerLine, socketWakeHint } from '../send/native.ts';
+import { logLine } from '../log.ts';
+import { deliverLeadTypedWake, type TypedWakeHost } from '../send/typed-wake.ts';
 import {
   markWake as mark,
   releaseWake as release,
@@ -73,7 +76,7 @@ import {
   type WakeMark,
 } from '../send/wake-marker.ts';
 import { pendingDropPath } from '../send/pending.ts';
-import { isRead, readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { isRead, readRecord, recordFile, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
@@ -81,6 +84,7 @@ import { DELIVERY_LEGS } from '../settings/inherit.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { MailPass, STUCK_MARKER } from './mail-pass.ts';
 import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
+import { climbUnreadLead } from './status-events.ts';
 import { readScreen } from './screen.ts';
 
 /** The marker beside a message whose one wake line was typed (`src/send/wake-marker.ts` holds
@@ -181,10 +185,23 @@ function watchRetryOf(seat: Seat): { tries: number } | null {
 function payloadOf(dropDir: string, id: string, home: string): RecordPayload | null {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return null;
-  const looked = readRecord(join(dropDir, id), id);
+  const looked = readRecord(recordFile(dropDir, id), id);
   if (!looked.ok || looked.record === null) return null;
   if (!verifyRecord(looked.record, key.key)) return null;
   return looked.record.payload;
+}
+
+/** The watch's sources as the typed wake sees one pane. */
+function leadWakeHost(scene: RetryScene, pane: string): TypedWakeHost {
+  return {
+    read: () => scene.sources.screen(pane, scene.session),
+    type: (_id, text) => scene.sources.typeText(pane, text, scene.session),
+    enter: () => scene.sources.pressEnter(pane, scene.session),
+    ...(scene.sources.sendKey
+      ? { key: (_id: string, key: string) => scene.sources.sendKey!(pane, key, scene.session) }
+      : {}),
+    wait: (ms) => scene.sources.sleep(ms),
+  };
 }
 
 /** The watch's sources as the delivery sees one pane. */
@@ -308,6 +325,8 @@ async function wakeByWebhook(
   at: string,
   /** The send already recorded a webhook delivery. Post once more; the `.posted` mark stays. */
   again: boolean,
+  /** When set, a post is not the wake: the wake is the read receipt this returns. */
+  receipt?: () => boolean,
 ): Promise<WebhookWake> {
   const home = scene.home;
   if (home === undefined) return { outcome: 'next' };
@@ -334,7 +353,9 @@ async function wakeByWebhook(
     ...(again ? { again: true } : {}),
   });
   if (posted.kind === 'posted') {
-    mark(wakePath(dropDir, message.id), { id: message.id, at, state: 'sent', evidence: 'webhook', ms: posted.ms });
+    const read = receipt?.() === true;
+    if (receipt !== undefined) noteLeadEpisode(scene, seat.name, dropDir, message.id, scene.now.getTime(), true);
+    mark(wakePath(dropDir, message.id), { id: message.id, at, state: read ? 'read' : 'sent', evidence: 'webhook', ms: posted.ms });
     appendHistory(scene.team.project, scene.root, home, {
       ts: at,
       from: payload.from,
@@ -342,13 +363,19 @@ async function wakeByWebhook(
       body: payload.body,
       id: message.id,
       thread: payload.thread,
-      outcome: 'delivered',
+      outcome: read ? 'delivered (read)' : receipt !== undefined ? 'awaiting receipt' : 'delivered',
       ms: posted.ms,
       via: 'webhook',
-      note: 'the watch posted the record after the unread window',
+      note: read
+        ? 'the watch posted the record after the unread window and the read receipt was there'
+        : receipt !== undefined
+          ? 'the watch posted the record after the unread window; the wake counts when the read receipt appears'
+          : 'the watch posted the record after the unread window',
     });
     scene.say(
-      `${seat.name}: a message from ${payload.from} was unread and its webhook adapter took it after the unread window (${String(posted.ms)} ms)`,
+      read || receipt === undefined
+        ? `${seat.name}: a message from ${payload.from} was unread and its webhook adapter took it after the unread window (${String(posted.ms)} ms)`
+        : `${seat.name}: a message from ${payload.from} was posted after the unread window; the wake counts when the read receipt appears`,
       false,
     );
     return { outcome: 'settled' };
@@ -369,6 +396,62 @@ async function wakeByWebhook(
   if (posted.kind === 'none' && posted.why === 'claim-held') return { outcome: 'held' };
   if (posted.kind === 'failed') return { outcome: 'next', failed: `webhook: ${posted.reason}` };
   return { outcome: 'next' };
+}
+
+/** Five minutes after a lead's first wake, with no read receipt, the parent is told once. */
+const LEAD_RECEIPT_MS = 5 * 60 * 1000;
+
+/** Starts the lead's receipt clock the first time a wake is due, and climbs once it expires
+ *  while the drop is still unread. The mailbox write is the lead climb in status-events. */
+function noteLeadEpisode(
+  scene: RetryScene,
+  seat: string,
+  dropDir: string,
+  id: string,
+  nowMs: number,
+  waking: boolean,
+): void {
+  const path = join(dropDir, `${id}.lead-episode`);
+  let at: number | undefined;
+  let climbed = false;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { at?: unknown; climbed?: unknown };
+    if (typeof parsed.at === 'number') at = parsed.at;
+    climbed = parsed.climbed === true;
+  } catch {
+    at = undefined;
+  }
+  if (climbed) return;
+  if (at === undefined) {
+    if (!waking) return;
+    at = nowMs;
+    try {
+      writeFileSync(path, `${JSON.stringify({ at, climbed: false })}\n`, { mode: 0o600 });
+    } catch {
+      return;
+    }
+  }
+  if (nowMs - at < LEAD_RECEIPT_MS) return;
+  const home = scene.home;
+  if (home === undefined) return;
+  try {
+    climbUnreadLead({
+      home,
+      root: scene.root,
+      project: scene.team.project,
+      seat,
+      episode: id.replace(/[^0-9A-Za-z]/g, ''),
+      why: `The lead ${seat} had unread mail and no read receipt within 5 minutes of the first wake, so the entity's orchestrator is told now`,
+      at: new Date(nowMs).toISOString(),
+    });
+  } catch {
+    return;
+  }
+  try {
+    writeFileSync(path, `${JSON.stringify({ at, climbed: true })}\n`, { mode: 0o600 });
+  } catch {
+    // The mailbox id is the episode, so a later pass writes the same record.
+  }
 }
 
 /**
@@ -432,7 +515,11 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     if (unread.length === 0 && fresh.length === 0) continue;
     // The seat's class is read only for a seat something waits at: the window is the one its
     // delivery class earns, and a seat with nothing unread costs no read.
-    const unreadAfter = windowForSeat(options, seat);
+    // A lead is woken from unread mail whatever its delivery order is, including drop only.
+    const leadSeat = (scene.team.orchestrator !== '' && seat.name === scene.team.orchestrator)
+      || (scene.team.operator !== '' && seat.name === scene.team.operator);
+    const leadWindow = scene.team.watch.leadUnreadAfter;
+    const unreadAfter = leadSeat && typeof leadWindow === 'number' ? leadWindow : windowForSeat(options, seat);
     const scanned = new Set(unread.map((one) => one.id));
     const due = unread
       .filter((message) => dueForWake(dropDir, message, nowMs, unreadAfter, retry === null ? null : retry.tries));
@@ -442,6 +529,17 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const arrived = fresh.filter((one) => !scanned.has(one.id)
       && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
       && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
+    if (leadSeat) {
+      const pending = [...unread];
+      for (const one of fresh) {
+        if (!pending.some((item) => item.id === one.id)) pending.push(one);
+      }
+      pending.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+      const oldest = pending[0];
+      if (oldest !== undefined) {
+        noteLeadEpisode(scene, seat.name, dropDir, oldest.id, nowMs, false);
+      }
+    }
     if (due.length === 0 && arrived.length === 0) continue;
     // The cascade's next leg below the one the send's walk took, per message: the adapter is
     // tried before any pane is looked for, because a post is no keystroke and needs none. A
@@ -471,6 +569,15 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           payload,
           scene.now.toISOString(),
           lines.get(message.id)?.via === 'webhook',
+          leadSeat
+            ? () => receiptHeld(
+              dropDir,
+              message.id,
+              context,
+              home,
+              claimBindingIn(scene.root, scene.session, seat.name, message.id),
+            )
+            : undefined,
         );
         if (woke.outcome === 'next') {
           if (woke.failed !== undefined) failedWebhook.set(message.id, woke.failed);
@@ -570,8 +677,11 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const line = readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
       if (line === null) continue;
       // The typed retry submits a box that already holds exactly its line, and leaves every
-      // other draft. The check is this pass's own look; the wake reads the box again.
-      if (retry !== null && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen)) continue;
+      // other draft. A lead's draft is the exception the delivery below can keep: it copies
+      // the text and puts it back, and types nothing when it cannot. The typed-wake seam has
+      // no restore, so it is not used while that draft is there.
+      const preserveDraft = leadSeat && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen);
+      if (!preserveDraft && retry !== null && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen)) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an
       // earlier attempt whose effect is unknown, and no second line is typed for it.
@@ -583,6 +693,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         return true;
       };
       if (!take(audited.message.id)) continue;
+      if (leadSeat) noteLeadEpisode(scene, seat.name, dropDir, audited.message.id, nowMs, true);
       for (const one of wakeable) {
         if (one.id !== audited.message.id) take(one.id);
       }
@@ -592,11 +703,75 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // delivery cannot become the wake's read here.
       const binding = claimBindingIn(scene.root, scene.session, seat.name, message.id);
       const receipt = (): boolean => receiptHeld(dropDir, message.id, context, home, binding);
+      // A lead is woken by a socket nudge first (the bus fans `message.arrived` to the seat and
+      // to a channel server). No bus, and the typed wake: a box that holds other text is cleared
+      // and that text is put back, or the wake line is not typed.
+      if (leadSeat) {
+        let pushed = false;
+        try {
+          pushed = (await nudgeBus(scene.root, {
+            session: scene.session,
+            seat: seat.name,
+            record_id: message.id,
+          }, { deadlineMs: 300 })).kind === 'nudged';
+        } catch {
+          pushed = false;
+        }
+        const typed = pushed
+          ? null
+          : await deliverLeadTypedWake(leadWakeHost(scene, pane), pane, line, seat.cli, {
+              now: () => scene.now.getTime(),
+              dropPath: join(dropDir, message.id),
+              seatDir: join(scene.dir, 'seats', seat.name),
+              log: (kept) => logLine(join(scene.root, '.agents'), 'watch', seat.name, kept, scene.now),
+            });
+        if (!pushed && (typed === null || !typed.typed)) {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          continue;
+        }
+        const read = receipt();
+        const via = pushed ? 'socket' as const : 'typed' as const;
+        if (read) {
+          appendHistory(scene.team.project, scene.root, home, {
+            ts: at,
+            from: payload.from,
+            to: seat.name,
+            body: payload.body,
+            id: message.id,
+            thread: payload.thread,
+            outcome: 'delivered (read)',
+            via,
+            ...failedLeg(message.id),
+          });
+          scene.say(`${seat.name}: a message from ${payload.from} was unread and was read on the wake (receipt)`, false);
+        } else {
+          appendHistory(scene.team.project, scene.root, home, {
+            ts: at,
+            from: payload.from,
+            to: seat.name,
+            body: payload.body,
+            id: message.id,
+            thread: payload.thread,
+            outcome: 'awaiting receipt',
+            ...(typed?.reason === undefined ? {} : { note: typed.reason }),
+            via,
+            ...failedLeg(message.id),
+          });
+          scene.say(
+            `${seat.name}: a message from ${payload.from} was unread and one wake was delivered; it counts when the read receipt appears`,
+            false,
+          );
+        }
+        for (const id of reserved) {
+          mark(wakePath(dropDir, id), { id, at, state: read ? 'read' : 'sent', evidence: pushed ? 'socket' : 'typed-wake' });
+        }
+        continue;
+      }
       // The seat's profile declares a typed wake and its retry is on: the watch types the same
       // wake a send types, through the one seam that carries the module (src/send/typed-wake.ts).
       // That wake is delivered only when the profile's working screen showed; a refused or
       // failed attempt gives its reservations back, so it never spends the message's one wake.
-      if (retry !== null) {
+      if (retry !== null && !preserveDraft) {
         const typed = await scene.sources.typedWake?.(pane, line, seat.cli, scene.session);
         if (typed === undefined) {
           // No seam bound: nothing was attempted, so nothing is spent and no attempt is counted.
@@ -649,12 +824,17 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
             body: payload.body,
             id: message.id,
             thread: payload.thread,
-            outcome: 'delivered (typed wake)',
+            outcome: leadSeat ? 'awaiting receipt' : 'delivered (typed wake)',
             note: typed.reason,
             via: 'typed',
             ...failedLeg(message.id),
           });
-          scene.say(`${seat.name}: a message from ${payload.from} was unread and one typed wake line was delivered (${typed.reason})`, false);
+          scene.say(
+            leadSeat
+              ? `${seat.name}: a message from ${payload.from} was unread and one typed wake line was delivered; it counts when the read receipt appears`
+              : `${seat.name}: a message from ${payload.from} was unread and one typed wake line was delivered (${typed.reason})`,
+            false,
+          );
         }
         for (const id of reserved) {
           mark(wakePath(dropDir, id), { id, at, state: read ? 'read' : 'sent', evidence: 'typed-wake' });
@@ -1192,8 +1372,9 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
   for (const seat of scene.team.seats) {
     // A person reads their own mail; a stopped seat keeps it until its next start, and the
     // generic report already names the queue its absence leaves. The lead is the report's
-    // recipient, never its subject: a notice about the lead is written into the very queue it
-    // names, and that queue is what the report exists to speak for.
+    // recipient, never its subject: a notice about the lead would be written into the queue
+    // the report exists to speak for. The lead's own unread mail is the wake, and a receipt
+    // that never arrives climbs to the parent orchestrator.
     if (seat.human === true || seat.stopped === true || seat.name === leadName) continue;
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const unread = mail.unread(seat.name);

@@ -125,6 +125,8 @@ export function compactRule(rule: string): string {
       return 'direct-work';
     case "the daemon's reminder authority":
       return 'reminder';
+    case "the daemon's stuck-child notice":
+      return 'daemon';
     default: {
       const grantMatch = /^an owner-signed grant naming send \((.+)\)$/.exec(trimmed);
       if (grantMatch !== null) return `grant ${grantMatch[1]}`;

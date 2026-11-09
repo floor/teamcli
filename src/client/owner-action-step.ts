@@ -6,17 +6,18 @@
 
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { basename, dirname } from 'node:path';
-import { callerLabel, callerOf, isOwner, type Caller } from '../caller.ts';
+import { basename, dirname, join, resolve } from 'node:path';
+import { callerLabel, callerOf, isOwner, standingOf, type Caller } from '../caller.ts';
 import { syncChildTimeout } from '../child.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import { isSameOrInside } from '../grant.ts';
-import { admitOwnerAction, admitOwnerActionByRule, approveOwnerAction, auditRuleAdmission, boundWords, canonicalRoot, createOwnerActionRequest, listOwnerActionRules, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
-import { readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './owner-seat.ts';
+import { admitOwnerAction, admitOwnerActionByRule, auditRuleAdmission, boundWords, canonicalRoot, createOwnerActionRequest, listOwnerActionRules, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
+import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './owner-seat.ts';
 import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { ownerSubjectProof } from '../dev_mode.ts';
+import { leadsCommandExcluded, leadsOwnTeamAdmits, leadsOwnTeamAtCwd } from '../leads-authority.ts';
 import { readTeams } from '../registry/teams.ts';
 import type { Io } from '../io.ts';
 import { refuse } from '../output/index.ts';
@@ -25,8 +26,8 @@ export type OwnerSeatSources = {
   home?: string;
   now?: () => Date;
   ownerSeatStore?: OwnerSeatKeyStore;
-  /** Whether a request is presented to the owner seat's Touch ID signer at once. Absent: only
-   *  with the system key store (a real run); an injected store opts in with `true`. */
+  /** Kept so existing callers still type-check. `--request` records and returns; it does not
+   *  present Touch ID or run the command in the same invocation. */
   present?: boolean;
   /** The team root the caller has already resolved, for a caller whose team lives in a folder
    *  that is not a git repository (the registry record is keyed by that folder). Absent: the git
@@ -61,7 +62,55 @@ export function teamNameAt(root: string, home: string): string {
   return basename(root);
 }
 
-/** `--request` and `--approval <id>` for one command. `none` when neither was passed. */
+/** The folder a charter must cover when a command edits `file`, or this checkout when no file is
+ *  named. The path is resolved and not read. */
+export function charterTargetOf(cwd: string, file?: string): string {
+  const aimed = file === undefined ? cwd : resolve(cwd, file);
+  return findRoot(aimed) ?? findRoot(dirname(aimed)) ?? (file === undefined ? resolve(cwd) : dirname(aimed));
+}
+
+function leadsAdmissionAt(
+  io: Io,
+  home: string,
+  command: string,
+  sources: OwnerSeatSources,
+  targets: readonly string[],
+  now: Date,
+) {
+  const aimed = sources.root ?? targets[0];
+  if (aimed === undefined) return leadsOwnTeamAtCwd(io, { command, home, now });
+  let loaded: ReturnType<typeof readTeamConfig>;
+  try {
+    loaded = readTeamConfig(aimed, { home });
+  } catch {
+    return null;
+  }
+  if (!loaded.ok) return null;
+  // Every folder this run changes has to sit in the one team the caller is placed on.
+  // A later folder outside that root is another team's, and the first folder does not admit it.
+  const root = resolve(loaded.root);
+  for (const target of targets) {
+    if (!isSameOrInside(root, resolve(target))) return null;
+  }
+  const dir = dirname(loaded.path);
+  const caller = callerOf(io, loaded.team.session);
+  return leadsOwnTeamAdmits({
+    caller,
+    team: loaded.team,
+    teamFile: loaded.team,
+    at: standingOf(dir, loaded.team.session, caller),
+    home,
+    root: loaded.root,
+    command,
+    now,
+    dir,
+  });
+}
+
+/** `--request` and `--approval <id>` for one command. `none` when neither was passed.
+ *  `targets` are the folders the command will change. The charter is asked for every one of
+ *  them; an empty list is no charter admission and never falls back to the caller's cwd.
+ *  `--request` records the card and returns, whether or not a charter would have admitted the run. */
 export function ownerSeatStep(
   command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config' | 'client' | 'development-mode',
   action: OwnerAction,
@@ -69,21 +118,56 @@ export function ownerSeatStep(
   ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean; reason?: string },
   io: Io,
   sources: OwnerSeatSources,
+  targets: readonly string[] = [],
+  // The team session a send already resolved. The gate's placement then shares that key with
+  // the prologue. Absent, the caller's own placement is asked, and nothing new is admitted.
+  callerSession?: string,
 ): OwnerSeatStep {
   const home = sources.home ?? homedir();
-  // The charter admits routine operations in the folder it covers. The machine's development
-  // mode is not one of them: it is the machine's, so only the owner's own answer admits it, even
-  // when the caller's folder lies inside a signed charter.
-  if (command !== 'development-mode') {
-    const gate = charterGate(home, { operation: command === 'client' ? 'grant' : command, cwd: io.cwd }, sources.ownerSeatStore);
-    if (gate.kind === 'block') {
-      refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
-      return { kind: 'refused' };
-    }
-    if (gate.kind === 'admit') return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: gate.signer } };
-  }
-  if (!ask.request && ask.approval === undefined) return { kind: 'none' };
   const now = sources.now?.() ?? new Date();
+  // A charter the owner wrote is a deny for every seat, and it is asked before the default rule.
+  // A block refuses a placed lead or operator. The owner is never refused: one warning names the
+  // charter and the repair, and the run continues as the owner. Config prints that warning on
+  // its own write. Absent is not a deny. Development mode is the machine's, so only the owner's
+  // own answer admits it. An empty target list is no charter admission and is never the caller's cwd.
+  const gateCaller = callerSession === undefined ? callerOf(io) : callerOf(io, callerSession);
+  const ownerCaller = isOwner(gateCaller);
+  let charterSigner: string | null = null;
+  let ownerBlocked: string | null = null;
+  if (command !== 'development-mode' && targets.length > 0) {
+    for (const target of targets) {
+      const gate = charterGate(home, { operation: command === 'client' ? 'grant' : command, cwd: io.cwd, path: target }, sources.ownerSeatStore);
+      if (gate.kind === 'block') {
+        if (!ownerCaller) {
+          refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
+          return { kind: 'refused' };
+        }
+        ownerBlocked ??= gate.message;
+        continue;
+      }
+      if (gate.kind === 'admit' && ownerBlocked === null) charterSigner = gate.signer;
+    }
+  }
+  if (ownerBlocked !== null && command !== 'config') {
+    passCharterOwner(io, ownerBlocked, {
+      dir: join(targets[0] ?? io.cwd, '.agents'),
+      command,
+      caller: callerLabel(callerOf(io)),
+      now,
+    });
+    charterSigner = null;
+  }
+  // An excluded command stays on the path this door had before the default rule. Forget is
+  // one of them: the charter above already judged the named targets, and the rule must not
+  // look a team up for it. `--request` records the card and writes nothing, even when the
+  // default rule would have admitted the run.
+  const leads = ask.request || leadsCommandExcluded(command) ? null : leadsAdmissionAt(io, home, command, sources, targets, now);
+  if (leads !== null) {
+    return { kind: 'admitted', admission: { ok: true, via: 'leads', signer: leads.role } };
+  }
+  // A caller who asked for the card gets the card. The charter may admit a run that did not.
+  if (charterSigner !== null && !ask.request) return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: charterSigner } };
+  if (!ask.request && ask.approval === undefined) return { kind: 'none' };
   const refused = (message: string): OwnerSeatStep => {
     refuse(io, ask.json, command, { id: `${command}.approval-refused`, message, repair: null });
     return { kind: 'refused' };
@@ -105,22 +189,12 @@ export function ownerSeatStep(
       ...(ask.reason === undefined ? {} : { reason: ask.reason }),
     }, now);
     if (!made.ok) return refused(made.why);
-    // The same honest delivery `grant --request` uses: the owner seat's Touch ID signer is asked to
-    // sign this request's answer, with the card as the prompt. A verified signature is the approval,
-    // and the request is then admitted and run in this same invocation, exactly as signed. A
-    // cancelled or unavailable prompt leaves the request waiting on the owner page.
-    const touch = presentAction(home, made.record.request_id, sources, now);
-    if (touch.ok) {
-      const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
-      const admitted = admitOwnerAction(home, made.record.request_id, { action, root, team, head, words, claim: !ask.dry }, store, now);
-      if (!admitted.ok) return refused(admitted.why);
-      if (!ask.json) io.stderr(`team ${command}: owner notified via touch-id: approved with a verified owner-seat signature (signed by ${admitted.signer}); applying request ${made.record.request_id}\n`);
-      return { kind: 'admitted', admission: admitted };
-    }
+    // `--request` files the card and stops. It does not present Touch ID and it does not run the
+    // command in this process; `--approval` is the run, once the owner has answered.
     const run = `team ${command} ${[...words, '--approval', made.record.request_id].join(' ')}`.replace(/\s+/g, ' ');
     const where = made.page === 'live' ? 'the owner page is already open and will show this card' : 'the owner answers it on the owner page';
     if (ask.json) io.stdout(`${JSON.stringify({ format: 1, status: 'requested', request_id: made.record.request_id, expires_at: made.record.expires_at, text: made.text, page: made.page, run })}\n`);
-    else io.stdout(`team ${command}: owner-seat request ${made.record.request_id} recorded; ${touch.why === null ? '' : `owner NOT notified via touch-id (${touch.why}); `}${where}\nthen run: ${run}\n`);
+    else io.stdout(`team ${command}: owner-seat request ${made.record.request_id} recorded; ${where}\nthen run: ${run}\n`);
     return { kind: 'requested' };
   }
   const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
@@ -236,6 +310,13 @@ export function ownerSeatRuleFolder(cwd: string): string | null {
   return root === null ? null : dirname(canonicalRoot(root));
 }
 
+/** Whether the always rule that would admit `cwd` also covers every folder the command changes.
+ *  A rule for the caller's folder does not reach a team or file outside it. */
+export function ownerSeatRuleCovers(cwd: string, targets: readonly string[]): boolean {
+  const folder = ownerSeatRuleFolder(cwd);
+  return folder !== null && targets.length > 0 && targets.every((target) => isSameOrInside(folder, target));
+}
+
 export type OwnerRecordAdmission =
   | { ok: true; via: 'owner' }
   | { ok: true; via: 'rule'; ruleId: string; signer: string; ruleFolder: string }
@@ -279,19 +360,4 @@ export function ownerAdmitsRecord(action: OwnerAction, io: Io, targets: readonly
   } catch {
     return { ok: false, kind: 'caller', caller };
   }
-}
-
-/** Presents one owner-action request to the owner seat's Touch ID signer. `why` is null when no
- *  presentation was attempted (a test store that did not opt in). */
-function presentAction(home: string, id: string, sources: OwnerSeatSources, now: Date): { ok: true } | { ok: false; why: string | null } {
-  const enabled = sources.present ?? sources.ownerSeatStore === undefined;
-  if (!enabled) return { ok: false, why: null };
-  const seat = readOwnerSeat(home);
-  if (seat === null) return { ok: false, why: 'no owner seat is registered' };
-  const signer = seat.signers.find((one) => one.type === 'mac-keystore');
-  if (signer === undefined) return { ok: false, why: 'the owner seat has no Touch ID (mac-keystore) signer' };
-  const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
-  if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available here` };
-  const answered = approveOwnerAction(home, id, 'oui', store, now, { signer: signer.name });
-  return answered.ok ? { ok: true } : { ok: false, why: answered.why };
 }

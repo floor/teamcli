@@ -114,7 +114,7 @@ function setup(text: string): void {
   );
 }
 
-/** A live pane watch already carries this route: no watch step, no watch workspace. */
+/** A fresh pane-watch record. These scenes are about a seat's workspace; `up` opens no watch pane. */
 function seedWatch(): void {
   updateState(dir, (file) => {
     const session = (file.sessions[SESSION] ??= emptySession());
@@ -543,6 +543,7 @@ test('a human or granted seat carrying a sweep adds no sweep step', () => {
     session: 'scratch',
     sessionRunning: true,
     watchAlive: true,
+    startWatch: false,
     watchLabel: 'Watch · scratch',
     seats: [
       seatOf('lead', { human: true, sweep: { workspace: SPACE } }),
@@ -554,6 +555,9 @@ test('a human or granted seat carrying a sweep adds no sweep step', () => {
   // seat's panes are left as they are.
   const swept = plan.flatMap((step) => (step.do?.do === 'sweep' ? [step.do] : []));
   expect(swept).toEqual([{ do: 'sweep', seat: 'worker', workspace: NEW_SPACE, cli: 'claude-code' }]);
+  // The daemon is the watch. The plan does not open a workspace for it.
+  expect(plan.some((step) => step.do?.do === 'watch')).toBe(false);
+  expect(JSON.stringify(plan)).not.toContain('Watch · ');
 });
 
 test('a workspace holding the pane this command runs in is left as it is', async () => {

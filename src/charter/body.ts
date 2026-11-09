@@ -1,6 +1,7 @@
 // The owner charter: one signed document written by `team setup`. It names the project roots,
 // the vendors, and the routine operations the owner allows. A later command that sits inside it
-// runs with no prompt. One that sits outside is refused, and the owner re-signs only by running
+// runs with no prompt. A seat that sits outside is refused. The owner is never refused, and
+// re-signs only by running
 // `team setup --edit`. Nothing in this file signs or reads a key.
 
 import { createHash } from 'node:crypto';

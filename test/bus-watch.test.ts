@@ -575,6 +575,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       prompt: false,
       history: { lastWorking: undefined, idleSince: undefined },
       liveness: { idle_lead_seconds: 300, idle_owner_seconds: 1800, blind_after_seconds: 600 },
+      queued: false,
       ...overrides,
     });
 

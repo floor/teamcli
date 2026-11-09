@@ -3,6 +3,7 @@
 // at every level of the document. Nothing here reads a credential store, the process
 // environment or a CLI home; the input is the parsed file's value and nothing else.
 import { readSettingsObject, stringHoldsSecret } from './settings.ts';
+import { hasVersionToken } from '../file/signature.ts';
 import {
   ARG_CLASSES,
   ARG_POLICIES,
@@ -34,7 +35,7 @@ const COMMON_KEYS = ['format', 'name', 'kind', 'summary', 'writable_folders', 's
 const KIND_KEYS: Record<LauncherDefinition['kind'], readonly string[]> = {
   identity: ['env'],
   endpoint: ['harness', 'prefix', 'provider', 'executable', 'args', 'arg_policy', 'env', 'env_policy', 'harness_settings'],
-  preset: ['harness', 'base', 'executable', 'args', 'arg_policy', 'resume', 'env', 'env_policy', 'cwd', 'harness_settings', 'caller_args'],
+  preset: ['harness', 'base', 'executable', 'args', 'arg_policy', 'resume', 'env', 'env_policy', 'cwd', 'harness_settings', 'caller_args', 'seat'],
   custom: ['argv', 'args_mode', 'env', 'env_policy', 'cwd'],
 };
 const PROVIDER_KEYS = ['name', 'base_url', 'token', 'models', 'context_window', 'effort', 'extra_env'] as const;
@@ -336,6 +337,22 @@ export function validateDefinition(
       break;
     }
     case 'preset': {
+      if (raw.seat !== undefined) {
+        if (!isMap(raw.seat)) fail(diagnostics, ctxN, 'E_SEAT_RECIPE', 'seat', 'seat is a map of vendor, model, version and display');
+        else {
+          const keys = ['vendor', 'model', 'version', 'display'];
+          unknownKeys(diagnostics, ctxN, raw.seat, keys, 'seat');
+          for (const key of keys) {
+            const word = raw.seat[key];
+            if (typeof word !== 'string' || word.trim() === '' || /[\x00-\x1f\x7f]/.test(word) || stringHoldsSecret(word)) {
+              fail(diagnostics, ctxN, 'E_SEAT_RECIPE', `seat.${key}`, `${key} is nonempty text without controls or secret material`);
+            }
+          }
+          if (typeof raw.seat.display === 'string' && typeof raw.seat.version === 'string' && !hasVersionToken(raw.seat.display, raw.seat.version)) {
+            fail(diagnostics, ctxN, 'E_SEAT_RECIPE', 'seat.display', 'display must contain the version as a token of its own');
+          }
+        }
+      }
       if (typeof raw.harness !== 'string' || raw.harness === '') {
         fail(diagnostics, ctxN, 'E_HARNESS_UNKNOWN', 'harness', 'a preset names its harness (a CLI profile name)');
       }

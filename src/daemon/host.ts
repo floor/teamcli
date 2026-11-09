@@ -71,6 +71,10 @@ import {
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
+import { sendDaemonDirect } from '../reminder/direct-send.ts';
+import { realHost } from '../commands/send.ts';
+import { logLine as teamLogLine } from '../log.ts';
+import { createStuckBook, type StuckFacts } from './stuck-child.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import { reminderTick, type ReminderSend, type ReminderSpec } from '../reminder/run.ts';
 import {
@@ -615,6 +619,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // Filled once the roots loop has resolved every route; a status entry gains its `watch`
   // record on each state write, and only entries that actually got a host ever have one.
   const hostedWatches: { status: MachineRootStatus; watch: HostedWatch }[] = [];
+  /** Restarts of a stuck watch or a late chores child, per root, so three in an hour is the cap. */
+  const stuckBook = createStuckBook();
+  /** When this root's watch entered `starting`. A restart gets a fresh limit. A watch already
+   *  starting when it is first seen keeps that start; one that had left `starting` is timed
+   *  from the return. */
+  const watchStartingAt = new Map<string, number>();
+  const watchLeftStarting = new Set<string>();
   /** The presence work per accepted route, and this process's one in-flight run per route. */
   const presenceWork: {
     route: HostedRoute;
@@ -2395,6 +2406,83 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       logLine(`reminders: the beat failed — ${messageOf(error)}`);
     });
   };
+  /**
+   * One root at a time. A watch still in `starting` past this team's limit, or a chores child
+   * that has missed more heartbeats than the limit, is stopped and started again. Only the
+   * child this daemon started for that root; every other root and this daemon keep running.
+   * Three such restarts in an hour is the cap, and the one past it is left for a person.
+   */
+  const restartStuckChildren = (at: Date): void => {
+    if (closed) return;
+    for (const hosted of hostedWatches) {
+      const root = hosted.watch.route.root;
+      const team = teams.get(root);
+      if (team === undefined) continue;
+      const reading = hosted.watch.state();
+      const stuck = choresFleet?.stuckOf(root) ?? null;
+      const hostsWatch = stuck !== null && stuck.watchPhase !== null;
+      const phase = stuck !== null && stuck.watchPhase !== null ? stuck.watchPhase : reading.phase;
+      const startedAt = stuck !== null && stuck.watchPhase !== null ? stuck.watchStartedAt : reading.startedAt;
+      const cycles = stuck !== null && stuck.watchPhase !== null ? stuck.cycles : reading.cycles;
+      const missed = stuck?.missed ?? 0;
+      const watchStuck = phase === 'starting';
+      const late = missed > (team.watch.childLateLimit ?? 30);
+      // The chores child is the one to stop when it hosts the watch or it is the late child.
+      // An in-process watch is stopped through its own fault, which restarts it on the next beat.
+      const child: StuckFacts['child'] = (hostsWatch || late) && stuck !== null ? 'chores' : 'watch';
+      if (child === 'watch' && !watchStuck) continue;
+      if (child === 'chores' && !watchStuck && !late) continue;
+      const reportedStart = startedAt === null ? Number.NaN : Date.parse(startedAt);
+      if (phase !== 'starting') {
+        watchStartingAt.delete(root);
+        watchLeftStarting.add(root);
+      } else if (!watchStartingAt.has(root)) {
+        watchStartingAt.set(
+          root,
+          watchLeftStarting.has(root) || Number.isNaN(reportedStart) ? at.getTime() : reportedStart,
+        );
+      }
+      const facts: StuckFacts = {
+        nowMs: at.getTime(),
+        watchPhase: phase,
+        watchStartedAtMs: phase === 'starting' ? watchStartingAt.get(root) ?? null : null,
+        cycles,
+        missed,
+        watchStartLimitMs: (team.watch.watchStartLimit ?? 120) * 1000,
+        childLateLimit: team.watch.childLateLimit ?? 30,
+        child,
+      };
+      const decision = stuckBook.consider(root, facts);
+      if (decision.action === 'none') continue;
+      if (decision.action === 'restart') {
+        const stopped = child === 'chores'
+          ? (choresFleet?.restartRoot(root, decision.text) ?? false)
+          : hosted.watch.fault(decision.text);
+        if (!stopped) continue;
+        stuckBook.committed(root, at.getTime());
+        // The child just started again. The next limit is measured from this beat, so a watch
+        // that is still `starting` inside that limit is not stopped on the following beat.
+        watchStartingAt.set(root, at.getTime());
+        watchLeftStarting.add(root);
+      }
+      const entry = routeTeams.get(root);
+      if (entry !== undefined) teamLogLine(dirname(entry.handle), 'daemon', 'daemon', decision.text, at);
+      const lead = team.orchestrator;
+      if (lead === '') continue;
+      void sendDaemonDirect(
+        {
+          reminder: 'stuck-child',
+          due: at.toISOString(),
+          recipients: [{ root, session: team.session, seat: lead }],
+          notice: 'stuck-child',
+        },
+        { root, seat: lead, body: decision.text },
+        { ...realHost, home },
+      ).catch((error: unknown) => {
+        logLine(`root ${root}: the stuck-child notice was not sent — ${messageOf(error)}`);
+      });
+    }
+  };
   beat = () => {
     if (input.runningRoots !== undefined && !closed) {
       try {
@@ -2420,6 +2508,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // The chores fleet is a nudge and a check, never a wait: a stuck child is signalled here and
     // its replacement starts on a later beat, so this tick returns at once whatever it is doing.
     choresFleet?.tick(now());
+    // After the fleet has judged this beat: a watch still starting, or a chores child past its
+    // late limit, is stopped and started for that root alone.
+    restartStuckChildren(now());
     mailboxRouter?.tick(now());
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each

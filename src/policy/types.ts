@@ -108,6 +108,7 @@ export type DevModeOperation = (typeof DEV_MODE_OPERATIONS)[number];
 export const ENFORCED_POLICY_NAMES = [
   'dev-mode',
   'lead-gates',
+  'leads.authority',
   'seats-cross-teams',
   'state-trace-window-seconds',
   'state-blind-after-seconds',
@@ -198,6 +199,7 @@ export type CataloguePolicyName = EnforcedPolicyName | AdvisedPolicyName;
 export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> = {
   dev_mode: 'dev-mode',
   lead_gates: 'lead-gates',
+  leads_authority: 'leads.authority',
   seats_cross_teams: 'seats-cross-teams',
   state_trace_window_seconds: 'state-trace-window-seconds',
   trace_window_seconds: 'state-trace-window-seconds',
@@ -386,6 +388,8 @@ export type PolicySpec<V extends PolicyValue = PolicyValue> = {
   defaultValue: V;
   /** True for gate-lifting policies (§2.7), where absent or expired means `'off'`. */
   gateLifting: boolean;
+  /** True when setting this key changes who may act. Only the owner sets it. */
+  needsOwner?: boolean;
   /**
    * True for advised policies whose defining text says a lower level chooses without ordering
    * (`development-mode`, amendment 02 §2.3 exception).
@@ -437,6 +441,14 @@ export type LeadGatesValue = 'lead' | 'lead+operator';
 /** `lead-gates` accepts exactly its two words; anything else is a load refusal. */
 function parseLeadGates(raw: unknown): LeadGatesValue | null {
   return raw === 'lead' || raw === 'lead+operator' ? raw : null;
+}
+
+/** `leads.authority`: `own-team` is the default; `owner-asks` restores the owner gates. */
+export type LeadsAuthorityValue = 'own-team' | 'owner-asks';
+
+/** `leads.authority` accepts exactly its two words; anything else is a load refusal. */
+function parseLeadsAuthority(raw: unknown): LeadsAuthorityValue | null {
+  return raw === 'own-team' || raw === 'owner-asks' ? raw : null;
 }
 
 /** The Actions commands a caller may leave in the guard's allowlist. The release default is all
@@ -1393,6 +1405,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: 'off',
     gateLifting: true,
+    needsOwner: true,
     parseValue: parseOnOff,
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off', lowerExpiry?: string | null, higherExpiry?: string | null) => {
       if (lower === 'off') return true;
@@ -1414,6 +1427,18 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     // `lead+operator` is only within `lead+operator`: a nearer level cannot widen the gates past
     // a farther level that kept them the lead's.
     isWithin: (lower: LeadGatesValue, higher: LeadGatesValue) => lower === 'lead' || lower === higher,
+  },
+  'leads.authority': {
+    name: 'leads.authority',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'own-team',
+    gateLifting: false,
+    needsOwner: true,
+    parseValue: parseLeadsAuthority,
+    // `owner-asks` is tighter: it restores the owner gates. A nearer level cannot widen them
+    // back to `own-team` past a farther level that asked the owner.
+    isWithin: (lower: LeadsAuthorityValue, higher: LeadsAuthorityValue) => lower === 'owner-asks' || lower === higher,
   },
   'seats-cross-teams': {
     name: 'seats-cross-teams',
@@ -1855,6 +1880,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     // access because it failed to say anything. Turning it on is an explicit owner declaration.
     defaultValue: 'off',
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseOnOff,
     // 'off' is tighter than 'on': off is within on, on is not within off.
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => !(higher === 'off' && lower === 'on'),
@@ -1904,6 +1930,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: DAEMON_HEARTBEAT_SECONDS.release,
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseHeartbeatSeconds,
     valueProblem: (raw: unknown) => heartbeatSecondsProblem('daemon.heartbeat', raw),
     // A shorter or equal beat is tighter, the same direction as every interval policy.
@@ -1927,6 +1954,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: DAEMON_CHORES_DEFAULTS.mode,
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseChoreMode,
     valueProblem: (raw: unknown) => choreModeProblem('daemon.chores', raw),
     isWithin: (lower: DaemonChoresMode, higher: DaemonChoresMode) => CHORE_MODE_RANK[lower] <= CHORE_MODE_RANK[higher],
@@ -2085,6 +2113,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity'],
     defaultValue: null,
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseOwnerSigners,
     isWithin: (lower: string[] | null, higher: string[] | null) => higher === null || (lower !== null && lower.every((n) => higher.includes(n))),
   },
@@ -2095,6 +2124,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity'],
     defaultValue: 'any',
     gateLifting: false,
+    needsOwner: true,
     parseValue: (raw: unknown) => (raw === 'any' ? raw : null),
     isWithin: () => true,
   },
@@ -2176,6 +2206,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity'],
     defaultValue: 'owner-terminal',
     gateLifting: false,
+    needsOwner: true,
     parseValue: (raw: unknown) => (raw === 'owner-terminal' || raw === 'conversational' ? raw : null),
     isWithin: (lower: 'owner-terminal' | 'conversational', higher: 'owner-terminal' | 'conversational') =>
       lower === higher || lower === 'owner-terminal',
@@ -2203,6 +2234,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: 'local-fast',
     gateLifting: false,
+    needsOwner: true,
     lowerLevelChooses: true,
     parseValue: (raw: unknown) => (raw === 'local-fast' || raw === 'pr-per-change' ? raw : null),
     isWithin: () => true,
@@ -2364,6 +2396,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: OWNER_RESERVED_SCOPE_DEFAULT,
     gateLifting: false,
+    needsOwner: true,
     lowerLevelChooses: true,
     parseValue: parseScopeItems,
     valueProblem: (raw: unknown) => `owner.reserved-scope is a list of reserved scopes, got ${JSON.stringify(raw)}`,

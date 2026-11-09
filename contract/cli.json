@@ -2794,10 +2794,63 @@
       "hidden": false,
       "name": "drops",
       "positionals": [],
-      "subcommands": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "archive",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team drops archive [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "team-change",
+            "why": "the owner, the orchestrator or the operator archives every seat folder; a seat on its own pane archives only its own"
+          }
+        }
+      ],
       "usage": [
         "team drops [--follow] [--json]",
-        "team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]"
+        "team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]",
+        "team drops archive [--dry-run] [--json]"
       ],
       "who": {
         "gate": "seat-only",
@@ -7941,6 +7994,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true
@@ -7990,7 +8049,18 @@
       ],
       "hidden": false,
       "name": "swap",
-      "positionals": [],
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": true,
+          "repeatable": false
+        },
+        {
+          "name": "preset",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
       "subcommands": [
         {
           "flags": [
@@ -8175,12 +8245,11 @@
         }
       ],
       "usage": [
-        "team swap [--file <path>] [--json]",
-        "team swap --rule [--file <path>] [--json]",
+        "team swap <seat> <preset> [--dry-run] [--file <path>] [--json]",
+        "team swap [--rule | --run] [--file <path>] [--json]",
         "team swap queue <seat> [--to <target>] [--file <path>] [--json]",
         "team swap now <seat> [--file <path>] [--json]",
-        "team swap cancel <seat> [--file <path>] [--json]",
-        "team swap --run [--file <path>] [--json]"
+        "team swap cancel <seat> [--file <path>] [--json]"
       ],
       "who": {
         "gate": "team-read",

@@ -971,11 +971,33 @@ export const SWAP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.swap',
   fileName: 'swap.schema.json',
   title: 'team swap --json output',
-  statuses: ['listed', 'rule', 'queued', 'forced', 'ran', 'run-failed', 'cancelled'],
+  statuses: ['listed', 'rule', 'queued', 'forced', 'ran', 'run-failed', 'cancelled', 'planned', 'swapped'],
   required: ['project', 'session'],
   properties: {
     entity: { type: ['string', 'null'] },
     seat: { type: 'string', minLength: 1 },
+    preset: { type: 'string', minLength: 1 },
+    fresh: { type: 'boolean' },
+    pane: { type: 'string', minLength: 1 },
+    notes: { type: 'array', items: { type: 'string' } },
+    changes: {
+      type: 'object', additionalProperties: false,
+      properties: Object.fromEntries(['cli', 'vendor', 'model', 'version', 'display', 'launch', 'cwd', 'mode', 'launcher', 'account', 'effort', 'modelFrom'].map(key => [key, {
+        type: 'object', additionalProperties: false, required: ['from', 'to'],
+        properties: { from: { type: ['string', 'null'] }, to: { type: ['string', 'null'] } },
+      }])),
+    },
+    worktree: {
+      type: ['object', 'null'], additionalProperties: false, required: ['task', 'base', 'record'],
+      properties: {
+        task: { type: 'string' }, base: { type: 'string' },
+        record: {
+          type: 'object', additionalProperties: false, required: ['path', 'branch', 'seat', 'setup'],
+          properties: { path: { type: 'string' }, branch: { type: 'string' }, seat: { type: 'string' },
+            own_commits: { type: 'boolean' }, setup: { type: 'string', enum: ['ok', 'failed'] } },
+        },
+      },
+    },
     rule: { type: 'string' },
     entries: {
       type: 'array',
@@ -3591,5 +3613,4 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   WORKFLOW_OUTPUT_SCHEMA,
   AGENTS_OUTPUT_SCHEMA,
 ];
-
 

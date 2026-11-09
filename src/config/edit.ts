@@ -12,7 +12,9 @@ import { readArgs } from '../args.ts';
 import { ownerSeatStep } from '../client/owner-action-step.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { teamBinding } from '../registry/binding.ts';
 import {
+  callerLabel,
   callerOf,
   describeCaller,
   detachedRefusal,
@@ -22,7 +24,7 @@ import {
   type Caller,
   type SeatStanding,
 } from '../caller.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
@@ -66,6 +68,11 @@ function usageRefused(io: Io, json: boolean, message: string, usage: string): nu
   return 2; // exit: config.usage
 }
 
+function refuseUnreadable(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'config', { id: 'config.unreadable', message, repair: 'team import' });
+  return 2; // exit: config.unreadable
+}
+
 function runEditor(path: string, env: Record<string, string | undefined>): number {
   const editor = env.VISUAL || env.EDITOR || 'vi';
   const ran = spawnSync('/bin/sh', ['-c', `${editor} "$1"`, 'sh', path], { stdio: 'inherit' });
@@ -94,15 +101,16 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   if (why !== null || typeof path === 'string') return usageRefused(io, json, why ?? 'invalid path', usage);
   const home = sources.home ?? homedir();
   const env = sources.env ?? process.env;
-  const root = realRoot(io.cwd);
+  const seat = path[0] === 'seats' && path[1] !== undefined && !/^\d+$/.test(path[1]) ? path[1] : undefined;
+  const binding = teamBinding(home, io.cwd, seat, io);
+  if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') return refuseUnreadable(io, json, binding.message);
+  const root = binding.kind === 'bound' ? binding.team.root : realRoot(io.cwd);
   const file = join(root, TEAM_FILE);
   let target: ReturnType<typeof teamTextTarget>;
   try {
     target = teamTextTarget(file, { home, env });
   } catch (error) {
-    refuse(io, json, 'config', { id: 'config.unreadable', message: `the registry's record of this team cannot be read: ${error instanceof Error ? error.message : String(error)}`, repair: 'team import' });
-    // exit: config.unreadable
-    return 2;
+    return refuseUnreadable(io, json, `the registry's record of this team cannot be read: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (target.kind === 'file' && !existsSync(file)) {
     const held = readStoredTeamConfig(home, teamIdOf(root)) !== null;
@@ -135,6 +143,18 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   } catch (error) {
     parseError = error;
   }
+  // The orchestrator seat's own fields stay the owner's, whichever door admitted the run.
+  if ((verb === 'set' || verb === 'unset') && (path[0] === 'coordinator' || path[0] === 'orchestrator' || path[0] === 'leads') && !isOwner(callerOf(rawIo))) {
+    const caller = callerOf(rawIo);
+    refuse(io, json, 'config', {
+      id: 'config.orchestrator',
+      message: `only the owner changes the orchestrator's seat; this call is ${describeCaller(caller)}`,
+      repair: null,
+      rule: 'owner-only',
+    });
+    // exit: config.orchestrator
+    return 1;
+  }
   const reserved = parsed === null ? null : reservedKeyIn(parsed, path);
   if (reserved !== null) {
     return usageRefused(io, json, `${rawPath}: "${reserved}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key`, usage);
@@ -160,7 +180,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // binds these words. Nothing is written on a request, and an approval for other words refuses.
   let seatApproved = false;
   if (args.flags.has('request') || args.values.approval !== undefined) {
-    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home, root, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) });
+    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home, root, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) }, [root]);
     if (step.kind === 'requested') {
       // exit: config.approval-requested
       return 0;
@@ -188,11 +208,26 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     if (!json) io.stderr(`team config: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
     seatApproved = true;
   }
-  const gate = charterGate(home, { operation: 'config', cwd: io.cwd }, sources.ownerSeatStore);
-  if (gate.kind === 'block' && !seatApproved) {
+  const gate = charterGate(
+    home,
+    binding.kind === 'bound'
+      ? { operation: 'config', cwd: root, path: file }
+      : { operation: 'config', cwd: io.cwd, path: root },
+    sources.ownerSeatStore,
+  );
+  if (gate.kind === 'block' && !seatApproved && !isOwner(callerOf(rawIo))) {
     refuse(io, json, 'config', { id: 'config.charter', message: gate.message, repair: 'team setup --edit' });
     // exit: config.charter
     return 1;
+  }
+  // The owner is never refused. One warning names the charter and the repair, and the log keeps it.
+  if (gate.kind === 'block' && isOwner(callerOf(rawIo))) {
+    passCharterOwner(io, gate.message, {
+      dir: join(root, '.agents'),
+      command: 'config',
+      caller: callerLabel(callerOf(rawIo)),
+      ...(sources.now !== undefined ? { now: sources.now() } : {}),
+    });
   }
   let liftAudit: (() => void) | null = null;
   if (gate.kind !== 'admit' && !seatApproved) {
