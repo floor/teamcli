@@ -3,7 +3,7 @@ import { machineAccountsOf } from '../information/machine-accounts.ts';
 import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
 import { budgetsInForceOf } from '../approve/approval.ts';
-import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, fileOwnerRefusal, isOwner } from '../caller.ts';
 import { loadReadings, overlayReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, runChecksOfAsync, type CheckOutcome } from '../budgets/run.ts';
 import type { ChildOptions } from '../child.ts';
@@ -823,9 +823,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     else io.stderr(`team watch: ${why}\n`);
   };
   const hosted = sources.hosted;
-  const detached = hosted === undefined
-    ? detachedRefusal(callerOf(io), { who: 'the owner or a placed seat', where: 'a terminal outside herdr or its own pane' })
-    : undefined;
   // The `--file` check is the walk's too, and it runs before `currentTeam` reads that file or
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate
   // another project's team file, nor leave its `last_valid`, its log line or its heartbeat in
@@ -877,18 +874,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   const grant = args.values.file || hosted !== undefined
     ? undefined
     : await admittedWatchdog(io.cwd, args.values.session, caller, sources);
-  // A run with no terminal is refused: the watch lives in a pane of its own now, so no process
-  // outside a terminal is ever the watch and none has to be admitted to the file.
-  if (detached !== undefined) {
-    refuse('watch.caller', detached);
-    // exit: watch.caller
-    return 1;
-  }
-  if (grant && 'refuse' in grant) {
-    refuse('watch.watchdog', grant.refuse);
-    // exit: watch.watchdog
-    return 1;
-  }
   // The instant this process reached its loop, recorded once on the first beat the record takes:
   // `down` stops a pane-less watch only when the live process's command line and start instant
   // prove it is this watch. Captured once the run is admitted and before the first pass reads, so
@@ -984,9 +969,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // exit: watch.standby
       return 0;
     }
-    refuse('watch.already', `a watch already runs for the session "${session}" (${where})`);
-    // exit: watch.already
-    return 1;
   }
   if (first.path !== undefined) rememberCurrent(first.dir, first.path, sources.now());
 

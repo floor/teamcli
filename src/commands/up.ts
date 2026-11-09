@@ -4137,7 +4137,6 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // exit: up.ready
     // exit: up.pending
     // exit: up.server
-    // exit: up.watch
     return failed ? 1 : 0;
   } finally {
     if (runLock !== null && 'release' in runLock) runLock.release();
