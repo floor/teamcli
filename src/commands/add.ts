@@ -233,6 +233,14 @@ function ownTeamFlagBounds(
 ): { fileInside: boolean; sessionOwn: boolean } | null {
   const named = readTeamConfig(io.cwd, { home: sources.home });
   if (!named.ok) return null;
+  // Another session cannot use this team's lead exception. A file is compared by the same
+  // real path as before; proving it outside needs no caller placement or file-content read.
+  if (session !== undefined && session !== named.team.session) return null;
+  const rootReal = resolvedPath(named.root);
+  if (rootReal === null) return null;
+  const real = file === undefined ? null : flaggedFileReal(io.cwd, file);
+  const fileInside = file === undefined || (real !== null && pathInsideRoot(rootReal, real));
+  if (!fileInside) return null;
   const dir = dirname(named.path);
   const caller = callerOf(io, named.team.session);
   if (leadsOwnTeamAdmits({
@@ -246,17 +254,7 @@ function ownTeamFlagBounds(
     now: sources.now(),
     dir,
   }) === null) return null;
-  let rootReal: string;
-  try {
-    rootReal = realpathSync(named.root);
-  } catch {
-    return { fileInside: false, sessionOwn: false };
-  }
-  const real = file === undefined ? null : flaggedFileReal(io.cwd, file);
-  return {
-    fileInside: file === undefined || (real !== null && pathInsideRoot(rootReal, real)),
-    sessionOwn: session === undefined || session === named.team.session,
-  };
+  return { fileInside, sessionOwn: true };
 }
 
 export async function runAdd(argv: string[], io: Io, sources: AddSources = realSources): Promise<number> {

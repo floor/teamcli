@@ -2227,13 +2227,14 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   const allCode = !badInvocation && args.flags.has('all')
     ? await runUpAll(args, io, out, sources, json, dry, noLaunch, jsonNotes, stderrLine)
     : null;
-  const seatStep = badInvocation || allCode !== null
-    ? { kind: 'pass' as const }
-    : args.values.general !== undefined
-    ? { kind: 'admitted' as const }
-    : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
-    ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources, [charterTargetOf(io.cwd, args.values.file)]);
+  const approvalRequested = (): number => {
+    // exit: up.approval-requested
+    return 0;
+  };
+  const approvalRefused = (): number => {
+    // exit: up.approval-refused
+    return 1;
+  };
   if (badInvocation || allCode === 2) {
     if (badInvocation) {
       refuse(io, json, 'up', {
@@ -2246,28 +2247,41 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // exit: up.invocation
     return 2;
   }
-  if (allCode === 0 || seatStep.kind === 'requested') {
-    // exit: up.approval-requested
-    return 0;
-  }
-  if (allCode === 1 || seatStep.kind === 'refused') {
-    // exit: up.approval-refused
-    return 1;
-  }
-  const seatApproved = seatStep.kind === 'admitted';
+  if (allCode === 0) return approvalRequested();
+  if (allCode === 1) return approvalRefused();
   const walked = internal?.caller ?? walkCaller(io);
+  const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
+  const aimed = otherFile || args.values.session !== undefined;
+  // A non-owner's aimed flags meet their existing delegate, grant and owner-only refusals
+  // before the owner-seat door can read a caller or apply a charter. Runs that survive those
+  // gates still take the same door below; the own-file spelling keeps its ordinary route.
+  const ownerFlagsFirst = aimed && !mayLaunchSeats(walked)
+    && detachedRefusal(walked) === undefined;
+  const ownerSeatDoor = () => args.values.general !== undefined
+    ? { kind: 'admitted' as const }
+    : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
+    ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
+    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources, [charterTargetOf(io.cwd, args.values.file)]);
+  let seatStep = ownerFlagsFirst ? { kind: 'pass' as const } : ownerSeatDoor();
+  if (seatStep.kind === 'requested') return approvalRequested();
+  if (seatStep.kind === 'refused') return approvalRefused();
+  let seatApproved = seatStep.kind === 'admitted';
   // A run with no terminal is not the owner, and it is not asked of the delegate gate, the grant,
   // or the token. The refusal is one sentence, on the dry run and the real run.
   const detached = clientUp !== null || seatApproved ? undefined : detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
-  // The owner's run on a team still only in its file imports it first, with a notice
-  // (docs/commands/up.md): moving to the registry never stands between the owner and a launch.
-  const imported = clientUp === null && detached === undefined && (walked.kind === 'owner' || seatApproved) && !args.values.file
-    ? importForUp(io.cwd, sources.home, dry, sources.now?.() ?? new Date())
-    : null;
-  if (imported !== null) {
-    if (dry && !json) out.stdout(`${imported}\n`);
-    else stderrLine(`team up: ${imported}\n`);
-  }
+  let imported: string | null = null;
+  const importAdmitted = (): void => {
+    // The owner's run on a team still only in its file imports it first, with a notice
+    // (docs/commands/up.md): moving to the registry never stands between the owner and a launch.
+    imported = clientUp === null && detached === undefined && (walked.kind === 'owner' || seatApproved) && !args.values.file
+      ? importForUp(io.cwd, sources.home, dry, sources.now?.() ?? new Date())
+      : null;
+    if (imported !== null) {
+      if (dry && !json) out.stdout(`${imported}\n`);
+      else stderrLine(`team up: ${imported}\n`);
+    }
+  };
+  if (!ownerFlagsFirst) importAdmitted();
   const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : readTeamConfig(io.cwd, { home: sources.home });
   // Dev mode, as the default live file's chain states it: this folder's own file is the caller's
   // place, never a file the caller names. The aimed branch below decides before that file is
@@ -2290,8 +2304,6 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // thing the aim meets: a grant that refused the run — for any reason — never turns the aim
   // into an ordinary one on the file's own session. This folder's own file, with no
   // `--session`, continues below.
-  const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
-  const aimed = otherFile || args.values.session !== undefined;
   if (detached !== undefined && aimed && !(ownerSeatRuleCovers(io.cwd, [charterTargetOf(io.cwd, args.values.file)]) && ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources))) {
     refuse(io, json, 'up', { id: 'up.detached', message: detached, repair: null });
     // exit: up.detached
@@ -2394,6 +2406,13 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       return 1;
     }
   }
+  if (ownerFlagsFirst) {
+    seatStep = ownerSeatDoor();
+    if (seatStep.kind === 'requested') return approvalRequested();
+    if (seatStep.kind === 'refused') return approvalRefused();
+    seatApproved = seatStep.kind === 'admitted';
+  }
+  if (ownerFlagsFirst) importAdmitted();
   // The caller rule is the map's row (`owner-or-leads`): the owner, or a seat the team's record
   // marks `leads` — its orchestrator, or a roster mark. The decision is made where the caller
   // stands, by the same search `down` makes (`judgeCallerIn`), and the pane proof stays the
