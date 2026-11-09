@@ -173,7 +173,7 @@ describe('a wrapped CLI line that sets its own safety flags is never widened', (
     const argv = cliArgv(command, { binary: 'codex' });
     expect(argv).not.toContain('danger-full-access');
     expect(argv).not.toContain('never');
-    // FLO-1368 adds no fixed false pair; every other CLI safety word keeps its exact place.
+    // Current recipes add no fixed false pair; every other CLI safety word keeps its exact place.
     expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen']);
   });
 
@@ -216,7 +216,7 @@ describe("a delimiter inside a quoted script is the CLI's, not the outer shell's
       expect(argv.slice(at)).toEqual(['--', 'prompt', RULES_LINE]);
       const options = argv.slice(0, at);
       expect(options).toContain('--no-alt-screen');
-      // FLO-1368 adds no feature override before the delimiter.
+      // Current recipes add no feature override before the delimiter.
       expect(options).not.toContain('-c');
       expect(options).not.toContain('features.mcp_oauth_refresh_coordination=false');
       expect(options).toContain('-a');

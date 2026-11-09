@@ -90,7 +90,7 @@ export function featureMismatch(line: string | undefined, features: readonly str
   return `its recorded launch line does not pin ${said(gaps)}; the profile pins ${said(features)} on every launch`;
 }
 
-/** Remove the fixed false override shipped for Codex in FLO-1190, including in an old
+/** Remove the fixed false override shipped in earlier Codex defaults, including in an old
  * recorded recipe. Other config values, positional text, wrappers and quoting stay byte for
  * byte. Null means the obsolete pair is present but no source span proves safe to rewrite;
  * the launch must refuse before closing anything rather than run the incompatible recipe. */

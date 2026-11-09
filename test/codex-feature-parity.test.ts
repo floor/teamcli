@@ -1,4 +1,4 @@
-// FLO-1368 retires the fixed false override: proven launch recipes shed it, true stays,
+// Saved recipe migration retires the fixed false override: proven launch recipes shed it, true stays,
 // and a profile with no required feature pins emits no pin diagnostic.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -126,7 +126,7 @@ describe('the launch line removes only the obsolete false override', () => {
       'Read /x/rules.md; reply ready.',
     );
     expect(command).toContain(`resume 01a1`);
-    // FLO-1368 removes the legacy false pair without changing resume or rules placement.
+    // Recipe normalization removes the legacy false pair without changing resume or rules placement.
     expect(command).not.toContain(PIN);
     expect(command).toContain('Read /x/rules.md; reply ready.');
     expect(command.indexOf('resume 01a1')).toBeLessThan(command.indexOf('Read /x/rules.md'));
@@ -136,7 +136,7 @@ describe('the launch line removes only the obsolete false override', () => {
     const profile = profileFor('codex');
     if (!profile) throw new Error('codex profile must exist');
     const command = launchCommand(profile, `codex -m gpt-6.1-sol -c features.mcp_oauth_refresh_coordination=true -c ${PIN}`, 'Rules.');
-    // FLO-1368 removes false only; the caller's explicit true value remains the sole setting.
+    // Recipe normalization removes false only; the caller's explicit true value remains the sole setting.
     expect(command).toContain('-c features.mcp_oauth_refresh_coordination=true');
     expect(command.lastIndexOf('features.mcp_oauth_refresh_coordination')).toBe(command.indexOf('features.mcp_oauth_refresh_coordination=true'));
     expect(command).not.toContain(PIN);
@@ -156,7 +156,7 @@ describe('the launch line removes only the obsolete false override', () => {
         undefined,
         'Read /x/rules.md; reply ready.',
       );
-      // FLO-1368 removes the option before -- while preserving both positional words.
+      // Recipe normalization removes the option before -- while preserving both positional words.
       expect(command).not.toContain(PIN);
       expect(command.indexOf('an existing prompt')).toBeLessThan(command.indexOf('Read /x/rules.md'));
       expect(command).toContain('Read /x/rules.md; reply ready.');
@@ -183,7 +183,7 @@ describe('the plan and the record keep the migrated base recipe', () => {
     const { launch } = planned();
     expect(launch.recordLine).toBe(CLI);
     expect(launch.recordLine).not.toContain('AGENT_UNATTENDED');
-    // FLO-1368 strips the false pair from the stored recipe and the expanded command.
+    // Recipe normalization strips the false pair from the stored recipe and the expanded command.
     expect(launch.command).not.toContain(PIN);
   });
 
@@ -238,7 +238,7 @@ describe('team doctor requires no retired feature pin', () => {
     seed(dir, { launch_line: CLI });
     const io = testIo(root, { kind: 'owner' });
     await runDoctor(['--file', '.agents/team.yaml'], io, sources(home));
-    // FLO-1368 has no profile pin requirement, including for an older unpinned recipe.
+    // Current recipes have no profile pin requirement, including for an older unpinned recipe.
     expect(io.out).not.toContain(`${SEAT}: its recorded launch line`);
     expect(io.out).not.toContain(`run \`team restart ${SEAT}\``);
   });
@@ -300,7 +300,7 @@ describe('team check requires no retired feature pin', () => {
     const { root, home, dir } = place();
     seed(dir, { launch_line: CLI });
     const { code, out } = check(root, home);
-    // FLO-1368 no longer requires the false pair; unrelated differences still determine exit1.
+    // Current recipes no longer require the false pair; unrelated differences still determine exit1.
     expect(out).not.toContain(`difference: ${SEAT}: its recorded launch line`);
     expect(out).not.toContain(`  repair: team restart ${SEAT}`);
     expect(code).toBe(1);

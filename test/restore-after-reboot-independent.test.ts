@@ -395,7 +395,7 @@ test('a restored host names every seat again, including a pane whose id is new',
 
 test('a Codex seat on the incompatible-feature dialog is relaunched and no option is chosen', async () => {
   const made = restored();
-  // FLO-1368 leaves lead panes alone; this positive dialog repair targets a worker.
+  // Dialog recovery leaves lead panes alone; this positive repair targets a worker.
   const now = approvedCobble(made, true);
   const dialog = movedCodex();
   const dry = testIo(made.root, { kind: 'owner' });
@@ -404,7 +404,7 @@ test('a Codex seat on the incompatible-feature dialog is relaunched and no optio
   ));
   expect(await runUp(['--dry-run'], dry, planned), `${dry.out}\n${dry.err}`).toBe(0);
   const pins = pinnedWords(profileFor('codex')?.features ?? []);
-  // FLO-1368 relaunches without the retired fixed false pair.
+  // Dialog recovery relaunches without the retired fixed false pair.
   expect(pins).toEqual([]);
   expect(dry.out).toContain('closed without choosing a dialog option; launched again with the coordination flag');
   expect(dry.out).not.toContain('features.mcp_oauth_refresh_coordination=false');
@@ -439,7 +439,7 @@ test('a lead on the Codex settings dialog stays open and status names the dialog
   host.launch.sendKey = (_session, _pane, key) => { inputs.push(key); return true; };
   scriptHost();
   const io = testIo(made.root, { kind: 'owner' });
-  // FLO-1368 protects the lead from automatic dialog repair and leaves every input untouched.
+  // Dialog recovery protects the lead from automatic repair and leaves every input untouched.
   expect(await runUp([], io, host), `${io.out}\n${io.err}`).toBe(0);
   expect(closed).toEqual([]);
   expect(launched).toEqual([]);

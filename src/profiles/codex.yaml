@@ -14,8 +14,8 @@ unattended:
   - -s
   - danger-full-access
   - --no-alt-screen
-# FLO-1190 pinned this feature false after measuring that default on Codex 0.161.0.
-# FLO-1368 removes that historical pin: a fixed override can differ from the shared server.
+# An earlier recipe pinned this feature false after measuring that default on Codex 0.161.0.
+# Current recipes remove that historical pin: a fixed override can differ from the shared server.
 # Old recorded recipes shed that exact pair through currentCodexRecipe before relaunch.
 rules:
   launch_prompt: positional
