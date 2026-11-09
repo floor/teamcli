@@ -16,6 +16,7 @@ import {
   existsSync,
   lstatSync,
   readFileSync,
+  realpathSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -28,9 +29,10 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
-import { readTeams } from '../registry/teams.ts';
+import { getTeam, noteStoppedTeamRunning, readTeams, teamIdOf } from '../registry/teams.ts';
+import { currentRunMemo } from '../run-memo.ts';
 import type { TeamFile } from '../file/types.ts';
-import { paneProcessesAsync, type PaneProcesses } from '../herdr.ts';
+import { paneProcessesAsync, sessionRunningAsync, type PaneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
@@ -2794,13 +2796,46 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             ...(teamFile === undefined ? {} : { teamFile }),
             signal: restoreAbort.signal,
           });
+    // A hosted route whose registry row still says stopped is the same team when the row's id
+    // is the canonical root, that root still realpath's to the row, and the terminal host
+    // reports the row's own session running. The write is the compare-and-set; a failed proof
+    // leaves the row stopped and the refusal below is today's.
+    const noteLiveStopped = async (route: HostedRoute): Promise<boolean> => {
+      let canonical: string;
+      try { canonical = realpathSync(route.root); }
+      catch { return false; }
+      const id = teamIdOf(canonical);
+      const memo = currentRunMemo();
+      memo?.teamsTolerant.delete(home);
+      memo?.teamsStrict.delete(home);
+      let record: ReturnType<typeof getTeam>;
+      try { record = getTeam(home, id); }
+      catch { return false; }
+      if (record === null || record.lifecycle !== 'stopped') return false;
+      let stored: string;
+      try { stored = realpathSync(record.root); }
+      catch { return false; }
+      if (stored !== canonical) return false;
+      const provedSession = record.session;
+      const running = await sessionRunningAsync(provedSession, { signal: restoreAbort.signal });
+      if (running !== true) return false;
+      let wrote = false;
+      try { wrote = noteStoppedTeamRunning(home, id, canonical, provedSession); }
+      catch { return false; }
+      if (!wrote) return false;
+      logLine(`registry ${canonical}: ${id} stopped to running`);
+      return true;
+    };
     restoreSweepRun = (async (): Promise<void> => {
       let pendingRoutes: HostedRoute[] = [];
       for (const route of routes) {
         if (closed) return;
         const entry = routeTeams.get(route.root);
         if (entry === undefined) continue;
-        const lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+        let lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+        if (lifecycleProblem !== null && await noteLiveStopped(route)) {
+          lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+        }
         if (lifecycleProblem !== null) {
           logLine(`restore ${route.root}: ${lifecycleProblem}`);
           continue;
@@ -2870,7 +2905,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           if (closed || restoreAbort.signal.aborted) return;
           const entry = routeTeams.get(route.root);
           if (entry === undefined) continue;
-          const lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+          let lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+          if (lifecycleProblem !== null && await noteLiveStopped(route)) {
+            lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+          }
           if (lifecycleProblem !== null) {
             logLine(`restore ${route.root}: ${lifecycleProblem}`);
             continue;

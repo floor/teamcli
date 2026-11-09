@@ -315,6 +315,39 @@ export function setTeamLifecycle(home: string, id: string, state: TeamLifecycle)
   return upsertTeam(home, id, { lifecycle: state });
 }
 
+/** The one automatic stopped-to-running write. Under the teams lock, the row is read again.
+ *  It is set to running only when it still exists, is still stopped, its stored root still
+ *  realpath's to `root`, its id is still `teamIdOf(root)`, and its session is still the
+ *  session the caller proved. An absent row is left absent. Any other lifecycle, a session
+ *  that changed, or an id that is not the canonical root's, is left as it is. A root that
+ *  will not realpath, or a registry that will not read, writes nothing. */
+export function noteStoppedTeamRunning(home: string, id: string, root: string, session?: string): boolean {
+  return withTeamsLock(home, () => {
+    const memo = currentRunMemo();
+    memo?.teamsTolerant.delete(home);
+    memo?.teamsStrict.delete(home);
+    let record: TeamRecord | null;
+    try {
+      record = getTeam(home, id);
+    } catch {
+      return false;
+    }
+    if (record === null || record.lifecycle !== 'stopped') return false;
+    if (session === undefined || session === '' || record.session !== session) return false;
+    let folder: string;
+    try { folder = realpathSync(record.root); }
+    catch { return false; }
+    if (folder !== root) return false;
+    if (id !== teamIdOf(root)) return false;
+    try {
+      upsertTeam(home, id, { lifecycle: 'running' });
+    } catch {
+      return false;
+    }
+    return true;
+  });
+}
+
 /** The teams a key names, in the order a written address may mean it: the team with that id,
  *  else every team whose own name (the file's `project:`) is that word, else every team whose
  *  session is. A class with any answer is taken whole, so a second team that only shares a
