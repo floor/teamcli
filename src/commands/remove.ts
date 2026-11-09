@@ -12,7 +12,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
-import { leadsOwnTeamAdmits } from '../leads-authority.ts';
+import { abandonGateOf, leadsOwnTeamAdmits } from '../leads-authority.ts';
 import { plainLine } from '../launch/plain.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -440,9 +440,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const abandon = args.flags.has('abandon');
-  // `dir` writes the admission line when the default rule admits this abandon. The map already
-  // admits the placed lead, so this is the run's first line, ahead of the stop and the file edit.
-  // The operator's own line is written below, so this check does not write a second one.
+  // Abandon is the owner's. The leads door refuses it, so a placed lead reaches the refusal
+  // below. The owner does not enter this check.
   const abandonLogs = !(name === team.operator && name !== team.orchestrator);
   if (abandon && !ownerRun && (name === team.orchestrator || leadsOwnTeamAdmits({
     caller,
@@ -451,21 +450,22 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     home: sources.home ?? homedir(),
     root,
     command: 'remove',
+    gate: abandonGateOf('remove', true),
     now: sources.now(),
     ...(abandonLogs ? { dir } : {}),
     teamFile: team,
   }) === null)) {
-    // The owner's dev-mode admission for exactly this gate: a placed lead or
-    // orchestrator continues with the warning; every other caller keeps the refusal.
+    // Abandoning a seat is owner-reserved. Dev mode does not lift it: the warning is not
+    // printed and the refusal below stands, for a lead and for every other caller.
     const lift = devModeOwnerLift(io, {
       command: 'remove',
+      gate: 'abandon-seat',
       refusal: 'only the owner abandons a seat, from a terminal outside herdr',
       ...(sources.home !== undefined ? { home: sources.home } : {}),
       team,
       root,
       dir,
       now: sources.now(),
-      // The placed operator may abandon, under the lead-gates policy.
       admitsOperator: true,
     });
     if (!lift.lifted) {

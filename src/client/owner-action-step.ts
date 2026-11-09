@@ -17,7 +17,7 @@ import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { ownerSubjectProof } from '../dev_mode.ts';
-import { leadsCommandExcluded, leadsOwnTeamAdmits, leadsOwnTeamAtCwd } from '../leads-authority.ts';
+import { abandonGateOf, leadsCommandExcluded, leadsOwnTeamAdmits, leadsOwnTeamAtCwd } from '../leads-authority.ts';
 import { readTeams } from '../registry/teams.ts';
 import type { Io } from '../io.ts';
 import { refuse } from '../output/index.ts';
@@ -115,7 +115,7 @@ export function ownerSeatStep(
   command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config' | 'client' | 'development-mode',
   action: OwnerAction,
   argv: readonly string[],
-  ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean; reason?: string },
+  ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean; reason?: string; gate?: string },
   io: Io,
   sources: OwnerSeatSources,
   targets: readonly string[] = [],
@@ -140,9 +140,11 @@ export function ownerSeatStep(
   }
   // An excluded command stays on the path this door had before the default rule. Forget is
   // one of them: the charter above already judged the named targets, and the rule must not
-  // look a team up for it. `--request` records the card and writes nothing, even when the
-  // default rule would have admitted the run.
-  const leads = ask.request || leadsCommandExcluded(command) ? null : leadsAdmissionAt(io, home, command, sources, targets, now);
+  // look a team up for it. Abandon is the same: the reserved table's gate, when the caller
+  // names one, is not this door's to open. `--request` records the card and writes nothing,
+  // even when the default rule would have admitted the run.
+  const gate = 'gate' in ask ? ask.gate : abandonGateOf(command, argv.includes('--abandon'));
+  const leads = ask.request || leadsCommandExcluded(command, gate) ? null : leadsAdmissionAt(io, home, command, sources, targets, now);
   if (leads !== null) {
     return { kind: 'admitted', admission: { ok: true, via: 'leads', signer: leads.role } };
   }

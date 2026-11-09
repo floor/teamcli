@@ -724,7 +724,7 @@ function executeWrite(
     // The audit and the team file's `last_valid` copy wait for the write below: this gate answers
     // before the request is validated, and a refused or dry run writes neither.
     const lift = file === undefined
-      ? devModeOwnerLiftAtCwd(io, { command: 'settings', refusal: message, home, now, audit: 'later' })
+      ? devModeOwnerLiftAtCwd(io, { command: 'settings', gate: verb, refusal: message, home, now, audit: 'later' })
       : null;
     if (lift === null || !lift.lifted) {
       if (json) {

@@ -393,6 +393,7 @@ function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb:
   const message = `only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is ${describeCaller(caller)}`;
   const lift = devModeOwnerLiftAtCwd(io, {
     command: 'daemon',
+    gate: verb ?? 'daemon',
     refusal: message,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     ...(sources.now !== undefined ? { now: sources.now() } : {}),
