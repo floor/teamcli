@@ -19,6 +19,7 @@ import { runImport } from '../src/commands/import.ts';
 import { runForget } from '../src/commands/forget.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch } from '../src/commands/up.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { LEADS_AUTHORITY_EXCLUDED, LEADS_DOOR_COMMANDS, leadsCommandExcluded, orchestratorSeatStaysOwner, policyNeedsOwner } from '../src/leads-authority.ts';
@@ -380,14 +381,22 @@ function grantScopedToDown(home: string, root: string): void {
   });
 }
 
-test('a grant does not narrow the default: lead runs up past a grant scoped to down', async () => {
+test('a grant does not narrow the default: lead runs status past a grant scoped to down', async () => {
   const { home, root } = repo();
   grantScopedToDown(home, root);
   const io = testIo(root, seat('lead'));
-  const code = await runUp([], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
-  expect(code).toBe(1);
-  expect(io.err).toContain('no way to reach herdr');
+  const sources: StatusSources = {
+    live: () => null,
+    branch: () => null,
+    standing: () => ({ kind: 'none' }),
+    now: () => NOW,
+    home,
+  };
+  const code = await runStatus([], io, sources);
+  expect(code).toBe(2);
+  expect(io.err).toContain('herdr doesn\'t answer');
   expect(io.err.includes('deny')).toBe(false);
+  expect(io.err.includes('not yours to read')).toBe(false);
 });
 
 test('owner-asks: a grant scoped to down refuses up', async () => {
@@ -554,7 +563,7 @@ seats:
   expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toContain('add [lead] warning: owner gate; admitted as lead');
 });
 
-test('a placed lead abandons an ordinary seat with an unknown screen: closed, nothing typed, audit line', async () => {
+test('a placed lead is refused when abandoning an ordinary seat, and the owner still closes an unknown screen', async () => {
   const { home, root } = repo();
   const text = `format: 1
 project: acme
@@ -615,16 +624,26 @@ seats:
       now: () => NOW,
     },
   };
+  const before = readFileSync(file, 'utf8');
   const io = testIo(root, seat('lead'));
-  const code = await runRemove(['worker', '--abandon'], io, sources);
-  expect(code).toBe(0);
+  const code = await runRemove(['worker', '--abandon', '--json'], io, sources);
+  expect(code, `${io.out}\n${io.err}`).toBe(1);
+  expect(io.out).toContain('remove.abandon');
+  expect(io.out).toContain('only the owner abandons a seat, from a terminal outside herdr');
   expect(typed).toEqual([]);
-  expect(closed).toEqual(['w3']);
-  expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toContain('remove [lead] warning: owner gate; admitted as lead');
+  expect(closed).toEqual([]);
+  expect(readFileSync(file, 'utf8')).toBe(before);
   const orchestrator = testIo(root, seat('lead'));
   const refused = await runRemove(['lead', '--abandon'], orchestrator, sources);
   expect(refused).toBe(1);
   expect(orchestrator.err).toContain('only the owner abandons');
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  const owner = testIo(root, { kind: 'owner' });
+  const passed = await runRemove(['worker', '--abandon'], owner, sources);
+  expect(passed, `${owner.out}\n${owner.err}`).toBe(0);
+  expect(typed).toEqual([]);
+  expect(closed).toEqual(['w3']);
+  expect(readFileSync(file, 'utf8').includes('name: worker')).toBe(false);
 });
 
 test('flag gate: add --session of another team stays the owner\'s', async () => {
@@ -707,7 +726,7 @@ test('a placed lead\'s project-level policy set is not a default-rule admission'
 });
 
 test('the owner-seat door and the exclusion list name the same acts', () => {
-  expect(Object.keys(LEADS_DOOR_COMMANDS).sort()).toEqual(['approvals', 'import']);
+  expect(Object.keys(LEADS_DOOR_COMMANDS).sort()).toEqual(['approvals', 'import', 'up']);
   for (const [door, gate] of Object.entries(LEADS_DOOR_COMMANDS)) {
     expect(LEADS_AUTHORITY_EXCLUDED.has(gate)).toBe(true);
     expect(leadsCommandExcluded(door)).toBe(true);

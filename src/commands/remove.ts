@@ -1,18 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, clientRosterText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { recordSeatDigestOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
-import { charterGate } from '../charter/check.ts';
+import { anotherPaneRefusal, callerLabel, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
-import { leadsOwnTeamAdmits } from '../leads-authority.ts';
+import { abandonGateOf, leadsOwnTeamAdmits } from '../leads-authority.ts';
 import { plainLine } from '../launch/plain.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -218,11 +218,19 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
   // order.
   const charter = clientRun !== null ? { kind: 'absent' as const } : charterGate(sources.home ?? homedir(), { operation: 'remove', cwd: io.cwd }, sources.ownerSeatStore);
-  // A charter block binds the owner too, until they widen it with team setup --edit.
-  if (charter.kind === 'block') {
+  // A charter block refuses a seat. The owner goes through with one warning and an audit line.
+  if (charter.kind === 'block' && !isOwner(walkCaller(io))) {
     refuse(io, json, 'remove', { id: 'remove.charter', message: charter.message, repair: null });
     // exit: remove.charter
     return 1;
+  }
+  if (charter.kind === 'block') {
+    passCharterOwner(io, charter.message, {
+      dir: join(io.cwd, '.agents'),
+      command: 'remove',
+      caller: callerLabel(walkCaller(io)),
+      now: sources.now(),
+    });
   }
   const charterAdmitted = charter.kind === 'admit';
   const detached = clientRun !== null || charterAdmitted ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
@@ -440,9 +448,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const abandon = args.flags.has('abandon');
-  // `dir` writes the admission line when the default rule admits this abandon. The map already
-  // admits the placed lead, so this is the run's first line, ahead of the stop and the file edit.
-  // The operator's own line is written below, so this check does not write a second one.
+  // Abandon is the owner's. The leads door refuses it, so a placed lead reaches the refusal
+  // below. The owner does not enter this check.
   const abandonLogs = !(name === team.operator && name !== team.orchestrator);
   if (abandon && !ownerRun && (name === team.orchestrator || leadsOwnTeamAdmits({
     caller,
@@ -451,21 +458,22 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     home: sources.home ?? homedir(),
     root,
     command: 'remove',
+    gate: abandonGateOf('remove', true),
     now: sources.now(),
     ...(abandonLogs ? { dir } : {}),
     teamFile: team,
   }) === null)) {
-    // The owner's dev-mode admission for exactly this gate: a placed lead or
-    // orchestrator continues with the warning; every other caller keeps the refusal.
+    // Abandoning a seat is owner-reserved. Dev mode does not lift it: the warning is not
+    // printed and the refusal below stands, for a lead and for every other caller.
     const lift = devModeOwnerLift(io, {
       command: 'remove',
+      gate: 'abandon-seat',
       refusal: 'only the owner abandons a seat, from a terminal outside herdr',
       ...(sources.home !== undefined ? { home: sources.home } : {}),
       team,
       root,
       dir,
       now: sources.now(),
-      // The placed operator may abandon, under the lead-gates policy.
       admitsOperator: true,
     });
     if (!lift.lifted) {

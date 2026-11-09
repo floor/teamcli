@@ -11,6 +11,7 @@ import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
+import { placedCallerTeam } from '../registry/binding.ts';
 import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
@@ -384,6 +385,8 @@ export type DaemonSendPrincipal = {
   /** The roots the daemon hosted when the principal was established. */
   roots: readonly string[];
   recheck(): { ok: true } | { ok: false; why: string };
+  /** A stuck-child notice addresses the loaded team's lead and nobody else. Absent on a reminder. */
+  notice?: 'stuck-child';
 };
 
 export type SendHost = {
@@ -777,7 +780,10 @@ function needsTeam(spec: string): string {
  * no team to resolve in and is refused with `needsTeam`'s sentence.
  */
 function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
-  const loaded = readTeamConfig(io.cwd, { home: host.home });
+  // The pane places the sender before the folder does. A seat whose shell sits in another
+  // team's bound root is still that seat; an unnamed pane leaves the folder to decide.
+  const placed = placedCallerTeam(host.home, io);
+  const loaded = readTeamConfig(placed === null ? io.cwd : placed.root, { home: host.home });
   if (!loaded.ok) {
     if (noTeamFolder(loaded.errors)) {
       const parsed = parseSpec(seatName);
@@ -1280,6 +1286,22 @@ export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Pro
   }
 }
 
+/** The team session the rest of this send will judge the caller in, read once from the folder
+ *  the shell is in. `default` is the sessionless key `judgeCallerIn` already uses. A folder
+ *  that is not a team leaves the session unset, and the gate keeps the placement it has today. */
+function sendTeamSession(io: Io, home: string): string | undefined {
+  let loaded: ReturnType<typeof readTeamConfig>;
+  try {
+    loaded = readTeamConfig(io.cwd, { home });
+  } catch {
+    return undefined;
+  }
+  if (!loaded.ok) return undefined;
+  const session = loaded.team.session;
+  if (session === '' || session === 'default') return undefined;
+  return session;
+}
+
 /** The folder the charter judges for this send: the recipient team's root, or this checkout for a
  *  read that names no recipient. A spec that names a team the registry cannot place is no
  *  admission. */
@@ -1333,8 +1355,14 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
   const sendTargets = sendCharterTargets(host.home, seatName, args, io, host);
   let seatApproved = false;
+  // The default rule lifts the owner gate and leaves the sender as the seat. An owner-seat
+  // signature still admits the run as the owner, because the owner seat signed it.
+  let leadsLift = false;
+  // A registry record that is not running never becomes the sender, including through a later
+  // always-rule lift that would otherwise admit the run as the owner.
+  let recordNotRunning = false;
   if (internalCallerOf(host) === null) {
-    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources, sendTargets);
+    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources, sendTargets, sendTeamSession(io, host.home));
     if (step.kind === 'requested') {
       // exit: send.approval-requested
       return 0;
@@ -1343,11 +1371,51 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       // exit: send.approval-refused
       return 1;
     }
-    seatApproved = step.kind === 'admitted';
+    // The default rule lifts the gate. Attribution stays the seat: a record that is not running
+    // is refused, and a running record or a missing one is judged as that seat.
+    if (step.kind === 'admitted') {
+      seatApproved = true;
+      if (step.admission.via === 'leads') {
+        leadsLift = true;
+        const seated = callerOf(io);
+        if (seated.kind === 'seat') {
+          // A seat caller may carry no session. The team file's session is the same one the
+          // record is filed under. With neither, the not-running check cannot be skipped:
+          // skipping it would admit the seat as the owner.
+          let session = seated.session !== undefined && seated.session !== '' ? seated.session : null;
+          if (session === null) {
+            try {
+              const loaded = readTeamConfig(io.cwd, { home: host.home });
+              if (loaded.ok && loaded.team.session !== '') session = loaded.team.session;
+            } catch {
+              session = null;
+            }
+          }
+          if (session === null) {
+            let lifecycle: string | null = null;
+            for (const agent of readAgents(host.home)) {
+              if (agent.lifecycle === 'retired' || agent.reach.seat !== seated.name || agent.lifecycle === 'running') continue;
+              lifecycle = agent.lifecycle;
+              break;
+            }
+            const why = lifecycle === null
+              ? `the registry's record for seat ${seated.name} is not running: only a running seat acts as its own record`
+              : `the registry's record for seat ${seated.name} is ${lifecycle}, not running: only a running seat acts as its own record`;
+            return refuse(io, null, seated.name, why, host, report);
+          }
+          const held = recordFor(host.home, session, seated.name);
+          if (held !== null && held.lifecycle !== 'running') {
+            seatApproved = false;
+            leadsLift = false;
+            recordNotRunning = true;
+          }
+        }
+      }
+    }
   }
   const preCaller = internalCallerOf(host) ?? (seatApproved ? undefined : walkCaller(io));
   if (
-    internalCallerOf(host) === null && !seatApproved && preCaller !== undefined && !isOwner(preCaller)
+    internalCallerOf(host) === null && !seatApproved && !recordNotRunning && preCaller !== undefined && !isOwner(preCaller)
     && !args.flags.has('list') && args.values.confirm === undefined && args.values.record === undefined
   ) {
     seatApproved = ownerSeatRuleCovers(io.cwd, sendTargets) && ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
@@ -1414,7 +1482,9 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   const { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit } = pro;
   // An owner-seat answer admits this one send the way the owner would. The caller's own identity
   // stays on the log line; the admission is the owner's, because the owner seat signed it.
-  const acting: Caller = seatApproved ? { kind: 'owner' } : caller;
+  // The default rule lifts the same gate and leaves the sender as the seat: the header names
+  // the seat, and the id rides the seat's own record, or the file's seat when it has none.
+  const acting: Caller = seatApproved && !leadsLift ? { kind: 'owner' } : caller;
   // The line's own team, for every reader outside this one: the history the receiving team keeps
   // must say where its sender stood, not leave a shared seat name to the local roster.
   report.from_team = fileTeamId;
@@ -6941,6 +7011,24 @@ function daemonAdmissionOf(
   const seat = target === null ? seatName : target.agent.reach.seat;
   if (seat === 'owner') {
     return { ok: false, why: 'owner: the daemon addresses a declared seat of a team it hosts, never the owner' };
+  }
+  // A stuck-child notice is one message to the loaded team's lead. The recipient list still has
+  // to name that lead, so the principal cannot be reused for any other seat. The lead is who the
+  // notice is for, including when that seat is a person's: the seat's own delivery order decides
+  // the transport, and no other seat is admitted by this notice.
+  if (daemon.principal.notice === 'stuck-child') {
+    if (team.orchestrator === '' || seat !== team.orchestrator) {
+      return { ok: false, why: `${seat}: a stuck-child notice goes to this team's lead and to nobody else` };
+    }
+    const addressed = daemon.principal.recipients.some((entry) => samePath(entry.root, daemon.root) && entry.session === team.session && entry.seat === seat);
+    if (!addressed) {
+      return { ok: false, why: `${seat}: a stuck-child notice names the lead in the checkout the daemon hosted` };
+    }
+    const declared = team.seats.find((entry) => entry.name === seat);
+    if (declared === undefined) {
+      return { ok: false, why: `${seat}: it is not a declared seat; the daemon addresses a seat of a team it hosts only` };
+    }
+    return { ok: true, rule: "the daemon's stuck-child notice", sender: 'daemon' };
   }
   // The recipient list the due instant carries is the whole of what this principal may address:
   // a declared seat that is not on it was not due, and is refused before anything is staged.

@@ -581,8 +581,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     : null;
   let liftAudit: (() => void) | null = null;
   if (mayRun !== null) {
+    const asked = args.rest[0] ?? '';
+    const declared = team.seats.some((seat) => seat.name === asked);
+    // A name the live file does not declare, and not a `--like` copy, is putting a seat back.
+    // That is owner-reserved. A declared seat and a `--like` copy stay the development check.
+    const gate = !temporary && !declared && args.values.like === undefined ? 'restore-seat' : 'caller';
     const lift = devModeOwnerLift(io, {
       command: 'add',
+      gate,
       refusal: mayRun,
       home: sources.home,
       team,

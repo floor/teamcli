@@ -24,6 +24,8 @@ export type DaemonDirectContext = {
   reminder: string;
   due: string;
   recipients: readonly DaemonRecipient[];
+  /** Set only for the stuck-child notice. Admission then admits the loaded team's lead alone. */
+  notice?: 'stuck-child';
 };
 
 /** One reminder delivery: the recipient's checkout, the declared seat, and the body the reminder
@@ -76,6 +78,7 @@ export async function sendDaemonDirect(
     due: context.due,
     recipients: context.recipients,
     roots: first.roots,
+    ...(context.notice === undefined ? {} : { notice: context.notice }),
     recheck: () => {
       const again = verify(host, identity);
       return again.ok ? { ok: true } : { ok: false, why: again.why };

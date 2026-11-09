@@ -18,9 +18,10 @@
 // `planRevocation`/`writeRevocation` own that, and a dry run refuses exactly what a write refuses.
 
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { AuthorityEditOptions, AuthorityEditResult } from '../authority-edit.ts';
-import { describeCaller, isOwner, walkCaller } from '../caller.ts';
-import { charterGate } from '../charter/check.ts';
+import { callerLabel, describeCaller, isOwner, walkCaller } from '../caller.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -78,12 +79,15 @@ export function runStandingGrant(rawIo: Io, edit: StandingGrantEdit, options: Au
     else io.stderr(`team grant: ${gate.message}\n`);
     return 'refused';
   }
+  if (gate.kind === 'block') {
+    passCharterOwner(io, gate.message, { dir: join(io.cwd, '.agents'), command: 'grant', caller: callerLabel(caller) });
+  }
   // A charter never admits a grant. A covered folder is not the owner's signature, and an
   // entity-wide or cross-team grant has no one folder the charter can cover.
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
-    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', refusal: msg, home: options.home ?? homedir() });
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', gate: 'grant', refusal: msg, home: options.home ?? homedir() });
     if (lift === null || !lift.lifted) {
       if (json) {
         writeJsonError(rawIo, 'grant.refused', plainText(msg), 'the owner runs `team grant` from a terminal outside herdr', 1, 'owner-only');
@@ -206,12 +210,15 @@ export function runSendGrant(rawIo: Io, edit: SendGrantEdit, options: AuthorityE
     else io.stderr(`team grant: ${gate.message}\n`);
     return 'refused';
   }
+  if (gate.kind === 'block') {
+    passCharterOwner(io, gate.message, { dir: join(io.cwd, '.agents'), command: 'grant', caller: callerLabel(caller) });
+  }
   // A charter never admits a grant. A covered folder is not the owner's signature, and an
   // entity-wide or cross-team grant has no one folder the charter can cover.
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
-    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', refusal: msg, home: options.home ?? homedir() });
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', gate: 'grant', refusal: msg, home: options.home ?? homedir() });
     if (lift === null || !lift.lifted) {
       if (json) {
         writeJsonError(rawIo, 'grant.refused', plainText(msg), 'the owner runs `team grant --send` from a terminal outside herdr', 1, 'owner-only');
@@ -297,7 +304,7 @@ export function runStandingRevoke(rawIo: Io, edit: StandingRevokeEdit, options: 
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
-    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'revoke', refusal: msg, home: options.home ?? homedir() });
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'revoke', gate: 'revoke', refusal: msg, home: options.home ?? homedir() });
     if (lift === null || !lift.lifted) {
       if (json) {
         writeJsonError(rawIo, 'revoke.refused', plainText(msg), 'the owner runs `team revoke` from a terminal outside herdr', 1, 'owner-only');

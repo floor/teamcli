@@ -6,9 +6,9 @@
 
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { Args } from './args.ts';
-import { describeCaller, detachedRefusal, isOwner, walkCaller } from './caller.ts';
+import { callerLabel, describeCaller, detachedRefusal, isOwner, walkCaller } from './caller.ts';
 import { devModeOwnerLiftAtCwd } from './dev_mode.ts';
 import {
   CLIENT_GRANT_ID_PATTERN,
@@ -36,7 +36,7 @@ import { clientPaneGuard } from './client/pane-guard.ts';
 import { verifyClientGrantIssue } from './client/verify.ts';
 import { expiresArgument, expiresField } from './client/duration-policy.ts';
 import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, ownerSeatHelperPath, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
-import { charterGate } from './charter/check.ts';
+import { charterGate, passCharterOwner } from './charter/check.ts';
 import { createRequestLink } from './client/request-link.ts';
 import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, approvalRuleFolders, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, grantPrompt, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingGrantFolders, pendingSummary, presentToOwnerSeat, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
 import { ownerAdmitsRecord, type OwnerRecordAdmission, type OwnerSeatSources } from './client/owner-action-step.ts';
@@ -99,7 +99,7 @@ export function clientOwnerAllows(command: 'grant' | 'revoke', rawIo: Io, io: Io
   // The owner's dev-mode admission for exactly this gate. The home is the
   // one the central resolver reads a governing policy or the machine record from; the command
   // always names it, so a herdr caller is not refused before the record can be read.
-  const lift = devModeOwnerLiftAtCwd(rawIo, { command, refusal: message, home });
+  const lift = devModeOwnerLiftAtCwd(rawIo, { command, gate: command, refusal: message, home });
   if (lift !== null && lift.lifted) {
     io.stderr(`${lift.warning}\n`);
     return true;
@@ -531,6 +531,9 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
   // `--request` records the card and returns.
   const gate = charterGate(home, { operation: 'grant', cwd: io.cwd, path: up?.root ?? io.cwd }, approval.ownerSeatStore);
   if (gate.kind === 'block' && !isOwner(walkCaller(io))) return refuse(gate.message);
+  if (gate.kind === 'block') {
+    passCharterOwner(io, gate.message, { dir: join(up?.root ?? io.cwd, '.agents'), command: 'grant', caller: callerLabel(walkCaller(io)), now });
+  }
   if (params.allow_grant && gate.kind === 'admit') return refuse('a grant cannot carry the right to grant');
   // A standing rule the owner approved ('always') covers a request fully inside it: no new ask.
   if (grantEmissionOf(home, params.entity, now).mode === 'conversational') {

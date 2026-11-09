@@ -14,6 +14,7 @@ import { admitGeneral } from '../client/general-grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { teamBinding } from '../registry/binding.ts';
 import {
+  callerLabel,
   callerOf,
   describeCaller,
   detachedRefusal,
@@ -23,7 +24,7 @@ import {
   type Caller,
   type SeatStanding,
 } from '../caller.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
@@ -219,6 +220,15 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     // exit: config.charter
     return 1;
   }
+  // The owner is never refused. One warning names the charter and the repair, and the log keeps it.
+  if (gate.kind === 'block' && isOwner(callerOf(rawIo))) {
+    passCharterOwner(io, gate.message, {
+      dir: join(root, '.agents'),
+      command: 'config',
+      caller: callerLabel(callerOf(rawIo)),
+      ...(sources.now !== undefined ? { now: sources.now() } : {}),
+    });
+  }
   let liftAudit: (() => void) | null = null;
   if (gate.kind !== 'admit' && !seatApproved) {
     const caller = callerOf(rawIo);
@@ -242,6 +252,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       // before the change is validated, and a refused or unchanged run writes no record line.
       const lift = devModeOwnerLiftAtCwd(rawIo, {
         command: 'config',
+        gate: path[0] === 'trust' ? 'trust' : 'record',
         refusal: message,
         home,
         audit: 'later',

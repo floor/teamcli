@@ -4,7 +4,7 @@ import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner, type C
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findRoot, loadTeamText, TEAM_FILE } from '../file/load.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import { admitOwnerAction, createOwnerActionRequest, OWNER_ACTION_TTL_MS } from '../client/owner-action.ts';
 import { charterTargetOf, headOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
@@ -322,10 +322,18 @@ export async function runTeamImport(
   // A dry run only reads. A blocking charter stops a real migrate before any card is written.
   if (mode === 'migrate' && !dryRun) {
     const gate = charterGate(home, { operation: 'migrate', cwd: io.cwd, path: charterTargetOf(io.cwd) }, sources.ownerSeatStore);
-    // A charter block binds the owner too, until they widen it with team setup --edit.
-    if (gate.kind === 'block') {
+    // A charter block refuses a seat. The owner goes through with one warning and an audit line.
+    if (gate.kind === 'block' && !isOwner(caller)) {
       refuse(io, json, mode, { id: `${mode}.not-owner`, message: gate.message, repair: null });
       return 'not-owner';
+    }
+    if (gate.kind === 'block') {
+      passCharterOwner(io, gate.message, {
+        dir: join(findRoot(io.cwd) ?? io.cwd, '.agents'),
+        command: mode,
+        caller: callerLabel(caller),
+        now: now(),
+      });
     }
     charterAdmitted = gate.kind === 'admit' && !isOwner(caller);
   }

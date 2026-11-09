@@ -1764,6 +1764,7 @@ async function runUpAll(
     if (walked.kind !== 'owner') {
       let lift = devModeOwnerLiftAtCwd(io, {
         command: 'up',
+        gate: 'all',
         refusal,
         home,
         now,
@@ -1786,6 +1787,7 @@ async function runUpAll(
             if (!loaded.ok) continue;
             const candidate = devModeOwnerLift(io, {
               command: 'up',
+              gate: 'all',
               refusal,
               home,
               team: loaded.team,

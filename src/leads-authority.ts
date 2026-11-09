@@ -4,10 +4,10 @@
 // owner gates. The proof is the target team's own file and the pane its state records: a lead
 // of another team proves nothing. Dev mode is a separate switch and is not read here.
 //
-// The exclusion list is the one place a command stays the owner's. The three decided rows sit
-// beside it: the orchestrator seat itself stays the owner's, `team forget` of the lead's own
-// team stays the owner's, and `down --abandon` of the orchestrator seat stays the owner's.
-// The operator seat, and `down --abandon` of an ordinary seat or the operator seat, are admitted.
+// The exclusion list is the one place a command stays the owner's. The orchestrator seat
+// itself stays the owner's, and `team forget` of the lead's own team stays the owner's.
+// Abandon is the owner's on every door: `remove --abandon` and `down --abandon`, the two
+// rows the reserved table names. The operator seat stays the lead's.
 
 import { dirname } from 'node:path';
 import { callerOf, callerVerdict, logTag, standingOf, type Caller, type SeatStanding } from './caller.ts';
@@ -15,6 +15,7 @@ import { readTeamConfig } from './file/team-config.ts';
 import type { TeamFile } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
+import { OWNER_RESERVED_GATES } from './dev_mode.ts';
 import { loadAndResolvePolicyChain } from './policy/sources.ts';
 import { getPolicySpec, type LeadsAuthorityValue } from './policy/types.ts';
 
@@ -59,12 +60,26 @@ export const LEADS_AUTHORITY_EXCLUDED: ReadonlySet<string> = new Set([
 export const LEADS_DOOR_COMMANDS: Readonly<Record<string, string>> = {
   approvals: 'approvals:revoke',
   import: 'migrate',
+  // `team up` is the start act the exclusion list names. The door says `up`.
+  up: 'start',
 };
 
-export function leadsCommandExcluded(command: string): boolean {
+/** The reserved table's abandon rows. A placed lead is not admitted to either. */
+const LEADS_ABANDON_GATES = OWNER_RESERVED_GATES.filter(
+  (row) => row.gate === 'abandon-seat' || row.gate === 'abandon-team',
+);
+
+/** The reserved table's abandon gate for this command, when the line carries `--abandon`. */
+export function abandonGateOf(command: string, abandon: boolean): string | undefined {
+  if (!abandon) return undefined;
+  return LEADS_ABANDON_GATES.find((row) => row.command === command)?.gate;
+}
+
+export function leadsCommandExcluded(command: string, gate?: string): boolean {
   if (LEADS_AUTHORITY_EXCLUDED.has(command)) return true;
-  const gate = LEADS_DOOR_COMMANDS[command];
-  return gate !== undefined && LEADS_AUTHORITY_EXCLUDED.has(gate);
+  const mapped = LEADS_DOOR_COMMANDS[command];
+  if (mapped !== undefined && LEADS_AUTHORITY_EXCLUDED.has(mapped)) return true;
+  return gate !== undefined && LEADS_ABANDON_GATES.some((row) => row.command === command && row.gate === gate);
 }
 
 /** Whether setting this policy key changes who may act, so only the owner may set it.
@@ -131,11 +146,13 @@ export function leadsOwnTeamAdmits(options: {
   home: string;
   root: string;
   command: string;
+  /** Set on an abandon. Those two reserved rows stay the owner's. */
+  gate?: string;
   now: Date;
   dir?: string;
   teamFile?: TeamFile;
 }): LeadsAdmission | null {
-  if (leadsCommandExcluded(options.command)) return null;
+  if (leadsCommandExcluded(options.command, options.gate)) return null;
   if (leadsAuthorityOf(options.home, options.root, options.now, options.teamFile) !== 'own-team') return null;
   const role = placedOwnTeamRole(options.caller, options.team, options.at);
   if (role === null) return null;
