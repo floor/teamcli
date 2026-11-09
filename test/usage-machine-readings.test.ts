@@ -12,6 +12,7 @@ import { figuresOf } from '../src/profiles/quota.ts';
 import { quotaFor } from '../src/profiles/profile.ts';
 import { statusRow } from '../src/watch/screen.ts';
 import { testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { approvalOf } from '../src/approve/approval.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
@@ -49,10 +50,12 @@ seats:
     launch: grok --always-approve
 `);
 });
-afterEach(() => { if (process.platform === 'darwin') execFileSync('/usr/bin/trash', [home]); });
+// Fixture trash can outlast Bun's five-second hook budget; keep cleanup mandatory and bounded.
+afterEach(() => { if (process.platform === 'darwin') execFileSync('/usr/bin/trash', [home]); }, 15_000);
 
 function sources(): WatchSources {
-  return {
+  // Daemon-only watch persists readings in the hosted pass; a hand-run watch only reports status.
+  return withHostedLoop({
     home,
     live: () => ({ running: true, workspaces: [{ id: 'fixture-workspace', label: 'lead' }],
       agents: [{ name: 'lead', agent: 'grok', pane: 'fixture-pane', workspace: 'fixture-workspace', status: 'idle', cwd: null }],
@@ -62,7 +65,7 @@ function sources(): WatchSources {
     status: () => 'idle', foreground: () => ['grok'], typeText: () => false, pressEnter: () => false,
     sleep: async () => {}, notify: () => {}, now: () => new Date(NOW), wait: async () => false,
     alive: () => false, pid: 4242,
-  };
+  });
 }
 
 test('a watch persists a Grok zero without team budgets; usage counts machine subscriptions', async () => {
