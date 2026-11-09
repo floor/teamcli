@@ -133,7 +133,7 @@ describe('a hand-run team watch only prints the daemon view', () => {
 
   test('a record already on disk is left as it stands', async () => {
     place();
-    const held = { pid: 777, heartbeat: NOW.toISOString(), pane: 'w8:p1', workspace: 'w8' };
+    const held = { pid: 777, heartbeat: NOW.toISOString(), pane: 'pane-watch-ws', workspace: 'ws-watch' };
     record(held);
     const creates: string[] = [];
     const io = testIo(root, { kind: 'owner' });
@@ -154,7 +154,7 @@ describe('a hand-run team watch only prints the daemon view', () => {
   test('a record of any age is left as it stands', async () => {
     place();
     for (const age of [0, 2 * 120, 2 * 120 + 1]) {
-      const held = { pane: 'w8:p1', workspace: 'w8', heartbeat: new Date(NOW.getTime() - age * 1000).toISOString() };
+      const held = { pane: 'pane-watch-ws', workspace: 'ws-watch', heartbeat: new Date(NOW.getTime() - age * 1000).toISOString() };
       record(held);
       const io = testIo(root, { kind: 'owner' });
       const code = await runWatch(FILE, io, watchSources());

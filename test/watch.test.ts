@@ -2380,6 +2380,11 @@ describe('team watch', () => {
     // does not ring again.
     const body = 'the message body itself';
     dropWaiting('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
+    const operator = scene.agents.find((one) => one.name === 'claude-operator-acme');
+    if (!operator) throw new Error('the synthetic live scene has no operator');
+    scene.screens['pane-ring'] = scene.screens[operator.pane] ?? idle;
+    delete scene.screens[operator.pane];
+    operator.pane = 'pane-ring';
     const io = testIo(dir, { kind: 'owner' });
     let read = false;
     const code = await runWatch(['--file', file], io, sources(2, {
@@ -2396,8 +2401,8 @@ describe('team watch', () => {
     }));
     expect(code).toBe(0);
     expect(typed).toEqual([
-      `w0:p1 ${ringFor('claude-operator-acme')}`,
-      'w0:p1 <enter>',
+      `pane-ring ${ringFor('claude-operator-acme')}`,
+      'pane-ring <enter>',
     ]);
     expect(io.out).toContain('was read on the wake');
     expect(io.out).not.toContain('ring not typed');
