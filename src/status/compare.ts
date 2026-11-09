@@ -22,6 +22,7 @@ import type { SeatState, SessionState } from '../state.ts';
 import { pluralCount, type DifferenceWho } from '../output/text.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { watchLabel } from '../watch/pane.ts';
+import { outOfTokensState } from '../quota/token-fallback.ts';
 import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, recordSignedModel, runningModel, seatModel, wrapperSeat } from './statusline.ts';
 
@@ -468,12 +469,17 @@ export function compare(
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
       const quotaOut = quiet && switchReason === undefined ? quotaOutText(screen) : null;
-      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : switchReason !== undefined ? ` (${switchReason})` : '';
+      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : switchReason !== undefined && switchReason !== 'out of tokens' ? ` (${switchReason})` : '';
+      // Out of tokens replaces herdr's idle or done. A profile wall that already named a reset
+      // keeps its own quota word.
+      const tokens = outOfTokensState(screen);
       const stateText = blockedUnsent
         ? `blocked: unsent input${seat.parked ? ', parked' : ''}`
-        : quotaOut !== null
-          ? `${quotaOut}${seat.parked ? ', parked' : ''}`
-          : `${word}${mark}${seat.parked ? ', parked' : ''}`;
+        : tokens !== null
+          ? `${tokens}${seat.parked ? ', parked' : ''}`
+          : quotaOut !== null
+            ? `${quotaOut}${seat.parked ? ', parked' : ''}`
+            : `${word}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
         ...idField,
@@ -705,10 +711,11 @@ export function compare(
       const unread = quiet && tempScreen.kind === 'unknown';
       // The pool a temporary seat spends is the like-seat's, as its cli and model string are.
       const quotaOut = quiet ? quotaOutText(tempScreen) : null;
+      const tokens = outOfTokensState(tempScreen);
       rows.push({
         name,
         ...idField,
-        state: `${quotaOut ?? `${tempWord}${unread ? ' (screen not recognised)' : ''}`}, temporary`,
+        state: `${tokens ?? quotaOut ?? `${tempWord}${unread ? ' (screen not recognised)' : ''}`}, temporary`,
         model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),

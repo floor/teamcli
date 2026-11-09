@@ -50,6 +50,8 @@ export type Rule = {
    *  step to the screen's last non-blank line: every row the block draws, the blanks it draws
    *  and the run of rows it fills with its own text. The rule's only key. */
   block?: BlockStep[];
+  /** Set when an override added this rule. A shipped rule leaves it unset. */
+  added?: true;
 };
 
 /** The versions a captured record was taken on, as the profile's `tested:` range reads. */

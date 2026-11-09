@@ -201,7 +201,11 @@ describe('the marks', () => {
 
   test('a mark is the operator\'s to act on', () => {
     const result = pass({ team: team(OPENAI), watch: team(OPENAI).watch, state: emptySession(), live: live(), machine: fine, now: NOW, memory: newMemory(), approval: [], outcomes: week(NOW, 92, RESET) });
-    expect(budgetReports(result).every((report) => report.to === 'operator')).toBe(true);
+    const reports = budgetReports(result);
+    const marks = reports.filter((report) => report.key.startsWith('budget:mark:'));
+    expect(marks.length).toBeGreaterThan(0);
+    expect(marks.every((report) => report.to === 'operator')).toBe(true);
+    expect(reports.filter((report) => report.key === 'budget:token-warn:openai').map((report) => report.to)).toEqual(['orchestrator']);
   });
 });
 
@@ -302,6 +306,7 @@ describe('the source fallback is per window', () => {
       'openai weekly is 95% used, past the 50% mark (operator)',
       'openai weekly is 95% used, past the 75% mark (operator)',
       'openai weekly is 95% used, past the 90% mark (operator)',
+      'openai weekly quota is 5% left, below the 20% warning (orchestrator)',
       'openai weekly left 5%, inside its 20% reserve (owner)',
     ]);
   });
@@ -333,6 +338,7 @@ describe('the source fallback is per window', () => {
       'openai weekly is 95% used, past the 50% mark (operator)',
       'openai weekly is 95% used, past the 75% mark (operator)',
       'openai weekly is 95% used, past the 90% mark (operator)',
+      'openai weekly quota is 5% left, below the 20% warning (orchestrator)',
       'openai weekly left 5%, inside its 20% reserve (owner)',
     ]);
     const bare = (one: Seen) => Object.fromEntries(Object.entries(one).filter(([field]) => field !== 'was'));

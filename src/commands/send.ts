@@ -74,6 +74,7 @@ import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
+import { tokenUnavailable } from '../quota/token-fallback.ts';
 import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
@@ -1643,6 +1644,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     const quota = quotaOutOf(to.cli, preflightScreen);
     if (quota !== null) return refuse(io, dir, who, `${to.seat}: ${quotaOutDetail(declared, quota)}`, host, report);
   }
+  // A seat the watch marked out of tokens stays unavailable when this run cannot read the pane.
+  // The sender is told, and no leg is walked.
+  const marked = tokenUnavailable(dir, to.seat);
+  if (marked !== null) return refuse(io, dir, who, `${to.seat}: ${marked}`, host, report);
   // A `--brief` send reads the receiving team's `brief-transport` before it reads the draft or
   // writes anything durable. `message` and `file` both deliver the whole body as an ordinary
   // send — the walk is the same one — while `memory` is refused with nothing written on either
@@ -5111,6 +5116,10 @@ export async function walkBriefDelivery(input: {
   payload: RecordPayload;
 }): Promise<BriefWalkResult> {
   const seatName = input.seat;
+  const markedBrief = tokenUnavailable(input.dir, seatName);
+  if (markedBrief !== null) {
+    return { via: null, walked: false, exit: 1, failures: [`${seatName}: ${markedBrief}`] };
+  }
   const from = input.payload.from;
   const startedAt = input.host.now().getTime();
   const dropDir = join(input.dir, 'send-drops', input.session, seatName);

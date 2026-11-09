@@ -40,6 +40,7 @@ import {
 } from './check.ts';
 import { minutes } from './check.ts';
 import { attention } from './checks/attention.ts';
+import { outOfTokens } from './checks/out-of-tokens.ts';
 import { providerError } from './checks/provider-error.ts';
 import { approval } from './checks/approval.ts';
 import { budget } from './checks/budget.ts';
@@ -190,7 +191,7 @@ export type PassResult = {
 // order is the core's: a seat's wrong model is reported before its permission prompt, and every
 // seat before the team. Disabling a check in the `watch` section in force takes it out of the
 // run, except the six that can't be turned off.
-export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, modelRule, attention, providerError, unsent, idle];
+export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, modelRule, attention, providerError, outOfTokens, unsent, idle];
 export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, approval, load, memoryCheck, disk, swapGrowth, budget];
 
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
@@ -319,6 +320,11 @@ export type PassInput = {
   /** The first instant a seat's box held unsent text, or null once it does not. The caller
    *  persists it; the pass itself only reports the reading. */
   onUnsent?(name: string, since: number | null): void;
+  /**
+   * The team's `.agents` folder. Set, the out-of-tokens check records and clears the
+   * unavailable mark there. Omitted, that check only reports.
+   */
+  agentsDir?: string;
 };
 
 // One pass of the watch. Pure: it reads what it is handed and changes only `memory`.
@@ -355,6 +361,7 @@ export function pass({
   modelRule: rule = null,
   queued,
   onUnsent,
+  agentsDir,
 }: PassInput): PassResult {
   const reports: Report[] = [];
   const current = new Set<string>();
@@ -462,6 +469,8 @@ export function pass({
         lead,
         parked,
         stopped,
+        ...(agentsDir === undefined ? {} : { agentsDir }),
+        ...(seat?.role === undefined ? {} : { role: seat.role }),
         attention: null,
         dialogText: null,
         model: null,
@@ -549,6 +558,8 @@ export function pass({
       parked,
       blocked: blockedUnsent,
       stopped,
+      ...(agentsDir === undefined ? {} : { agentsDir }),
+      ...(seat?.role === undefined ? {} : { role: seat.role }),
       attention: attentionOf(screen, agent.status, quiet, theirWord),
       dialogText: questionText(cli, pane),
       // The observation is read off the pane, except for a wrapper: Claude Code prints its own

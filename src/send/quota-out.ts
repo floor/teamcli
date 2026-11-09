@@ -5,18 +5,21 @@
 // nothing here — the send keeps its existing delivery-time cautions — and that gap is named,
 // never called safe. The host's own status is not consulted: a wall the screen proves is a
 // wall while the terminal host still calls the seat working.
+import { TOKEN_SKIP } from '../quota/token-fallback.ts';
 import { readScreen, type Reset } from '../watch/screen.ts';
 
 /** The wall a pane's text shows. `reset` is the displayed text with the preposition the CLI's
  *  own sentence uses, or null when the screen names no time. */
-export type QuotaOut = { reset: Reset | null };
+export type QuotaOut = { reset: Reset | null; outOfTokens?: true };
 
 /** The wall a pane's text shows, or null. `text` is the pane as the terminal host reads it;
  *  undefined or null is no read at all, and never a wall. */
 export function quotaOutOf(cli: string, text: string | null | undefined): QuotaOut | null {
   if (text === null || text === undefined || text === '') return null;
   const screen = readScreen(cli, text);
-  return screen.kind === 'rate limit' ? { reset: screen.reset } : null;
+  if (screen.kind !== 'rate limit') return null;
+  if (screen.reason === 'out of tokens') return { reset: null, outOfTokens: true };
+  return { reset: screen.reset };
 }
 
 /** The refusal's detail: the account the seat spends when the file names one (its own
@@ -24,6 +27,7 @@ export function quotaOutOf(cli: string, text: string | null | undefined): QuotaO
  *  span — or an explicit "names no reset time", and the fact that nothing was sent, so a
  *  refused send never reads as one. */
 export function quotaOutDetail(seat: { account?: string | null; vendor?: string | null } | undefined, quota: QuotaOut): string {
+  if (quota.outOfTokens === true) return TOKEN_SKIP;
   const account = seat?.account ?? seat?.vendor ?? '';
   const on = account === '' ? '' : ` on ${account}`;
   if (quota.reset === null) return `quota out${on}; the screen names no reset time; nothing was sent`;

@@ -12,7 +12,7 @@ import { profileFor, quotaFor, quotaList } from './profile.ts';
 import { approvalStanding, findStore, storePath, type Standing } from '../store/store.ts';
 import { addedRules } from '../watch/screen-file.ts';
 import type { ScreenData, Stage } from '../watch/screen-data.ts';
-import { classifyData, screenData, type Screen } from '../watch/screen.ts';
+import { classifyData, screenData, withOutOfTokens, type Screen } from '../watch/screen.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
 
 export const DIALOG_STAGES = ['unknown', 'trust', 'permission', 'question'] as const;
@@ -58,7 +58,9 @@ export function mergeScreen(base: ScreenData, added: ProfileOverride): ScreenDat
     const extra = added.screen[name];
     if (!extra) continue;
     const existing = base[name];
-    next[name] = { rules: [...(existing?.rules ?? []), ...extra.rules] };
+    next[name] = {
+      rules: [...(existing?.rules ?? []), ...extra.rules.map((rule) => ({ ...rule, added: true as const }))],
+    };
   }
   return next;
 }
@@ -96,8 +98,8 @@ export function classifyWith(cli: string, screen: string | undefined, profiles: 
   const lines = screen.split('\n');
   const shipped = classifyData(base, lines);
   const added = profiles.find((profile) => profile.cli === cli);
-  if (!added || DIALOG_STAGES.every((stage) => added.screen[stage] === undefined)) return shipped;
-  return guardReading(shipped, classifyData(mergeScreen(base, added), lines));
+  if (!added || DIALOG_STAGES.every((stage) => added.screen[stage] === undefined)) return withOutOfTokens(cli, screen, shipped);
+  return withOutOfTokens(cli, screen, guardReading(shipped, classifyData(mergeScreen(base, added), lines)));
 }
 
 /** Shipped quota patterns, then the override's. The shipped ones are never dropped. */
