@@ -313,37 +313,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (!wantsJson) io.stderr(`client grant ${clientRun.grant.grantId}: ${clientRun.grant.clientId} for team ${clientRun.grant.up.project} at ${clientRun.root}, until ${clientRun.grant.expires}\n`);
   }
   const clientText = clientRun === null ? null : `client:${clientRun.grant.clientId}`;
-  // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat after
-  // every validation gate below has passed, so a command that would fail locally never opens an
-  // owner card or prompts Touch ID; `--approval <id>` and a signed charter still admit here.
-  // The root it records and admits is the one the record's readers resolve: a checkout's root, or
-  // the plain folder itself (the registry record is keyed by that folder). The step's own
-  // findRoot alone refused every team whose folder is not a repository.
-  const approvalRefused = (): number => {
-    // exit: add.approval-refused
-    return 1;
-  };
-  const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
-  const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
-    ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : args.flags.has('request') && args.values.approval !== undefined
-      ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--request asks the owner seat and --approval runs an answered request: pass one', repair: null }), { kind: 'refused' as const })
-      : ownerSeatStep('add', 'team-add', argv, { request: false, approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot }, [seatRoot]);
-  if (seatStep.kind === 'refused') return approvalRefused();
-  // `--request` files a card later. A charter that covers this folder does not run the add in
-  // this same invocation when the caller asked for the card.
-  const seatApproved = seatStep.kind === 'admitted' && !args.flags.has('request');
-  const requesting = args.flags.has('request') && !seatApproved;
-  // No create-grant admits a run with no terminal: the record matches the caller's own registry
-  // record, and a caller outside herdr has none. This sentence is answered before any file is
-  // read, as `down` and `init` ask it; the route names who may run it, so the sentence does not
-  // send every reader to the owner.
-  const detached = clientRun !== null || seatApproved || requesting ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
-  if (detached !== undefined) {
-    refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
-    // exit: add.detached
-    return 1;
-  }
   const temporary = args.flags.has('temporary');
   const dry = args.flags.has('dry-run');
   if (temporary ? args.rest.length > 0 : args.rest.length !== 1) {
@@ -379,9 +348,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // the caller for anyone else. The eligibility that asks is the default live file's alone, so
   // the flagged file is not read at all; with no `delegates` section there, today's refusal
   // stands, byte for byte.
-  const walkedForSession = args.values.session !== undefined ? walkCaller(io) : undefined;
-  let fileFlag = fileOwnerRefusal(io, args.values.file);
-  let sessionFlag = walkedForSession !== undefined && !isOwner(walkedForSession) ? sessionOwnerRefusal(walkedForSession) : undefined;
+  const flagWalk = args.values.file !== undefined || args.values.session !== undefined ? walkCaller(io) : undefined;
+  // A no-terminal owner keeps the detached sentence, which is asked after the owner-seat door.
+  // Every other non-owner is the owner-only sentence, decided before that door places anyone.
+  const flagIsDetached = flagWalk !== undefined && detachedRefusal(flagWalk) !== undefined;
+  let fileFlag = flagIsDetached ? undefined : fileOwnerRefusal(io, args.values.file);
+  let sessionFlag = flagWalk !== undefined && !flagIsDetached && args.values.session !== undefined && !isOwner(flagWalk) ? sessionOwnerRefusal(flagWalk) : undefined;
   if (fileFlag !== undefined || sessionFlag !== undefined) {
     const bounds = ownTeamFlagBounds(io, sources, args.values.file, args.values.session);
     if (bounds !== null) {
@@ -417,6 +389,68 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.file-owner
     // exit: add.session-owner
     return 1;
+  }
+  // `--model` and `--effort` on a declared seat are the owner's too. A request still carries them
+  // to the owner seat; every other non-owner is refused before that door can admit the run.
+  if (!temporary && clientRun === null && !args.flags.has('request') && (args.values.model !== undefined || args.values.effort !== undefined)) {
+    const walked = flagWalk ?? walkCaller(io);
+    if (!isOwner(walked) && detachedRefusal(walked) === undefined) {
+      refuse(io, json, 'add', {
+        id: 'add.override-owner',
+        message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
+        repair: null,
+      });
+      // exit: add.override-owner
+      return 1;
+    }
+  }
+
+  // The owner-seat door (src/client/owner-action-step.ts) runs after the owner-only flags above.
+  // `--request` asks the owner seat after every validation gate below has passed, so a command
+  // that would fail locally never opens an owner card or prompts Touch ID; `--approval <id>` and
+  // a signed charter still admit here. The root it records and admits is the one the record's
+  // readers resolve: a checkout's root, or the plain folder itself (the registry record is keyed
+  // by that folder). The step's own findRoot alone refused every team whose folder is not a repository.
+  const approvalRefused = (): number => {
+    // exit: add.approval-refused
+    return 1;
+  };
+  const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
+  const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
+    ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
+    : args.flags.has('request') && args.values.approval !== undefined
+      ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--request asks the owner seat and --approval runs an answered request: pass one', repair: null }), { kind: 'refused' as const })
+      : ownerSeatStep('add', 'team-add', argv, { request: false, approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot }, [seatRoot]);
+  if (seatStep.kind === 'refused') return approvalRefused();
+  // `--request` files a card later. A charter that covers this folder does not run the add in
+  // this same invocation when the caller asked for the card.
+  const seatApproved = seatStep.kind === 'admitted' && !args.flags.has('request');
+  const requesting = args.flags.has('request') && !seatApproved;
+  // No create-grant admits a run with no terminal: the record matches the caller's own registry
+  // record, and a caller outside herdr has none. This sentence is answered before any file is
+  // read, as `down` and `init` ask it; the route names who may run it, so the sentence does not
+  // send every reader to the owner. An owner-only flag above has already answered for every
+  // other non-owner.
+  const detached = clientRun !== null || seatApproved || requesting ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
+  if (detached !== undefined) {
+    refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
+    // exit: add.detached
+    return 1;
+  }
+  // Admission does not hand a caller without a terminal the owner's file or session flags.
+  // Those checks were deferred only to preserve the unapproved caller's detached sentence.
+  if (flagIsDetached && flagWalk !== undefined) {
+    const detachedFileFlag = fileOwnerRefusal(io, args.values.file);
+    const detachedSessionFlag = args.values.session !== undefined ? sessionOwnerRefusal(flagWalk) : undefined;
+    const detachedFlagRefusal = detachedFileFlag ?? detachedSessionFlag;
+    if (detachedFlagRefusal !== undefined) {
+      refuse(io, json, 'add', {
+        id: detachedFileFlag !== undefined ? 'add.file-owner' : 'add.session-owner',
+        message: detachedFlagRefusal,
+        repair: null,
+      });
+      return 1;
+    }
   }
 
   const bindingHome = sources.home ?? homedir();
