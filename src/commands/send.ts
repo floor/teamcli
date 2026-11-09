@@ -1280,6 +1280,22 @@ export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Pro
   }
 }
 
+/** The team session the rest of this send will judge the caller in, read once from the folder
+ *  the shell is in. `default` is the sessionless key `judgeCallerIn` already uses. A folder
+ *  that is not a team leaves the session unset, and the gate keeps the placement it has today. */
+function sendTeamSession(io: Io, home: string): string | undefined {
+  let loaded: ReturnType<typeof readTeamConfig>;
+  try {
+    loaded = readTeamConfig(io.cwd, { home });
+  } catch {
+    return undefined;
+  }
+  if (!loaded.ok) return undefined;
+  const session = loaded.team.session;
+  if (session === '' || session === 'default') return undefined;
+  return session;
+}
+
 /** The folder the charter judges for this send: the recipient team's root, or this checkout for a
  *  read that names no recipient. A spec that names a team the registry cannot place is no
  *  admission. */
@@ -1340,7 +1356,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // always-rule lift that would otherwise admit the run as the owner.
   let recordNotRunning = false;
   if (internalCallerOf(host) === null) {
-    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources, sendTargets);
+    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources, sendTargets, sendTeamSession(io, host.home));
     if (step.kind === 'requested') {
       // exit: send.approval-requested
       return 0;

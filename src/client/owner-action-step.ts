@@ -119,6 +119,9 @@ export function ownerSeatStep(
   io: Io,
   sources: OwnerSeatSources,
   targets: readonly string[] = [],
+  // The team session a send already resolved. The gate's placement then shares that key with
+  // the prologue. Absent, the caller's own placement is asked, and nothing new is admitted.
+  callerSession?: string,
 ): OwnerSeatStep {
   const home = sources.home ?? homedir();
   const now = sources.now?.() ?? new Date();
@@ -127,7 +130,8 @@ export function ownerSeatStep(
   // charter and the repair, and the run continues as the owner. Config prints that warning on
   // its own write. Absent is not a deny. Development mode is the machine's, so only the owner's
   // own answer admits it. An empty target list is no charter admission and is never the caller's cwd.
-  const ownerCaller = isOwner(callerOf(io));
+  const gateCaller = callerSession === undefined ? callerOf(io) : callerOf(io, callerSession);
+  const ownerCaller = isOwner(gateCaller);
   let charterSigner: string | null = null;
   let ownerBlocked: string | null = null;
   if (command !== 'development-mode' && targets.length > 0) {
