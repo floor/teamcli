@@ -174,18 +174,21 @@ export type ProcessEntry = { pid: number; comm: string; startedAtMs: number };
  *  not read whole is skipped, never guessed: the reading is only ever used to name processes a
  *  person may then stop, so a half-read row is no row. */
 const TABLE_LINE = /^\s*(\d+)\s+(.*?)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s*$/;
+const WIDE_TABLE_LINE = /^\s*(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*?)\s*$/;
 
 /** Reads the query's text into rows. Exported for its own scene: the shapes are fixed by the
  *  query, so the parser needs no process behind it. Captured local columns keep their existing
- *  interpretation; the trusted system query explicitly supplies UTC. */
-export function parseProcessTable(text: string, timeZone?: 'UTC'): ProcessEntry[] {
+ *  interpretation and column order; the trusted system query explicitly supplies UTC and puts
+ *  comm last so its output width is unlimited. */
+export function parseProcessTable(text: string, timeZone?: 'UTC', columns: 'comm-first' | 'comm-last' = 'comm-first'): ProcessEntry[] {
   const rows: ProcessEntry[] = [];
   for (const line of text.split('\n')) {
-    const match = TABLE_LINE.exec(line);
+    const match = (columns === 'comm-last' ? WIDE_TABLE_LINE : TABLE_LINE).exec(line);
     if (match === null) continue;
-    const startedAtMs = Date.parse(timeZone === 'UTC' ? `${match[3]!} UTC` : match[3]!);
+    const started = columns === 'comm-last' ? match[2]! : match[3]!;
+    const startedAtMs = Date.parse(timeZone === 'UTC' ? `${started} UTC` : started);
     if (!Number.isFinite(startedAtMs)) continue;
-    rows.push({ pid: Number(match[1]), comm: match[2]!, startedAtMs });
+    rows.push({ pid: Number(match[1]), comm: columns === 'comm-last' ? match[3]! : match[2]!, startedAtMs });
   }
   return rows;
 }
@@ -195,17 +198,21 @@ export function parseProcessTable(text: string, timeZone?: 'UTC'): ProcessEntry[
  *  names processes a person may then stop, and it must never name or probe a process another user
  *  owns. Measured here on 2026-11-04, `ps -axo pid=,comm=,lstart=` printed 1283 rows including
  *  uid 0's `/sbin/launchd`, while `ps -U 501 -o pid=,comm=,lstart=` printed 1060 rows starting at
- *  pid 643 — this user's own, in the same line shape the parser reads. */
+ *  pid 643 — this user's own. Measured on 2026-11-09 against an owned Python child, adding
+ *  `-ww` alone still cut a middle `comm` column to 16 characters. `ps -ww -U <uid>
+ *  -o pid=,lstart=,comm=` kept the full name, equal to the child's direct `comm` reading.
+ *  Both the unlimited width and the final column are required; captured rows keep their old
+ *  parser shape while this live query explicitly selects the comm-last shape. */
 export const processTable = (): ProcessEntry[] | null => {
   const uid = process.getuid?.();
   if (uid === undefined) return null;
   try {
-    const text = execProcessToolSync('ps', ['-U', String(uid), '-o', 'pid=,comm=,lstart='], {
+    const text = execProcessToolSync('ps', ['-ww', '-U', String(uid), '-o', 'pid=,lstart=,comm='], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       maxBuffer: 16 * 1024 * 1024,
     });
-    return parseProcessTable(text, 'UTC');
+    return parseProcessTable(text, 'UTC', 'comm-last');
   } catch {
     return null;
   }
