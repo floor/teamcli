@@ -446,7 +446,7 @@ export type SendHost = {
    *  (beside a listener it also writes) to see the unconfirmed ending without waiting, or a
    *  small number to watch the receipt land. */
   inboxGraceMs?: number;
-  /** Out of tokens. The real host reads FLO-961's mark; a test injects the observation and
+  /** Out of tokens. The real host reads the recipient token mark; a test injects the observation and
    *  absent is none. */
   tokens?: (session: string, seat: string, dir: string) => { reason: 'out of tokens' } | undefined;
   /** How long a typed wake waits for a working screen or a read receipt. Absent, the wake's own bound. */

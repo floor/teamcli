@@ -1,4 +1,4 @@
-// The out-of-tokens mark FLO-961 writes beside the team. Send and the watch read it; they do
+// The out-of-tokens mark beside the team. Send and the watch read it; they do
 // not detect screens themselves. Absent file, absent seat, or a mark that is not that shape is
 // none. Tests inject the observation and do not need this file.
 import { readFileSync } from 'node:fs';

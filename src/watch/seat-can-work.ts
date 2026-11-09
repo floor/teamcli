@@ -54,7 +54,7 @@ export type SeatWork =
       restart?: SeatWorkRestart;
     };
 
-/** FLO-961's state on a classified screen: a rate limit whose reason is out of tokens. */
+/** Token quota on a classified screen: a rate limit whose reason is out of tokens. */
 function tokensOnScreen(screen: SeatWorkInput['screen']): boolean {
   return typeof screen !== 'string' && screen.kind === 'rate limit' && screen.reason === 'out of tokens';
 }

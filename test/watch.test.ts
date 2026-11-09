@@ -688,6 +688,7 @@ describe('a pass of the watch', () => {
   test('a pane that no longer holds the process team launched, reported once per change', () => {
     const state = emptySession();
     state.seats['deepseek-acme'] = { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 400, cli: [401] } };
+    const recordedPane = Object.values(state.seats)[0]!.pane!;
     const memory = newMemory();
     const at = (processes: Record<string, { shell: number; foreground: number[] }>) =>
       pass({ team: team(), watch: team().watch, state, live: live(), machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
@@ -700,7 +701,7 @@ describe('a pass of the watch', () => {
     // The pane back at its own shell: one can't-work report, naming the restart the record
     // still allows. A shell is not the launcher line, and the restored line already stands.
     const noCli = 'deepseek-acme: can\'t work: no CLI — restart deepseek-acme from its record, resumed';
-    expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([noCli]);
+    expect(at({ [recordedPane]: { shell: 400, foreground: [400] } })).toEqual([noCli]);
     // The same shell again: once per change, not repeated.
     expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([]);
     // The recorded process in front again: the condition cleared, and one clear pass is a flicker.
@@ -717,6 +718,7 @@ describe('a pass of the watch', () => {
     const seen = live();
     const seat = seen.agents.find((agent) => agent.name === 'deepseek-acme');
     if (seat) seat.session = 'kept';
+    const recordedPane = Object.values(state.seats)[0]!.pane!;
     const memory = newMemory();
     const at = (processes: Record<string, { shell: number; foreground: number[] }>) =>
       pass({ team: team(), watch: team().watch, state, live: seen, machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
@@ -725,7 +727,7 @@ describe('a pass of the watch', () => {
     // the launcher is still said. The foreground is a CLI, so this is not a can't-work report.
     expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([launcher]);
     // The recorded CLI is in front: the seat is the seat. No restored line, and no can't-work report.
-    expect(at({ 'w3:p1': { shell: 400, foreground: [400, 401] } })).toEqual([]);
+    expect(at({ [recordedPane]: { shell: 400, foreground: [400, 401] } })).toEqual([]);
   });
 
   test('a restored agent session is recognized while its observed model drift is still reported', () => {
@@ -772,6 +774,7 @@ describe('a pass of the watch', () => {
   test('a reading herdr can\'t give is no change: it never clears the report-once mark', () => {
     const state = emptySession();
     state.seats['deepseek-acme'] = { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 400, cli: [401] } };
+    const recordedPane = Object.values(state.seats)[0]!.pane!;
     const memory = newMemory();
     const at = (processes: Record<string, { shell: number; foreground: number[] } | null>) =>
       pass({ team: team(), watch: team().watch, state, live: live(), machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
@@ -786,9 +789,9 @@ describe('a pass of the watch', () => {
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [400, 401] } })).toEqual([]);
-    expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
+    expect(at({ [recordedPane]: { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
     expect(at({ 'w3:p1': null })).toEqual([]);
-    expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([]);
+    expect(at({ [recordedPane]: { shell: 400, foreground: [500] } })).toEqual([]);
   });
 
   test('herdr can\'t tell, or the seat has no record: the pane reads as today', () => {
