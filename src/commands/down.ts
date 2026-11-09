@@ -718,12 +718,37 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (!json) io.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, ${expiryPhrase(verified.grant.expires)}\n`);
   }
   const dry = args.flags.has('dry-run');
+  // `--file` and `--session` are the owner's. The walk decides that before any caller placement,
+  // charter, approval, or lead admission, so a lead rule cannot spend those flags and the agent
+  // list is not read to refuse them. A no-terminal owner keeps the detached sentence below.
+  // A team that names delegates still reaches the gate below: that gate's own sentence is the
+  // refusal when it places one, and this early return is only the walk's.
+  let ownerFlagsFirst = false;
+  if (clientDown === null && (args.values.file !== undefined || args.values.session !== undefined)) {
+    const walked = walkCaller(io);
+    if (!isOwner(walked) && detachedRefusal(walked) === undefined) {
+      const live = liveTeam(io, sources.home);
+      if (live === undefined || live.team.delegates === null) {
+        refuse(io, json, 'down', {
+          id: args.values.file !== undefined ? 'down.file-owner' : 'down.session-owner',
+          message: args.values.file !== undefined ? fileOwnerRefusal(io, args.values.file) ?? '' : sessionOwnerRefusal(walked),
+          repair: null,
+        });
+        // exit: down.file-owner
+        // exit: down.session-owner
+        return 1;
+      }
+      ownerFlagsFirst = true;
+    }
+  }
   // The owner-seat door, for a stop that is not a client grant. `--request` records the stop and
   // returns; `--approval` and an always rule admit it, so the owner never has to be at a terminal.
-  // A leads seat on its own pane is admitted by the gate below, as before.
+  // A leads seat on its own pane is admitted by the gate below, as before. It is asked only after
+  // the owner-only flags above, and only for the target this stop will change. A held owner-only
+  // flag skips it: the delegate gate below owns that refusal, and a lead admission must not.
   const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
   let seatApproved = false;
-  if (clientDown === null) {
+  if (clientDown === null && !ownerFlagsFirst) {
     const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason, gate: abandonGateOf('down', args.flags.has('abandon')) }, io, seatSources, [charterTargetOf(io.cwd, args.values.file)]);
     if (seat.kind === 'requested') {
       // exit: down.approval-requested
@@ -825,7 +850,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // this one included, so the flagged path is never read and the run goes on as the delegate's.
   // Any other answer — the gate didn't place this caller, or the file carries no delegate — is
   // refused here, byte for byte as today.
-  const fileRefusal = seatApproved ? undefined : fileOwnerRefusal(io, args.values.file);
+  const fileRefusal = fileOwnerRefusal(io, args.values.file);
   if (fileRefusal !== undefined) {
     const said = decide();
     if (said?.kind === 'refused' && placed) {
@@ -842,7 +867,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // refuses the same way: the plan it would print is that session's, which is not its to aim.
   // (A seat cannot be named in this refusal: placing it would read a session, and that is what
   // must not happen yet.) A delegate's `--session` is the same case as its `--file`.
-  if (args.values.session !== undefined && !branching() && !seatApproved) {
+  if (args.values.session !== undefined && !branching()) {
     const walked = walkCaller(io);
     if (!isOwner(walked)) {
       const said = decide();
