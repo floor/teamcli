@@ -47,9 +47,12 @@ const UNSENT_SCREEN = readFileSync(new URL('./fixtures/codex/0.161.0/unsent.txt'
 
 let fakeSessionRunning: boolean | null = true;
 
+// Captured before the mock. Calling the live export from the replacement recurses, and that mock then leaks.
+const realSessionRunning = realHerdr.sessionRunning;
+
 mock.module('../src/herdr.ts', () => ({
   ...realHerdr,
-  sessionRunning: (name: string) => (name === SESSION ? fakeSessionRunning : realHerdr.sessionRunning(name)),
+  sessionRunning: (name: string) => (name === SESSION ? fakeSessionRunning : realSessionRunning(name)),
 }));
 
 const { realCheckSources, runTeamCheck } = await import('../src/check/team.ts');
@@ -309,7 +312,7 @@ afterEach(() => {
 });
 
 afterAll(() => {
-  mock.module('../src/herdr.ts', () => ({ ...realHerdr }));
+  mock.module('../src/herdr.ts', () => ({ ...realHerdr, sessionRunning: realSessionRunning }));
   discardFixtures([base]);
 });
 
