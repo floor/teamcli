@@ -573,18 +573,14 @@ seats:
 watch: none
 ```
 
-Every `team watch` console below shows a pass as the watch itself prints it — the lines its pane
-shows while it runs, and the same lines in `.agents/team.log`. Run bare from the owner's terminal
-outside herdr, `team watch` hands itself to its workspace and prints one line about that instead;
-a `--no-nudge` or `--no-notify` run, the owner's, stays in the caller's terminal and prints these
-lines directly.
+A hand-run `team watch` does not run a pass. It reports whether the daemon hosts the session and
+exits 0. The consoles below are that report.
 
 The seats are at their prompts, nothing to report: a pass is the two lines that frame it.
 
 ```console
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -593,9 +589,7 @@ never types a report into a seat. The operator is a lead and is not nudged eithe
 
 ```console screens="claude-keeper=question"
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -603,9 +597,7 @@ A permission prompt is the owner's, and the watch says so rather than nudging an
 
 ```console screens="claude-beacon=permission"
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z claude-beacon waits at a permission prompt: its owner's to answer
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -614,9 +606,7 @@ retry pass and the wake. The report is the same line either way: it never had on
 
 ```console screens="claude-keeper=question"
 $ team watch --no-nudge ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s, without nudges
-2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -625,9 +615,7 @@ answer, and a watch does not stop the team over it:
 
 ```console machine=tight
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z free memory is 8%, below 15%
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -642,10 +630,7 @@ seats: [
 
 ```console
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z the watch-rhythm policy could not be read: team: policy source cannot be read or verified (./.agents/team.yaml: line 3: "[" is not closed on its line); automated work, nudges and escalations are held until it can be read
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z team config is invalid (line 3: "[" is not closed on its line); using the copy of 2026-10-04T09:00:00.000Z
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host this session
 exit 0
 ```
 
@@ -688,8 +673,7 @@ seats:
 
 ```console
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -749,13 +733,12 @@ seats:
 
 ```console machine=tight
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
-`up` leaves a watch running in a workspace of its own, so a second one refuses rather than reading
-the same session twice:
+`up` does not start a watch of its own. A following `team watch` reports whether the daemon hosts
+the session:
 
 ```console
 $ team up ; echo "exit $?"
@@ -764,12 +747,11 @@ claude-keeper: ready
   already ready; left as it is
 claude-beacon: ready
   already ready; left as it is
-watch: started
 0 seats repaired, 0 skipped (working), 0 refused
 exit 0
 $ team watch ; echo "exit $?"
-team watch: a watch already runs for the session "beacon" (pid 4242)
-exit 1
+team watch: the daemon does not host session beacon
+exit 0
 ```
 
 The six that can't be turned off — `attention`, `missing`, `model-drift`, `model-rule`,
