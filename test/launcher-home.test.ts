@@ -313,3 +313,34 @@ seats:
   expect(io.out).toContain('repair: team launchers migrate');
   expect(readFileSync(script, 'utf8')).toBe('# synthetic\n');
 });
+
+test('a settings path and an add-dir path are not scripts, and a shell script or an executable path still is', () => {
+  const base = scratch('launcher-words-');
+  const home = join(base, 'home');
+  const repo = join(base, 'repo');
+  const real = join(base, 'real-temp');
+  const link = join(base, 'link-temp');
+  mkdirSync(home);
+  mkdirSync(join(repo, 'docs'), { recursive: true });
+  mkdirSync(real);
+  symlinkSync(real, link);
+  git(repo, 'init', '-q', '-b', 'main');
+  const settings = join(link, 'settings.json');
+  const shellScript = join(link, 'x.sh');
+  const executable = join(link, 'run.sh');
+  writeFileSync(settings, '{}\n');
+  writeFileSync(shellScript, '# synthetic\n');
+  writeFileSync(executable, '# synthetic\n');
+  chmodSync(settings, 0o644);
+  chmodSync(shellScript, 0o644);
+  chmodSync(executable, 0o755);
+  const docs = join(repo, 'docs');
+
+  withTemp(link, () => {
+    const place = realLaunchPlace();
+    expect(launchLineProblem(`claude --settings ${settings}`, repo, home, place)).toBeNull();
+    expect(launchLineProblem(`claude --add-dir ${docs}`, repo, home, place)).toBeNull();
+    expect(launchLineProblem(`sh ${shellScript}`, repo, home, place)).toContain('temp folder');
+    expect(launchLineProblem(`claude ${executable}`, repo, home, place)).toContain('temp folder');
+  });
+});

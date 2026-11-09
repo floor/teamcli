@@ -156,7 +156,9 @@ export function realLaunchPlace(): LaunchPlace {
 
 /** A problem when `line` runs a script inside a git repo or a temp folder. An ordinary
  *  program word is not a problem. `place` is the real detection when a caller does not
- *  pass one. */
+ *  pass one. Only a word that can run is judged: the program word, an interpreter's first
+ *  script word, and a later path whose resolved file has an execute bit. An option's value,
+ *  space-form or equals-form, is not a word that runs. */
 export function launchLineProblem(
   line: string,
   root: string,
@@ -170,15 +172,88 @@ export function launchLineProblem(
   return null;
 }
 
-function pathWords(line: string, home: string, root: string): string[] {
+/** Interpreters whose first script word runs even when that file has no execute bit. */
+const INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'env', 'node', 'bun', 'python', 'python3', 'deno']);
+
+function lineWords(line: string): string[] {
   const out: string[] = [];
   for (const raw of line.split(/\s+/)) {
     const word = raw.replace(/^['"]|['"]$/g, '');
-    if (word === '' || word.startsWith('-') || word.includes('://')) continue;
-    const value = word.includes('=') ? word.slice(word.indexOf('=') + 1) : word;
-    if (!value.includes('/') && !value.startsWith('~')) continue;
-    const expanded = value.startsWith('~/') ? join(home, value.slice(2)) : value;
-    out.push(isAbsolute(expanded) ? expanded : resolve(root, expanded));
+    if (word !== '') out.push(word);
+  }
+  return out;
+}
+
+function programBase(word: string): string {
+  const slash = word.lastIndexOf('/');
+  return slash === -1 ? word : word.slice(slash + 1);
+}
+
+/** A path the line names, or null when the word is not a path. `~` is the home passed in.
+ *  A relative path is resolved against the team root. Nothing is read here. */
+function pathOf(word: string, home: string, root: string): string | null {
+  if (word.includes('://') || word.startsWith('-')) return null;
+  if (!word.includes('/') && !word.startsWith('~')) return null;
+  const expanded = word.startsWith('~/') ? join(home, word.slice(2)) : word;
+  return isAbsolute(expanded) ? expanded : resolve(root, expanded);
+}
+
+/** The resolved file is executable. A directory's search bit is not a script, and a missing
+ *  path is not one either. `lstat` of the real path is the only read. */
+function executableFile(path: string): boolean {
+  try {
+    const info = lstatSync(canonical(path));
+    return info.isFile() && (info.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+/** `env VAR=value script`: the assignment is not the script. */
+function envAssignment(word: string): boolean {
+  const eq = word.indexOf('=');
+  return eq > 0 && !word.slice(0, eq).includes('/');
+}
+
+function pathWords(line: string, home: string, root: string): string[] {
+  const words = lineWords(line);
+  const program = words[0];
+  if (program === undefined) return [];
+  const out: string[] = [];
+  const take = (word: string, force: boolean): void => {
+    const path = pathOf(word, home, root);
+    if (path === null) return;
+    if (force || executableFile(path)) out.push(path);
+  };
+  take(program, true);
+  const interpreter = INTERPRETERS.has(programBase(program));
+  let options = true;
+  let pendingValue = false;
+  let firstScript = interpreter;
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i]!;
+    if (options && word === '--') {
+      options = false;
+      pendingValue = false;
+      continue;
+    }
+    if (options && word.startsWith('-')) {
+      // An interpreter's next word is its script, not a flag's value. Any other program's
+      // space-form value is the option's, and it is not judged.
+      pendingValue = !interpreter && !word.includes('=');
+      continue;
+    }
+    if (pendingValue) {
+      pendingValue = false;
+      continue;
+    }
+    if (interpreter && envAssignment(word)) continue;
+    if (firstScript) {
+      take(word, true);
+      firstScript = false;
+      continue;
+    }
+    take(word, false);
   }
   return out;
 }
