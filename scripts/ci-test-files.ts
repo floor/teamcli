@@ -27,7 +27,7 @@ export function runTestFiles(testUnits: readonly string[], options: {
     delete env.TEAM_EXIT_PART;
     if (part !== undefined) env.TEAM_EXIT_PART = part;
     log(`Test file: ${unit}`);
-    const ran = spawnSync(process.execPath, ['test', resolve(options.root ?? ROOT, file)], {
+    const ran = spawnSync(process.execPath, ['test', '--timeout', '30000', resolve(options.root ?? ROOT, file)], {
       cwd: options.root ?? ROOT,
       env,
       stdio: options.stdio ?? 'inherit',
