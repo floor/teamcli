@@ -17,6 +17,7 @@ import type { WorkPush, WorkPushRequest } from '../src/watch/dispatch.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
 import { claudeBox, testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const raw = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 const PROMPT = 'Take the next unfinished item in your queue and start it.';
@@ -223,7 +224,7 @@ describe('team watch writes the drop', () => {
 
   function sources(over: Partial<WatchSources> = {}): WatchSources {
     let left = 2;
-    return {
+    return withHostedLoop({
       live: () => scene({
         'deepseek-acme': { status: 'idle', screen: idle },
         'deepseek-acme-2': { status: 'idle', screen: idle },
@@ -244,7 +245,7 @@ describe('team watch writes the drop', () => {
       pid: 4242,
       home: dir,
       ...over,
-    };
+    });
   }
 
   beforeEach(() => {

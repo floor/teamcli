@@ -46,7 +46,7 @@ import { daemonDifferences, daemonProblemNotes, daemonReading } from '../daemon/
 import { canonicalRoot } from '../daemon/routes.ts';
 import { canonicalRoot as ownerCanonicalRoot, readOwnerActionRecord } from '../client/owner-action.ts';
 import { actionRequestsFolder } from '../client/team-create.ts';
-import { hostedWatchCheckNotes, hostedWatchDifferences, paneWatchCheckNotes } from '../daemon/watch_display.ts';
+import { hostedWatchCheckNotes, hostedWatchDifferences, hostedWatchRunning, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
 import { declaredModel } from '../file/model.ts';
@@ -660,6 +660,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()),
     undefined,
     continuityIds,
+    undefined,
+    undefined,
+    undefined,
+    sources.daemon !== undefined && hostedWatchRunning(sources.daemon, root, session),
   );
   // Dev mode is the local override, read from the caller's place: under it the approval and
   // overrides state rows fold into quiet notes, and a seat recorded under it is counted rather

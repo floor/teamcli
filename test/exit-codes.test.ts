@@ -556,6 +556,16 @@ function upSources(place: Place, over: Partial<UpSources> = {}): UpSources {
   return { sessionRunning: () => false, agents: () => [], home: place.home, now: () => NOW, terminal: () => ownerTerminal(), ...over };
 }
 
+/** The daemon's own loop. A hand-run `team watch` never enters it. */
+function hostedWatch(): NonNullable<WatchSources['hosted']> {
+  return {
+    signal: new AbortController().signal,
+    wait: async () => false,
+    cycled: () => {},
+    standby: () => {},
+  };
+}
+
 function watchSources(over: Partial<WatchSources> = {}): WatchSources {
   return {
     live: () => quiet,
@@ -3284,12 +3294,6 @@ scene('up.server', async (place) => {
   approve(place, TEAM);
   return show(await up(place, ['--file', place.file], owner, upSources(place, { launch: launching(IDLE, () => true, false) })), 'its server did not start');
 });
-scene('up.watch', async (place) => {
-  approve(place, TEAM);
-  return show(await up(place, ['--file', place.file], owner, upSources(place, {
-    launch: launching(IDLE, (command) => !command.includes(' watch')),
-  })), 'watch: it did not start');
-});
 
 // §RFC0007: one run per delegate refusal of `up`. The gate is the real one in every scene — the
 // command calls it with no stand-ins of its own — and only the reads it cannot make here are
@@ -3374,39 +3378,23 @@ async function watched(place: Place, argv: string[], caller: Caller, sources: Wa
 }
 
 scene('watch.invocation', async (place) => show(await watched(place, ['extra'], owner), 'unexpected'));
-scene('watch.not-a-repo', async (place) => show(await watched(place, [], owner), 'not inside a git repository'), false);
-scene('watch.file', async (place) => show(await watched(place, ['--file', 'missing.yaml'], owner), 'no team file'));
+scene('watch.not-a-repo', async (place) => show(await watched(place, [], owner, watchSources({ hosted: hostedWatch() })), 'not inside a git repository'), false);
+scene('watch.file', async (place) => show(await watched(place, ['--file', 'missing.yaml'], owner, watchSources({ hosted: hostedWatch() })), 'no team file'));
 scene('watch.file-invalid', async (place) => {
   invalid(place);
-  return show(await watched(place, ['--file', 'team.yaml'], owner), 'line');
+  return show(await watched(place, ['--file', 'team.yaml'], owner, watchSources({ hosted: hostedWatch() })), 'line');
 });
 scene('watch.file-owner', async (place) => {
   write(place, TEAM);
   return show(await watched(place, ['--file', '.agents/team.yaml'], other), "--file is the owner's");
 });
-scene('watch.watchdog', async (place) => {
-  // Beside the team file, where `up` writes it — the watch reads that state, not its start folder.
-  updateState(join(place.root, '.agents'), (state) => {
-    const session = (state.sessions.acme ??= emptySession());
-    session.watchdog = { file: join(place.root, 'custom', 'team.yaml'), pane: 'w2:p1' };
-  });
-  return show(await watched(place, ['--session', 'acme'], other), 'only the watch this session records');
-});
 scene('watch.no-nudge', async (place) => {
   write(place, TEAM);
-  return show(await watched(place, ['--no-nudge'], other), '--no-nudge');
+  return show(await watched(place, ['--no-nudge'], other, watchSources({ hosted: hostedWatch() })), '--no-nudge');
 });
 scene('watch.no-notify', async (place) => {
   write(place, TEAM);
-  return show(await watched(place, ['--no-notify'], other), '--no-notify');
-});
-scene('watch.already', async (place) => {
-  write(place, TEAM);
-  updateState(join(place.root, '.agents'), (state) => {
-    const session = (state.sessions.acme ??= emptySession());
-    session.watch = { pid: 99, heartbeat: NOW.toISOString() };
-  });
-  return show(await watched(place, [], owner, watchSources({ alive: (pid) => pid === 99 })), 'already runs');
+  return show(await watched(place, ['--no-notify'], other, watchSources({ hosted: hostedWatch() })), '--no-notify');
 });
 scene('watch.standby', async (place) => {
   write(place, TEAM);
@@ -3427,23 +3415,14 @@ scene('watch.standby', async (place) => {
 });
 scene('watch.stopped', async (place) => {
   write(place, TEAM);
-  return show(await watched(place, [], owner), 'stopped');
-});
-scene('watch.workspace', async (place) => {
-  write(place, TEAM);
-  return show(await watched(place, [], owner, watchSources({
-    createWorkspace: () => null,
-    paneRun: () => false,
-    watchCommand: () => 'team watch',
-  })), 'did not start in its workspace');
+  return show(await watched(place, [], owner, watchSources({ hosted: hostedWatch() })), 'the watch of "acme" stopped');
 });
 scene('watch.started', async (place) => {
   write(place, TEAM);
   return show(await watched(place, [], owner, watchSources({
-    createWorkspace: () => ({ pane: 'w2:p1', workspace: 'w2' }),
-    paneRun: () => true,
-    watchCommand: () => 'team watch',
-  })), 'the watch runs in its own workspace');
+    home: place.home,
+    daemonHealth: async () => ({ roots: [{ root: realpathSync(place.root), watch: { session: 'acme', phase: 'running' } }] }),
+  })), 'running in the daemon for session acme');
 });
 
 // The hidden settings-file hook prints nothing by design, so its scenes assert the status and
@@ -7757,7 +7736,6 @@ scene('order.done', async (place) => {
 });
 
 scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), LEADS));
-scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), PLACED));
 scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), ORCH));
 
 const ACTIVE_TWO = TWO.replace('    stopped: true\n', '');

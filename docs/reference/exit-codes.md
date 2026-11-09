@@ -972,7 +972,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.server` | `up` | 1 | the session's server did not start | `team up` |
 | `up.stopped` | `up` | 1 | the session is stopped | `team up` |
 | `up.unknown` | `up` | 1 | a running agent is not in this file's state | `team up` |
-| `up.watch` | `up` | 1 | the watch did not start | `team up` |
 | `up.file` | `up` | 2 | the team file can't be read | `team up --file missing.yaml` |
 | `up.file-invalid` | `up` | 2 | the team file can't be parsed | `team up --file team.yaml` |
 | `up.invocation` | `up` | 2 | the invocation can't be read | `team up extra` |
@@ -985,15 +984,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `waits.configuration` | `waits` | 2 | the team file, the registry or the retention policy can't be read | `team waits` |
 | `waits.usage` | `waits` | 2 | the invocation can't be read | `team waits --all` |
 | `watch.standby` | `watch` | 0 | a hosted watch stood down for a running watch | `team watch` |
-| `watch.started` | `watch` | 0 | the watch started in its own workspace | `team watch` |
+| `watch.started` | `watch` | 0 | the daemon's watch was printed | `team watch` |
 | `watch.stopped` | `watch` | 0 | the watch ran and stopped | `team watch` |
-| `watch.already` | `watch` | 1 | a watch already runs | `team watch` |
-| `watch.caller` | `watch` | 1 | a run with no terminal | `team watch` |
 | `watch.file-owner` | `watch` | 1 | --file is the owner's | `team watch --file .agents/team.yaml` |
 | `watch.no-notify` | `watch` | 1 | a seat passed --no-notify | `team watch --no-notify` |
 | `watch.no-nudge` | `watch` | 1 | a seat passed --no-nudge | `team watch --no-nudge` |
-| `watch.watchdog` | `watch` | 1 | only the recorded watch may read the file up recorded | `team watch --session acme` |
-| `watch.workspace` | `watch` | 1 | the watch did not start in its workspace | `team watch` |
 | `watch.file` | `watch` | 2 | the team file can't be read | `team watch --file missing.yaml` |
 | `watch.file-invalid` | `watch` | 2 | the team file can't be parsed | `team watch --file team.yaml` |
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |

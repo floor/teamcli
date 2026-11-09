@@ -385,17 +385,14 @@ describe('team up, two runs and the watchdog', () => {
     const first = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, first, sources({}, made));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'Watch · acme-web']);
-    expect(first.err).toContain('watch: started\n');
-    // `up` starts the watch in its own workspace and records where it runs; the pid arrives
-    // with the watch's own first pass. This run plays that pid as still alive.
-    const after = stateOf();
-    expect(after.sessions['acme-web']?.watch).toMatchObject({ pane: 'w4:p1', workspace: 'w4' });
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
+    expect(first.err).not.toContain('watch: started');
+    // The daemon is the watch. This run opens no watch pane and records none.
+    expect(stateOf().sessions['acme-web']?.watch).toBeUndefined();
     const seeded = JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'));
     seeded.sessions['acme-web'].watch = { pid: 4242, heartbeat: '2026-10-03T14:01:30Z' };
     writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify(seeded));
-    // The first run's own watch start is a pane-run in this same list: the second run
-    // adds none to it.
+    // The first run typed no watch. The second run adds none either.
     const runsAfterFirst = made.runs.length;
 
     const named = () => [
@@ -412,7 +409,7 @@ describe('team up, two runs and the watchdog', () => {
       agents: named,
     }, made));
     expect(code2).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'Watch · acme-web']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
     expect(made.runs.slice(runsAfterFirst).filter((run) => run.command.includes('watch'))).toHaveLength(0);
     expect(second.err).not.toContain('watch: started');
     expect(`${second.out}${second.err}`).not.toContain('was gone and was replaced');
@@ -454,7 +451,7 @@ describe('team up, two runs and the watchdog', () => {
     expect(claim?.id).not.toBe(was);
   });
 
-  test('the watchdog pane is recorded when a flagless watch would miss the file, and survives the next run', async () => {
+  test('a flagless file records no watchdog pane and opens no watch workspace', async () => {
     // A git root above the project: a watch started in `root` with no `--file` would load the
     // git root's own file, not this one, so the resolved path is recorded for the pane. The
     // home moves out of `base` first — a lobby inside the repository is refused on its own.
@@ -465,12 +462,10 @@ describe('team up, two runs and the watchdog', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', 'Watch · acme-web']);
-    expect(stateOf().sessions['acme-web']?.watchdog).toEqual({
-      file: join(root, '.agents/team.yaml'),
-      pane: 'w4:p1',
-    });
-    expect(stateOf().sessions['acme-web']?.watch).toMatchObject({ pane: 'w4:p1', workspace: 'w4' });
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
+    expect(made.creates.some((label) => label.startsWith('Watch · '))).toBe(false);
+    expect(stateOf().sessions['acme-web']?.watchdog).toBeUndefined();
+    expect(stateOf().sessions['acme-web']?.watch).toBeUndefined();
 
     const seeded = JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'));
     seeded.sessions['acme-web'].watch = { pid: 4242, heartbeat: '2026-10-03T14:01:30Z' };
@@ -489,15 +484,13 @@ describe('team up, two runs and the watchdog', () => {
       agents: named,
     }, made));
     expect(code2).toBe(0);
-    // The three seat workspaces and the watch's, which the first run made.
-    expect(made.creates).toHaveLength(4);
-    expect(stateOf().sessions['acme-web']?.watchdog).toEqual({
-      file: join(root, '.agents/team.yaml'),
-      pane: 'w4:p1',
-    });
+    // The three seat workspaces the first run made. No watch pane was added.
+    expect(made.creates).toHaveLength(3);
+    expect(made.creates.some((label) => label.startsWith('Watch · '))).toBe(false);
+    expect(stateOf().sessions['acme-web']?.watchdog).toBeUndefined();
   });
 
-  test('a watch whose pid is dead is started again, and only it', async () => {
+  test('a watch whose pid is dead is not started again, and the seats stay', async () => {
     await approve();
     seedState({
       'claude-coordinator-acme': { stage: 'ready', pane: 'w1:p1', workspace: 'w1', launched: { shell: 400, cli: [401] } },
@@ -525,11 +518,11 @@ describe('team up, two runs and the watchdog', () => {
       watchCommand: () => 'team watch',
     }, made));
     expect(code).toBe(0);
-    // Only the watch's workspace is made, and the watch is typed into it: the seats
-    // stay where they are.
-    expect(made.creates).toEqual(['Watch · acme-web']);
-    expect(made.runs.find((run) => run.command === 'team watch')).toBeDefined();
-    expect(io.err).toContain('watch: started\n');
+    // A dead pane watch is not started again. The seats stay where they are, and no watch pane opens.
+    expect(made.creates).toEqual([]);
+    expect(made.runs.find((run) => run.command === 'team watch')).toBeUndefined();
+    expect(io.err).not.toContain('watch: started');
+    expect(stateOf().sessions['acme-web']?.watch).toMatchObject({ pid: 4242, heartbeat: '2026-10-03T13:00:00Z' });
     expect(made.renames).toEqual([]);
     const seats = stateOf().sessions['acme-web']?.seats ?? {};
     expect(seats['claude-coordinator-acme']?.pane).toBe('w1:p1');

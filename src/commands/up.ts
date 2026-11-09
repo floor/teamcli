@@ -2833,6 +2833,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     ? `watch: ${identity.why}; nothing was signalled and no replacement is started`
     : null;
   const watchUnknown = sitting.kind === 'unknown' && !watchAlive;
+  // A dead pane-watch record is cleared on the admitted run, after a dry run and a refusal
+  // have returned. Neither of those writes the record or an audit line.
   // The watch starts in `root` and runs `watch` with no `--file`. When that load would miss
   // this file, or read another one, the resolved path is recorded for the pane.
   const watchFile = watchWouldRead(root, loaded.path, sources.home) ? undefined : loaded.path;
@@ -2887,6 +2889,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     startFolders: placedStartFolders(team.seats, recorded),
     watchLabel: watchLabel(team.project),
     watchAlive,
+    // The daemon is the only watch. `up` opens no Watch pane and starts no `team watch`.
+    startWatch: false,
     ...(watchPid !== null ? { watchPid } : {}),
     ...(watchHold !== null ? { watchHold } : {}),
     ...(watchUnknown ? { watchUnknown: true } : {}),
@@ -3159,6 +3163,47 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     return 1;
   }
   try {
+    // A restore whose daemon already hosts this session's watch drops a dead pane-watch record.
+    // The pane and the pid go; one audit line names the pane. A live or fresh record stays.
+    // Under the lock the holder is read again: the same pane and pid, no epoch, the beat still
+    // stale, the pid still dead. A daemon that took the record over in the meantime — an epoch,
+    // a new pid, a fresh beat, a live process — is left as it is.
+    if (sitting.kind === 'hosted' && sitting.watch.session === session && watch?.pane !== undefined && watch.epoch === undefined) {
+      const intervalMs = watchInForceOf(standing, team).interval * 1000;
+      const nowMs = (sources.now?.() ?? new Date()).getTime();
+      const beat = Date.parse(watch.heartbeat);
+      const age = nowMs - beat;
+      const stale = !Number.isFinite(age) || age > 3 * intervalMs;
+      const pidDead = watch.pid === undefined || !(sources.alive?.(watch.pid) ?? false);
+      if (stale && pidDead) {
+        const pane = watch.pane;
+        const pid = watch.pid;
+        const heartbeat = watch.heartbeat;
+        const dropped = updateState(dir, (state) => {
+          const current = state.sessions[session];
+          const held = current?.watch;
+          if (current === undefined || held === undefined) return false;
+          if (held.epoch !== undefined) return false;
+          if (held.pane !== pane || held.pid !== pid) return false;
+          if (held.heartbeat !== heartbeat) return false;
+          const heldAge = nowMs - Date.parse(held.heartbeat);
+          if (Number.isFinite(heldAge) && heldAge <= 3 * intervalMs) return false;
+          if (held.pid !== undefined && (sources.alive?.(held.pid) ?? false)) return false;
+          delete held.pane;
+          delete held.pid;
+          return true;
+        }, { writeWhen: (wrote) => wrote });
+        if (dropped) {
+          logLine(
+            dir,
+            'up',
+            'daemon',
+            `cleared pane watch ${pane}: the daemon hosts this session's watch`,
+            sources.now?.() ?? new Date(),
+          );
+        }
+      }
+    }
     // The audit line of a delegated run: the gate passed it and this run is about to have effects,
     // so the delegation is on the record before the first workspace is made. A dry run returned
     // above and writes nothing; a run that refused never got here.
@@ -4060,19 +4105,20 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     if (!json) out.stderr(`${summaryLine}\n`);
     // A seat the plan left behind (a repair it would not close, a dialog it timed out at) is a
     // seat left short of ready even when its state still says ready: `held` makes that exit 1.
-    const failed = pending.length > 0 || report.serverFailed || report.watchFailed || report.held;
+    // `up` never plans a watch step (`startWatch: false`), so the executor's watchFailed flag
+    // stays false for this command and is not an exit.
+    const failed = pending.length > 0 || report.serverFailed || report.held;
     if (json) {
       if (failed) {
         // The run's own failure named by its row: the seats short of ready first, then what the
         // plan reported; a held step with nothing pending is the pending row too.
         const id = pending.length > 0
           ? 'up.pending'
-          : report.serverFailed ? 'up.server' : report.watchFailed ? 'up.watch' : 'up.pending';
+          : report.serverFailed ? 'up.server' : 'up.pending';
         const message = pending.length > 0
           ? `${pending.length} seat${pending.length === 1 ? '' : 's'} not ready: ${pending.map((seat) => seat.name).join(', ')} (${summaryLine})`
           : report.serverFailed ? 'the herdr server did not start'
-            : report.watchFailed ? 'the watch did not start'
-              : restoreSummary.refused > 0 ? summaryLine : `a step was held (${summaryLine})`;
+            : restoreSummary.refused > 0 ? summaryLine : `a step was held (${summaryLine})`;
         refuse(io, true, 'up', { id, message, repair: null });
       } else {
         writeJson(io, 'team.up', {
@@ -4092,7 +4138,6 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // exit: up.ready
     // exit: up.pending
     // exit: up.server
-    // exit: up.watch
     return failed ? 1 : 0;
   } finally {
     if (runLock !== null && 'release' in runLock) runLock.release();

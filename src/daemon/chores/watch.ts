@@ -22,7 +22,7 @@
 // the child would have to re-derive. The broker reading does not cross the token: no production
 // daemon hosts the broker (`features.broker` is never `on`), so the child's watch keeps that
 // reading explicitly unknown, exactly as a daemon without a broker reader does.
-import type { WatchSources } from '../../commands/watch.ts';
+import { paneProcessesOnce, type WatchSources } from '../../commands/watch.ts';
 import { paneProcessesAsync } from '../../herdr.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../../watch/authority.ts';
 import { loggedWatchDirectIo, sendWatchDirect } from '../../watch/direct-send.ts';
@@ -95,13 +95,14 @@ function startRoute(input: ChoresWatchInput, route: ChoresChildRoute, now: () =>
     // supervisor then reports. A pane it cannot read stays unproven and is never asked to hand
     // over. A test's read sources answer first; a base that supplies only the synchronous reader
     // keeps using it, so no scene probes the machine's own sessions.
-    processInfo: (pane) => {
-      if (input.base?.processesAsync !== undefined) {
-        return input.base.processesAsync(pane, hosted.session, { timeoutMs: 10_000 });
-      }
-      if (input.base?.processes !== undefined) return input.base.processes(pane, hosted.session);
-      return paneProcessesAsync(pane, hosted.session, { timeoutMs: 10_000 });
-    },
+    processInfo: (pane) => paneProcessesOnce(
+      input.base?.processesAsync !== undefined || input.base?.processes !== undefined
+        ? input.base
+        : { processesAsync: (name, session, options) => paneProcessesAsync(name, session, options) },
+      pane,
+      hosted.session,
+      { timeoutMs: 10_000 },
+    ),
     ...(watch.presence
       ? {
           presenceChannelHealthy: (seat: string): boolean =>
