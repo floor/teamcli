@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, clientRosterText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { recordSeatDigestOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
-import { charterGate } from '../charter/check.ts';
+import { anotherPaneRefusal, callerLabel, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
@@ -218,11 +218,19 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
   // order.
   const charter = clientRun !== null ? { kind: 'absent' as const } : charterGate(sources.home ?? homedir(), { operation: 'remove', cwd: io.cwd }, sources.ownerSeatStore);
-  // A charter block binds the owner too, until they widen it with team setup --edit.
-  if (charter.kind === 'block') {
+  // A charter block refuses a seat. The owner goes through with one warning and an audit line.
+  if (charter.kind === 'block' && !isOwner(walkCaller(io))) {
     refuse(io, json, 'remove', { id: 'remove.charter', message: charter.message, repair: null });
     // exit: remove.charter
     return 1;
+  }
+  if (charter.kind === 'block') {
+    passCharterOwner(io, charter.message, {
+      dir: join(io.cwd, '.agents'),
+      command: 'remove',
+      caller: callerLabel(walkCaller(io)),
+      now: sources.now(),
+    });
   }
   const charterAdmitted = charter.kind === 'admit';
   const detached = clientRun !== null || charterAdmitted ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });

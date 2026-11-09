@@ -289,6 +289,65 @@ test('a folder under a charter root is pre-trusted, and a folder outside is refu
   expect(store.prompts).toHaveLength(signed);
 });
 
+test('the owner editing outside the charter is warned once, the edit stands, and the log records it', async () => {
+  const { home, base } = scratch();
+  const root = projectAt(base, 'acme', CONFIG_TEAM);
+  const elsewhere = join(base, 'elsewhere');
+  mkdirSync(elsewhere, { recursive: true });
+  const store = fakeOwnerStore();
+  expect(await sign(home, store, [elsewhere], root)).toBe(0);
+  const io = testIo(root, { kind: 'owner' });
+  const env = { ...process.env, TEAM_CONFIG_SOURCE: 'file' };
+  const code = await runConfig(['set', 'project', 'other'], io, { home, env, now: () => NOW, ownerSeatStore: store });
+  expect(code, `${io.err}${io.out}`).toBe(0);
+  const warnings = `${io.err}${io.out}`.split('\n').filter((line) => line.includes('owner charter') && line.includes('team setup --edit'));
+  expect(warnings).toHaveLength(1);
+  const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+  const audited = log.split('\n').filter((line) => line.includes('owner charter') && line.includes('team setup --edit'));
+  expect(audited).toHaveLength(1);
+  expect(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8')).toContain('project: other');
+});
+
+test('the owner migrating outside the charter is warned once, the migrate stands, and the log records it', async () => {
+  const { home, base } = scratch();
+  const root = projectAt(base, 'acme', CONFIG_TEAM);
+  const elsewhere = join(base, 'elsewhere');
+  mkdirSync(elsewhere, { recursive: true });
+  const store = fakeOwnerStore();
+  expect(await sign(home, store, [elsewhere], root)).toBe(0);
+  const io = testIo(root, { kind: 'owner' });
+  const code = await runMigrate([], io, { home, now: () => NOW, ownerSeatStore: store });
+  expect(code, `${io.err}${io.out}`).toBe(0);
+  const warnings = `${io.err}${io.out}`.split('\n').filter((line) => line.includes('owner charter') && line.includes('team setup --edit'));
+  expect(warnings).toHaveLength(1);
+  const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+  const audited = log.split('\n').filter((line) => line.includes('owner charter') && line.includes('team setup --edit'));
+  expect(audited).toHaveLength(1);
+  expect(`${io.err}${io.out}`).toContain('read back and verified');
+});
+
+test('the owner removing a seat outside the charter is warned once, the removal stands, and the log records it', async () => {
+  const { home, base } = scratch();
+  const root = projectAt(base, 'seats', ADD_TEAM);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, stdio: 'ignore' });
+  const loaded = loadTeamFile(root, { home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  writeApproval(storePath(loaded.team.project, loaded.root, home), { approval: approvalOf(loaded.team, loaded.root), file: readFileSync(join(root, '.agents', 'team.yaml'), 'utf8') }, loaded.team.seats, home);
+  const elsewhere = join(base, 'elsewhere');
+  mkdirSync(elsewhere, { recursive: true });
+  const store = fakeOwnerStore();
+  expect(await sign(home, store, [elsewhere], root)).toBe(0);
+  const io = testIo(root, { kind: 'owner' });
+  const code = await runRemove(['worker'], io, removeSources(home, store));
+  expect(code, `${io.err}${io.out}`).toBe(0);
+  const warnings = `${io.err}${io.out}`.split('\n').filter((line) => line.includes('owner charter') && line.includes('team setup --edit'));
+  expect(warnings).toHaveLength(1);
+  const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+  const audited = log.split('\n').filter((line) => line.includes('owner charter') && line.includes('team setup --edit'));
+  expect(audited).toHaveLength(1);
+  expect(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8')).not.toContain('name: worker');
+});
+
 test('seat add, delete, swap and config set run under the charter with no owner prompt', async () => {
   const { home, base } = scratch();
   const configRoot = projectAt(base, 'config', CONFIG_TEAM);
