@@ -102,6 +102,7 @@ export function restoredPaneByConversation(input: {
       home: input.home,
       session: input.session,
       pane: agent.pane,
+      agentSession: agent.session,
       processes,
       foreground,
     });

@@ -1,5 +1,5 @@
 // An unnamed pane is still the seat whose record holds it, when the process in the pane is
-// that seat's own CLI. The name is not the proof: the host drops it on a restore and during
+// that seat's own CLI and its reported conversation is the one the record holds. The name is not the proof: the host drops it on a restore and during
 // the window before it has named the pane. A bare shell, or a process that is another CLI,
 // is not the seat. The same reading `team register` uses — a CLI pid in front of the shell,
 // and a foreground argv0 the seat's profile names — decides it. TeamCLI then re-applies the
@@ -26,6 +26,8 @@ export function recordedCliAtPane(input: {
   home: string;
   session: string;
   pane: string;
+  /** The conversation the terminal host reports on this pane, absent when unread. */
+  agentSession: string | undefined;
   processes: PaneProcesses | null;
   foreground: readonly string[] | null;
 }): RecordedCli {
@@ -36,6 +38,9 @@ export function recordedCliAtPane(input: {
   );
   if (holding.length !== 1) return { kind: holding.length === 0 ? 'absent' : 'refused' };
   const agent = holding[0]!;
+  // A reused pane id is not this seat's conversation. Refuse before the shell anchor can
+  // place it or the caller can re-apply the old seat's name; an unread conversation is no match.
+  if (input.agentSession === undefined || input.agentSession !== agent.reach.agent_session) return { kind: 'refused' };
   if (input.processes === null) return { kind: 'absent' };
   if (launchedIdentity(input.processes) === null) return { kind: 'refused' };
   if (input.foreground === null) return { kind: 'absent' };

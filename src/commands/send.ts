@@ -393,7 +393,7 @@ export type SendHost = {
   /** The live agents of a session; null when herdr can't be reached. `cli` is the agent herdr
    *  reads on the pane (`claude`, `codex`, …), the process name a CLI profile names — null or
    *  absent when herdr reported none. */
-  agents(session: string): { name: string; pane: string; cli?: string | null }[] | null;
+  agents(session: string): { name: string; pane: string; cli?: string | null; session?: string }[] | null;
   /** A pane's process pids, or null when the pane can't be read. */
   processInfo(session: string, pane: string): PaneProcesses | null;
   /** The folder the session sockets live in; the real one is the runtime temp folder's. */
@@ -475,7 +475,7 @@ export type SendHost = {
 };
 
 export const realHost: SendHost = {
-  agents: (session) => agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane, cli: agent.agent })) ?? null,
+  agents: (session) => agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane, cli: agent.agent, session: agent.session })) ?? null,
   processInfo: (session, pane) => paneProcesses(pane, session),
   // The probe's path shape: `<tmp>/cc-socks/<pid>.sock`, the runtime temp folder's own
   // (observed on this Mac as /tmp/cc-socks; a version-specific observation, not a public
@@ -1517,7 +1517,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
+    admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -1528,7 +1528,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
+    admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -3846,7 +3846,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
+    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -3857,7 +3857,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
+    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -4002,7 +4002,7 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
       }
     }
     if (callerRecord !== null) {
-      const identity = recordIdentityProblem(caller, callerRecord, standing);
+      const identity = recordIdentityProblem(caller, callerRecord, standing, host);
       if (identity !== null) return refuse(io, dir, who, identity, host, report);
     }
   }
@@ -6849,6 +6849,7 @@ export function admissionOf(
   reply?: ReplyContext,
   watch?: { principal: WatchSendPrincipal; root: string },
   daemon?: { principal: DaemonSendPrincipal; root: string },
+  live?: Pick<SendHost, 'agents'>,
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
   if (caller.kind === 'watch') return watchAdmissionOf(caller, team, target, seatName, watch);
@@ -6860,7 +6861,7 @@ export function admissionOf(
   // name is not that seat, and a caller of the same name in another session is not either — so a
   // record the call does not stand as refuses instead of acting for it. Nobody is judged by it.
   if (record !== null) {
-    const identity = recordIdentityProblem(caller, record, at);
+    const identity = recordIdentityProblem(caller, record, at, live);
     if (identity !== null) return { ok: false, why: identity };
   }
   const declared = record === null ? declaredSenderOf(caller, team, fileTeamId) : null;
@@ -7097,13 +7098,24 @@ function noAgentRecord(caller: Caller, declared: DeclaredSender | null): string 
   return `sender ${describeCaller(caller)} has no agent record on this machine, so no rule admits the send (${RULE_SUMMARY}); ${register}\`team up\` registers a seat it leaves standing`;
 }
 
+/** A reported conversation mismatch is never this record's sender. An integration with no
+ *  report, or a record-only path with no live reader, keeps its existing placement checks. */
+export function reportedConversationProblem(record: Agent, pane: string, live?: Pick<SendHost, 'agents'>): string | null {
+  if (record.reach.agent_session == null) return null;
+  const panes = live?.agents(record.reach.session)?.filter((agent) => agent.pane === pane) ?? [];
+  if (panes.some((agent) => agent.session !== undefined && agent.session !== record.reach.agent_session)) {
+    return `the live conversation on pane ${pane} does not match the registry's conversation for seat ${record.reach.seat}; this call is not proven as that seat; run team up or team restart ${record.reach.seat}`;
+  }
+  return null;
+}
+
 /** Why a call may not act as the agent record its name found: null when it may — the call is a
  *  seat standing as the record holds it, on the pane the record names, in the record's session,
  *  with the record running, and the state recording that seat on that same pane (`callerVerdict`,
  *  the pane proof every admitted seat meets). Session and seat name alone bind nobody: a pane
  *  renamed to a registered seat's name is not that seat, and a caller of that name in another
  *  session is not it either. */
-function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding): string | null {
+function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding, live?: Pick<SendHost, 'agents'>): string | null {
   const name = record.reach.seat;
   if (caller.kind !== 'seat') {
     return `the registry holds agent ${record.id} for seat ${name}, and this call is ${describeCaller(caller)}: a record is its own seat's, never a placement beside it`;
@@ -7118,6 +7130,8 @@ function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding):
     const on = record.reach.pane === null ? 'no pane' : `pane ${record.reach.pane}`;
     return `the registry records ${on} for seat ${name} in session ${record.reach.session}, and this call is on pane ${caller.pane}: a pane renamed to a seat's name is not that seat`;
   }
+  const conversation = reportedConversationProblem(record, caller.pane, live);
+  if (conversation !== null) return conversation;
   const verdict = callerVerdict(caller, name, at);
   if (verdict.kind === 'no-pane') return noPaneRefusal(verdict.name);
   if (verdict.kind === 'another-pane') return anotherPaneRefusal(verdict.name, verdict.recordedPane);

@@ -86,7 +86,7 @@ import { messageKeyOf, messageKeyState } from '../store/keys.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { noteUnread } from '../send/unread-hint.ts';
 import { recordDir } from './messages.ts';
-import { admissionOf, labelNameOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
+import { reportedConversationProblem, admissionOf, labelNameOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
 
 export const USAGE = `Usage: team reply <id> [<text>] [--close] [--json]
        team reply <id> --close
@@ -832,6 +832,8 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
               why: `seat ${me} has no registered agent record in team ${freshBinding.teamId} naming ${freshBinding.recipientId}; a reply never claims an identity it does not have; nothing was written`,
             };
           }
+          const conversation = reportedConversationProblem(freshAgent, placed.pane, host.send);
+          if (conversation !== null) return { ok: false, why: `${conversation}; nothing was written` };
           const signed = signRecord(payload, host.home);
           const wrote = writeClientInboxFile(freshInbox.dir, replyId, `${JSON.stringify(signed, null, 2)}\n`);
           if (wrote === 'exists') return { ok: false, why: `client ${origin.grant.clientId}: a record already holds the id ${replyId}; nothing was written` };
@@ -988,7 +990,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   // (§3.5). A send never carries the context.
   let admission = admissionOf(
     placed, team, endpoint ?? seatSender, targetSeat, host.home, fileTeamId, () => host.now(), standing,
-    senderIsMainOrchestrator ? undefined : 'open-thread',
+    senderIsMainOrchestrator ? undefined : 'open-thread', undefined, undefined, host.send,
   );
   if (!admission.ok && senderIsMainOrchestrator) {
     if (!state.open) {
@@ -1014,7 +1016,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     }
     admission = admissionOf(
       placed, team, endpoint ?? seatSender, targetSeat, host.home, fileTeamId, () => host.now(), standing,
-      'main-orchestrator-thread',
+      'main-orchestrator-thread', undefined, undefined, host.send,
     );
   }
   if (!admission.ok) {

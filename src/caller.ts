@@ -165,6 +165,7 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
           home: sources.home,
           session,
           pane: agent.pane,
+          agentSession: agent.session,
           processes: sources.paneProcesses?.(agent.pane) ?? null,
           foreground: sources.foreground?.(agent.pane) ?? null,
         });
