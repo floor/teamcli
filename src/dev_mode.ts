@@ -404,13 +404,35 @@ export type DevModeOwnerLift = {
 const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning: null, caller, role: null, audit: () => { /* nothing was admitted */ } });
 
 /**
+ * Owner-reserved actions. Development mode does not admit them: the lift returns not lifted
+ * before it reads whether dev mode is on, so there is no warning and no run. A development
+ * check is any other gate, and it keeps the admission below.
+ */
+export const OWNER_RESERVED_GATES: readonly { command: string; gate: string }[] = [
+  { command: 'remove', gate: 'abandon-seat' },
+  { command: 'down', gate: 'abandon-team' },
+  { command: 'add', gate: 'restore-seat' },
+  { command: 'forget', gate: 'forget' },
+  { command: 'grant', gate: 'grant' },
+  { command: 'delegate', gate: 'delegate' },
+  { command: 'revoke', gate: 'revoke' },
+  { command: 'config', gate: 'trust' },
+];
+
+/** Whether this command and gate are owner-reserved. An omitted gate is a development check. */
+export function ownerReservedGate(command: string, gate: string | undefined): boolean {
+  if (gate === undefined) return false;
+  return OWNER_RESERVED_GATES.some((row) => row.command === command && row.gate === gate);
+}
+
+/**
  * Whether dev mode admits a caller to one owner-only command. The caller must be a placed seat:
  * the target team's lead on the pane the target state records for it in the target
  * session, or — the route the main team's lead takes — a lead of another team the registry holds, on
  * the pane that team's own state records, in that team's session; and dev mode must be `on` for
  * the caller's place. The file's own `operator:` seat holds a second, narrower admission:
  * only at a command that passes `admitsOperator` — `check
- * --repair`, `remove --abandon`, `down --abandon`, `policy set`/`unset`, `daemon restart` — and
+ * --repair`, `policy set`/`unset`, `daemon restart` — and
  * only while the `lead-gates` policy reads `lead+operator` on the caller's chain. The owner is
  * not this path's to admit — the command's own `isOwner` answers first — and a no-terminal or
  * unplaced caller never is. An admitted run logs the same warning the folded caller gate logs,
@@ -433,12 +455,17 @@ export function devModeOwnerLift(
     /** Whether the `lead-gates` policy's `lead+operator` value may admit the target file's own
      *  placed operator to exactly this gate. Absent or false keeps the gate the lead's. */
     admitsOperator?: boolean;
+    /** Which gate this call is. A gate in `OWNER_RESERVED_GATES` is never lifted. */
+    gate?: string;
     /** When the audit line is written: with the admission (the sibling writers' `now`), or by
      *  the caller through the returned `audit` once its own write succeeded (`later`). */
     audit?: 'now' | 'later';
   },
 ): DevModeOwnerLift {
   const caller = callerOf(io, options.team.session);
+  // Owner-reserved actions refuse every caller but the owner. That answer is not a warning:
+  // dev mode is not consulted, and nothing is written.
+  if (ownerReservedGate(options.command, options.gate)) return NO_LIFT(caller);
   const state = devModeState(io, {
     ...(options.home !== undefined ? { home: options.home } : {}),
     team: options.team,
@@ -481,8 +508,10 @@ export function devModeOwnerLift(
  */
 export function devModeOwnerLiftAtCwd(
   io: Io,
-  options: { command: string; refusal: string; home?: string; now?: Date; admitsOperator?: boolean; audit?: 'now' | 'later' },
+  options: { command: string; refusal: string; home?: string; now?: Date; admitsOperator?: boolean; audit?: 'now' | 'later'; gate?: string },
 ): DevModeOwnerLift | null {
+  // The same reserved table, before the cwd's team file is read and before dev mode is asked.
+  if (ownerReservedGate(options.command, options.gate)) return NO_LIFT(walkCaller(io));
   const walked = walkCaller(io);
   if (walked.kind !== 'seat' && !(walked.kind === 'unplaced' && walked.reason === 'it runs under herdr')) return null;
   // A caller the walk cannot place is the usual refusal, and it may not pay for a team-file
@@ -520,6 +549,7 @@ export function devModeOwnerLiftAtCwd(
     ...(options.now !== undefined ? { now: options.now } : {}),
     ...(options.admitsOperator !== undefined ? { admitsOperator: options.admitsOperator } : {}),
     ...(options.audit !== undefined ? { audit: options.audit } : {}),
+    ...(options.gate !== undefined ? { gate: options.gate } : {}),
   });
 }
 

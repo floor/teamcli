@@ -62,6 +62,7 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
     // orchestrator continues with the warning; every other caller keeps the refusal.
     const lift = devModeOwnerLiftAtCwd(io, {
       command: 'tempo',
+      gate: 'set',
       refusal: placement,
       ...(sources.home !== undefined ? { home: sources.home } : {}),
     });
