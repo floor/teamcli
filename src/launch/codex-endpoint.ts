@@ -54,7 +54,8 @@
 // ("File name too long", os error 63) — so this platform's own limit is not the bound relied on.
 // The other supported platform is unmeasured here: this build asks it for no more than the same
 // 100 bytes, and the runtime-folder fallback has not been run there.
-import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn } from 'node:child_process';
+import { execProcessToolSync } from '../process-tools-adapter.ts';
 import { syncChildTimeout } from '../child.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { sessionList } from '../herdr.ts';
@@ -259,13 +260,13 @@ function pidAlive(pid: number): boolean {
  *  the ownership proof a signal requires: a pid alone is never proof, because pids are reused. */
 export function codexCommandOf(pid: number): string | null {
   try {
-    const comm = execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], {
+    const comm = execProcessToolSync('ps', ['-o', 'comm=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(2_000),
     }).trim();
     if (basename(comm) !== 'codex') return null;
-    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], {
+    return execProcessToolSync('ps', ['-o', 'command=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(2_000),
@@ -282,12 +283,12 @@ export function codexCommandOf(pid: number): string | null {
  *  the field to read. */
 export function processStartOf(pid: number): number | null {
   try {
-    const line = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    const line = execProcessToolSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(2_000),
     }).trim();
-    const at = Date.parse(line);
+    const at = Date.parse(`${line} UTC`);
     return Number.isFinite(at) ? at : null;
   } catch {
     return null;

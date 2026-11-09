@@ -10,6 +10,7 @@
 // started by a seat's launch line, serves only that seat's drop folder, and writes exactly one
 // listener marker and one receipt per read (../mcp/serve.ts, ../mcp/inbox.ts).
 import { spawnSync } from 'node:child_process';
+import { spawnProcessToolSync } from '../process-tools-adapter.ts';
 import { createPublicKey } from 'node:crypto';
 import { closeSync, constants as fs, fstatSync, lstatSync, openSync, readSync, readdirSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
@@ -290,7 +291,12 @@ export const realSources: McpSources = {
     });
   },
   processRunning(pattern) {
-    const result = spawnSync('pgrep', ['-f', pattern], { stdio: 'ignore', timeout: 5_000 });
+    let result;
+    try {
+      result = spawnProcessToolSync('pgrep', ['-f', pattern], { encoding: 'utf8', stdio: 'ignore', timeout: 5_000 });
+    } catch {
+      return null;
+    }
     if (result.error) return null;
     if (result.status === 0) return true;
     if (result.status === 1) return false;

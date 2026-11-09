@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { spawnProcessToolSync } from '../process-tools-adapter.ts';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -100,11 +101,16 @@ export const realCommandRunner = run;
  *  not a single token is unreadable — a path's directory and a command line are not the name. */
 export function processComm(pid: number): string | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  const result = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 2_000,
-  });
+  let result;
+  try {
+    result = spawnProcessToolSync('ps', ['-p', String(pid), '-o', 'comm='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2_000,
+    });
+  } catch {
+    return null;
+  }
   if (result.error || result.status !== 0) return null;
   const base = result.stdout.trim().split('/').pop() ?? '';
   return /^[A-Za-z0-9._+-]+$/.test(base) ? base : null;

@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execProcessToolSync } from './process-tools-adapter.ts';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename } from 'node:path';
@@ -616,7 +616,7 @@ function processName(raw: string): string {
 
 export const readWithPs: ReadProcess = (pid) => {
   try {
-    const line = execFileSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], {
+    const line = execProcessToolSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(2_000),
@@ -648,7 +648,7 @@ export function parsePsSnapshot(text: string): ReadonlyMap<number, { ppid: numbe
 }
 
 function readPsSnapshot(): ReadonlyMap<number, { ppid: number; name: string }> {
-  const out = execFileSync('ps', ['-ax', '-o', 'pid=,ppid=,comm='], {
+  const out = execProcessToolSync('ps', ['-ax', '-o', 'pid=,ppid=,comm='], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     timeout: syncChildTimeout(2_000),

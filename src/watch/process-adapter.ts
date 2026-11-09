@@ -27,7 +27,7 @@
 // A test hands the core a fake adapter through this same interface; a scene never runs these
 // commands.
 
-import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { execProcessTool, execProcessToolSync, spawnProcessToolSync } from '../process-tools-adapter.ts';
 import { readlinkSync } from 'node:fs';
 import { syncChildTimeout } from '../child.ts';
 
@@ -44,7 +44,7 @@ export const processWorkingFolderOf: WorkingFolderReader = (pid) => {
     }
   }
   try {
-    const line = execFileSync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], {
+    const line = execProcessToolSync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(2_000),
@@ -104,7 +104,7 @@ export function parseCpuTime(text: string): number | null {
 export const processCpuTimeAsync: ProcessCpuTimeProbe = (pid) =>
   new Promise((resolve) => {
     try {
-      execFile(
+      execProcessTool(
         'ps',
         ['-o', 'time=', '-p', String(pid)],
         { encoding: 'utf8', timeout: CPU_PROBE_TIMEOUT_MS, killSignal: 'SIGKILL' },
@@ -138,11 +138,16 @@ export function processFoldersOf(pids: readonly number[]): Map<number, string | 
     }
     return folders;
   }
-  const result = spawnSync('lsof', ['-a', '-d', 'cwd', '-p', pids.join(','), '-Fn'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  let result;
+  try {
+    result = spawnProcessToolSync('lsof', ['-a', '-d', 'cwd', '-p', pids.join(','), '-Fn'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  } catch {
+    return null;
+  }
   if (result.error) return null;
   let at: number | null = null;
   for (const line of (result.stdout ?? '').split('\n')) {
@@ -171,13 +176,14 @@ export type ProcessEntry = { pid: number; comm: string; startedAtMs: number };
 const TABLE_LINE = /^\s*(\d+)\s+(.*?)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s*$/;
 
 /** Reads the query's text into rows. Exported for its own scene: the shapes are fixed by the
- *  query, so the parser needs no process behind it. */
-export function parseProcessTable(text: string): ProcessEntry[] {
+ *  query, so the parser needs no process behind it. Captured local columns keep their existing
+ *  interpretation; the trusted system query explicitly supplies UTC. */
+export function parseProcessTable(text: string, timeZone?: 'UTC'): ProcessEntry[] {
   const rows: ProcessEntry[] = [];
   for (const line of text.split('\n')) {
     const match = TABLE_LINE.exec(line);
     if (match === null) continue;
-    const startedAtMs = Date.parse(match[3]!);
+    const startedAtMs = Date.parse(timeZone === 'UTC' ? `${match[3]!} UTC` : match[3]!);
     if (!Number.isFinite(startedAtMs)) continue;
     rows.push({ pid: Number(match[1]), comm: match[2]!, startedAtMs });
   }
@@ -194,12 +200,12 @@ export const processTable = (): ProcessEntry[] | null => {
   const uid = process.getuid?.();
   if (uid === undefined) return null;
   try {
-    const text = execFileSync('ps', ['-U', String(uid), '-o', 'pid=,comm=,lstart='], {
+    const text = execProcessToolSync('ps', ['-U', String(uid), '-o', 'pid=,comm=,lstart='], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       maxBuffer: 16 * 1024 * 1024,
     });
-    return parseProcessTable(text);
+    return parseProcessTable(text, 'UTC');
   } catch {
     return null;
   }
@@ -208,7 +214,7 @@ export const processTable = (): ProcessEntry[] | null => {
 /** The name the system holds for the process at `pid`, or null when it is gone or cannot be read. */
 export const processCommOf = (pid: number): string | null => {
   try {
-    const line = execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], {
+    const line = execProcessToolSync('ps', ['-o', 'comm=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
@@ -224,11 +230,11 @@ export const processCommOf = (pid: number): string | null => {
  *  that instant. */
 export const processStartOf = (pid: number): number | null => {
   try {
-    const line = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    const line = execProcessToolSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    const at = Date.parse(line);
+    const at = Date.parse(`${line} UTC`);
     return Number.isFinite(at) ? at : null;
   } catch {
     return null;
