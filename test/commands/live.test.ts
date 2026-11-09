@@ -490,7 +490,7 @@ describe('team up, live', () => {
     }
   });
 
-  test('launches each claude-code seat, names it, and starts the watch', async () => {
+  test('launches and names each claude-code seat without a pane watch', async () => {
     await approve();
     const made = world();
     const io = testIo(root, { kind: 'owner' });
@@ -501,12 +501,11 @@ describe('team up, live', () => {
       'claude-coordinator-acme · project coordinator',
       'deepseek-acme · implementer',
       'deepseek-acme-2 · implementer',
-      // Last, the watch's own workspace: the pane that runs the watch.
-      watchLabel('acme-web'),
+      // 631ddc9d3: the daemon owns the watch; only seat workspaces are created.
     ]);
     expect(made.renames).toEqual(['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2']);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
-    expect(io.err).toContain('watch: started\n');
+    expect(made.runs.map(({ pane }) => pane)).toEqual(['w1:p1', 'w2:p1', 'w3:p1']);
     expect(io.err).toContain('skip codex-acme:');
     expect(io.err).toContain('skip grok-acme:');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
@@ -533,7 +532,7 @@ describe('team up, live', () => {
     for (const seat of Object.values(seats)) {
       expect(seat.launch_line ?? '').not.toContain('--settings');
     }
-    expect(readFileSync(join(root, '.agents/team.log'), 'utf8')).toContain('watch: started');
+    expect(readFileSync(join(root, '.agents/team.log'), 'utf8')).toContain('deepseek-acme-2: ready');
   });
 
   test('records the CLI each seat was launched with', async () => {
@@ -1255,7 +1254,7 @@ describe('team up, live', () => {
       '  already ready; left as it is; its process was never recorded: ' +
         'run team register claude-coordinator-acme to record it, nothing relaunched\n',
     );
-    expect(made.creates).toEqual(['deepseek-acme-2 · implementer', watchLabel('acme-web')]);
+    expect(made.creates).toEqual(['deepseek-acme-2 · implementer']); // 631ddc9d3: no separate Watch workspace.
     expect(made.renames).toContain('deepseek-acme');
     expect(made.renames).not.toContain('claude-coordinator-acme');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
@@ -2136,7 +2135,7 @@ describe('team up, live', () => {
     const made = world();
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({ machine: () => fine }, made))).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']); // 631ddc9d3: no separate Watch workspace.
   });
 
   test('free swap under the file does not refuse up on its own', async () => {
@@ -2144,7 +2143,7 @@ describe('team up, live', () => {
     const made = world();
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({ machine: () => ({ ...fine, swapFree: 1.2e9 }) }, made))).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']); // 631ddc9d3: no separate Watch workspace.
   });
 
   test("a doctor miss refuses, and the watch's missing heartbeat does not", async () => {
@@ -2412,13 +2411,16 @@ describe('team up, a session that was restored', () => {
     // The coordinator's pane is launched in again, and the pane it is launched in reads the
     // idle prompt its own line prints: `pane run` in a pane the run did not create.
     made.seed(restoredState['claude-coordinator-acme'].pane, IDLE, true);
-    // The readings as herdr gives them: pids only. w92 is the recorded process; w91's shell is in
+    // f91e276bd: the bare restored CLI exits before the recorded line runs in the same pane.
+    let restoredPhase: 'running' | 'shell' | 'relaunched' = 'running';
+    made.seed('w93:p1', IDLE, true);
+    // The readings as the terminal host gives them: pids only. w92 is the recorded process; w91's shell is in
     // front with no CLI; w93's shell is the recorded one and a stranger's CLI is in front; w94
     // can't be read at all.
     made.launch.processInfo = (_session, pane) => {
       if (pane === 'w91:p1') return { shell: 420, foreground: [420] };
       if (pane === 'w92:p1') return { shell: 410, foreground: [410, 411] };
-      if (pane === 'w93:p1') return { shell: 430, foreground: [500] };
+      if (pane === 'w93:p1') return { shell: 430, foreground: restoredPhase === 'shell' ? [430] : [restoredPhase === 'relaunched' ? 501 : 500] };
       if (pane === 'w94:p1') return null;
       // A pane this run made: the CLI it has just launched.
       return { shell: 700, foreground: [700, 701] };
@@ -2432,7 +2434,10 @@ describe('team up, a session that was restored', () => {
     ];
     // The recorded agents, plus the names this run's own renames put on the panes it launches:
     // the replacement seat's naming step reads them back from here.
-    made.launch.agents = () => { calls.push('agents'); return [...agents, ...liveNames(made)]; };
+    made.launch.agents = () => {
+      calls.push('agents');
+      return [...new Map([...agents, ...liveNames(made)].map((entry) => [entry.pane, entry])).values()];
+    };
     // The ordered host calls: the workspaces closed, the workspaces made, the lines run.
     const calls: string[] = [];
     const keys: string[] = [];
@@ -2445,7 +2450,7 @@ describe('team up, a session that was restored', () => {
       return madeWs;
     };
     const run = made.launch.paneRun.bind(made.launch);
-    made.launch.paneRun = (session, pane, command) => { calls.push(`run ${pane}`); return run(session, pane, command); };
+    made.launch.paneRun = (session, pane, command) => { calls.push(`run ${pane}`); if (pane === 'w93:p1') restoredPhase = 'relaunched'; return run(session, pane, command); };
     const read = made.launch.processInfo!;
     made.launch.processInfo = (session, pane) => { calls.push(`process ${pane}`); return read(session, pane); };
     const text = made.launch.paneText;
@@ -2454,7 +2459,7 @@ describe('team up, a session that was restored', () => {
       return pane === 'w93:p1' ? IDLE : text(session, pane);
     };
     made.launch.typeText = (_session, pane, text) => { keys.push(`type ${pane} ${text}`); return true; };
-    made.launch.pressEnter = (_session, pane) => { keys.push(`enter ${pane}`); return true; };
+    made.launch.pressEnter = (_session, pane) => { keys.push(`enter ${pane}`); if (pane === 'w93:p1') restoredPhase = 'shell'; return true; };
 
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
@@ -2475,10 +2480,10 @@ describe('team up, a session that was restored', () => {
       ),
     );
 
-    expect(code).toBe(0);
+    expect(code, io.out + io.err).toBe(0);
     // The shell's own pane is launched in again — nothing is created or closed for it. The pane
-    // that holds another program is not closed and is never typed or run into: its declared CLI
-    // is alone in its workspace at an idle prompt, so the seat is re-tied to it. The
+    // that holds the bare CLI stays in its workspace: only its exit word is typed, then its
+    // recorded launch runs in that same pane. The
     // coordinator's name is still in the agent list; that does not keep a shell.
     expect(made.closes).toEqual([]);
     const before = (at: string, n: number) => calls.slice(0, calls.indexOf(at)).slice(-n);
@@ -2490,8 +2495,8 @@ describe('team up, a session that was restored', () => {
     expect(before(`run ${coord}`, 1)).toEqual([`process ${coord}`]);
     expect(calls).not.toContain('close w91');
     expect(calls).not.toContain('close w93');
-    expect(keys).toEqual([]);
-    expect(made.runs.filter(({ pane }) => untouched.includes(pane))).toEqual([]);
+    expect(keys).toEqual(['type w93:p1 /exit', 'enter w93:p1']);
+    expect(made.runs.filter(({ pane }) => untouched.includes(pane)).map(({ pane }) => pane)).toEqual(['w93:p1']);
     expect(made.runs.find(({ pane }) => pane === coord)?.command).toContain('--append-system-prompt');
     expect(made.runs.find(({ pane }) => pane === coord)?.command).toContain('Agent: Claude Opus 5.5 · project coordinator');
     expect(io.out).toContain('codex-acme: ready\n');
@@ -2499,8 +2504,8 @@ describe('team up, a session that was restored', () => {
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(io.err).toContain(`claude-coordinator-acme: its recorded pane ${coord} was at its shell; launched in the same pane\n`);
     expect(io.out).toContain('deepseek-acme: ready\n');
-    expect(io.err).toContain('restored and re-tied: its pane runs claude-code alone in its workspace, at an idle prompt');
-    expect(io.err).toContain('1 seat repaired, 0 skipped (working), 0 refused\n');
+    expect(io.err).toContain('its pane held the bare restored CLI, not its launch line; exited in place and launched again in the same pane');
+    expect(io.err).toContain('2 seats repaired, 0 skipped (working), 0 refused\n'); // f91e276bd also repairs the bare CLI through its recorded launch.
     expect(io.err).not.toContain('its pane held a process team did not launch');
     expect(io.out).toContain('deepseek-acme-2: ready\n');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
@@ -2508,12 +2513,13 @@ describe('team up, a session that was restored', () => {
     // Relaunched in its own pane: the record keeps that pane and workspace, and its pids are
     // unchanged, because a pane reading of the shell alone gives no new identity to record.
     expect(seats['claude-coordinator-acme']).toMatchObject({ stage: 'ready', pane: coord, workspace: restoredState['claude-coordinator-acme'].workspace, launched: { shell: 420, cli: [421] } });
-    // The re-tie keeps the record's own pane, takes the pids the pane holds now, and writes no
-    // conversation it did not see.
+    // The relaunch keeps the pane and records the successor process and its own launch conversation.
     const tied = seats['deepseek-acme'];
-    expect(tied).toMatchObject({ stage: 'ready', launched: { shell: 430, cli: [500] } });
+    expect(tied).toMatchObject({ stage: 'ready', launched: { shell: 430, cli: [501] } });
     expect(tied?.pane).toBe(recorded['deepseek-acme']?.pane);
-    expect(tied?.agent_session).toBeUndefined();
+    const relaunched = made.runs.find(({ pane }) => pane === 'w93:p1');
+    expect(relaunched?.command).toMatch(/--session-id [0-9a-f-]{36}/);
+    expect(tied?.agent_session).toBe(relaunched?.command.match(/--session-id ([0-9a-f-]+)/)?.[1]);
     expect(seats['deepseek-acme-2']).toMatchObject({ stage: 'ready', pane: replacement, launched: { shell: 700, cli: [701] } });
   });
 
@@ -3723,7 +3729,7 @@ describe('team up, the pause', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(0);
-    const [firstPane, secondPane, thirdPane, watchPane] = made.runs.map(({ pane }) => pane);
+    const [firstPane, secondPane, thirdPane] = made.runs.map(({ pane }) => pane);
     // A7 (ed422f96d): named and ready each refresh the live session only after proving
     // this run's recorded process still holds the pane. Keep those reads in the exact trace.
     const sessionProof = (pane: string | undefined) => [`process:${pane}`, 'agents', 'agent-panes'];
@@ -3747,8 +3753,7 @@ describe('team up, the pause', () => {
       // the wait's reads, the naming list and rename, and the session proofs.
       'create:deepseek-acme · implementer', `process:${secondPane}`, `run:${secondPane}`, `read:${secondPane}`, `read:${secondPane}`, ...sessionProof(secondPane), 'agent-panes', 'agents', 'agent-panes', 'agents', 'agent-panes', `rename:${secondPane}:deepseek-acme`, 'agents', 'agent-panes', ...sessionProof(secondPane), ...sessionProof(secondPane),
       'create:deepseek-acme-2 · implementer', `process:${thirdPane}`, `run:${thirdPane}`, `read:${thirdPane}`, `read:${thirdPane}`, ...sessionProof(thirdPane), 'agent-panes', 'agents', 'agent-panes', 'agents', 'agent-panes', `rename:${thirdPane}:deepseek-acme-2`, 'agents', 'agent-panes', ...sessionProof(thirdPane), ...sessionProof(thirdPane),
-      // Then the watch's workspace and its command line, the plan's last step.
-      'create:Watch · acme-web', `run:${watchPane}`,
+      // 631ddc9d3: no pane-watch create/run between the seats and the address pass.
       // The address pass: every declared claude-code seat this run leaves live is read once for
       // the socket its pane answers at.
       'agents', 'agent-panes', `process:${firstPane}`, `process:${secondPane}`, `process:${thirdPane}`,
@@ -4992,7 +4997,7 @@ describe('team up, delegated', () => {
     expect(io.err).not.toContain("--file is the owner's");
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(made.starts).toBe(1);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']); // 631ddc9d3: no separate Watch workspace.
     expect(audits).toEqual([]);
   });
 
@@ -5026,7 +5031,7 @@ describe('team up, delegated', () => {
     const code = await runUp(FILE, io, sources({ ...passed, logDelegated }, made));
     expect(code).toBe(0);
     expect(made.starts).toBe(1);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']); // 631ddc9d3: no separate Watch workspace.
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(made.terminal.reads).toBe(0);
     expect(audits).toHaveLength(1);
@@ -7015,13 +7020,11 @@ describe('team up, a ready seat whose model drifted', () => {
       if (pane === 'w92:p1') return { shell: 410, foreground: [410, 411] };
       return { shell: 700, foreground: [700, 701] };
     };
-    let seen = 0;
-    made.launch.paneText = (_session, pane) => {
-      if (pane !== 'w92:p1') return IDLE;
-      seen += 1;
-      return seen === 1 ? terra() : fileModel(terra());
-    };
-    made.launch.agents = () => [lead(), codex()];
+    // f91e276bd: dialog and model planning both see the initial frame; it changes at execution.
+    let executing = false;
+    made.launch.paneText = (_session, pane) => pane === 'w92:p1'
+      ? (executing ? fileModel(terra()) : terra()) : IDLE;
+    made.launch.agents = () => { executing = true; return [lead(), codex()]; };
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,
@@ -7068,13 +7071,11 @@ describe('team up, a ready seat whose model drifted', () => {
       if (pane === 'w92:p1') return { shell: 410, foreground: [410, 411] };
       return { shell: 700, foreground: [700, 701] };
     };
-    let seen = 0;
-    made.launch.paneText = (_session, pane) => {
-      if (pane !== 'w92:p1') return IDLE;
-      seen += 1;
-      return seen === 1 ? terra() : null;
-    };
-    made.launch.agents = () => [lead(), codex()];
+    // f91e276bd: dialog and model planning both see the initial frame; it changes at execution.
+    let executing = false;
+    made.launch.paneText = (_session, pane) => pane === 'w92:p1'
+      ? (executing ? null : terra()) : IDLE;
+    made.launch.agents = () => { executing = true; return [lead(), codex()]; };
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,
@@ -7106,13 +7107,11 @@ describe('team up, a ready seat whose model drifted', () => {
       if (pane === 'w92:p1') return { shell: 410, foreground: [410, 411] };
       return { shell: 700, foreground: [700, 701] };
     };
-    let seen = 0;
-    made.launch.paneText = (_session, pane) => {
-      if (pane !== 'w92:p1') return IDLE;
-      seen += 1;
-      return seen === 1 ? terra() : unknownFrame();
-    };
-    made.launch.agents = () => [lead(), codex()];
+    // f91e276bd: dialog and model planning both see the initial frame; it changes at execution.
+    let executing = false;
+    made.launch.paneText = (_session, pane) => pane === 'w92:p1'
+      ? (executing ? unknownFrame() : terra()) : IDLE;
+    made.launch.agents = () => { executing = true; return [lead(), codex()]; };
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,

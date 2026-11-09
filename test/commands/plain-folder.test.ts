@@ -1,5 +1,5 @@
 // A folder with no git repository: flagless load reads `.agents/team.yaml` there and nowhere
-// above it, `up` starts a watch only when that watch would read the file it was given, and the
+// above it, `up` launches seats without a pane watch, and the
 // caller gate and the approval still decide once the file is found.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawn } from 'node:child_process';
@@ -338,7 +338,7 @@ int main(int argc, char **argv) {
 }
 
 describe('a folder with no git repository', () => {
-  test('up --file .agents/team.yaml starts a watch that reads that file', async () => {
+  test('up --file .agents/team.yaml launches from that folder without a pane watch', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     const file = join(root, '.agents', 'team.yaml');
@@ -355,16 +355,15 @@ describe('a folder with no git repository', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', '.agents/team.yaml'], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    const watchdog = made.creates.find((created) => created.label === watchLabel('acme'));
-    expect(watchdog?.cwd).toBe(root);
-    expect(io.err).toContain('watch: started\n');
-    const command = made.runs.find((run) => /\bwatch\b/.test(run.command))?.command ?? '';
-    expect(command).toContain(' watch');
-    expect(command).not.toContain('--file');
-
-    const beat = await runAsPane(command, root, home);
-    expect(beat.heartbeat).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(beat.pid).toBeGreaterThan(0);
+    // 631ddc9d3: the daemon owns the watch; preserve the flagged-folder and ready-seat checks.
+    expect(made.creates.map(({ cwd }) => cwd)).toEqual([root, root]);
+    expect(io.out).toContain('claude-coordinator-acme: ready\n');
+    const commands = made.runs.map(({ command }) => command);
+    expect(commands).toHaveLength(2);
+    expect(commands.every((command) => command.startsWith('AGENT_UNATTENDED=1 claude '))).toBe(true);
+    const ready = readState(join(root, '.agents')).sessions[SESSION]?.seats['claude-coordinator-acme'];
+    expect(ready?.last_active).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(made.creates.length).toBeGreaterThan(0);
   }, 20_000);
 
   // Earlier rule, reversed by the status caller rule:
@@ -455,7 +454,7 @@ describe('a folder with no git repository', () => {
 });
 
 describe('a file the watch would not read', () => {
-  test('up --file custom/team.yaml records a watch that reads the flagged file', async () => {
+  test('up --file custom/team.yaml launches there and manual watch only reports', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -471,32 +470,32 @@ describe('a file the watch would not read', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    const watchdog = made.creates.find((created) => created.label === watchLabel('acme'));
-    expect(watchdog?.cwd).toBe(customDir);
-    const run = made.runs.find((item) => /\bwatch\b/.test(item.command));
-    expect(run?.command).toContain(' watch');
-    expect(run?.command).not.toContain('--file');
-    expect(run?.command).toContain(`--session ${SESSION}`);
+    // 631ddc9d3: no pane watch or watchdog record; hand-run watch is a read-only report.
+    expect(made.creates.map(({ cwd }) => cwd)).toEqual([customDir, customDir]);
+    const commands = made.runs.map(({ command }) => command);
+    expect(commands).toHaveLength(2);
+    expect(commands.join('\n')).not.toContain('--file');
+    expect(io.out).toContain('claude-operator-acme: ready\n');
+    const statePath = join(customDir, 'team.state.json');
+    const before = readFileSync(statePath, 'utf8');
 
     const other = testIo(customDir, { kind: 'pane', pane: 'w9:p1' });
-    const refused = await runWatch(['--session', SESSION], other, watchSources(home));
-    expect(refused).toBe(1);
-    expect(other.err).toContain('only the watch this session records');
-    expect(readState(customDir).sessions[SESSION]?.watch?.pane).toBe(run?.pane);
+    const reported = await runWatch(['--session', SESSION], other, watchSources(home));
+    expect(reported).toBe(0);
+    expect(other.out).toContain(`the daemon does not host session ${SESSION}`);
+    expect(readState(customDir).sessions[SESSION]?.watch?.pane).toBeUndefined();
 
-    const watching = testIo(customDir, { kind: 'pane', pane: run?.pane ?? '' });
+    const watching = testIo(customDir, { kind: 'pane', pane: 'w1:p1' });
     const watched = await runWatch(['--session', SESSION], watching, watchSources(home));
     expect(watched, watching.out + watching.err).toBe(0);
-    expect(watching.out).toContain(`watching the session "${SESSION}"`);
-    const pane = run?.pane;
-    if (!pane) throw new Error('the watchdog pane was not recorded');
-    expect(readState(customDir).last_valid?.file).toBe(customBody);
-    expect(readState(customDir).sessions[SESSION]?.watchdog).toEqual({ file: custom, pane });
+    expect(watching.out).toContain(`the daemon does not host session ${SESSION}`);
+    expect(readFileSync(custom, 'utf8')).toBe(customBody);
+    expect(readFileSync(statePath, 'utf8')).toBe(before);
     expect(readState(join(root, '.agents')).last_valid?.file).not.toBe(customBody);
     expect(readState(join(root, '.agents')).sessions[SESSION]?.watch).toBeUndefined();
   });
 
-  test('a dry run prints the watchdog and does not say the watch was left unstarted', async () => {
+  test('a dry run previews seats without a watchdog or an unstarted-watch warning', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -512,7 +511,9 @@ describe('a file the watch would not read', () => {
     const preview = await runUp(['--dry-run', '--file', custom], dry, upSources(home, world()));
     expect(preview).toBe(0);
     expect(dry.out).toContain('dry run: nothing was run\n');
-    expect(dry.out).toContain("--label 'Watch · acme'");
+    // 631ddc9d3: only seat workspaces belong in the preview.
+    expect(dry.out).toContain('claude-coordinator-acme');
+    expect(dry.out).not.toContain("--label 'Watch · acme'");
     expect(dry.out).not.toContain('--file');
     expect(dry.out).not.toContain('watch: not started');
     expect(dry.err).not.toContain('watch: not started');
@@ -530,7 +531,8 @@ describe('a file the watch would not read', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    expect(made.creates.some((created) => created.label === watchLabel('acme'))).toBe(true);
+    // 631ddc9d3: the daemon watch adds no workspace to the two launched seats.
+    expect(made.creates.map(({ label }) => label)).toEqual(['coordinator', 'operator']);
     const command = made.runs.find((run) => /\bwatch\b/.test(run.command))?.command ?? '';
     expect(command).not.toContain('--file');
     expect(command.includes('\x1b')).toBe(false);
@@ -544,7 +546,7 @@ describe('a file the watch would not read', () => {
     expect(dry.out).not.toContain('watch: not started');
   });
 
-  test('the default path starts the watch', async () => {
+  test('the default path launches its seats without a pane watch', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -559,8 +561,9 @@ describe('a file the watch would not read', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', file], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    expect(made.creates.some((created) => created.label === watchLabel('acme'))).toBe(true);
-    expect(io.err).toContain('watch: started\n');
+    // 631ddc9d3: the daemon watch adds no workspace to the two launched seats.
+    expect(made.creates.map(({ label }) => label)).toEqual(['coordinator', 'operator']);
+    expect(io.out).toContain('claude-operator-acme: ready\n');
     expect(io.out).not.toContain('watch: not started');
     expect(io.err).not.toContain('watch: not started');
   });

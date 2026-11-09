@@ -700,13 +700,9 @@ describe('doctor: --file reads for any caller, and writes nothing', () => {
   });
 });
 
-// The watch the pane runs carries no flag, and a seat's `status` needs none: the refusal the
-// rule adds breaks neither. `up --file` starts its watch from the project root, the line built
-// by `watchCommand` (`team watch`, `--session` when the session is not "default"), and the pane
-// that runs it is under herdr — a caller the walk places as unplaced, exactly the caller the
-// rule must not refuse when no flag is passed.
+// 631ddc9d3: up launches no pane watch; a hand-run watch only reports daemon state and writes nothing.
 describe('a team whose owner ran up --file', () => {
-  test('the watch it starts carries no --file, and that watch runs from a pane under herdr', async () => {
+  test('it starts no pane watch, and a flagless pane can read the daemon report', async () => {
     writeFileSync(file, fileText);
     writeFileSync(stateFile, `${JSON.stringify(STATE, null, 2)}\n`);
     const lines: string[] = [];
@@ -740,18 +736,19 @@ describe('a team whose owner ran up --file', () => {
     }));
     expect(code).toBe(0);
     const watchLine = lines.find((line) => line.includes(' watch'));
-    expect(watchLine).toBeDefined();
-    expect(watchLine).toContain('--session');
-    expect(watchLine).not.toContain('--file');
+    expect(lines).toEqual([]);
+    expect(watchLine).toBeUndefined();
+    expect(readFileSync(file, 'utf8')).toBe(fileText);
+    const before = readFileSync(stateFile, 'utf8');
 
-    // The pane's own run: a caller under herdr (the walk places nobody — naming a seat would
-    // read a session), no flag, the session named. The watch starts.
+    // A flagless unplaced pane gets the daemon report and leaves the team's state untouched.
     const pane = await outputOf((io) => {
       io.callerSources = sourcesUnderHerdr(OTHER, COORDINATOR, COORDINATOR_PANE);
       return runWatch(['--session', SESSION], io, watchSources());
     });
     expect(pane.code, pane.out + pane.err).toBe(0);
-    expect(pane.out).toContain(`watching the session "${SESSION}"`);
+    expect(pane.out).toContain(`the daemon does not host session ${SESSION}`);
+    expect(readFileSync(stateFile, 'utf8')).toBe(before);
   });
 
   test("its seats' status still works in their own project: no flag, the same report the owner reads", async () => {
