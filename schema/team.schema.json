@@ -456,10 +456,25 @@
           "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
           "description": "how long a message may go without the seat's read receipt before the watch retries it once; the report to the sender and the lead follows at twice this window"
         },
+        "lead_unread_after": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long a lead's own unread drop waits before the lead is woken; 3m when omitted, and a tempo scales it"
+        },
         "stuck_after": {
           "type": "string",
           "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
           "description": "how long a seat whose presence still says a turn is running may sit with unread mail before the lead is told it is stuck; 15m when omitted, never scaled by the tempo"
+        },
+        "watch_start_limit": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long a hosted watch may stay in starting before the daemon stops and starts the child it started for that root; 120s when omitted"
+        },
+        "child_late_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "how many heartbeats a chores child may miss before the daemon stops and starts that root's child, even while it is still working; 30 when omitted"
         },
         "nudge": {
           "type": "string",

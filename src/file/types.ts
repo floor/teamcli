@@ -360,6 +360,12 @@ export type TeamFile = {
     /** How long a proven "working" presence may stand, with unread mail waiting, before the
      *  seat reads as stuck and the lead is told; 15 minutes when the file omits it. */
     stuckAfter: number;
+    /** How long this root's watch may stay in `starting` before the daemon stops and starts
+     *  the child it started for this root; 120 seconds when the file omits it. Not scaled. */
+    watchStartLimit?: number;
+    /** How many heartbeats this root's chores child may miss before that same restart, even
+     *  while its CPU is still advancing; 30 when the file omits it. Not scaled. */
+    childLateLimit?: number;
     quotaMarks: number[];
     // The checks this file turns off, by name. The four that can't be turned off never appear.
     checks: string[];
