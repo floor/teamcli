@@ -44,6 +44,7 @@ import {
   settledReadOf,
   readRecord,
   readSealedRecord,
+  recordFile,
   receiptFile,
   recordAuthOfSealed,
   signReceiptPayload,
@@ -671,7 +672,7 @@ function openInboxMessage(
   home: string,
   brief: BriefRead | undefined,
 ): OpenedMessage {
-  const at = join(target.dropDir, id);
+  const at = recordFile(target.dropDir, id);
   const refused = (rule: InboxRefusal['rule'], reason: string): OpenedMessage => ({
     ok: false,
     reason,
@@ -752,7 +753,7 @@ export function readMessage(
   handover?: { receipt: 'after' },
 ): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  const at = join(target.dropDir, id);
+  const at = recordFile(target.dropDir, id);
   if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const atReceipt = heldAt(receiptPath(target.dropDir, id));
   if (atReceipt.kind !== 'missing' && atReceipt.kind !== 'file') {
@@ -898,7 +899,7 @@ export function readMessage(
  */
 export function peekMessage(target: InboxTarget, id: string, home: string, seats: readonly string[], brief?: BriefRead): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  if (heldAt(join(target.dropDir, id)).kind !== 'file') {
+  if (heldAt(recordFile(target.dropDir, id)).kind !== 'file') {
     return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   }
   const key = messageKeyState(home);

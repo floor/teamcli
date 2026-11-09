@@ -6743,6 +6743,62 @@ scene('drops.invocation', async (place) => {
 });
 scene('drops.not-a-repo', async (place) => show(await dropped(place, []), 'not inside a git repository'), false);
 
+// `team drops archive` settles one seat's mailbox. The scenes plant a signed drop the archive
+// can move, and the refusals are the same folder with one thing wrong.
+const ARCHIVE_DROP = 'a11ce000-0000-4000-8000-0000000000a1';
+
+function plantSettledDrop(place: Place): void {
+  write(place, TEAM);
+  placeLead(place);
+  messageKeyOf(place.home);
+  plantRecord(place.home, place.root, 'acme', 'lead', ARCHIVE_DROP, 'synthetic drop\n', {
+    at: '2026-11-08T10:00:00.000Z',
+    from: 'owner',
+  });
+  const dir = recordDir(place.root, 'acme', 'lead');
+  const signed = signReceiptPayload({
+    kind: 'receipt',
+    status: 'replied',
+    id: ARCHIVE_DROP,
+    to: 'lead',
+    root: place.root,
+    session: 'acme',
+    at: '2026-11-08T10:00:00.000Z',
+  }, place.home);
+  const kept = writeReceipt(dir, signed, place.home);
+  if (!kept.ok) throw new Error(kept.reason);
+}
+
+scene('drops.archive.ok', async (place) => {
+  plantSettledDrop(place);
+  return show(await dropped(place, ['archive']), `moved ${ARCHIVE_DROP}`);
+});
+scene('drops.archive.file', async (place) => {
+  placeLead(place);
+  return show(await dropped(place, ['archive']), 'no team file');
+});
+scene('drops.archive.key', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  return show(await dropped(place, ['archive']), 'no message key; nothing was archived');
+});
+scene('drops.archive.migration', async (place) => {
+  plantSettledDrop(place);
+  writeFileSync(join(recordDir(place.root, 'acme', 'lead'), 'archive'), 'not a folder\n');
+  return show(await dropped(place, ['archive']), 'the archive folder could not be created');
+});
+scene('drops.archive.refused', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  return show(await dropped(place, ['archive'], other), 'archive is the owner, a lead, or the seat itself');
+});
+scene('drops.archive.invocation', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  return show(await dropped(place, ['archive', 'extra']), 'unexpected "extra"');
+});
+scene('drops.archive.not-a-repo', async (place) => show(await dropped(place, ['archive']), 'not inside a git repository'), false);
+
 // --- team mcp: a synthetic helper, bridge and front, under the scene's own temp base. The tree
 // is real (modes, sizes and the config's bytes are read as the command reads them), while the
 // probes that would touch the machine — the socket, the two HTTP requests, the certificate and

@@ -40,6 +40,7 @@ import { appendHistory } from '../send/history.ts';
 import { parseDuration, scanAckSeat, seatClearTargetStatus } from '../send/message-archive.ts';
 import { LEAD_ACK_PREFIX, recordNameOk } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
+import { writeExplicitAck } from '../send/inbox-retention.ts';
 import { messageKeyState } from '../store/keys.ts';
 import {
   findRecord,
@@ -337,6 +338,20 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
       return refused(io, json, `${resolvedId}: not marked read: the read receipt could not be written; run team ack again once the receipt folder can be written`);
     }
     return refused(io, json, `${resolvedId}: not marked read: the read receipt could not be made durable; leave it in place, it already records this read`);
+  }
+
+  const noted = writeExplicitAck({
+    folder: dirname(found.path),
+    id: resolvedId,
+    to: found.seat,
+    root,
+    session,
+    home: host.home,
+    key,
+    at,
+  });
+  if (!noted) {
+    return refused(io, json, `${resolvedId}: not marked read: the acknowledgement could not be written beside the record`);
   }
 
   const summary = `${resolvedId}: read`;

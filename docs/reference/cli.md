@@ -1378,6 +1378,7 @@ Usage:
 
     team drops [--follow] [--json]
     team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
+    team drops archive [--dry-run] [--json]
 
 ### Who may run it
 
@@ -1400,6 +1401,33 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `archive`
+
+Hidden: no
+
+Usage:
+
+    team drops archive [--dry-run] [--json]
+
+#### Who may run it
+
+`team-change` — the owner, the orchestrator or the operator archives every seat folder; a seat on its own pane archives only its own
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
