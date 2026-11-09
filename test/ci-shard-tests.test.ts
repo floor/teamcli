@@ -1,4 +1,8 @@
 import { expect, test } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runTestFiles } from '../scripts/ci-test-files.ts';
 import {
   UNTIMED_MS,
   appendUnits,
@@ -14,6 +18,41 @@ import {
   units,
   weights,
 } from '../scripts/ci-shard-tests.ts';
+
+test('the full-suite parent stops a spinning file, names it, and still runs the next file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-file-timeout-'));
+  try {
+    const next = join(root, 'next-ran');
+    writeFileSync(join(root, 'hang.test.ts'), "import { test } from 'bun:test'; test('spins', () => { for (;;) {} });\n");
+    writeFileSync(join(root, 'next.test.ts'), `import { test } from 'bun:test'; import { writeFileSync } from 'node:fs'; test('writes', () => writeFileSync(${JSON.stringify(next)}, 'yes'));\n`);
+    const log: string[] = [];
+    const started = performance.now();
+    expect(runTestFiles(['hang.test.ts', 'next.test.ts'], {
+      root, timeoutMs: 500, stdio: 'pipe', log: (line) => log.push(line),
+    })).toBe(1);
+    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(log).toContain('Test file timed out after 500 ms: hang.test.ts');
+    expect(existsSync(next)).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 5_000);
+
+test('the full-suite runner preserves split selectors without leaking one into the next file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-file-parts-'));
+  try {
+    const seen = join(root, 'parts.jsonl');
+    const source = `import { test } from 'bun:test'; import { appendFileSync } from 'node:fs'; test('records part', () => appendFileSync(${JSON.stringify(seen)}, JSON.stringify(process.env.TEAM_EXIT_PART ?? null) + '\\n'));\n`;
+    writeFileSync(join(root, 'part.test.ts'), source);
+    writeFileSync(join(root, 'whole.test.ts'), source);
+    expect(runTestFiles(['part.test.ts#2/6', 'whole.test.ts'], {
+      root, stdio: 'pipe', log: () => {}, env: { ...process.env, TEAM_EXIT_PART: '5/6' },
+    })).toBe(0);
+    expect(readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line))).toEqual(['2/6', null]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('a split file becomes its parts, each a fraction of its time', () => {
   const all = units(['test/a.test.ts', 'test/exit-codes.test.ts', 'test/a.test.ts']);
