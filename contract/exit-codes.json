@@ -6702,13 +6702,6 @@
       "trigger": "team up"
     },
     {
-      "code": 1,
-      "command": "up",
-      "id": "up.watch",
-      "meaning": "the watch did not start",
-      "trigger": "team up"
-    },
-    {
       "code": 2,
       "command": "up",
       "id": "up.file",
@@ -6809,20 +6802,6 @@
     {
       "code": 1,
       "command": "watch",
-      "id": "watch.already",
-      "meaning": "a watch already runs",
-      "trigger": "team watch"
-    },
-    {
-      "code": 1,
-      "command": "watch",
-      "id": "watch.caller",
-      "meaning": "a run with no terminal",
-      "trigger": "team watch"
-    },
-    {
-      "code": 1,
-      "command": "watch",
       "id": "watch.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team watch --file .agents/team.yaml"
@@ -6840,13 +6819,6 @@
       "id": "watch.no-nudge",
       "meaning": "a seat passed --no-nudge",
       "trigger": "team watch --no-nudge"
-    },
-    {
-      "code": 1,
-      "command": "watch",
-      "id": "watch.watchdog",
-      "meaning": "only the recorded watch may read the file up recorded",
-      "trigger": "team watch --session acme"
     },
     {
       "code": 2,
