@@ -13,7 +13,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runStatus } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
-import type { DoctorSources } from '../src/commands/doctor.ts';
+import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { canonicalRoot } from '../src/daemon/routes.ts';
@@ -358,8 +358,19 @@ test('a restore clears a dead pane watch once the daemon watch is active', async
 test('a pane watch does not become the owner while the daemon watch is live', async () => {
   const made = world();
   const shots: WatchRecord[] = [];
+  const sources = paneWatch(made, shots);
+  const waitBound = 2;
+  let waits = 0;
+  sources.wait = async () => {
+    waits += 1;
+    shots.push(watchRecord(made.dir));
+    if (waits > waitBound) {
+      throw new Error(`the watch kept waiting after ${waitBound} passes; a live daemon watch must stop the pane watch`);
+    }
+    return false;
+  };
   const io = testIo(made.root, { kind: 'pane', pane: VIEW, session: SESSION });
-  const code = await runWatch([], io, paneWatch(made, shots));
+  const code = await runWatch([], io, sources);
   expect(code, `${io.out}\n${io.err}`).toBe(0);
   const seen = [...shots, watchRecord(made.dir)];
   for (const shot of seen) {
@@ -497,4 +508,48 @@ test('a cleanup racing a daemon that has just taken over keeps the new live pid'
   expect(left?.pane).toBe('pane-daemon');
   const added = logText(made.dir).slice(priorLog.length);
   expect(added.includes('cleared pane watch')).toBe(false);
+});
+
+const DOCTOR_REPAIR = 'run `team daemon status`, or the lead runs `team daemon install`';
+
+async function doctorText(made: Held, health: DaemonHealth | null): Promise<string> {
+  const io = testIo(made.root, { kind: 'owner' });
+  const code = await runDoctor(['--file', '.agents/team.yaml'], io, {
+    ...doctor(made.home),
+    ...(health === null ? {} : { daemonHealth: async () => health }),
+  });
+  return `exit ${code}\n${io.out}${io.err}`;
+}
+
+test('a daemon hosting the watch is the watch, and a stale record or another host is a miss', async () => {
+  const made = world();
+  const hosted = await doctorText(made, hostedHealth(made.root));
+  expect(hosted).toContain('ok    the watch is running in the daemon\n');
+  expect(hosted).not.toContain('no watch has run for session');
+
+  const other = hostedHealth(made.root);
+  const otherWatch = other.roots[0]?.watch;
+  if (otherWatch === undefined) throw new Error('the fixture daemon hosts no watch');
+  otherWatch.session = 'other-session';
+  const elsewhere = await doctorText(made, other);
+  expect(elsewhere).toContain(`MISS  no watch has run for session ${SESSION}: ${DOCTOR_REPAIR}\n`);
+  expect(elsewhere).not.toContain('the watch is running in the daemon');
+
+  const down = hostedHealth(made.root);
+  down.state = 'not-running';
+  down.running = false;
+  down.roots = [];
+  const stopped = await doctorText(made, down);
+  expect(stopped).toContain(`MISS  no watch has run for session ${SESSION}: ${DOCTOR_REPAIR}\n`);
+
+  const absent = await doctorText(made, null);
+  expect(absent).toContain(`MISS  no watch has run for session ${SESSION}: ${DOCTOR_REPAIR}\n`);
+
+  updateState(made.dir, (state) => {
+    const session = state.sessions[SESSION] ?? (state.sessions[SESSION] = emptySession());
+    session.watch = { pid: 1, heartbeat: new Date(NOW.getTime() - 300_000).toISOString(), pane: 'pane-old' };
+  });
+  const stale = await doctorText(made, hostedHealth(made.root));
+  expect(stale).toContain(`MISS  the watch's heartbeat is 5 min old (two intervals are 4 min): ${DOCTOR_REPAIR}\n`);
+  expect(stale).not.toContain('the watch is running in the daemon');
 });

@@ -396,8 +396,8 @@ describe('team up, a restored session: boundaries', () => {
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
     expect(code).toBe(0);
-    // Relaunched in the pane the seat already has: no workspace made for it, none closed.
-    expect(made.creates.filter((label) => !label.startsWith('Watch · '))).toEqual([]);
+    // Relaunched in the pane the seat already has: no workspace made for it, and no watch pane, none closed.
+    expect(made.creates).toEqual([]);
     expect(made.closes).toEqual([]);
     expect(made.runs.filter((run) => run.pane === RECORDED_PANE)).toHaveLength(1);
     expect(io.err).toContain(`deepseek-acme: its recorded pane ${RECORDED_PANE} was at its shell; launched in the same pane\n`);
@@ -1082,8 +1082,8 @@ describe('team up, a restored session: boundaries', () => {
     );
     expect(code).toBe(1);
     expect(made.closes).toEqual([]);
-    // Only the mandatory watch workspace exists; nothing was created for the seat.
-    expect(made.creates.filter((label) => !label.startsWith('Watch · '))).toEqual([]);
+    // Nothing was created for the seat, and no watch pane was opened.
+    expect(made.creates).toEqual([]);
     expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
     expect(io.err).toContain('  its recorded conversation cannot be resumed');
     expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1' });

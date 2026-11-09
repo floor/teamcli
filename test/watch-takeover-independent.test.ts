@@ -1,9 +1,7 @@
-// A dead watch record can be taken over by the placed lead. The recorded pane is gone and
-// its pid is not a live team watch: the record is rewritten, the audit line is written
-// before the watch starts, and the watch starts. A recorded pane that is still running
-// team watch, with a live pid, refuses a second watch with the message a second watch
-// gets today, and the record stays as it was. A seat that is not the lead is refused
-// on a dead record. Liveness and the process verdict come from the watch sources.
+// A hand-run team watch, in a pane, is a read-only view of the daemon's watch. It prints
+// the daemon's line and writes nothing: the state file and the log stay as they were.
+// The daemon's own takeover of a dead pane record is a different caller, covered below.
+// Liveness and the process verdict come from the watch sources.
 // Homes and pane names are synthetic. No signal is sent and no CLI is started.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -22,7 +20,6 @@ import { testIo } from './helpers.ts';
 const NOW = new Date('2026-11-08T12:00:00Z');
 const OLD_PID = 5151;
 const OLD_PANE = 'pane-old';
-const TODAY = 'only the watch this session records may read the file up recorded';
 const made: string[] = [];
 
 afterEach(() => {
@@ -160,66 +157,55 @@ function recordText(dir: string): string {
   return readFileSync(join(dir, 'team.state.json'), 'utf8');
 }
 
-test('a gone pane and a dead pid let the lead take the watch over', async () => {
+const DAEMON_LINE = 'team watch: the daemon does not host session acme\n';
+
+async function expectPaneView(
+  scene: { dir: string },
+  io: ReturnType<typeof testIo>,
+  src: WatchSources,
+): Promise<void> {
+  const before = recordText(scene.dir);
+  const code = await runWatch(['--session', 'acme'], io, src);
+  expect(code, io.err + io.out).toBe(0);
+  expect(io.out).toBe(DAEMON_LINE);
+  expect(io.err).toBe('');
+  expect(recordText(scene.dir)).toBe(before);
+  expect(existsSync(join(scene.dir, LOG_FILE))).toBe(false);
+}
+
+test('a lead watch in a pane prints the daemon line and writes nothing when the recorded pane is gone', async () => {
   const scene = open({ pane: 'gone', pidLive: false });
   const io = testIo(scene.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
-  const code = await runWatch(['--session', 'acme'], io, sources(scene, { pane: 'gone', pidLive: false }));
-  expect(code, io.err + io.out).toBe(0);
-  const watchdog = readState(scene.dir).sessions.acme?.watchdog;
-  expect(watchdog?.file).toBe(scene.file);
-  expect(watchdog?.pane === 'pane-lead' || watchdog?.pane === undefined).toBe(true);
-  expect(watchdog?.pane).not.toBe(OLD_PANE);
-  const log = readFileSync(join(scene.dir, LOG_FILE), 'utf8');
-  const audit = log.indexOf('watch record taken over from pane-old: gone');
-  const start = log.indexOf('watching the session');
-  expect(audit).toBeGreaterThanOrEqual(0);
-  expect(start).toBeGreaterThan(audit);
-  expect(io.out).toContain('watching the session');
-});
-
-test('a live pane running team watch refuses a second watch and keeps the record', async () => {
-  const scene = open({ pane: 'watch', pidLive: true });
-  const before = recordText(scene.dir);
-  const io = testIo(scene.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
-  const code = await runWatch(['--session', 'acme'], io, sources(scene, { pane: 'watch', pidLive: true }));
-  expect(code, io.err + io.out).toBe(1);
-  expect(io.err + io.out).toContain(TODAY);
-  expect(io.err + io.out).toContain('this call is lead');
-  expect(recordText(scene.dir)).toBe(before);
+  await expectPaneView(scene, io, sources(scene, { pane: 'gone', pidLive: false }));
   expect(readState(scene.dir).sessions.acme?.watchdog).toEqual({ file: scene.file, pane: OLD_PANE });
 });
 
-test('a pane that is only a shell lets the lead, up, and the daemon take the watch over', async () => {
+test('a lead watch in a pane prints the daemon line and writes nothing while a live watch is recorded', async () => {
+  const scene = open({ pane: 'watch', pidLive: true });
+  const io = testIo(scene.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+  await expectPaneView(scene, io, sources(scene, { pane: 'watch', pidLive: true }));
+  expect(readState(scene.dir).sessions.acme?.watchdog).toEqual({ file: scene.file, pane: OLD_PANE });
+});
+
+test('a pane watch prints the daemon line and writes nothing when the recorded pane is only a shell', async () => {
   const shell = { pane: 'shell' as const, pidLive: false };
   const lead = open(shell);
   const leadIo = testIo(lead.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
-  expect(await runWatch(['--session', 'acme'], leadIo, sources(lead, shell)), leadIo.err + leadIo.out).toBe(0);
-  expect(readState(lead.dir).sessions.acme?.watchdog).toEqual({ file: lead.file, pane: 'pane-lead' });
-  const leadLog = readFileSync(join(lead.dir, LOG_FILE), 'utf8');
-  expect(leadLog.indexOf('watch record taken over from pane-old: no watch running')).toBeGreaterThanOrEqual(0);
-  expect(leadLog.indexOf('watching the session')).toBeGreaterThan(leadLog.indexOf('watch record taken over from pane-old: no watch running'));
+  await expectPaneView(lead, leadIo, sources(lead, shell));
 
   const up = open(shell);
   const upIo = testIo(up.root, { kind: 'pane', pane: 'pane-up', session: 'acme' });
-  expect(await runWatch(['--session', 'acme'], upIo, sources(up, shell, 'up')), upIo.err + upIo.out).toBe(0);
-  expect(readState(up.dir).sessions.acme?.watchdog).toEqual({ file: up.file, pane: 'pane-up' });
-  expect(readFileSync(join(up.dir, LOG_FILE), 'utf8')).toContain('watch record taken over from pane-old: no watch running');
+  await expectPaneView(up, upIo, sources(up, shell, 'up'));
 
   const daemon = open(shell);
   const daemonIo = testIo(daemon.root, { kind: 'daemon' });
-  expect(await runWatch(['--session', 'acme'], daemonIo, sources(daemon, shell, 'daemon')), daemonIo.err + daemonIo.out).toBe(0);
-  expect(readState(daemon.dir).sessions.acme?.watchdog).toEqual({ file: daemon.file });
-  expect(readFileSync(join(daemon.dir, LOG_FILE), 'utf8')).toContain('watch record taken over from pane-old: no watch running');
+  await expectPaneView(daemon, daemonIo, sources(daemon, shell, 'daemon'));
 });
 
-test('a seat that is not the lead is refused on a dead record', async () => {
+test('a seat that is not the lead prints the daemon line and writes nothing on a dead record', async () => {
   const scene = open({ pane: 'gone', pidLive: false });
-  const before = recordText(scene.dir);
   const io = testIo(scene.root, { kind: 'seat', name: 'maker', pane: 'pane-maker', session: 'acme' });
-  const code = await runWatch(['--session', 'acme'], io, sources(scene, { pane: 'gone', pidLive: false }));
-  expect(code, io.err + io.out).toBe(1);
-  expect(io.err + io.out).not.toContain('watch record taken over');
-  expect(recordText(scene.dir)).toBe(before);
+  await expectPaneView(scene, io, sources(scene, { pane: 'gone', pidLive: false }));
   expect(readState(scene.dir).sessions.acme?.watchdog?.pane).toBe(OLD_PANE);
 });
 

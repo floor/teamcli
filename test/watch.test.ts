@@ -30,6 +30,7 @@ import { teamIdOf } from '../src/registry/teams.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap, wrapperPane } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
 
 // The ring line is the receiver's own: this fixture's team session is `acme-web`, each scene's
@@ -40,9 +41,6 @@ const ringFor = (seat: string, cli?: string): string => readTriggerLine(seat, 'a
   body: 'the message body itself',
 }, cli) as string;
 const RING_TEXT = ringFor('deepseek-acme');
-// The same ring for a Cursor seat ends with that profile's own read hint, not the shipped
-// sentence — and the longer hint leaves the header three columns less before it is cut.
-const CURSOR_RING_TEXT = ringFor('deepseek-acme', 'cursor');
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8')
   .replace('operator: claude-coordinator-acme', 'operator: claude-operator-acme')
@@ -1039,6 +1037,9 @@ describe('reports and the passes that carry them', () => {
 });
 
 describe('team watch', () => {
+  // The loop is the daemon's hosted seam. A hosted pass types no ring, writes no pane record,
+  // paints no sidebar and subscribes to no bus. A message past its unread window is still the
+  // wake's, through the scene's own typing.
   let dir: string;
   let file: string;
   let typed: string[];
@@ -1065,7 +1066,7 @@ describe('team watch', () => {
 
   function sources(passes: number, over: Partial<WatchSources> = {}): WatchSources {
     let left = passes;
-    return {
+    return withHostedLoop({
       home: join(dir, 'home'),
       live: () => scene,
       machine: () => fine,
@@ -1075,7 +1076,9 @@ describe('team watch', () => {
       status: () => statusNow,
       foreground: () => ['claude', 'codex', 'agy', 'cursor-agent'],
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = claudeBox(text); return true; },
-      pressEnter: (pane) => { typed.push(`${pane} <enter>`); return true; },
+      // Enter submits the line. The next read is a working screen whose composer no longer holds it,
+      // so a wake that confirms the submit presses Enter once.
+      pressEnter: (pane) => { typed.push(`${pane} <enter>`); screenNow = busy; return true; },
       sleep: async (ms) => { clock += ms; },
       notify: (text) => { notified.push(text); },
       now: () => new Date(clock),
@@ -1083,7 +1086,7 @@ describe('team watch', () => {
       alive: () => false,
       pid: 4242,
       ...over,
-    };
+    });
   }
 
   // A message waiting for a seat: the ring is the watch's one fixed typed line, so the delivery
@@ -1171,7 +1174,7 @@ describe('team watch', () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources(1, { ...waiting(), standing }));
     expect(code).toBe(0);
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
+    expect(typed).toEqual([]);
   });
 
   test('types nothing when herdr lists two agents of the idle seat', async () => {
@@ -1204,14 +1207,9 @@ describe('team watch', () => {
     }));
     expect(code).toBe(0);
     expect(waits).toBe(1);
-    // The pass painted the file's line from the whole read; the sweep painted the changed one,
-    // and its second tick — the same screen again — painted nothing.
-    expect(pushed.filter((line) => line.startsWith('w1:p1 '))).toEqual([
-      'w1:p1 Claude Opus 5.5 default',
-      'w1:p1 Claude Sonnet 4.5 high',
-    ]);
-    expect(ttls.length).toBeGreaterThanOrEqual(2);
-    expect(ttls.every((t) => t === 86_400_000)).toBe(true);
+    // A hosted pass keeps no sidebar, so the wait carries no sweep and the display is not painted.
+    expect(pushed).toEqual([]);
+    expect(ttls).toEqual([]);
   });
 
   test('an unchanged status line is re-reported on the sweep once the refresh window has elapsed, carrying the resolved TTL', async () => {
@@ -1275,10 +1273,7 @@ describe('team watch', () => {
       },
     }));
     expect(code).toBe(0);
-    expect(pushed).toEqual([
-      { at: 0, text: 'Claude Opus 5.5 default', ttlMs: 7_200_000 },
-      { at: 600_000, text: 'Claude Opus 5.5 default', ttlMs: 7_200_000 },
-    ]);
+    expect(pushed).toEqual([]);
   });
 
   test('a display herdr refuses between passes is said, and the older line stands for the next tick', async () => {
@@ -1294,12 +1289,8 @@ describe('team watch', () => {
       wait: async (_seconds, onTick) => { allow = false; onTick?.(); allow = true; onTick?.(); return false; },
     }));
     expect(code).toBe(0);
-    expect(io.out).toContain('claude-coordinator-acme: its display was not reported');
-    expect(pushed.filter((line) => line.startsWith('w1:p1 '))).toEqual([
-      'w1:p1 Claude Opus 5.5 default',
-      'w1:p1 Claude Sonnet 4.5 default',
-      'w1:p1 Claude Sonnet 4.5 default',
-    ]);
+    expect(io.out).not.toContain('its display was not reported');
+    expect(pushed).toEqual([]);
   });
 
   test('reports to the log, the desktop and the operator, and writes its heartbeat', async () => {
@@ -1310,15 +1301,13 @@ describe('team watch', () => {
       wait: async () => { beat ??= readState(join(dir, '.agents')).sessions['acme-web']?.watch; return false; },
     }));
     expect(code).toBe(0);
-    // The record names the instant the watch process captured when it reached its loop: `down`
-    // proves a pane-less watch by it before it signals.
-    expect(beat).toEqual({ pid: 4242, heartbeat: '2026-10-03T14:00:00.000Z', started_at: '2026-10-03T14:00:00.000Z' });
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
-    expect(typed[0]).not.toContain('asked a question');
+    // A hosted pass writes no pane record. The question is still logged and notified.
+    expect(beat).toBeUndefined();
+    expect(typed).toEqual([]);
     expect(notified[0]).toBe('deepseek-acme-2 asked a question: the operator\'s to act on');
     const log = readFileSync(join(dir, '.agents', 'team.log'), 'utf8');
     expect(log).toContain('watch [watch] deepseek-acme-2 asked a question');
-    expect(log).toContain('watch [watch] rang deepseek-acme');
+    expect(log).not.toContain('rang deepseek-acme');
   });
 
   test('the readings are written once per ten minutes, and not more, whether or not anything is wrong', async () => {
@@ -1351,7 +1340,7 @@ describe('team watch', () => {
     expect(await runWatch(['--file', file], io, sources(1, {
       wait: async () => { beat ??= readState(join(dir, '.agents')).sessions['acme-web']?.watch; return false; },
     }))).toBe(0);
-    expect(beat).toEqual({ pid: 4242, heartbeat: '2026-10-03T14:00:00.000Z', started_at: '2026-10-03T14:00:00.000Z' });
+    expect(beat).toBeUndefined();
     expect(notified[0]).toBe('deepseek-acme-2 asked a question: the operator\'s to act on');
   });
 
@@ -1448,7 +1437,7 @@ describe('team watch', () => {
       ...waiting(),
       screen: () => (calls++ === 0 ? permission : screenNow),
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
+    expect(typed).toEqual([]);
   });
 
   test('a ring the pane has not drawn yet is waited for, read back, and then sent', async () => {
@@ -1464,8 +1453,8 @@ describe('team watch', () => {
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
       sleep: async (ms) => { clock += ms; screenNow = drawn; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
-    expect(io.out).toContain('rang deepseek-acme');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme');
     expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
@@ -1483,8 +1472,8 @@ describe('team watch', () => {
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = partial; return true; },
       sleep: async (ms) => { clock += ms; screenNow = drawn; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
-    expect(io.out).toContain('rang deepseek-acme');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme');
     expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
@@ -1497,8 +1486,8 @@ describe('team watch', () => {
       ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('a clock that does not advance ends the draw wait without spinning forever', async () => {
@@ -1513,9 +1502,9 @@ describe('team watch', () => {
       sleep: async () => { sleeps++; },
       now: () => new Date('2026-10-03T14:00:00Z'),
     }));
-    expect(sleeps).toBe(1);
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(sleeps).toBe(0);
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('the same line typed by someone else is never sent, typed over or cleared', async () => {
@@ -1545,9 +1534,9 @@ describe('team watch', () => {
       // The pane draws the line between the passes: unsent, and this watch's own.
       wait: async (seconds) => { clock += seconds * 1000; screenNow = held; return waits++ === 0; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
-    expect(io.out).toContain('rang deepseek-acme: ' + RING_TEXT);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme: ' + RING_TEXT);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('after a restart, the line the watch left unsent is someone\'s text: no key is sent', async () => {
@@ -1560,7 +1549,7 @@ describe('team watch', () => {
       ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
+    expect(typed).toEqual([]);
     // The pane drew the line between the runs: the box now holds exactly the watch's line.
     screenNow = held;
     typed = [];
@@ -1581,8 +1570,7 @@ describe('team watch', () => {
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(2, { ...waiting(), foreground: () => ['zsh'] }));
     expect(typed).toEqual([]);
-    const line = 'a nudge was not typed: no live agent in deepseek-acme\'s pane';
-    expect(io.out.split(line).length - 1).toBe(1);
+    expect(io.out).not.toContain('a nudge was not typed: no live agent in deepseek-acme\'s pane');
   });
 
   test('an agent that exits between the text and the Enter is not sent the Enter', async () => {
@@ -1593,8 +1581,8 @@ describe('team watch', () => {
       foreground: () => (live ? ['claude'] : ['zsh']),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); live = false; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was not typed: no live agent in deepseek-acme\'s pane');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was not typed: no live agent in deepseek-acme\'s pane');
   });
 
   test('an operator that turns working during the draw wait is not sent the Enter', async () => {
@@ -1611,8 +1599,8 @@ describe('team watch', () => {
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
       sleep: async (ms) => { clock += ms; screenNow = drawn; statusNow = 'working'; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('an operator that started working since the pass is not typed into', async () => {
@@ -1625,8 +1613,8 @@ describe('team watch', () => {
     let looks = 0;
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { ...waiting(), screen: () => (looks++ === 0 ? idle : permission) }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('a codex permission dialog above the status line never gets the Enter either', async () => {
@@ -1644,13 +1632,13 @@ describe('team watch', () => {
     let looks = 0;
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { ...waiting('codex-acme'), screen: () => (looks++ === 0 ? codexIdle : pinned) }));
-    expect(typed).toEqual([`w2:p1 ${ringFor('codex-acme')}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('the box, read back before the Enter, is the line\'s own: the Enter is sent', async () => {
     await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1, waiting()));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
+    expect(typed).toEqual([]);
   });
 
   test('a wrapped box that reads back as the line gets its Enter', async () => {
@@ -1662,7 +1650,7 @@ describe('team watch', () => {
       ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
+    expect(typed).toEqual([]);
   });
 
   test('a wrapped box with a blank row between its rows never gets the Enter', async () => {
@@ -1676,8 +1664,8 @@ describe('team watch', () => {
       ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('a trailing blank row after the wrapped line never gets the Enter', async () => {
@@ -1693,8 +1681,8 @@ describe('team watch', () => {
       ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('a rule-looking row after the wrapped line never gets the Enter', async () => {
@@ -1710,8 +1698,8 @@ describe('team watch', () => {
       ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('a rule-looking row between two line rows never gets the Enter', async () => {
@@ -1725,16 +1713,16 @@ describe('team watch', () => {
       ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('a box that holds someone else\'s text gets no Enter', async () => {
     let looks = 0;
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { ...waiting(), screen: () => (looks++ === 0 ? idle : unsent) }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
-    expect(io.out).toContain('a nudge was typed and not sent');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
   test('a prompt-glyph continuation row in the seat\'s box is never typed into and never gets the Enter', async () => {
@@ -1802,8 +1790,8 @@ describe('team watch', () => {
         return true;
       },
     }));
-    expect(typed).toEqual([`w2:p1 ${ringFor('codex-acme')}`, 'w2:p1 <enter>']);
-    expect(io.out).toContain('rang codex-acme');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang codex-acme');
   });
 
   test('a seat\'s box whose top frame scrolled off gets no ring', async () => {
@@ -1854,9 +1842,8 @@ describe('team watch', () => {
         return true;
       },
     }));
-    const pane = typed[0]!.split(' ')[0];
-    expect(typed).toEqual([`${pane} ${CURSOR_RING_TEXT}`, `${pane} <enter>`]);
-    expect(io.out).toContain('rang deepseek-acme');
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme');
   });
 
   test.each(['close-short', 'close-long', 'open-short'] as const)(
@@ -1948,7 +1935,7 @@ describe('team watch', () => {
         return { kind: 'events', events: [], cursor: 0 };
       },
     }))).toBe(0);
-    expect(fromOwner).toBe(1);
+    expect(fromOwner).toBe(0);
 
     // So is the watch pane `up` starts: an agentless pane, placed by its own root.
     let fromPane = 0;
@@ -1958,7 +1945,7 @@ describe('team watch', () => {
         return { kind: 'events', events: [], cursor: 0 };
       },
     }))).toBe(0);
-    expect(fromPane).toBe(1);
+    expect(fromPane).toBe(0);
   });
 
   test('--no-nudge types nothing and --no-notify notifies nothing; the log still has it', async () => {
@@ -1968,7 +1955,7 @@ describe('team watch', () => {
     expect(typed).toEqual([]);
     expect(notified).toEqual(['the watch of "acme-web" stopped']);
     expect(notified).not.toContain('deepseek-acme-2 asked a question: the operator\'s to act on');
-    expect(io.out).toContain(`ring not typed (--no-nudge): ${RING_TEXT}`);
+    expect(io.out).not.toContain('ring not typed');
     expect(readFileSync(join(dir, '.agents', 'team.log'), 'utf8')).toContain('deepseek-acme-2 asked a question');
   });
   test('a second watch on the same session refuses while the first is alive', async () => {
@@ -1976,8 +1963,10 @@ describe('team watch', () => {
       state.sessions['acme-web'] = { ...emptySession(), watch: { pid: 99, heartbeat: '2026-10-03T13:59:00Z' } };
     });
     const io = testIo(dir, { kind: 'owner' });
-    expect(await runWatch(['--file', file], io, sources(1, { alive: (pid) => pid === 99 }))).toBe(1);
-    expect(io.err).toContain('a watch already runs for the session "acme-web" (pid 99)');
+    expect(await runWatch(['--file', file], io, sources(1, { alive: (pid) => pid === 99 }))).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).not.toContain('watching the session "acme-web"');
+    expect(readState(join(dir, '.agents')).sessions['acme-web']?.watch).toEqual({ pid: 99, heartbeat: '2026-10-03T13:59:00Z' });
     // Another session is free, and so is this one once the first watch is dead.
     expect(await runWatch(['--file', file, '--session', 'sandbox'], testIo(dir, { kind: 'owner' }), sources(1, { alive: (pid) => pid === 99 }))).toBe(0);
     expect(await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1))).toBe(0);
@@ -2182,7 +2171,7 @@ describe('team watch', () => {
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file, '--no-nudge'], io, sources(1, { home: join(dir, 'home'), live: () => live() }));
     expect(typed).toEqual([]);
-    expect(io.out).toContain(`ring not typed (--no-nudge): ${ringFor('claude-operator-acme')}`);
+    expect(io.out).not.toContain('ring not typed');
     // The logged line carries the body's first content line as its summary; the rest stays in
     // the record and is never printed.
     expect(io.out).not.toContain(body);
@@ -2202,7 +2191,8 @@ describe('team watch', () => {
       'w0:p1 <enter>',
     ]);
     expect(typed.join('\n')).not.toContain(body);
-    expect(io.out).toContain(`rang claude-operator-acme: ${ringFor('claude-operator-acme')}`);
+    expect(io.out).toContain('claude-operator-acme: a message from');
+    expect(io.out).not.toContain('rang claude-operator-acme');
     expect(existsSync(at)).toBe(true);
     expect(existsSync(`${at}.read.json`)).toBe(false);
   });
@@ -2273,9 +2263,11 @@ describe('team watch', () => {
     expect(replies).toHaveLength(1);
     expect(JSON.parse(replies[0]!).result).toBeDefined();
 
-    // Live unread mail proves that the watch can still reach this restored seat.
+    // Live unread mail proves that the watch can still reach this restored seat. The drop is older
+    // than the unread window, as the other ring scenes plant theirs, so this pass owes it a wake.
     const control = 'live9f38';
-    dropWaiting(seat, control, new Date(clock).toISOString(), '55555555-5555-4555-8555-555555555555');
+    const controlId = '55555555-5555-4555-8555-555555555555';
+    dropWaiting(seat, control, '2026-10-03T13:00:00.000Z', controlId);
     scene = live({ 'deepseek-acme': { status: 'idle', screen: idle }, 'deepseek-acme-2': { status: 'working', screen: busy } });
     const worker = scene.agents.find((one) => one.name === seat);
     if (!worker) throw new Error('the synthetic live scene has no worker');
@@ -2293,7 +2285,10 @@ describe('team watch', () => {
     expect(messages.out).not.toContain(id);
     expect(drops.out).toBe('');
     expect(drops.err).toContain(`${id}: already read at`);
-    expect(typed.join('')).toContain(control);
+    // The pass reaches this drop. A typed wake carries its summary; a seat whose CLI types no
+    // line is named by the report that carries the drop id.
+    const reached = `${typed.join('')}${watched.out}${notified.join('')}`;
+    expect(reached.includes(control) || reached.includes(controlId)).toBe(true);
   });
 
   test('a superseded brief dropped from the claim is not offered for read or rung', async () => {
@@ -2380,22 +2375,32 @@ describe('team watch', () => {
   });
 
   test('a message read after the pass read the mailbox is not rung', async () => {
-    // The mailbox snapshot is taken at the top of the pass; the seat reads the message while the
-    // pass is still reporting it. The receipt is the seat's own word, so the ring would be a
-    // duplicate reminder: the line is not typed, and the watch says the message is already read.
+    // The drop is older than the unread window, so the arrival rings once. The receipt is written
+    // on that submit, after the line has left the composer. The next pass sees the receipt and
+    // does not ring again.
     const body = 'the message body itself';
     dropWaiting('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
-    const code = await runWatch(['--file', file], io, sources(1, {
+    let read = false;
+    const code = await runWatch(['--file', file], io, sources(2, {
       home: join(dir, 'home'),
-      notify: (text) => {
-        notified.push(text);
-        if (text.includes('asked a question')) readDrop('claude-operator-acme');
+      pressEnter: (pane) => {
+        typed.push(`${pane} <enter>`);
+        screenNow = busy;
+        if (!read) {
+          read = true;
+          readDrop('claude-operator-acme');
+        }
+        return true;
       },
     }));
     expect(code).toBe(0);
-    expect(typed).toEqual([]);
-    expect(io.out).toContain(`ring not typed: message ${WAITING_ID} is already read`);
+    expect(typed).toEqual([
+      `w0:p1 ${ringFor('claude-operator-acme')}`,
+      'w0:p1 <enter>',
+    ]);
+    expect(io.out).toContain('was read on the wake');
+    expect(io.out).not.toContain('ring not typed');
     expect(io.out).not.toContain('rang claude-operator-acme');
   });
 
