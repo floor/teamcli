@@ -25,11 +25,9 @@ const TAIL = 'openai weekly left 5%, inside its 10% reserve, changed 1m ago; acc
 const WHY = `refused: ${TAIL}`;
 /** Line 1 of the lead, its written label. The worker's written label is `worker`. */
 const TITLE = 'lead';
-// The watch's own workspace, which every live `up` starts after the seats.
-const WATCH = 'Watch · acme';
-/** The labels a live run creates: the seats it mounted, then the watch's workspace. */
+/** A daemon-only watch opens no Watch pane, so a refusal run's labels are the seats it mounted. */
 function mounted(...seats: string[]): string[] {
-  return [...seats, WATCH];
+  return [...seats];
 }
 
 const BASE = `format: 1
