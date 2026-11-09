@@ -183,23 +183,23 @@ interface HierarchyFixture {
   base: string;
   home: string;
   store: FakeStore;
-  floorRoot: string;
+  entityRoot: string;
   acmeRoot: string;
   acmeTeam: TeamFile;
-  callers: { atlas: Caller; acmeLead: Caller; acmeWorker: Caller };
+  callers: { mainLead: Caller; acmeLead: Caller; acmeWorker: Caller };
 }
 
 /**
- * A two-team hierarchy: entity `floor`'s main team at `floorRoot` (lead `atlas`, session `main`,
- * not a git repository) and its child team `acme` at `floorRoot/acme` (lead `lead`, plain seat
+ * A two-team hierarchy: entity `acme-entity`'s main team at `entityRoot` (lead `main-lead`, session `main`,
+ * not a git repository) and its child team `acme` at `entityRoot/acme` (lead `lead`, plain seat
  * `worker`, session `acme`, a git repository). Dev mode is a synthetic machine record or off.
  */
 function setupHierarchy(options: { devMode?: boolean } = {}): HierarchyFixture {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'down-rule-order-ind-')));
   cleanupDirs.push(base);
   const home = join(base, 'home');
-  const floorRoot = join(base, 'floor');
-  const acmeRoot = join(floorRoot, 'acme');
+  const entityRoot = join(base, 'acme-entity');
+  const acmeRoot = join(entityRoot, 'acme');
 
   mkdirSync(home, { recursive: true });
   const store = seatOwner(home);
@@ -209,8 +209,8 @@ function setupHierarchy(options: { devMode?: boolean } = {}): HierarchyFixture {
   }
 
   const specs = [
-    { root: floorRoot, project: 'floor', entity: 'floor', session: 'main', lead: 'atlas', leadPane: 'pane-atlas', workerPane: 'pane-floor-worker', git: false },
-    { root: acmeRoot, project: 'acme', entity: 'floor', session: 'acme', lead: 'lead', leadPane: 'pane-acme-lead', workerPane: 'pane-acme-worker', git: true },
+    { root: entityRoot, project: 'acme-entity', entity: 'acme-entity', session: 'main', lead: 'main-lead', leadPane: 'pane-main-lead', workerPane: 'pane-acme-entity-worker', git: false },
+    { root: acmeRoot, project: 'acme', entity: 'acme-entity', session: 'acme', lead: 'lead', leadPane: 'pane-acme-lead', workerPane: 'pane-acme-worker', git: true },
   ] as const;
 
   let acmeTeam: TeamFile | undefined;
@@ -260,11 +260,11 @@ function setupHierarchy(options: { devMode?: boolean } = {}): HierarchyFixture {
     base,
     home,
     store,
-    floorRoot,
+    entityRoot,
     acmeRoot,
     acmeTeam: acmeTeam!,
     callers: {
-      atlas: { kind: 'seat', name: 'atlas', pane: 'pane-atlas', session: 'main' },
+      mainLead: { kind: 'seat', name: 'main-lead', pane: 'pane-main-lead', session: 'main' },
       acmeLead: { kind: 'seat', name: 'lead', pane: 'pane-acme-lead', session: 'acme' },
       acmeWorker: { kind: 'seat', name: 'worker', pane: 'pane-acme-worker', session: 'acme' },
     },
@@ -433,14 +433,14 @@ describe('3. an owner-seat always rule still admits what it admitted before', ()
   test('down: the entity main orchestrator is refused without the rule and admitted past the caller gate with it', async () => {
     const fx = setupHierarchy({ devMode: false });
 
-    const refusedIo = testIo(fx.acmeRoot, fx.callers.atlas);
+    const refusedIo = testIo(fx.acmeRoot, fx.callers.mainLead);
     const refusedCode = await runDown([], refusedIo, downSources(fx.home, fx.store));
     expect(refusedCode).toBe(1);
-    expect(refusedIo.err).toBe(`team down: ${DOWN_CALLER_PREFIX} atlas\n`);
+    expect(refusedIo.err).toBe(`team down: ${DOWN_CALLER_PREFIX} main-lead\n`);
     expect(auditFiles(fx.home)).toEqual([]);
 
     const ruleId = signAlwaysRule(fx.home, fx.store, fx.acmeRoot, 'acme', 'team-down');
-    const admittedIo = testIo(fx.acmeRoot, fx.callers.atlas);
+    const admittedIo = testIo(fx.acmeRoot, fx.callers.mainLead);
     const admittedCode = await runDown([], admittedIo, downSources(fx.home, fx.store));
     expect(admittedCode).toBe(1);
     expect(admittedIo.err).toBe(`team down: ${NO_LAUNCH}\n`);
@@ -509,12 +509,12 @@ describe('4. the dev-mode lift is unchanged', () => {
   test('down --abandon: the main orchestrator continues with both warnings; a plain seat keeps the abandon refusal', async () => {
     const fx = setupHierarchy({ devMode: true });
 
-    const atlasIo = testIo(fx.acmeRoot, fx.callers.atlas);
-    const atlasCode = await runDown(['--abandon'], atlasIo, downSources(fx.home, fx.store));
-    expect(atlasCode).toBe(1);
+    const mainLeadIo = testIo(fx.acmeRoot, fx.callers.mainLead);
+    const mainLeadCode = await runDown(['--abandon'], mainLeadIo, downSources(fx.home, fx.store));
+    expect(mainLeadCode).toBe(1);
     // 1364: abandon stays the owner's. The down warning remains; the abandon itself is a refusal.
-    expect(atlasIo.err).toBe(
-      `team down: warning: ${DOWN_CALLER_PREFIX} atlas (dev-mode on at machine level)\n`
+    expect(mainLeadIo.err).toBe(
+      `team down: warning: ${DOWN_CALLER_PREFIX} main-lead (dev-mode on at machine level)\n`
       + `team down: ${ABANDON_REFUSAL}\n`,
     );
     expect(teamLog(fx.acmeRoot)).not.toContain('admitted as lead');

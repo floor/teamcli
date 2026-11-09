@@ -86,11 +86,11 @@ describe('doctor names a watch whose pane is gone', () => {
     const record = () => {
       updateState(join(root, '.agents'), (state) => {
         const session = (state.sessions['acme-web'] ??= emptySession());
-        session.watch = { pid, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9' };
+        session.watch = { pid, heartbeat: NOW.toISOString(), pane: 'synthetic-ws-9:p1', workspace: 'synthetic-ws-9' };
         session.seats = {
-          'claude-coordinator-acme': { stage: 'ready', pane: 'w1:p1', workspace: 'w1' },
-          'deepseek-acme': { stage: 'ready', pane: 'w2:p1', workspace: 'w2' },
-          'deepseek-acme-2': { stage: 'ready', pane: 'w3:p1', workspace: 'w3' },
+          'claude-coordinator-acme': { stage: 'ready', pane: 'synthetic-ws-1:p1', workspace: 'synthetic-ws-1' },
+          'deepseek-acme': { stage: 'ready', pane: 'synthetic-ws-2:p1', workspace: 'synthetic-ws-2' },
+          'deepseek-acme-2': { stage: 'ready', pane: 'synthetic-ws-3:p1', workspace: 'synthetic-ws-3' },
         };
       });
     };
@@ -169,7 +169,7 @@ describe('doctor names a watch whose pane is gone', () => {
     expect(host.state().cycles).toBeGreaterThanOrEqual(1);
     expect(readState(join(root, '.agents')).sessions['acme-web']?.watch).toBeUndefined();
     const teamLog = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
-    expect(teamLog).toContain('pane watch w9:p1 not alive: gone; the daemon\'s watch is active\n');
+    expect(teamLog).toContain('pane watch synthetic-ws-9:p1 not alive: gone; the daemon\'s watch is active\n');
     expect(log.some((line) => line.includes('watching the session "acme-web"'))).toBe(true);
     await host.stop('the daemon is closing');
     expect(host.state()).toMatchObject({ phase: 'stopped' });
@@ -192,9 +192,9 @@ function doctorSources(pid: number): DoctorSources {
 }
 
 const READY = [
-  ['claude-coordinator-acme', 'w1:p1', 'w1'],
-  ['deepseek-acme', 'w2:p1', 'w2'],
-  ['deepseek-acme-2', 'w3:p1', 'w3'],
+  ['claude-coordinator-acme', 'synthetic-ws-1:p1', 'synthetic-ws-1'],
+  ['deepseek-acme', 'synthetic-ws-2:p1', 'synthetic-ws-2'],
+  ['deepseek-acme-2', 'synthetic-ws-3:p1', 'synthetic-ws-3'],
 ] as const;
 
 function agents(): HerdrAgent[] {
@@ -214,7 +214,7 @@ function world(): { launch: Launch; creates: string[] } {
     createWorkspace(_session, _cwd, label) {
       n += 1;
       made.creates.push(label);
-      return { pane: `w${n}:p1`, workspace: `w${n}` };
+      return { pane: `synthetic-ws-${n}:p1`, workspace: `synthetic-ws-${n}` };
     },
     paneRun: () => true,
     renameAgent: () => true,
