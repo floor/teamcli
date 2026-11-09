@@ -4,6 +4,7 @@
 // daemon or a pane. `phase` and `effects` are kept apart on purpose — a watch can be cycling
 // while its outbound effects are closed, and no line here may read as fully enforcing while it
 // is blocked.
+import { canonicalRoot } from './routes.ts';
 import type { DaemonHealth } from './health.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';
 import type { WatchSitting } from '../watch/liveness.ts';
@@ -18,6 +19,17 @@ function watched(health: DaemonHealth): Watched[] {
   return health.roots.flatMap((entry) =>
     entry.watch === undefined ? [] : [{ root: entry.root, watch: entry.watch }],
   );
+}
+
+/** Whether this session's hosted watch is the one the status note calls running in the daemon.
+ *  The root match is the same canonical checkout `watchSitting` uses, and the phase is the one
+ *  `watch: running in the daemon` is printed for. A starting, standing-by, stopped or failed
+ *  watch is not that note. */
+export function hostedWatchRunning(health: DaemonHealth, root: string, session: string): boolean {
+  const canonical = canonicalRoot(root);
+  if (canonical === null) return false;
+  const watch = health.roots.find((entry) => entry.root === canonical)?.watch;
+  return watch !== undefined && watch.session === session && watch.phase === 'running';
 }
 
 /**

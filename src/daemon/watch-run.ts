@@ -4,7 +4,7 @@
 
 import type { Io } from '../io.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
-import { realWatchSources, runWatch, type WatchSources } from '../commands/watch.ts';
+import { activateDeadPaneWatchAsync, realWatchSources, runWatch, type WatchSources } from '../commands/watch.ts';
 import type { WorkPush } from '../watch/dispatch.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import type { HostedRoute } from './routes.ts';
@@ -50,6 +50,7 @@ export function hostedWatchSources(
     ...base,
     pid: pid ?? base.pid,
     hosted: loop,
+    startedBy: 'daemon',
     ownPane: undefined,
     typeText: () => false,
     pressEnter: () => false,
@@ -98,14 +99,20 @@ export function hostedWatchRun(input: HostedWatchRunInput): (loop: HostedLoop) =
     stdoutIsTTY: false,
     stderrIsTTY: false,
   };
-  return async (loop) => runWatch([], io, hostedWatchSources(
-    input.route,
-    loop,
-    base,
-    input.pushWork,
-    input.pid,
-    input.presenceChannelHealthy,
-    input.presenceChannelReason,
-    input.brokerWork,
-  ));
+  return async (loop) => {
+    const sources = hostedWatchSources(
+      input.route,
+      loop,
+      base,
+      input.pushWork,
+      input.pid,
+      input.presenceChannelHealthy,
+      input.presenceChannelReason,
+      input.brokerWork,
+    );
+    // A dead pane watch is released before the loop, so the hosted watch runs as the active
+    // one. A live pane watch is left recorded and the loop stands by for it. No pane is started.
+    await activateDeadPaneWatchAsync(input.route.root, input.route.session, sources);
+    return runWatch([], io, sources);
+  };
 }

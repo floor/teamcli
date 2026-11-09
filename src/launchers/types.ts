@@ -102,6 +102,8 @@ export type LauncherDefinition = {
   /** preset: whether seat args may follow the fixed args at all. `refuse` models a preset
    *  whose original wrapper forwarded nothing; default `append`. */
   caller_args?: 'append' | 'refuse';
+  /** The complete seat identity a preset installs; the harness and argv supply CLI and launch. */
+  seat?: { vendor: string; model: string; version: string; display: string };
   /** custom: the verbatim argv, first word the executable. */
   argv?: string[];
   /** custom: whether seat args may follow. */

@@ -89,9 +89,10 @@ import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
-import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
@@ -512,7 +513,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (!declared) {
     return unknownRefused(out, json, name);
   }
-  if (abandon && caller.kind !== 'owner' && (name === team.orchestrator || name === team.operator)) {
+  if (abandon && caller.kind !== 'owner' && name === team.orchestrator) {
     return leadRefused(out, json, describeCaller(caller));
   }
   // A stopped seat is its own team's sign-off to lift: the owner, a seat this team's map admits
@@ -556,6 +557,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // the close repeats the reason this run already gave, so it never reads as a resume that
   // quietly became a fresh start. Set where each decision is made, never inferred from the line.
   let resumeNote: string | undefined;
+  // The agent record's launch line after `--fresh` strips a pinned resume. The run that follows
+  // starts from this line, not from the line that still named the conversation.
+  let clearedLaunch: string | undefined;
   // The pane's continuity is proven by the session the registry binds to the seat, whatever
   // resume form the new launch line can carry: a CLI with none has no resume id, and its
   // state copy may predate the id a restore kept. The live agent's session must still be the
@@ -621,12 +625,27 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const listed = recordedPane === undefined
       ? undefined
       : agents.find((agent) => agent.name === name && agent.pane === recordedPane);
-    // The recorded launcher's own selection, read before anything is stopped: `--abandon` and
-    // `--fresh` are the caller's fresh start, and a line that itself names a conversation — the
-    // recorded id or any other — cannot be run fresh. It is never rewritten, so the flag is
-    // refused here rather than pretending the line it would run is a fresh one.
+    // The recorded launcher's own selection, read before anything is stopped. `--fresh` clears a
+    // resume this version can strip from the agent record's launch line, and clears the pinned
+    // conversation with it, in one write. `--abandon` does not rewrite that line. A resume this
+    // version cannot strip is still refused: nothing pretends the line it would run is fresh.
     const pinned = namedResumeTarget(declared.cli, resumeCandidate.launch) !== null;
-    if (pinned && (abandon || fresh)) {
+    if (pinned && fresh) {
+      const stripped = withoutResume(declared.cli, resumeCandidate.launch);
+      const agentId = ownSession.kind === 'bound'
+        ? ownSession.recorded.agentId
+        : boundSession.kind === 'bound'
+          ? boundSession.recorded.agentId
+          : '';
+      if (stripped !== null && agentId !== '') {
+        if (!dry) {
+          updateAgent(home, agentId, { launch: stripped, reach: { agent_session: null } });
+          logLine(dir, 'restart', describeCaller(caller), `${name}: cleared the pinned conversation from its agent record`, sources.now());
+        }
+        clearedLaunch = stripped;
+      }
+    }
+    if (pinned && (abandon || fresh) && clearedLaunch === undefined) {
       return notReadyRefused(
         out,
         json,
@@ -646,20 +665,23 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         // the caller's `--abandon` or `--fresh`, which both start a new conversation.
         if (!abandon && !fresh) resume = resumeCandidate.id;
         else resumeNote = abandon ? 'abandoned by the caller' : 'started fresh by the caller';
-      } else if (pinned) {
+      } else if (pinned && !(fresh && clearedLaunch !== undefined)) {
         // The recorded launcher names another conversation, or resumes without naming one:
         // stopping the seat and running that line would resume something nothing proved. Nothing
         // is stopped, and the fresh start is not the caller's `--abandon` either: that line would
-        // run the same selection.
+        // run the same selection. `--fresh` is past this once the pin was stripped above: that
+        // write cleared the selection, and the launch runs the stripped line.
         return notReadyRefused(
           out,
           json,
           `${name}: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
         );
       } else if (abandon || fresh) {
-        // The caller's fresh start: the id the records bind is not put on the line. The line
-        // names no conversation of its own here, so running it as it is starts one.
-        if (carried.kind === 'refuse') noResume(carried.why);
+        // The caller's fresh start: the id the records bind is not put on the line. A `--fresh`
+        // whose pin was stripped starts from that line. Otherwise the line names no conversation
+        // of its own, so running it as it is starts one.
+        if (fresh && clearedLaunch !== undefined) resumeNote = 'started fresh by the caller';
+        else if (carried.kind === 'refuse') noResume(carried.why);
       } else {
         // No measured resume form on this CLI: stopping the seat would destroy a conversation
         // nothing could put back. The fresh start is the caller's explicit choice.
@@ -721,7 +743,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     ...(declared.stopped
       ? { declare: () => declareRevived(path, name, home), restore: () => declareStopped(path, name, home) }
       : {}),
-    ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
+    ...(clearedLaunch !== undefined
+      ? { registryLaunch: clearedLaunch }
+      : boundSession.kind === 'bound' && boundSession.recorded.launch
+        ? { registryLaunch: boundSession.recorded.launch }
+        : {}),
     ...(args.flags.has('resolve-launch') ? { resolveLaunch: true } : {}),
     now: sources.now,
     sources,
@@ -1982,6 +2008,8 @@ function hostOf(input: {
         report: (why) => {
           stopped.why = why;
         },
+        leadPane: (input.team.orchestrator !== '' && file.seat === input.team.orchestrator)
+          || (input.team.operator !== '' && file.seat === input.team.operator),
         now: () => input.now().getTime(),
         sleep: launch.sleep,
       });
@@ -2404,7 +2432,7 @@ function unknownRefused(out: Io, json: boolean, name: string): number {
 function leadRefused(out: Io, json: boolean, callerText: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.lead',
-    message: `a seat caller does not abandon the orchestrator's or the operator's seat; this call is ${callerText}`,
+    message: `a seat caller does not abandon the orchestrator's seat; this call is ${callerText}`,
     repair: null,
   });
   // exit: restart.lead

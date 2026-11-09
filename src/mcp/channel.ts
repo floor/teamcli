@@ -14,7 +14,7 @@
 // the watch redelivers. It redelivers exactly once (`redelivered: channel unconfirmed`), and only
 // for an id with no receipt: an acknowledged message is never touched again.
 import { randomBytes } from 'node:crypto';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -39,12 +39,20 @@ export const CHANNEL_PUSH_STATUS = 'sent (channel)';
  *  honor it. It is not a push, and the sender's own wait never reads it as one. */
 export const CHANNEL_HELD_RECEIPT = 'channel-held';
 
-/** How long a send waits for the server's push marker: the server polls its inbox on a short
- *  timer, so this is several polls, never a wait on the seat. */
+/** How long a send waits for the server's push marker. The server pushes when the drop folder
+ *  changes, so this still covers a watch event that was missed, and the sender's own steps stay
+ *  on `CHANNEL_TICK_MS`. */
 export const CHANNEL_PUSH_GRACE_MS = 2_000;
 
-/** How often the serving inbox looks for a record it has not pushed yet when no bus is running. */
+/** How often a sender looks for the push marker it is waiting on. The serving inbox does not
+ *  poll on this interval: a folder watch delivers a new record, and `CHANNEL_IDLE_MS` is the
+ *  slow pass when that watch is quiet or down. */
 export const CHANNEL_TICK_MS = 250;
+
+/** How often a serving inbox with no bus still reads its folder whole. A few seconds, so an
+ *  idle server does not scan the inbox several times a second. A new record is pushed from the
+ *  folder watch or from a bus event, not from this pass. */
+export const CHANNEL_IDLE_MS = 2_000;
 
 /** How often a serving inbox with a live bus subscription still reads its inbox whole: the bus
  *  carries each arrival at once, and this slow pass catches a sender that could not reach it. */
@@ -270,15 +278,36 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-function pauseMs(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
 function discard(path: string): void {
   try {
     unlinkSync(path);
   } catch {
     // The private file is already gone.
+  }
+}
+
+/** Closes `fd` and removes `path` when that name still refers to the inode `fd` held. A name
+ *  someone else has replaced is left alone. A throw while releasing still closes the descriptor
+ *  and still removes the name we held. */
+function dropOwned(fd: number, path: string): void {
+  let held: { dev: number; ino: number } | null = null;
+  try {
+    const info = fstatSync(fd);
+    held = { dev: info.dev, ino: info.ino };
+  } catch {
+    held = null;
+  }
+  try {
+    closeSync(fd);
+  } catch {
+    // The descriptor is already closed.
+  }
+  if (held === null) return;
+  try {
+    const now = statSync(path);
+    if (now.dev === held.dev && now.ino === held.ino) unlinkSync(path);
+  } catch {
+    // The inode we held is already gone. A replacement at this path belongs to its creator.
   }
 }
 
@@ -288,44 +317,39 @@ function discard(path: string): void {
 function takeChannelCommit(dropDir: string, id: string, hooks?: ChannelCommitHooks): number | 'busy' {
   const lock = channelCommitLockPath(dropDir, id);
   const prep = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
-  let fd: number;
+  let fd: number | null = null;
+  let published = false;
   try {
     fd = openSync(prep, 'wx');
-  } catch {
-    return 'busy';
-  }
-  try {
     if (hooks?.failOwnerWrite === true) throw new Error('owner write failed');
     writeFileSync(fd, `${process.pid}\n`);
     fsyncSync(fd);
-  } catch {
-    closeSync(fd);
-    discard(prep);
-    return 'busy';
-  }
-  hooks?.beforePublish?.();
-  try {
+    hooks?.beforePublish?.();
     linkSync(prep, lock);
-  } catch {
-    closeSync(fd);
-    discard(prep);
-    return 'busy';
-  }
-  try {
+    published = true;
     const mine = fstatSync(fd);
-    const published = statSync(lock);
-    if (mine.dev !== published.dev || mine.ino !== published.ino) {
-      closeSync(fd);
-      discard(prep);
-      return 'busy';
-    }
-  } catch {
-    closeSync(fd);
+    const named = statSync(lock);
+    if (mine.dev !== named.dev || mine.ino !== named.ino) throw new Error('lock inode changed');
+    const owned = fd;
+    fd = null;
     discard(prep);
+    return owned;
+  } catch {
     return 'busy';
+  } finally {
+    // A return that does not hand back the descriptor removes the name this attempt published.
+    if (fd !== null) {
+      if (published) dropOwned(fd, lock);
+      else {
+        try {
+          closeSync(fd);
+        } catch {
+          // The descriptor is already closed.
+        }
+      }
+      discard(prep);
+    }
   }
-  discard(prep);
-  return fd;
 }
 
 const LOCK_EX = 2;
@@ -516,31 +540,21 @@ sys.stdin.buffer.read()
 
 function readHelperStatus(path: string, accept: readonly string[], waitMs = 2_000): string | null {
   const started = Date.now();
-  while (Date.now() - started < waitMs) {
+  // The helper runs in its own process and publishes the status beside the lock. This returns
+  // as soon as that status is one of `accept`, and at the deadline otherwise. It does not park
+  // the main thread on a wait whose timeout can fail to fire.
+  for (;;) {
     try {
       const text = readFileSync(path, 'utf8').trim();
       if (accept.includes(text)) return text;
     } catch {
       // The helper has not written the status yet.
     }
-    pauseMs(5);
+    if (Date.now() - started >= waitMs) return null;
   }
-  return null;
-}
-
-function helperDead(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ESRCH';
-  }
-  const probed = spawnSync('/bin/ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
-  const stat = (probed.stdout ?? '').trim();
-  return stat === '' || stat.startsWith('Z');
 }
 
 function stopHelper(child: ChildProcess): void {
-  const pid = child.pid;
   try {
     child.stdin?.end();
   } catch {
@@ -550,12 +564,6 @@ function stopHelper(child: ChildProcess): void {
     child.kill('SIGKILL');
   } catch {
     // The helper has already exited.
-  }
-  if (pid === undefined) return;
-  const started = Date.now();
-  while (Date.now() - started < 1_000) {
-    if (helperDead(pid)) return;
-    pauseMs(5);
   }
 }
 
@@ -638,35 +646,57 @@ function reclaimHeldByHelper(dropDir: string, id: string, hooks?: ChannelCommitH
     }
     const ours = created && holder === process.pid;
     if (Number.isInteger(holder) && holder > 0 && pidAlive(holder) && !ours) return 'busy';
+    // The published lock name's pid is the holder. The claim can still carry a dead pid, and
+    // the claim flock is free once the helper that published the lock has exited. Neither of
+    // those makes a live lock pid stealable. Only a dead lock pid may be replaced.
+    let publishedHolder = NaN;
+    try {
+      publishedHolder = Number(readFileSync(lock, 'utf8').trim());
+    } catch {
+      if (created) discard(claim);
+      return 'busy';
+    }
+    if (Number.isInteger(publishedHolder) && publishedHolder > 0 && pidAlive(publishedHolder)) {
+      if (created) discard(claim);
+      return 'busy';
+    }
     accepted = true;
     if (!lockIsDead(lock)) return 'busy';
     writeFileSync(go, '1\n');
     const published = readHelperStatus(status, ['published', 'aborted'], hooks?.helperWaitMs);
     if (published !== 'published') stopHelper(helper);
-    let fd: number;
+    let fd: number | null = null;
     try {
       fd = openSync(lock, 'r');
-    } catch {
-      return 'busy';
-    }
-    try {
       const now = Number(readFileSync(fd, 'utf8').trim());
       if (now !== process.pid) {
         closeSync(fd);
+        fd = null;
         return 'busy';
       }
       const mine = fstatSync(fd);
       const at = statSync(lock);
       if (mine.dev !== at.dev || mine.ino !== at.ino) {
         closeSync(fd);
+        fd = null;
         return 'busy';
       }
     } catch {
-      closeSync(fd);
+      if (fd !== null) dropOwned(fd, lock);
       return 'busy';
     }
+    if (fd === null) return 'busy';
     if (typeof helper.pid === 'number') hooks?.helperPid?.(helper.pid);
-    hooks?.beforeLockRename?.();
+    // The descriptor is held, but the caller has not recorded it yet. Record it before the
+    // hook so a nested attempt sees a live holder and does not remove the published name.
+    heldCommits.add(lock);
+    try {
+      hooks?.beforeLockRename?.();
+    } catch (error) {
+      heldCommits.delete(lock);
+      dropOwned(fd, lock);
+      throw error;
+    }
     return fd;
   } finally {
     heldClaims.delete(claim);
@@ -689,39 +719,35 @@ function reclaimHeldByHelper(dropDir: string, id: string, hooks?: ChannelCommitH
 function replaceDeadLock(dropDir: string, id: string): number | 'busy' {
   const lock = channelCommitLockPath(dropDir, id);
   const prep = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
-  let fd: number;
+  let fd: number | null = null;
+  let published = false;
   try {
     fd = openSync(prep, 'wx');
-  } catch {
-    return 'busy';
-  }
-  try {
     writeFileSync(fd, `${process.pid}\n`);
     fsyncSync(fd);
-  } catch {
-    closeSync(fd);
-    discard(prep);
-    return 'busy';
-  }
-  try {
     renameSync(prep, lock);
-  } catch {
-    closeSync(fd);
-    discard(prep);
-    return 'busy';
-  }
-  try {
+    published = true;
     const mine = fstatSync(fd);
-    const published = statSync(lock);
-    if (mine.dev !== published.dev || mine.ino !== published.ino) {
-      closeSync(fd);
-      return 'busy';
-    }
+    const named = statSync(lock);
+    if (mine.dev !== named.dev || mine.ino !== named.ino) throw new Error('lock inode changed');
+    const owned = fd;
+    fd = null;
+    return owned;
   } catch {
-    closeSync(fd);
     return 'busy';
+  } finally {
+    if (fd !== null) {
+      if (published) dropOwned(fd, lock);
+      else {
+        try {
+          closeSync(fd);
+        } catch {
+          // The descriptor is already closed.
+        }
+        discard(prep);
+      }
+    }
   }
-  return fd;
 }
 
 function lockIsDead(lock: string): boolean {
@@ -775,14 +801,22 @@ function releaseChannelCommit(fd: number, path: string, hooks?: ChannelCommitHoo
   } catch {
     held = null;
   }
-  hooks?.beforeRelease?.();
-  closeSync(fd);
-  if (held === null) return;
   try {
-    const now = statSync(path);
-    if (now.dev === held.dev && now.ino === held.ino) unlinkSync(path);
-  } catch {
-    // The inode we held is already gone. A replacement at this path belongs to its creator.
+    hooks?.beforeRelease?.();
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // The descriptor is already closed.
+    }
+    if (held !== null) {
+      try {
+        const now = statSync(path);
+        if (now.dev === held.dev && now.ino === held.ino) unlinkSync(path);
+      } catch {
+        // The inode we held is already gone. A replacement at this path belongs to its creator.
+      }
+    }
   }
 }
 
@@ -807,25 +841,40 @@ export function channelCommitActive(dropDir: string, id: string): boolean {
   }
 }
 
-/** Runs `work` while this process holds the commit lock. `busy` means the name is held, unknown,
- *  or not reclaimable. A dead positive pid may be replaced. A live holder is waited out. */
+/** Lock paths this process currently holds a descriptor for. A name that carries our pid and is
+ *  not in this set is a leftover: no one is waiting on it, and the next attempt removes it. */
+const heldCommits = new Set<string>();
+
+/** Runs `work` while this process holds the commit lock. `busy` means another live holder has
+ *  the name, or this process already holds it. A name that carries this process's pid while
+ *  this process does not hold the descriptor is stale: it is removed and the take is repeated.
+ *  This never waits. A caller that wants another try schedules it. The lock name is removed on
+ *  every return, including a throw from `work` or from the release hook. Nothing is spawned
+ *  while the descriptor is held. */
 export function withChannelCommit<T>(dropDir: string, id: string, work: () => T, hooks?: ChannelCommitHooks): T | 'busy' {
   const path = channelCommitLockPath(dropDir, id);
   let fd: number | 'busy' = 'busy';
-  // Without flock the reclaim spawns a helper and waits for it. One attempt: repeating that
-  // wait across the live-holder retries would block for the helper's whole window each time.
-  const attempts = flockWorks(hooks) ? 50 : 1;
-  for (let at = 0; at < attempts; at += 1) {
+  for (let at = 0; at < 3; at += 1) {
     fd = tryChannelCommit(dropDir, id, at === 0 ? hooks : undefined);
     if (fd !== 'busy') break;
-    if (lockHolder(dropDir, id) === process.pid) return 'busy';
-    if (!channelCommitActive(dropDir, id)) break;
-    if (at + 1 < attempts) pauseMs(20);
+    const holder = lockHolder(dropDir, id);
+    // A live pid on the published lock is the holder, including this process while its
+    // descriptor is recorded. A stale claim or a free flock does not make that pid stealable.
+    // Only a dead lock pid is removed and tried again. This process's own pid is removed only
+    // when no descriptor is held for the name.
+    if (holder !== null && pidAlive(holder) && (holder !== process.pid || heldCommits.has(path))) return 'busy';
+    if (holder === process.pid && !heldCommits.has(path)) {
+      discard(path);
+      continue;
+    }
+    return 'busy';
   }
   if (fd === 'busy') return 'busy';
+  heldCommits.add(path);
   try {
     return work();
   } finally {
+    heldCommits.delete(path);
     releaseChannelCommit(fd, path, hooks);
   }
 }

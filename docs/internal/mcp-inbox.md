@@ -97,7 +97,8 @@ Every wait on the leg is bounded.
 | `INBOX_FALLBACK_MS` | 10 minutes | how long the watch leaves an unread inbox drop to the seat's own client before its first fall-back pass; the retry types nothing, and the marker runs to `PENDING_MAX_AGE_MS` |
 | `PENDING_MAX_TRIES` | 3 | typed retries once the fall-through starts — never spent in a build that types nothing into a seat |
 | `PENDING_MAX_AGE_MS` | 30 minutes | the marker's whole life, from the send |
-| `CHANNEL_TICK_MS` | 250 ms | how often a serving inbox looks for a record it has not pushed yet |
+| `CHANNEL_TICK_MS` | 250 ms | how often a sender looks for the push marker while it waits |
+| `CHANNEL_IDLE_MS` | 2000 ms | how often a serving inbox with no bus re-reads mtimes in its folder; a folder watch queues the file the event names, a names-only listing on `CHANNEL_TICK_MS` queues only a name not seen before, and each queued name is read on its own turn. An id-named file that is not a channel record is remembered by name and mtime and is not read again until that mtime changes. This interval is the heavier pass |
 | `CHANNEL_PUSH_GRACE_MS` | 2000 ms | how long `team send` waits for the server's push marker after writing the record |
 | `CHANNEL_CONFIRM_MS` | 3 minutes | how long a push waits for its signed read receipt before the one redelivery |
 

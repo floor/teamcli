@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { saveReadings, saveSpendReadings, type Seen } from '../src/budgets/readings.ts';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runStatus } from '../src/commands/status.ts';
 import type { StatusSources } from '../src/commands/status.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Seat, TeamFile } from '../src/file/types.ts';
@@ -80,6 +81,9 @@ function built(): Live {
  *  and still carries the approval repair. */
 const REFUSED_WHY = 'the record is signed, but its key is missing';
 
+/** The repair a missing or stale watch names. The daemon carries the watch; a pane `team watch` does not. */
+const WATCH_REPAIR = 'team daemon status, or the lead runs team daemon install';
+
 let dir: string;
 let file: string;
 let live: Live | null;
@@ -117,6 +121,61 @@ async function status(...argv: string[]) {
   // owner, as a terminal run of the command would.
   const io = testIo(dir, { kind: 'owner' });
   const code = await runStatus(['--file', file, ...argv], io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
+/** A daemon health whose one route may host this checkout's watch. The root is the canonical
+ *  folder status compares, so a phase of `running` for the session is the hosted watch. */
+function watchHealth(session: string, phase: 'running' | 'stopped'): DaemonHealth {
+  const canonical = realpathSync(dir);
+  return {
+    daemon: 'teamcli',
+    socket: 'socket-status',
+    state: 'running',
+    running: true,
+    pid: 7,
+    uid: null,
+    since: null,
+    startedBy: null,
+    version: '1',
+    gitHead: null,
+    heartbeatAt: NOW.toISOString(),
+    heartbeatSeconds: 1,
+    features: null,
+    stuck: [],
+    roots: [{
+      root: canonical,
+      team: 'acme-web',
+      send: 'serving',
+      bus: 'serving',
+      why: null,
+      watch: {
+        routeId: 'route-acme',
+        root: canonical,
+        team: 'acme-web',
+        session,
+        phase,
+        startedAt: NOW.toISOString(),
+        lastCycleAt: NOW.toISOString(),
+        lastCycleOutcome: 'pass',
+        cycles: 1,
+        failures: 0,
+        effects: 'open',
+        required: true,
+        why: null,
+      },
+    }],
+    probe: { state: 'answered', at: NOW.toISOString() },
+    why: null,
+  };
+}
+
+async function statusHealth(health: DaemonHealth | null, ...argv: string[]) {
+  const io = testIo(dir, { kind: 'owner' });
+  const code = await runStatus(['--file', file, ...argv], io, {
+    ...sources,
+    ...(health === null ? {} : { daemonHealth: async () => health }),
+  });
   return { code, out: io.out, err: io.err };
 }
 
@@ -613,11 +672,11 @@ describe('team status', () => {
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ?? emptySession()).watch = { pid: 1, heartbeat: '2026-10-03T14:00:00Z' };
     });
-    expect((await status()).out).toContain('the watch\'s last pass was 10 minutes ago\n  repair: team watch --session acme-web');
+    expect((await status()).out).toContain(`the watch's last pass was 10 minutes ago\n  repair: ${WATCH_REPAIR}`);
     updateState(join(dir, '.agents'), (state) => {
       delete state.sessions['acme-web']?.watch;
     });
-    expect((await status()).out).toContain('no watch has run for this session');
+    expect((await status()).out).toContain(`no watch has run for this session\n  repair: ${WATCH_REPAIR}`);
   });
 
   test('a protected checkout off its branch', async () => {
@@ -652,7 +711,26 @@ describe('team status', () => {
   test('--session reads another session, with its own state', async () => {
     const { out } = await status('--session', 'sandbox');
     expect(out).toContain('session "sandbox"');
-    expect(out).toContain('no watch has run for this session\n  repair: team watch --session sandbox');
+    expect(out).toContain(`no watch has run for this session\n  repair: ${WATCH_REPAIR}`);
+  });
+
+  test('a daemon hosting this session\'s watch is the watch; down or another session is not', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      delete state.sessions['acme-web']?.watch;
+    });
+    const missing = `difference: no watch has run for this session\n  repair: ${WATCH_REPAIR}\n  who: the team's lead\n`;
+    // Phase running for this session, and no pane-watch record: the gap is not real.
+    const hosted = await statusHealth(watchHealth('acme-web', 'running'));
+    expect(hosted.out, hosted.err).not.toContain('no watch has run');
+    expect(hosted.code, hosted.out).toBe(0);
+    // The probe is absent: the daemon is down, and the difference names the daemon repair.
+    const down = await statusHealth(null);
+    expect(down.out).toContain(missing);
+    expect(down.code).toBe(1);
+    // A running watch for a different session is not this session's watch.
+    const other = await statusHealth(watchHealth('other', 'running'));
+    expect(other.out).toContain(missing);
+    expect(other.code).toBe(1);
   });
 
   test('a broken file: status falls back to the last valid copy and says so first', async () => {
@@ -972,7 +1050,7 @@ describe('team status', () => {
     expect(missingWatch.code).toBe(1);
     const restart1 = missingWatch.out.indexOf('difference: deepseek-acme is in the file and is not running\n  repair: team restart deepseek-acme\n');
     const restart2 = missingWatch.out.indexOf('difference: deepseek-acme-2 is in the file and is not running\n  repair: team restart deepseek-acme-2\n');
-    const watch = missingWatch.out.indexOf('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
+    const watch = missingWatch.out.indexOf(`difference: no watch has run for this session\n  repair: ${WATCH_REPAIR}\n`);
     expect(restart1).toBeGreaterThanOrEqual(0);
     expect(restart2).toBeGreaterThanOrEqual(0);
     // The differences keep the order they were created in: the watch's, made after them, stays after them.
@@ -991,7 +1069,7 @@ describe('team status', () => {
     expect(refused.out).toContain('repair: team restart deepseek-acme (after: the live file is what the commands read)');
     expect(refused.out).toContain('repair: team restart deepseek-acme-2 (after: the live file is what the commands read)');
     expect(refused.out.indexOf('difference: deepseek-acme is in the file and is not running')).toBeGreaterThan(approve);
-    expect(refused.out).toContain('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
+    expect(refused.out).toContain(`difference: no watch has run for this session\n  repair: ${WATCH_REPAIR}\n`);
   });
 
   test('B: whose repair: each repair string that names an owner command asserted exactly', async () => {

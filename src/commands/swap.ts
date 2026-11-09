@@ -5,6 +5,7 @@ import {
   describeCaller,
   detachedRefusal,
   fileOwnerRefusal,
+  callerOf,
   isOwner,
   judgeCallerIn,
   mayChangeTeamVerdict,
@@ -15,6 +16,7 @@ import {
   type CallerVerdict,
 } from '../caller.ts';
 import { charterTargetOf } from '../client/owner-action-step.ts';
+import { leadsOwnTeamAdmits } from '../leads-authority.ts';
 import { charterGate } from '../charter/check.ts';
 import type { DelegateSources } from '../delegate.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
@@ -52,6 +54,7 @@ import { findRecipe, listModelRuleBreaches, type ModelRecipe, type RuleDonor, ty
 import { runDueSwaps, runOneSwap, type SwapRunOptions, type SwapRunResult } from '../swap/run.ts';
 import { planVendorSwap, vendorTargetOf } from '../swap/vendor.ts';
 import { realSources, type RestartSources } from './restart.ts';
+import { runPresetSwap } from '../swap/preset.ts';
 
 // `team swap` is the command family for the entity's model rule and the queued swap
 // (Policies rules 10 and 11). The rule is read
@@ -61,13 +64,14 @@ import { realSources, type RestartSources } from './restart.ts';
 // out at the seat's boundary. This command owns the queue and the listing; the run is the
 // watch's, or `team swap --run` for a team whose watch is not running.
 
-export const USAGE = `Usage: team swap [--file <path>] [--json]
-       team swap --rule [--file <path>] [--json]
+export const USAGE = `Usage: team swap <seat> <preset> [--dry-run] [--file <path>] [--json]
+       team swap [--rule | --run] [--file <path>] [--json]
        team swap queue <seat> [--to <target>] [--file <path>] [--json]
        team swap now <seat> [--file <path>] [--json]
        team swap cancel <seat> [--file <path>] [--json]
-       team swap --run [--file <path>] [--json]
 
+<seat> <preset> installs that recipe and starts the seat fresh; --dry-run plans it and writes nothing.
+With no subcommand the command lists the queue. --rule reads the entity rule and takes no seat. --run drains the queue and takes no seat.
 A <target> is <cli>:<model>, and the recipe is copied from a seat of the entity that already runs it.
 A <vendor>:<model> target moves the seat between vendors of its own CLI through the profile's vendor
 table, with no donor and no launcher script; the vendor's credential item must be on this machine.
@@ -75,6 +79,8 @@ Exits 0 when the queue or the listing is shown, or a swap is queued, forced, run
 `;
 
 export type SwapCommandOptions = {
+  /** The shared restart sequence, injectable for command-level synthetic tests. */
+  presetRestart?: typeof import('./restart.ts').performRestart;
   home?: string;
   now?: Date | (() => Date);
   sources?: RestartSources;
@@ -149,7 +155,48 @@ type RunPlan = {
   rulesOrigin?: RulesOrigin;
 };
 
+const SWITCHES = new Set(['json', 'dry-run', 'rule', 'run']);
+const VALUED = new Set(['file', 'to']);
+
+/** Positionals only, so the form is chosen before a parser that refuses another form's flag.
+ *  A value flag consumes its argument. An unknown flag stops the scan, as readArgs does, so
+ *  words after it are not a second form. */
+function positionalsOf(argv: readonly string[]): string[] {
+  const rest: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i] as string;
+    if (!arg.startsWith('--')) {
+      rest.push(arg);
+      continue;
+    }
+    const [name, inline] = arg.slice(2).split(/=(.*)/s) as [string, string | undefined];
+    if (SWITCHES.has(name) && inline === undefined) continue;
+    if (VALUED.has(name)) {
+      if (inline === undefined) i += 1;
+      continue;
+    }
+    break;
+  }
+  return rest;
+}
+
+/** A flag the chosen form does not read, said the way that form already refuses it. `--to` on
+ *  anything but queue, and `--rule` or `--run` on queue, never become an unknown-option line. */
+function formError(queue: boolean, argv: readonly string[], error: string): string {
+  if (queue && error === 'unknown option --rule' && argv.includes('--rule')) return '--rule takes no subcommand';
+  if (queue && error === 'unknown option --run' && argv.includes('--run')) return '--run takes no subcommand and no seat';
+  if (!queue && error === 'unknown option --to') return '--to belongs to `team swap queue <seat>`';
+  return error;
+}
+
 export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOptions = {}): Promise<number> {
+  const words = positionalsOf(argv);
+  if (words.length >= 2 && !['queue', 'now', 'cancel'].includes(words[0] ?? '')) {
+    // The preset form reads only the flags it takes. runPresetSwap parses this same list and
+    // is what reports a flag the form does not take.
+    readArgs(argv, ['file'], ['dry-run', 'json']);
+    return runPresetSwap(argv, rawIo, options);
+  }
   const executed = execute(argv, rawIo, options);
   const outcome = typeof executed === 'string' ? executed : await performRun(executed);
   if (outcome === 'invocation') {
@@ -208,11 +255,16 @@ type Sub = 'view' | 'rule' | 'queue' | 'now' | 'cancel' | 'run';
 function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcome | RunPlan {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['to', 'file'], ['rule', 'json', 'run']);
+  const words = positionalsOf(argv);
+  // queue is the only form that reads --to. --rule and --run are the bare form. now and cancel
+  // share that bare list: a flag they do not take is still the refusal the bare form names.
+  const args = words[0] === 'queue'
+    ? readArgs(argv, ['to', 'file'], ['json'])
+    : readArgs(argv, ['file'], ['rule', 'json', 'run']);
   const home = options.home ?? homedir();
   const now = resolveNow(options.now);
 
-  if (args.error !== undefined) return invocation(rawIo, io, json, plainText(args.error));
+  if (args.error !== undefined) return invocation(rawIo, io, json, plainText(formError(words[0] === 'queue', argv, args.error)));
   const name = args.rest[0];
   const ruleView = args.flags.has('rule');
   const runFlag = args.flags.has('run');
@@ -244,15 +296,44 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
 
   const walked = walkCaller(rawIo);
   const gate = charterGate(home, { operation: 'swap', cwd: rawIo.cwd, path: charterTargetOf(rawIo.cwd, args.values.file) }, options.ownerSeatStore);
+  const peeked = !isOwner(walked) && sub === 'now' ? currentTeam(rawIo.cwd, undefined, now, home, false) : null;
+  const placedCaller = peeked?.ok === true ? callerOf(rawIo, peeked.team.session) : null;
+  // The orchestrator seat is refused, so that refusal must not leave an admission line.
+  // The line is written only once the run is actually admitted.
+  const wouldAdmit = placedCaller !== null && peeked?.ok === true && leadsOwnTeamAdmits({
+    caller: placedCaller,
+    team: peeked.team,
+    teamFile: peeked.team,
+    at: standingOf(peeked.dir, peeked.team.session, placedCaller),
+    home,
+    root: peeked.root,
+    command: 'swap',
+    now,
+  }) !== null;
+  const leadNow = wouldAdmit && peeked?.ok === true && seatName !== peeked.team.orchestrator;
+  if (leadNow && placedCaller !== null && peeked?.ok === true) {
+    leadsOwnTeamAdmits({
+      caller: placedCaller,
+      team: peeked.team,
+      teamFile: peeked.team,
+      at: standingOf(peeked.dir, peeked.team.session, placedCaller),
+      home,
+      root: peeked.root,
+      command: 'swap',
+      now,
+      dir: peeked.dir,
+    });
+  }
+  // A charter block is a deny the owner wrote. It wins over the default rule.
   if (gate.kind === 'block' && !isOwner(walked)) {
     refuse(rawIo, io, json, 'swap.caller', plainText(gate.message), `the owner widens the charter with team setup --edit`, undefined, 'owner-or-leads');
     return 'caller';
   }
   const covered = gate.kind === 'admit' && !isOwner(walked);
-  const owner = isOwner(walked) || covered;
+  const owner = isOwner(walked) || covered || leadNow;
 
-  if (sub === 'now' && !covered) {
-    // `team swap now` is the owner's alone: forcing the swap is the owner's word.
+  if (sub === 'now' && !covered && !leadNow) {
+    // Forcing a swap of the orchestrator seat stays the owner's. Any other seat is the lead's.
     const detached = detachedRefusal(walked, { who: 'the owner', where: 'a terminal outside herdr or its own seat' });
     if (detached !== undefined) {
       refuse(rawIo, io, json, 'swap.detached', plainText(detached), null, undefined, 'owner-only');
@@ -264,7 +345,9 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
         io,
         json,
         'swap.caller',
-        `only the owner forces a swap; this call is ${describeCaller(walked)}`,
+        peeked?.ok === true && wouldAdmit && seatName === peeked.team.orchestrator
+          ? `only the owner changes the orchestrator's seat; this call is ${describeCaller(walked)}`
+          : `only the owner forces a swap; this call is ${describeCaller(walked)}`,
         null,
         undefined,
         'owner-only',

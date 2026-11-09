@@ -9,6 +9,7 @@ import { publicNameRules, scanPublicNames } from '../../src/check/public-names.t
 import { checkBody, runCheck } from '../../src/check/run.ts';
 import { check } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
+import { testIo } from '../helpers.ts';
 import { storePath } from '../../src/store/store.ts';
 import { createRepository, HUMAN_EMAIL, type Repository } from './repository.ts';
 
@@ -173,3 +174,37 @@ test('every repository forbidden rule still rejects a violating commit, body and
   for (const source of pathPatterns) expect(scan.hits.some((hit) => hit.pattern === source && hit.line === 0)).toBe(true);
   expect(readFileSync(POLICY, 'utf8')).not.toContain('launch:');
 }, 30_000);
+
+const OUTSIDER = `kind: check-policy
+project: acme
+visibility: public
+identity:
+  humans: []
+signers:
+  - { display: "Model 9", model: "Model", version: "9", role: "writer" }
+`;
+
+test('a bare check reads the policy file and accepts a signer no roster seat has', async () => {
+  const repo = repository();
+  const home = scratch();
+  mkdirSync(join(repo.path, '.github'));
+  writeFileSync(join(repo.path, '.github/policy.yaml'), OUTSIDER);
+  const ref = repo.commit('fix: signed\n\nAgent: Model 9 · writer');
+  const io = testIo(repo.path);
+  const code = await commits(['check', ref], io, (cwd, file) => loadConfig(cwd, file, home));
+  expect(code, io.err + io.out).toBe(0);
+  expect(io.err).toContain('team commits check: read .github/policy.yaml');
+  expect(io.out).not.toContain('read .github/policy.yaml');
+  expect(io.out).toContain('ok');
+});
+
+test('with no policy file a bare check still reads the roster', async () => {
+  const repo = repository();
+  const home = scratch();
+  repo.commit('fix: signed\n\nAgent: Model 9 · writer');
+  const io = testIo(repo.path);
+  const code = await commits(['check', 'HEAD'], io, (cwd, file) => loadConfig(cwd, file, home));
+  expect(code).toBe(2);
+  expect(io.err).toContain('no team file');
+  expect(io.out).not.toContain('read .github/policy.yaml');
+});

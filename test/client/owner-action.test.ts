@@ -166,11 +166,12 @@ describe('fail closed', () => {
     expect(admitOwnerAction(p.home, id, ask(p), p.store, NOW)).toEqual({ ok: false, why: `the owner seat denied request ${id}` });
   });
 
-  test('no owner seat, no request', () => {
+  test('a request is recorded with no owner seat', () => {
     const base = realpathSync(mkdtempSync(join(tmpdir(), 'owner-action-none-')));
     made.push(base);
     const made2 = createOwnerActionRequest(join(base, 'home'), { actions: ['team-up'], root: base, team: 'x', head: null, args: {}, requestedBy: 'seat:iris' }, NOW);
-    expect(made2.ok).toBe(false);
+    expect(made2.ok).toBe(true);
+    if (made2.ok) expect(made2.record.request_id).toMatch(/^oa_[0-9a-f]{24}$/);
   });
 });
 

@@ -80,10 +80,6 @@ jobs:
             policy="$RUNNER_TEMP/policy.yaml"
             if git cat-file -e "origin/$BASE:.github/policy.yaml" 2>/dev/null; then
               git show "origin/$BASE:.github/policy.yaml" > "$policy"
-            elif git cat-file -e "origin/$BASE:.github/team.yaml" 2>/dev/null; then
-              # The first policy-file change still has a runnable team file on its base.
-              policy="$RUNNER_TEMP/team.yaml"
-              git show "origin/$BASE:.github/team.yaml" > "$policy"
             else
               echo "the base branch has no checking policy" >&2
               exit 1

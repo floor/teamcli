@@ -100,7 +100,7 @@ import { runSettings, type SettingsCommandOptions } from '../src/commands/settin
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runStart, type StartSources } from '../src/commands/start.ts';
-import { runSwap } from '../src/commands/swap.ts';
+import { runSwap, type SwapCommandOptions } from '../src/commands/swap.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runUsage } from '../src/commands/usage.ts';
 import { runWaits } from '../src/commands/waits.ts';
@@ -556,6 +556,16 @@ function upSources(place: Place, over: Partial<UpSources> = {}): UpSources {
   return { sessionRunning: () => false, agents: () => [], home: place.home, now: () => NOW, terminal: () => ownerTerminal(), ...over };
 }
 
+/** The daemon's own loop. A hand-run `team watch` never enters it. */
+function hostedWatch(): NonNullable<WatchSources['hosted']> {
+  return {
+    signal: new AbortController().signal,
+    wait: async () => false,
+    cycled: () => {},
+    standby: () => {},
+  };
+}
+
 function watchSources(over: Partial<WatchSources> = {}): WatchSources {
   return {
     live: () => quiet,
@@ -653,7 +663,20 @@ async function runCompared(place: Place, argv: string[], go: (args: string[]) =>
   const args = dryArgv(argv);
   const before = compareDry ? projectBytes(place) : null;
   const code = await go(args);
-  if (before) expect(projectBytes(place)).toEqual(before);
+  if (before) {
+    const after = projectBytes(place);
+    expect(after.state).toEqual(before.state);
+    // A dry run and the real run write the same admission line when the default rule admits
+    // the caller. The state stays as it was. That line is the only change a dry run may make.
+    const prior = before.log ?? '';
+    const next = after.log ?? '';
+    if (next !== prior) {
+      expect(next.startsWith(prior)).toBe(true);
+      const extra = next.slice(prior.length).split('\n').filter((line) => line !== '');
+      expect(extra.length).toBeGreaterThan(0);
+      for (const line of extra) expect(line).toContain('warning: owner gate; admitted as ');
+    }
+  }
   return { code, out: io.out, err: io.err };
 }
 
@@ -990,6 +1013,15 @@ scene('add.override-owner', async (place) => {
   return show(await added(place, ['lead', '--model', 'claude-sonnet-5-5'], addRemoveCaller, addSources(place, {
     delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
   })), "--model and --effort on a declared seat are the owner's");
+});
+scene('add.coordinator', async (place) => {
+  // `--file` is this team's own file, inside the checkout. The placed lead is admitted past
+  // that flag and stops on the orchestrator seat, which stays the owner's.
+  approve(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await added(place, ['lead', '--file', place.file], leadSeat, addSources(place)), "only the owner changes the orchestrator's seat");
 });
 scene('add.model', async (place) => {
   approve(place, TWO);
@@ -2309,14 +2341,14 @@ scene('remove.abandon', async (place) => {
   updateState(join(place.root, '.agents'), (state) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
   });
-  return show(await removed(place, ['worker', '--abandon'], leadSeat, downSources({ home: place.home })), 'only the owner abandons');
+  return show(await removed(place, ['lead', '--abandon'], leadSeat, downSources({ home: place.home })), 'only the owner abandons');
 });
 scene('remove.coordinator', async (place) => {
   write(place, TWO);
   updateState(join(place.root, '.agents'), (state) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
   });
-  return show(await removed(place, ['lead'], leadSeat, downSources({ home: place.home })), 'only the owner removes the orchestrator');
+  return show(await removed(place, ['lead'], leadSeat, downSources({ home: place.home })), 'only the owner changes the orchestrator');
 });
 // A lead's `--keep` is a swap. The seat never swaps itself; another lead swaps it only
 // under a grant that lists `swap`; the owner's swap stops it and leaves the file as it was.
@@ -2328,11 +2360,13 @@ scene('remove.swap-self', async (place) => {
   return show(await removed(place, ['lead', '--keep'], leadSeat, downSources({ home: place.home })), "can't swap its own seat");
 });
 scene('remove.swap-grant', async (place) => {
+  // The orchestrator seat stays the owner's. The placed operator is the caller, and the needle
+  // stays the swap refusal. The operator's own seat is the lead's, so it is not this scene.
   write(place, TWO.replace('operator: lead', 'operator: worker').replace('    stopped: true\n', ''));
   updateState(join(place.root, '.agents'), (state) => {
-    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+    (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-worker' };
   });
-  return show(await removed(place, ['worker', '--keep'], leadSeat, downSources({ home: place.home })), 'swaps the orchestrator');
+  return show(await removed(place, ['lead', '--keep'], { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' }, downSources({ home: place.home })), 'swaps the orchestrator');
 });
 scene('remove.no-seat', async (place) => {
   write(place, TWO);
@@ -2768,6 +2802,10 @@ scene('seats.not-yours', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['set', 'project', 'other'], other), "only the owner edits the team's record");
   });
+  scene('config.orchestrator', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'coordinator', 'ops'], other), "only the owner changes the orchestrator's seat");
+  });
   scene('config.approval-requested', async (place) => {
     write(place, TEAM);
     seatOwner(place.home);
@@ -2863,7 +2901,7 @@ scene('seats.not-yours', async (place) => {
   }
   scene('config.entity.composed-value', async (place) => {
     write(place, TEAM);
-    return show(await entityRun(place, ['get', 'composed.rules']), 'No entity, project, or team rules declared');
+    return show(await entityRun(place, ['get', '@composed.rules']), 'No entity, project, or team rules declared');
   });
   scene('config.project.rules-written', async (place) => {
     projects(place);
@@ -3256,12 +3294,6 @@ scene('up.server', async (place) => {
   approve(place, TEAM);
   return show(await up(place, ['--file', place.file], owner, upSources(place, { launch: launching(IDLE, () => true, false) })), 'its server did not start');
 });
-scene('up.watch', async (place) => {
-  approve(place, TEAM);
-  return show(await up(place, ['--file', place.file], owner, upSources(place, {
-    launch: launching(IDLE, (command) => !command.includes(' watch')),
-  })), 'watch: it did not start');
-});
 
 // §RFC0007: one run per delegate refusal of `up`. The gate is the real one in every scene — the
 // command calls it with no stand-ins of its own — and only the reads it cannot make here are
@@ -3328,6 +3360,10 @@ scene('up.grant-scope', async (place) => {
   approve(place, GRANT_DOWN);
   recordLead(place, 'w1:p1');
   unlisted(place);
+  // A grant adds rights. Under own-team it does not refuse this lead, so the scene restores
+  // the owner gates and the grant scope is what denies.
+  const asked = writePolicySet(place.home, { level: 'team', target: place.root, teamRoot: place.root, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+  expect(asked.ok).toBe(true);
   return show(await up(place, [], leadSeat, upSources(place)), 'deny');
 });
 scene('up.grant-flag', async (place) => {
@@ -3342,39 +3378,23 @@ async function watched(place: Place, argv: string[], caller: Caller, sources: Wa
 }
 
 scene('watch.invocation', async (place) => show(await watched(place, ['extra'], owner), 'unexpected'));
-scene('watch.not-a-repo', async (place) => show(await watched(place, [], owner), 'not inside a git repository'), false);
-scene('watch.file', async (place) => show(await watched(place, ['--file', 'missing.yaml'], owner), 'no team file'));
+scene('watch.not-a-repo', async (place) => show(await watched(place, [], owner, watchSources({ hosted: hostedWatch() })), 'not inside a git repository'), false);
+scene('watch.file', async (place) => show(await watched(place, ['--file', 'missing.yaml'], owner, watchSources({ hosted: hostedWatch() })), 'no team file'));
 scene('watch.file-invalid', async (place) => {
   invalid(place);
-  return show(await watched(place, ['--file', 'team.yaml'], owner), 'line');
+  return show(await watched(place, ['--file', 'team.yaml'], owner, watchSources({ hosted: hostedWatch() })), 'line');
 });
 scene('watch.file-owner', async (place) => {
   write(place, TEAM);
   return show(await watched(place, ['--file', '.agents/team.yaml'], other), "--file is the owner's");
 });
-scene('watch.watchdog', async (place) => {
-  // Beside the team file, where `up` writes it — the watch reads that state, not its start folder.
-  updateState(join(place.root, '.agents'), (state) => {
-    const session = (state.sessions.acme ??= emptySession());
-    session.watchdog = { file: join(place.root, 'custom', 'team.yaml'), pane: 'w2:p1' };
-  });
-  return show(await watched(place, ['--session', 'acme'], other), 'only the watch this session records');
-});
 scene('watch.no-nudge', async (place) => {
   write(place, TEAM);
-  return show(await watched(place, ['--no-nudge'], other), '--no-nudge');
+  return show(await watched(place, ['--no-nudge'], other, watchSources({ hosted: hostedWatch() })), '--no-nudge');
 });
 scene('watch.no-notify', async (place) => {
   write(place, TEAM);
-  return show(await watched(place, ['--no-notify'], other), '--no-notify');
-});
-scene('watch.already', async (place) => {
-  write(place, TEAM);
-  updateState(join(place.root, '.agents'), (state) => {
-    const session = (state.sessions.acme ??= emptySession());
-    session.watch = { pid: 99, heartbeat: NOW.toISOString() };
-  });
-  return show(await watched(place, [], owner, watchSources({ alive: (pid) => pid === 99 })), 'already runs');
+  return show(await watched(place, ['--no-notify'], other, watchSources({ hosted: hostedWatch() })), '--no-notify');
 });
 scene('watch.standby', async (place) => {
   write(place, TEAM);
@@ -3395,23 +3415,14 @@ scene('watch.standby', async (place) => {
 });
 scene('watch.stopped', async (place) => {
   write(place, TEAM);
-  return show(await watched(place, [], owner), 'stopped');
-});
-scene('watch.workspace', async (place) => {
-  write(place, TEAM);
-  return show(await watched(place, [], owner, watchSources({
-    createWorkspace: () => null,
-    paneRun: () => false,
-    watchCommand: () => 'team watch',
-  })), 'did not start in its workspace');
+  return show(await watched(place, [], owner, watchSources({ hosted: hostedWatch() })), 'the watch of "acme" stopped');
 });
 scene('watch.started', async (place) => {
   write(place, TEAM);
   return show(await watched(place, [], owner, watchSources({
-    createWorkspace: () => ({ pane: 'w2:p1', workspace: 'w2' }),
-    paneRun: () => true,
-    watchCommand: () => 'team watch',
-  })), 'the watch runs in its own workspace');
+    home: place.home,
+    daemonHealth: async () => ({ roots: [{ root: realpathSync(place.root), watch: { session: 'acme', phase: 'running' } }] }),
+  })), 'running in the daemon for session acme');
 });
 
 // The hidden settings-file hook prints nothing by design, so its scenes assert the status and
@@ -6743,6 +6754,62 @@ scene('drops.invocation', async (place) => {
 });
 scene('drops.not-a-repo', async (place) => show(await dropped(place, []), 'not inside a git repository'), false);
 
+// `team drops archive` settles one seat's mailbox. The scenes plant a signed drop the archive
+// can move, and the refusals are the same folder with one thing wrong.
+const ARCHIVE_DROP = 'a11ce000-0000-4000-8000-0000000000a1';
+
+function plantSettledDrop(place: Place): void {
+  write(place, TEAM);
+  placeLead(place);
+  messageKeyOf(place.home);
+  plantRecord(place.home, place.root, 'acme', 'lead', ARCHIVE_DROP, 'synthetic drop\n', {
+    at: '2026-11-08T10:00:00.000Z',
+    from: 'owner',
+  });
+  const dir = recordDir(place.root, 'acme', 'lead');
+  const signed = signReceiptPayload({
+    kind: 'receipt',
+    status: 'replied',
+    id: ARCHIVE_DROP,
+    to: 'lead',
+    root: place.root,
+    session: 'acme',
+    at: '2026-11-08T10:00:00.000Z',
+  }, place.home);
+  const kept = writeReceipt(dir, signed, place.home);
+  if (!kept.ok) throw new Error(kept.reason);
+}
+
+scene('drops.archive.ok', async (place) => {
+  plantSettledDrop(place);
+  return show(await dropped(place, ['archive']), `moved ${ARCHIVE_DROP}`);
+});
+scene('drops.archive.file', async (place) => {
+  placeLead(place);
+  return show(await dropped(place, ['archive']), 'no team file');
+});
+scene('drops.archive.key', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  return show(await dropped(place, ['archive']), 'no message key; nothing was archived');
+});
+scene('drops.archive.migration', async (place) => {
+  plantSettledDrop(place);
+  writeFileSync(join(recordDir(place.root, 'acme', 'lead'), 'archive'), 'not a folder\n');
+  return show(await dropped(place, ['archive']), 'the archive folder could not be created');
+});
+scene('drops.archive.refused', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  return show(await dropped(place, ['archive'], other), 'archive is the owner, a lead, or the seat itself');
+});
+scene('drops.archive.invocation', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  return show(await dropped(place, ['archive', 'extra']), 'unexpected "extra"');
+});
+scene('drops.archive.not-a-repo', async (place) => show(await dropped(place, ['archive']), 'not inside a git repository'), false);
+
 // --- team mcp: a synthetic helper, bridge and front, under the scene's own temp base. The tree
 // is real (modes, sizes and the config's bytes are read as the command reads them), while the
 // probes that would touch the machine — the socket, the two HTTP requests, the certificate and
@@ -7338,6 +7405,7 @@ scene('forget.forgotten', async (place) => {
 scene('forget.refused', async (place) => show(await forgetRun(place, ['abc123abc123'], detachedCaller), 'only the owner runs this'));
 scene('forget.approval-requested', async (place) => {
   seatOwner(place.home);
+  upsertTeam(place.home, 'abc123abc123', { project: 'acme', session: 'acme', root: place.root, by: 'test' });
   return show(await forgetRun(place, ['abc123abc123', '--request'], detachedCaller), 'owner-seat request');
 });
 scene('forget.approval-refused', async (place) =>
@@ -7668,7 +7736,6 @@ scene('order.done', async (place) => {
 });
 
 scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), LEADS));
-scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), PLACED));
 scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), ORCH));
 
 const ACTIVE_TWO = TWO.replace('    stopped: true\n', '');
@@ -7726,11 +7793,13 @@ scene('restart.unknown', async (place) => {
   return show(await restarted(place, ['missing']), 'not a signed declared seat');
 });
 scene('restart.lead', async (place) => {
-  // The map admits the lead for `restart`; the seat caller is the lead, standing on its own
-  // recorded pane, and the target the file's operator. The abandon rule refuses it there.
+  // The placed operator is admitted to restart. Abandon of the orchestrator's seat stays the owner's.
   write(place, ACTIVE_TWO.replace('operator: lead', 'operator: worker'));
-  recordLead(place, leadSeat.pane);
-  return show(await restarted(place, ['worker', '--abandon'], leadSeat), 'does not abandon the orchestrator');
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-worker' };
+  });
+  const ops = { kind: 'seat' as const, name: 'worker', pane: 'pane-worker', session: 'acme' };
+  return show(await restarted(place, ['lead', '--abandon'], ops), 'does not abandon the orchestrator');
 });
 scene('restart.signed-off', async (place) => {
   write(place, TWO);
@@ -8221,6 +8290,7 @@ seats:
     argv: readonly string[],
     caller: Caller = owner,
     over: Partial<RestartSources> = {},
+    presetRestart?: SwapCommandOptions['presetRestart'],
   ): Promise<Ran> {
     const io = testIo(place.root, caller);
     return {
@@ -8228,6 +8298,7 @@ seats:
         home: place.home,
         now: () => NOW,
         sources: restartSources(place, over),
+        ...(presetRestart ? { presetRestart } : {}),
       }),
       out: io.out,
       err: io.err,
@@ -8371,6 +8442,24 @@ seats:
       await swapped(place, ['--run'], owner, { agents: () => [] }),
       'is no longer declared in the team file; its queued swap was removed',
     );
+  });
+  scene('swap.preset-planned', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['worker', 'lead', '--dry-run']), 'swap worker to lead (dry run)');
+  });
+  scene('swap.preset-swapped', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['worker', 'lead'], owner, {}, async () => ({
+      kind: 'ready', oldPane: 'pane-swap-old', pane: 'pane-swap-new', readBack: { kind: 'unread' },
+    })), 'swapped: worker to lead in pane-swap-new (fresh conversation)');
+  });
+  scene('swap.preset-refused', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['nobody', 'lead']), 'the target must be a declared, active agent seat');
+  });
+  scene('swap.preset-unreadable', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['worker', 'lead', 'extra']), 'expected <seat> <preset>');
   });
 }
 

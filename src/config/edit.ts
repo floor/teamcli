@@ -142,6 +142,18 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   } catch (error) {
     parseError = error;
   }
+  // The orchestrator seat's own fields stay the owner's, whichever door admitted the run.
+  if ((verb === 'set' || verb === 'unset') && (path[0] === 'coordinator' || path[0] === 'orchestrator' || path[0] === 'leads') && !isOwner(callerOf(rawIo))) {
+    const caller = callerOf(rawIo);
+    refuse(io, json, 'config', {
+      id: 'config.orchestrator',
+      message: `only the owner changes the orchestrator's seat; this call is ${describeCaller(caller)}`,
+      repair: null,
+      rule: 'owner-only',
+    });
+    // exit: config.orchestrator
+    return 1;
+  }
   const reserved = parsed === null ? null : reservedKeyIn(parsed, path);
   if (reserved !== null) {
     return usageRefused(io, json, `${rawPath}: "${reserved}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key`, usage);

@@ -2455,17 +2455,62 @@ export function conversationOnDisk(cli: string, cwd: string, id: string, env: No
   return existsSync(join(config, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${id}.jsonl`));
 }
 
-/** The same launch line without its resume, for a CLI whose resume form is measured as a flag
- *  and its id (`--resume <id>` / `-r <id>`, Claude Code). Null where it is not. A resume inside
- *  a trailing quoted script is stripped there and the quotes stay: a word after the closing
- *  quote is the script's positional word, not the CLI's. A plain line this version cannot prove
- *  is null too: a word a tokenizer finds after a comment or an operator is not the CLI's. */
+/** The resume words a measured line carries, as source spans in the body those words were read
+ *  from. Null when this CLI's form is absent or the id is not one the reader accepts. */
+function resumeSite(cli: string, words: readonly ShellWord[]): FlagValueSite | null {
+  if (cli === 'codex') {
+    // The positional subcommand, after the options: `codex -m gpt-x resume <id>`. A bare
+    // `resume`, or one whose next word is itself an option, names no id to remove.
+    const at = words.findIndex((word) => word.text === 'resume');
+    const next = at < 0 ? undefined : words[at + 1];
+    if (at < 0 || next === undefined || next.text === '' || next.text.startsWith('-')) return null;
+    const word = words[at]!;
+    return {
+      flag: 'resume',
+      value: next.text,
+      flagStart: word.start,
+      flagEnd: word.end,
+      valueStart: next.start,
+      valueEnd: next.end,
+      attached: false,
+    };
+  }
+  if (cli === 'grok') {
+    return flagValueSite(words, ['--resume', '-r'], (value) => /^[A-Za-z0-9._:-]+$/.test(value));
+  }
+  if (cli === 'claude-code') {
+    return flagValueSite(words, ['--resume', '-r'], (value) => /^[A-Za-z0-9._-]+$/.test(value));
+  }
+  return null;
+}
+
+/** Remove a resume site and one run of spaces or tabs beside it. Every other character of the
+ *  body — quotes, escapes and spacing elsewhere — stays exactly as it was. */
+function stripResumeSite(body: string, site: FlagValueSite): string {
+  let start = site.flagStart;
+  let end = site.attached ? site.flagEnd : site.valueEnd;
+  while (start > 0 && (body[start - 1] === ' ' || body[start - 1] === '\t')) start -= 1;
+  if (start === site.flagStart) {
+    while (end < body.length && (body[end] === ' ' || body[end] === '\t')) end += 1;
+  }
+  return `${body.slice(0, start)}${body.slice(end)}`;
+}
+
+/** The same launch line without its resume, for a CLI whose resume form is measured: Claude
+ *  Code `--resume <id>` / `-r <id>`, Grok's same flags (an id may contain `:`), and Codex's
+ *  positional `resume <id>` after its options. Null where the form is not measured, where the
+ *  line names no such id, or where the words cannot be proved. A resume inside a trailing
+ *  quoted script is stripped there and the quotes stay: a word after the closing quote is the
+ *  script's positional word, not the CLI's. A plain line this version cannot prove is null
+ *  too: a word a tokenizer finds after a comment or an operator is not the CLI's. */
 export function withoutResume(cli: string, command: string): string | null {
-  if (cli !== 'claude-code') return null;
+  const binary = profileFor(cli)?.binary;
+  if (binary === undefined) return null;
+  if (cli !== 'claude-code' && cli !== 'codex' && cli !== 'grok') return null;
   const trimmed = command.trimEnd();
   // A line whose quoting never closes has no knowable words: nothing may be stripped from it.
   if (shellWords(trimmed) === null) return null;
-  const body = shellScriptWordOf(trimmed) === null ? plainBodyOf(trimmed) : cliBodyOn('claude', trimmed);
+  const body = shellScriptWordOf(trimmed) === null ? plainBodyOf(trimmed) : cliBodyOn(binary, trimmed);
   // A script this version cannot read through keeps its words: a resume is never stripped from
   // text whose quoting is not proved.
   if (body === null) return null;
@@ -2473,17 +2518,9 @@ export function withoutResume(cli: string, command: string): string | null {
   if (words === null) return null;
   // A quoted flag name is the flag and a quoted id is the id: the resume is found in the body's
   // decoded words, and removed by its source span.
-  const site = flagValueSite(words, ['--resume', '-r'], (value) => /^[A-Za-z0-9._-]+$/.test(value));
+  const site = resumeSite(cli, words);
   if (site === null) return null;
-  // Remove the resume and one run of spaces or tabs beside it, leaving every other character of
-  // the body — quotes, escapes and spacing elsewhere — exactly as it was.
-  let start = site.flagStart;
-  let end = site.attached ? site.flagEnd : site.valueEnd;
-  while (start > 0 && (body.text[start - 1] === ' ' || body.text[start - 1] === '\t')) start -= 1;
-  if (start === site.flagStart) {
-    while (end < body.text.length && (body.text[end] === ' ' || body.text[end] === '\t')) end += 1;
-  }
-  const stripped = `${body.text.slice(0, start)}${body.text.slice(end)}`;
+  const stripped = stripResumeSite(body.text, site);
   if (body.start === 0 && body.end === trimmed.length) return stripped.trimEnd();
   // The resume is a plain word in the script's body: strip it there and leave the line's own
   // quoting as it was.

@@ -4,6 +4,7 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
+import { leadsOwnTeamAdmits } from '../leads-authority.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
@@ -1150,7 +1151,18 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // has answered is the run's only refusal: today's abandon line stays out of the way of its own.
   const abandon = args.flags.has('abandon') && granted === undefined;
   let abandonLifted = false;
-  if (abandon && !callerOwns(caller) && !clientAbandons && !seatApproved && verdict === undefined) {
+  const leadAbandons = abandon && leadsOwnTeamAdmits({
+    caller,
+    team,
+    at: standingOf(dir, session, caller),
+    home: sources.home ?? homedir(),
+    root,
+    command: 'down',
+    now: sources.now(),
+    dir,
+    teamFile: team,
+  }) !== null;
+  if (abandon && !leadAbandons && !callerOwns(caller) && !clientAbandons && !seatApproved && verdict === undefined) {
     // The owner's dev-mode admission for exactly this gate: a placed lead or
     // orchestrator continues with the warning; every other caller keeps the refusal.
     const lift = devModeOwnerLiftAtCwd(io, {
@@ -1365,7 +1377,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // `--abandon` only: a prompt the profile answers itself, or a box of unsent text saved under
     // `.agents/abandoned-input/` and then cleared, so the seat can be asked to exit and close fully.
     let abandonPlan: { answerKeys?: readonly string[]; unsentText?: string; saveTo?: string } = {};
-    if (args.flags.has('abandon') && profile !== null && !humanOf.has(name)) {
+    // The orchestrator stays out of a default-rule abandon. A delegate, a grant and a client keep
+    // the plan base built, orchestrator included.
+    if (args.flags.has('abandon') && profile !== null && !humanOf.has(name) && !(name === team.orchestrator && !callerOwns(caller) && leadAbandons)) {
       const text = sources.screenText(session, agent.pane, cli);
       const answer = abandonAnswerKeys(profile, text);
       if (answer !== null) abandonPlan = { answerKeys: answer };

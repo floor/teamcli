@@ -19,6 +19,11 @@ export const idle: SeatCheck = {
       delete told[seat.name];
       return [];
     }
+    // Unsent text with mail still queued is blocked, and a blocked seat is not idle.
+    if (seat.blocked === true) {
+      delete told[seat.name];
+      return [];
+    }
     if (seat.lead || seat.parked) return [];
     const worked = seat.history.lastWorking;
     const since = ctx.now - (worked ?? seat.history.idleSince ?? ctx.now);

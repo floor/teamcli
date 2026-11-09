@@ -284,6 +284,29 @@ export async function runTeamImport(
   }
   const file = mode === 'import' ? args.rest[0] : undefined;
   const caller = callerOf(io);
+  // A request is recorded only when the named file can be imported. A dry read writes
+  // nothing; a file that cannot be read refuses here, so the owner gets no card.
+  if (mode === 'import' && args.flags.has('request')) {
+    const home = sources.home ?? homedir();
+    const looked = importTeamFile({
+      cwd: io.cwd,
+      home,
+      mode,
+      ...(file !== undefined ? { file } : {}),
+      dryRun: true,
+      now: sources.now?.() ?? new Date(),
+    });
+    if (!looked.ok) {
+      const message = looked.errors.map((p) => (p.line ? `line ${p.line}: ` : '') + p.message).join('; ');
+      const where = looked.reason === 'invalid' && looked.from ? `${looked.from}: ` : '';
+      refuse(io, json, mode, {
+        id: `${mode}.${looked.reason}`,
+        message: `${where}${message}`,
+        repair: looked.reason === 'already-migrated' ? 'team import' : null,
+      });
+      return looked.reason;
+    }
+  }
   // The owner-seat door, for `import` (src/client/owner-action-step.ts): `--request` asks the owner
   // seat; `--approval <id>` runs the import the owner seat signed for, with no owner terminal.
   const seat = mode === 'import'
@@ -299,7 +322,8 @@ export async function runTeamImport(
   // A dry run only reads. A blocking charter stops a real migrate before any card is written.
   if (mode === 'migrate' && !dryRun) {
     const gate = charterGate(home, { operation: 'migrate', cwd: io.cwd, path: charterTargetOf(io.cwd) }, sources.ownerSeatStore);
-    if (gate.kind === 'block' && !isOwner(caller)) {
+    // A charter block binds the owner too, until they widen it with team setup --edit.
+    if (gate.kind === 'block') {
       refuse(io, json, mode, { id: `${mode}.not-owner`, message: gate.message, repair: null });
       return 'not-owner';
     }
