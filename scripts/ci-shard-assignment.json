@@ -1094,6 +1094,7 @@
     "test/send/push-adapters.test.ts": 2,
     "test/send/relay-runtime-adapters.test.ts": 2,
     "test/send/socket-default.test.ts": 1,
+    "test/sender-after-restore-independent.test.ts": 5,
     "test/sender-attributed-independent.test.ts": 4,
     "test/sender-attributed-readers-independent.test.ts": 1,
     "test/sender-attributed-readers.test.ts": 3,
