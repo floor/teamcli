@@ -606,7 +606,9 @@ export function launchCommandOrRefusal(
   if (positional.length > 0 && placed.uncertain) {
     warn?.('its launch line could not be read to its end; its rules line is after the line, where the CLI may not read it');
   }
-  return { command: ['AGENT_UNATTENDED=1', placed.line].join(' ') };
+  const line = placed.line;
+  const prefixed = /^AGENT_UNATTENDED=1(?:\s|$)/.test(line);
+  return { command: prefixed ? line : `AGENT_UNATTENDED=1 ${line}` };
 }
 
 /** The command alone, as 0.5.10 built it: for a caller that is not launching this line (a

@@ -52,7 +52,7 @@ function setupRoot(home: string, cwd: string, io?: Io): string | null {
   if (binding.kind === 'unreadable' || binding.kind === 'ambiguous') throw new ConfigRefusal(binding.message);
   return binding.kind === 'bound' ? resolve(binding.team.root) : null;
 }
-function enable(launch: string): string {
+export function channelOnLaunch(launch: string): string {
   const decoded = cliWordListOf('claude', launch);
   const body = cliBodyOn('claude', launch) ?? plainBodyOf(launch);
   if (decoded === null || body === null) throw new Error('the launch flag cannot be placed safely on this launch line');
@@ -174,7 +174,7 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
       fail('mcp.setup-changed', 'the setup-owned launch line changed; it was left untouched');
       return 1; // exit: mcp.setup-changed
     }
-    const launch = off ? journal?.launchBefore ?? seat.launch : enable(seat.launch);
+    const launch = off ? journal?.launchBefore ?? seat.launch : channelOnLaunch(seat.launch);
     let configOutput = '';
     // The setup gate already admitted this caller. The config edit is judged as that same
     // caller, dry run and real run alike: the editor's own rules admit a placed lead under

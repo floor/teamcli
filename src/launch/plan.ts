@@ -3,7 +3,10 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { ownStartFolderProblem, type StartFolder, type OwnStartFolderInput } from '../worktree/place.ts';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
-import { channelLobbyFolder, claudeChannelSeat, type ChannelLaunchScope } from '../mcp/launch-config.ts';
+import { channelLaunchFallback, channelStart, claudeChannelSeat, type ChannelLaunchScope } from '../mcp/launch-config.ts';
+import { channelLaunchEnabled, withoutChannel } from '../mcp/channel.ts';
+import { isLeadSeat } from '../file/sections/lead.ts';
+import { channelOnLaunch } from '../mcp/setup.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { sidebarRowsWord } from '../policy/types.ts';
@@ -1260,10 +1263,19 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    let cwd = claudeChannelSeat(seat) && input.home !== undefined && input.team !== undefined
-      ? channelLobbyFolder(lobbyOf(input.home, input.root, input.team), seat)
+    const declaredChannelSeat = input.team?.seats.find((one) => one.name === seat.name);
+    const declinesChannel = declaredChannelSeat?.channelOff === true;
+    const asChannel = { ...seat, ...(declinesChannel ? { channelOff: true as const } : {}) };
+    const channelFallback = input.team === undefined ? undefined : channelLaunchFallback(
+      input.team, { ...asChannel, cwd: declaredChannelSeat?.cwd ?? seat.cwd }, input.root,
+    );
+    const channelPlace = channelFallback === undefined && claudeChannelSeat(asChannel) && input.home !== undefined && input.team !== undefined
+      ? channelStart(asChannel, input.root, lobbyOf(input.home, input.root, input.team), isLeadSeat(input.team, seat.name))
+      : null;
+    let cwd = channelPlace !== null
+      ? channelPlace.cwd
       : isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
-    const channel = claudeChannelSeat(seat)
+    const channel = channelFallback === undefined && claudeChannelSeat(asChannel)
       ? { root: input.root, ...(input.home === undefined ? {} : { home: input.home }),
           ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }) }
       : undefined;
@@ -1344,6 +1356,15 @@ export function upPlan(input: UpInput): Step[] {
     // The id a proven conversation writes into the launch line: the state-agreeing record's
     // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
     // form cannot carry either; the plan says so on the launch rather than losing it silently.
+    if (channelFallback === undefined && claudeChannelSeat(asChannel) && !channelLaunchEnabled(seat.launch)) {
+      try {
+        seat.launch = channelOnLaunch(seat.launch);
+      } catch (error) {
+        const why = error instanceof Error ? error.message : 'the launch flag cannot be placed safely on this launch line';
+        steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`, do: { do: 'refuse', seat: seat.name, why } });
+        continue;
+      }
+    }
     const resumeId = seat.freshStart === undefined ? seat.registry?.sessionId ?? seat.resume : undefined;
     const carried = resumeId === undefined ? undefined : resumeCarry(profile.cli, seat.launch, resumeId);
     // A line that names another conversation, or resumes without naming one, is not rewritten
@@ -1458,7 +1479,7 @@ export function upPlan(input: UpInput): Step[] {
     // The line is built before the steps that create or close a workspace: a refusal must come
     // before any of them, and the warnings it produces are said on the launch step where they
     // have always been said.
-    const launchWarnings: string[] = [];
+    const launchWarnings: string[] = channelFallback === undefined ? [] : [channelFallback];
     let command: string;
     let fromResolver = false;
     let baseLine = recordedLine;
@@ -1620,6 +1641,7 @@ export function upPlan(input: UpInput): Step[] {
     if (seat.freshStart !== undefined) notice = seat.freshStart;
     // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
     // options after it; the seat says so on the launch step rather than losing the words.
+    if (channelFallback !== undefined) command = withoutChannel(command);
     for (const text of launchWarnings) notice = notice ? `${notice}; ${text}` : text;
     // The launch carries the line exactly when the CLI's own decoded words end with it: a
     // message-mode CLI reads its initial prompt as its last positional word, and a line this

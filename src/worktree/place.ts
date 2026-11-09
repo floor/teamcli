@@ -6,7 +6,7 @@ import { insideTrust, isLegacyTrust, isMigratedTrust, protectedBy } from '../fil
 import { isLeadSeat } from '../file/sections/lead.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
-import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
+import { channelStart, claudeChannelSeat } from '../mcp/launch-config.ts';
 import { worktreeOf, type SessionState } from '../state.ts';
 
 // A task name is one path segment. It is also the last segment of the folder and part of the branch.
@@ -187,13 +187,24 @@ function sameRecordedPlace(root: string, cwd: string, recorded: string): boolean
   }
 }
 
-// Where a seat starts. In a migrated file, a seat whose cwd is not `.` starts in that folder,
-// resolved against the project root, once it is outside every protected checkout. `.` keeps the
-// lead in the project root and every other seat in the resolved lobby. A Claude channel seat
-// stays in its lobby folder, and Cursor and Grok keep the branch above. In a legacy file, a
-// shared seat starts in its cwd, and a worktree seat starts in the old derived lobby.
+// Where a seat starts. The existing placement is decided first: a protected checkout, a lead in
+// the project, a lobby seat, and every other refusal. A Claude channel seat whose start was
+// accepted then uses its channel folder, except a lead keeps its project cwd. Cursor and Grok
+// keep their own branch. In a legacy file, a shared seat starts in its cwd, and a worktree seat
+// starts in the old derived lobby.
 export function seatStart(
   team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string, worktree?: string, recorded?: Pick<SessionState, 'seats' | 'worktrees'>,
+): SeatStart {
+  const placed = placedSeatStart(team, seat, root, home, verifiedLobby, worktree, recorded);
+  if ('problem' in placed || !claudeChannelSeat(seat)) return placed;
+  if (!isMigratedTrust(team.trust)) return placed;
+  const start = channelStart(seat, root, verifiedLobby ?? lobbyOf(home, root, team), isLeadSeat(team, seat.name));
+  if (start === null) return placed;
+  return start.lobby ? { cwd: start.cwd, lobby: true } : { cwd: start.cwd };
+}
+
+function placedSeatStart(
+  team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string, verifiedLobby?: string, worktree?: string, recorded?: Pick<SessionState, 'seats' | 'worktrees'>,
 ): SeatStart {
   if (!team.trust || team.trust.length === 0) {
     const lobby = lobbyOf(home, root, team);
@@ -202,11 +213,6 @@ export function seatStart(
         `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(team, root, home)}`,
       once: true,
     };
-  }
-
-  if (claudeChannelSeat(seat)) {
-    if (!isMigratedTrust(team.trust)) return { problem: 'a Claude channel requires the team lobby in absolute trust configuration' };
-    return { cwd: channelLobbyFolder(verifiedLobby ?? lobbyOf(home, root, team), seat), lobby: true };
   }
 
   // Grok's preset and Cursor's MCP configuration write the start folder. Both require a

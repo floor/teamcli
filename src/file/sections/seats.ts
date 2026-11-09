@@ -116,6 +116,10 @@ export const seats: Section = {
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there' },
+        channel: {
+          enum: ['off', 'on'],
+          $comment: 'the team-inbox channel for a claude-code seat: omitted or on is the default, and off leaves the launch and the seat\'s MCP pair alone',
+        },
         watch_wake: {
           enum: ['on', 'off'],
           $comment: 'the watch\'s typed retry for this seat: on exactly where its CLI profile declares typed_wake unless the seat writes off, which keeps the drop-file wake',
@@ -183,7 +187,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'launcher', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'public_only', 'compact_delivery', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'messaging', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'channel', 'watch_wake', 'public_only', 'compact_delivery', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'messaging', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -261,6 +265,10 @@ function readSeats(
     // nudge there either. A field of the built seat like `assistant`, omitted when the file
     // marks none — every file that marks no seat keeps the digest it had.
     const human = check.flag(fields.get('human'), `${at}: human`);
+    // Omitted unless the file writes `off`, so every file that writes no channel key keeps the
+    // digest it had. `on` is the default and is not stored.
+    const channelWord = check.oneOf(fields.get('channel'), `${at}: channel`, ['off', 'on']);
+    const channelOff = channelWord === 'off';
     // The seat's own word on the watch's typed wake retry. A field of the built seat like
     // `human`, omitted when the file writes none — every file that writes none keeps the digest
     // it had, and a written word is part of the digest the owner approves. `on` needs a profile
@@ -356,6 +364,7 @@ function readSeats(
         ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         // Omitted when the file marks no human, for the same reason.
         ...(human ? { human: true as const } : {}),
+        ...(channelOff ? { channelOff: true as const } : {}),
         // Omitted when the file writes no watch_wake word, for the same reason.
         ...(watchWake !== undefined ? { watchWake } : {}),
         // Omitted when the file marks no public-only seat, for the same reason.

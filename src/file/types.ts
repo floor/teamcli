@@ -178,6 +178,12 @@ export type Seat = {
    */
   human?: true;
   /**
+   * The seat opts out of the team-inbox channel. Absent means on: every claude-code seat gets
+   * the channel, and a file that writes no `channel` key keeps the digest it had. `off` is the
+   * only stored word.
+   */
+  channelOff?: true;
+  /**
    * The seat's own word on the watch's typed wake retry, when the file writes one: `on` lets
    * the watch type the same wake a send types once a message has gone unread past its window;
    * `off` keeps the seat on the drop-file leg alone. Absent, the seat's CLI profile decides

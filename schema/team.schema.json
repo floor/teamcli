@@ -688,6 +688,13 @@
             "type": "boolean",
             "$comment": "the pane is a person's: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there"
           },
+          "channel": {
+            "enum": [
+              "off",
+              "on"
+            ],
+            "$comment": "the team-inbox channel for a claude-code seat: omitted or on is the default, and off leaves the launch and the seat's MCP pair alone"
+          },
           "watch_wake": {
             "enum": [
               "on",

@@ -77,7 +77,7 @@ import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers, rawAgentSession } from '../launch/resolve-flag.ts';
 import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { inboxLive } from '../mcp/inbox.ts';
-import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
+import { channelLaunchFallback, channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
@@ -1563,7 +1563,9 @@ function restartNote(
   if (claudeChannelSeat(seat)) {
     const start = seatStart({ ...team, session }, seat, root, home);
     if ('problem' in start || recorded.start_cwd === start.cwd) return {};
-    return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
+    return { restartNote: start.lobby
+      ? `a relaunch moves it into the lobby: ${fix}`
+      : `a relaunch moves it to its own folder: ${fix}` };
   }
   // Cursor and Grok with "." start in the recorded worktree. A record that already names it
   // needs no note, and a record that names the lobby is moved to that folder, not into the lobby.
@@ -3271,7 +3273,13 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     for (let index = 0; index < seats.length; index++) {
       const seat = seats[index];
       if (!seat) continue;
-      const line = lobbyPretrustLine(seat, sources.home, { write, now, mode });
+      const declared = team.seats.find((one) => one.name === seat.name);
+      const line = lobbyPretrustLine(
+        { ...seat, ...(declared?.channelOff === true || (declared !== undefined && channelLaunchFallback(team, declared, root) !== undefined)
+          ? { channelOff: true as const } : {}) },
+        sources.home,
+        { write, now, mode },
+      );
       if (line) seats[index] = { ...seat, launchProblem: line };
       // The project root, for a seat that starts there: pre-accepted in its CLI's own record.
       // A start folder under a charter root is pre-accepted the same way, wherever it sits.
