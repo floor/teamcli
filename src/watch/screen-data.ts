@@ -1,4 +1,5 @@
 // The shape of a profile's screen, after the dialect has compiled its patterns.
+import type { QuotaPattern } from '../profiles/quota.ts';
 import type { ScreenProfile } from './screen-profile.ts';
 import type { Screen } from './screen.ts';
 
@@ -197,6 +198,11 @@ export type Composer = Box | StatusLast | StatusThenOne | TwoRules;
 
 export type ScreenData = {
   chrome: RegExp[];
+  /** The CLI's shipped quota patterns, attached by the screen loader. A limit line above a
+   *  readable current prompt is history when every window the status row shows has quota
+   *  left. Any window with none left, or no readable prompt, leaves the wall. Absent on a
+   *  screen built without them: the wall is read as the profile wrote it. */
+  quota?: readonly QuotaPattern[];
   /** The row that ends a turn, when the CLI draws one: a `live` rule's newest-turn region starts
    *  after the last such row above the composer, so a sentence a completion already ended is
    *  history. Absent, the whole paragraph above the composer is the newest turn. */

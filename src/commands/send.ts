@@ -116,9 +116,11 @@ input box after that trigger line and Enter, and the pane host reported the seat
 done or blocked, changed from the status read before Enter — or the transcript shows
 the drop being read; no signed receipt has come back, so the message is never called
 read. The pane must not be a dialog this command already classifies (question,
-permission, trust, vendor notice, provider error, rate limit). A screen that is one of
-those is not reached: the kind and the drop path are named, and nothing further is
-pressed. Who may call it is the registry's decision, default deny: the
+permission, trust, vendor notice, provider error, rate limit). A rate-limit screen is not
+that wall when a readable prompt sits below the limit line and every window on the status
+row shows quota left. A row with no prompt, or any window with none left, keeps the wall. A
+screen that is one of those is not reached: the kind and the drop path are named, and
+nothing further is pressed. Who may call it is the registry's decision, default deny: the
 owner; an orchestrator to an orchestrator of its own team or entity; an orchestrator
 or operator to a seat of its own team; a seat whose role is operator to another such
 seat of its own team; an assistant seat to its entity's coordinator; the entity's main
@@ -1616,7 +1618,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // refuses; an absent agent or a pane that does not read leaves the existing delivery-time
   // cautions, and that gap is the named limitation, not a safe outcome. The host's status is
   // not consulted: a wall the screen proves holds even while the terminal host still calls the
-  // seat working, so no socket or drop effect can start ahead of the old caution.
+  // seat working, so no socket or drop effect can start ahead of the old caution. The
+  // screen reader decides history: a limit line above a readable prompt is not a wall when
+  // every window on the status row shows quota left. A missing prompt, or any window with
+  // none left, keeps the wall the reader named.
   if (preflightLive.ok) {
     const quota = quotaOutOf(to.cli, preflightScreen);
     if (quota !== null) return refuse(io, dir, who, `${to.seat}: ${quotaOutDetail(declared, quota)}`, host, report);

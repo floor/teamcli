@@ -1090,6 +1090,10 @@ export async function stopSendDaemon(project: string, root: string, home = homed
 function dialogKind(cli: string, screen: string | null): string | null {
   if (screen === null) return null;
   const kind = classify(cli, screen.split('\n')).kind;
+  // History is the screen reader's decision, which quotaOutOf reports. A limit line above a
+  // readable prompt is not a wall when every window on the status row shows quota left. A
+  // rate-limit reading stands: a positive row with no current prompt does not clear it.
+  if (kind === 'rate limit' && quotaOutOf(cli, screen) === null) return null;
   return DIALOG.has(kind) ? kind : null;
 }
 
@@ -1338,8 +1342,11 @@ async function executeQueuedSend(
   // The quota preflight runs before the drop file is staged: a walled screen takes no drop and
   // no key, because a stored copy would only be retried into a dead turn. Only a positive read
   // refuses — an unreadable pane keeps the delivery-time caution below — and the host's
-  // `working` word does not cancel a wall the screen proves. Nothing is written: no history
-  // line, no pending record; the sender's refusal is the caller's to make.
+  // `working` word does not cancel a wall the screen proves. A limit line above a readable
+  // prompt is not that wall when every window on the status row shows quota left. A missing
+  // prompt, or any window with none left, keeps the wall. Nothing
+  // is written on a wall that still holds: no history line, no pending record; the sender's
+  // refusal is the caller's to make.
   const wallText = await hostPaneText(host, team.session, pane);
   const wall = quotaOutOf(configured.cli, wallText);
   if (wall !== null) {

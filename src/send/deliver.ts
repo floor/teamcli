@@ -22,6 +22,7 @@ import { boxHoldsText } from '../launch/deliver.ts';
 import { profileFor, type InputBlock } from '../profiles/profile.ts';
 import { classify, classifyComposer, readBox, readFoldMark, readScreen } from '../watch/screen.ts';
 import { dropMessage, POLL_MS, SETTLE_MS, sawSubmission, type NativePane } from './native.ts';
+import { quotaOutOf } from './quota-out.ts';
 
 /** The most Enters one delivery presses. */
 export const MAX_TRIES = 3;
@@ -126,6 +127,10 @@ const HELD_FRAME_KIND = 'held message';
 export function dialogKind(profile: string, screen: string | null): string | null {
   if (screen === null) return null;
   const kind = classify(profile, screen.split('\n')).kind;
+  // History is the screen reader's decision, which quotaOutOf reports. A limit line above a
+  // readable prompt is not a wall when every window on the status row shows quota left. A
+  // rate-limit reading stands: a positive row with no current prompt does not clear it.
+  if (kind === 'rate limit' && quotaOutOf(profile, screen) === null) return null;
   return DIALOGS.has(kind) ? kind : null;
 }
 
