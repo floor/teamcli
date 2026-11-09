@@ -4,6 +4,8 @@ import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } 
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
+import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
+import { hostedWatchRunning } from '../daemon/watch_display.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
@@ -69,6 +71,9 @@ export type DoctorSources = {
    *  remote, the Jules CLI). Absent in a test: "could not be run", never consent to touch the
    *  machine. */
   command?(binary: string, args: string[]): CommandRead | null;
+  /** The machine daemon's health. Absent: doctor does not probe, and a session with no pane
+   *  watch record is still reported missing. */
+  daemonHealth?(home: string): Promise<DaemonHealth>;
 };
 
 export type CommandRunner = (binary: string, args: string[]) => { status: number | null; stdout: string } | null;
@@ -160,6 +165,7 @@ export const realSources: DoctorSources = {
     if (panes === null) return null;
     return panes.includes(pane);
   },
+  daemonHealth,
 };
 
 export const USAGE =
@@ -384,20 +390,27 @@ export function holdFindings(dir: string, sources: DoctorSources): Finding[] {
 function watchFindings(
   watch: TeamFile['watch'],
   dir: string,
+  root: string,
   session: string,
   running: boolean | null,
   now: Date,
   sources: DoctorSources,
+  health: DaemonHealth | null,
 ): Finding[] {
   const recorded = readState(dir).sessions[session]?.watch;
   if (!running) return [];
-  if (!recorded) return [{ level: 'miss', text: `no watch has run for session ${session}: start \`team watch\`` }];
+  // `up` writes no pane-watch record once the daemon carries the session. The same reading
+  // the status note uses: a hosted watch in phase `running` for this session is the watch.
+  if (!recorded && health !== null && hostedWatchRunning(health, root, session)) {
+    return [{ level: 'ok', text: 'the watch is running in the daemon' }];
+  }
+  if (!recorded) return [{ level: 'miss', text: `no watch has run for session ${session}: run \`team daemon status\`, or the lead runs \`team daemon install\`` }];
   const age = (now.getTime() - Date.parse(recorded.heartbeat)) / 1000;
   if (!(age <= 2 * watch.interval)) {
     return [
       {
         level: 'miss',
-        text: `the watch's heartbeat is ${Math.round(age / 60)} min old (two intervals are ${(2 * watch.interval) / 60} min): start \`team watch\``,
+        text: `the watch's heartbeat is ${Math.round(age / 60)} min old (two intervals are ${(2 * watch.interval) / 60} min): run \`team daemon status\`, or the lead runs \`team daemon install\``,
       },
     ];
   }
@@ -667,6 +680,9 @@ export function doctorFindings(
   launchLines: Finding[] = [],
   /** Registry wording when the team was read from the registry; file wording for a real team.yaml. */
   rulesOrigin: RulesOrigin = 'file',
+  /** The daemon health `runDoctor` already probed. Absent for a caller that did not probe:
+   *  a missing pane record is then still a miss. */
+  health: DaemonHealth | null = null,
 ): Finding[] {
   const findings: Finding[] = warnings.map((warning) => ({
     level: 'warn',
@@ -724,7 +740,7 @@ export function doctorFindings(
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
   findings.push(...featureFindings(team, dir, session));
 
-  findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
+  findings.push(...watchFindings(watchInForceOf(standing, team), dir, root, session, running, sources.now(), sources, health));
   findings.push(...trustFindings(team, root, dir, session, sources));
 
   const lobby = lobbyOf(sources.home, root, { ...team, session });
@@ -997,6 +1013,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   const julesOnly = !loginOnly && args.flags.has('jules');
   // A focused report (`--login`, `--jules`) carries only its own findings.
   const focused = loginOnly || julesOnly;
+  const health = sources.daemonHealth === undefined || focused ? null : await sources.daemonHealth(sources.home);
   const findings = loginOnly
     ? doctorLoginFindings(team, sources)
     : args.flags.has('jules')
@@ -1017,6 +1034,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           budgetCheckFindings(team, standing, root, sources, callerOf(io)),
           launchLineFindings(team, root, { onPath: (binary) => sources.onPath(binary), home: sources.home, state: readState(dirname(loaded.path)).sessions[session] }),
           rulesOriginOf(loaded.source),
+          health,
         ),
         // Each verified general grant's chain, one note, in neither count, blocking nothing.
         ...generalGrantChainNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),

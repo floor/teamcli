@@ -59,6 +59,8 @@ export const LEADS_AUTHORITY_EXCLUDED: ReadonlySet<string> = new Set([
 export const LEADS_DOOR_COMMANDS: Readonly<Record<string, string>> = {
   approvals: 'approvals:revoke',
   import: 'migrate',
+  // `team up` is the start act the exclusion list names. The door says `up`.
+  up: 'start',
 };
 
 export function leadsCommandExcluded(command: string): boolean {

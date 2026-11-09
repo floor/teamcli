@@ -200,12 +200,11 @@ function upTrace(): { sources: UpSources; trace: UpTrace } {
 }
 
 /** The plan an admitted lead's run makes: the orchestrator and the operator in the project
- *  folder, the implementer in the lobby, and the watch in its own workspace last. */
+ *  folder, the implementer in the lobby. The daemon is the watch, so no watch workspace is opened. */
 const PLAN = [
   { label: 'lead', cwd: '' },
   { label: 'pilot', cwd: '' },
   { label: 'worker', cwd: '' },
-  { label: 'Watch · acme', cwd: '' },
 ];
 
 function agent(name: string, pane: string): HerdrAgent {

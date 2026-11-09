@@ -23,7 +23,7 @@ import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_w
 import { daemonHealth } from '../daemon/health.ts';
 import type { DaemonHealth } from '../daemon/health.ts';
 import { daemonDifferences, daemonNotes, daemonReading } from '../daemon/health_display.ts';
-import { hostedWatchNotes } from '../daemon/watch_display.ts';
+import { hostedWatchNotes, hostedWatchRunning } from '../daemon/watch_display.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
 import { MailPass } from '../watch/mail-pass.ts';
@@ -655,6 +655,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     { dir, root, home },
     watchDaemon,
     queuedDropsOf(dir, root, session, home, team),
+    health !== null && hostedWatchRunning(health, root, session),
   );
   const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
   const backlog = queues ? readBacklogDepth(team, root, sources.home) : null;

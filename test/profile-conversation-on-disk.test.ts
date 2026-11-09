@@ -25,11 +25,12 @@ test('a CLI whose store is not measured is unknown, never missing', () => {
   expect(conversationOnDisk('antigravity', '/x', 'id', {})).toBeNull();
 });
 
-test('the resume is taken off a Claude Code line, and only there', () => {
+test('a measured resume is taken off the launch line', () => {
   expect(withoutResume('claude-code', 'claude --model m --resume abc-1')).toBe('claude --model m');
   expect(withoutResume('claude-code', 'claude -r abc-1 --model m')).toBe('claude --model m');
   expect(withoutResume('claude-code', 'claude --model m')).toBeNull();
-  expect(withoutResume('codex', 'codex resume abc')).toBeNull();
+  expect(withoutResume('codex', 'codex resume abc')).toBe('codex');
+  expect(withoutResume('grok', 'grok -r ses:1')).toBe('grok');
   // A resume inside a trailing quoted script is followed by the closing quote: it is stripped
   // there, and the quotes stay. The shell's own -c is not a resume, and a line with none is null.
   expect(withoutResume('claude-code', '/bin/sh -c "claude --model m --resume abc-1"'))

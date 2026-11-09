@@ -1,9 +1,7 @@
-// The watch in its own herdr workspace, from the issue's acceptance text and not from the code:
-// `up` starts it in exactly one `Watch · <team>` workspace of the team's own session; a second
-// `up` reuses it and creates no other; `status` lists the watch's pane, its pid and the age of
-// its heartbeat; `check` flags a heartbeat older than two in-force intervals with the repair;
-// and the watch is never typed into a seat's pane. The host is fake throughout — no herdr, no
-// session, no pane.
+// The daemon hosts the session's watch. `up` creates no `Watch · <team>` workspace and runs no
+// watch command; a second `up` still creates none. A pane watch already on disk is what
+// `status` lists — pane, pid, heartbeat age — and what `check` flags when its heartbeat is
+// older than two in-force intervals. The host is fake throughout — no herdr, no session, no pane.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -31,7 +29,6 @@ const WATCH = `Watch · ${PROJECT}`;
 const FILE = ['--file', '.agents/team.yaml'];
 const SEAT = 'lead';
 const SEAT_PANE = 'w1:p1';
-const WATCH_PANE = 'w2:p1';
 const WATCH_WORKSPACE = 'w2';
 
 let base: string;
@@ -239,57 +236,44 @@ function seatLabel(): string {
   return workspaceLabel(parsed.team.seats[0]!);
 }
 
-describe('the watch in its own workspace', () => {
-  test('up creates exactly one Watch · <team> workspace, in the team\'s own session, and runs the watch there', async () => {
+describe('the daemon hosts the watch', () => {
+  test('up creates no Watch workspace and runs no watch command', async () => {
     await approve();
     const made = world();
     const run = await up(made);
     expect(run.code).toBe(0);
-    const watches = made.created.filter((entry) => entry.label === WATCH);
-    expect(watches).toHaveLength(1);
-    expect(watches[0]?.session).toBe(SESSION);
-    expect(watches[0]?.cwd).toBe(root);
-    // The workspace is the run's last step, and the watch is run in its pane — never typed into a
-    // seat's.
-    expect(made.created[made.created.length - 1]?.label).toBe(WATCH);
-    // The watch runs in the pane of that workspace — its command, whatever binary leads it.
-    const started = made.runs.filter((entry) => entry.pane === (made.paneOf(WATCH) ?? WATCH_PANE));
-    expect(started).toHaveLength(1);
-    expect(started[0]?.command).toContain(`watch --session ${SESSION}`);
+    expect(made.created.filter((entry) => entry.label === WATCH)).toEqual([]);
+    expect(made.created.some((entry) => entry.session === SESSION)).toBe(true);
+    expect(made.runs.some((entry) => entry.command.includes('watch --session'))).toBe(false);
     expect(made.typed).toEqual([]);
     expect(made.enters).toEqual([]);
-    // The state records the pane, the workspace and a heartbeat of the pass that started it.
-    const recorded = readState(join(root, '.agents')).sessions[SESSION]?.watch;
-    expect(recorded).toMatchObject({ pane: made.paneOf(WATCH), workspace: WATCH_WORKSPACE, heartbeat: NOW.toISOString() });
+    expect(readState(join(root, '.agents')).sessions[SESSION]?.watch).toBeUndefined();
   });
 
-  test('a second up reuses the recorded watch and creates no second workspace', async () => {
+  test('a second up still creates no Watch workspace', async () => {
     await approve();
     const made = world();
     expect((await up(made)).code).toBe(0);
     const first = made.created.length;
-    const watch = made.created.find((entry) => entry.label === WATCH);
-    // Herdr lists the seat the first up launched, on the pane and workspace it recorded.
     const seat = made.created[0]!;
     made.agents.push({ name: SEAT, agent: 'claude', pane: seat.pane, workspace: seat.workspace, status: 'idle', cwd: null });
-    // The first pass has not recorded a pid yet: the recorded pane and a heartbeat no older
-    // than two intervals are what say the watch runs.
     const second = await up(made);
     expect(second.code).toBe(0);
     expect(made.created).toHaveLength(first);
-    expect(made.created.filter((entry) => entry.label === WATCH)).toHaveLength(1);
+    expect(made.created.filter((entry) => entry.label === WATCH)).toEqual([]);
     expect(second.err).not.toContain('watch: started');
-    expect(made.runs.filter((entry) => entry.pane === watch?.pane)).toHaveLength(1);
+    expect(made.runs.some((entry) => entry.command.includes('watch --session'))).toBe(false);
     expect(made.typed).toEqual([]);
-    expect(readState(join(root, '.agents')).sessions[SESSION]?.watch?.pane).toBe(watch?.pane);
-    // And once a pass has recorded its pid, a live pid says the same: still one workspace.
+    expect(readState(join(root, '.agents')).sessions[SESSION]?.watch).toBeUndefined();
+    // A live pid on a planted record does not start a pane watch either.
     updateState(join(root, '.agents'), (state) => {
-      const session = state.sessions[SESSION];
-      if (session?.watch) session.watch.pid = 4242;
+      const session = (state.sessions[SESSION] ??= emptySession());
+      session.watch = { pid: 4242, heartbeat: NOW.toISOString() };
     });
     const third = await up(made, { alive: () => true });
     expect(third.code).toBe(0);
     expect(made.created).toHaveLength(first);
+    expect(made.created.filter((entry) => entry.label === WATCH)).toEqual([]);
     expect(third.err).not.toContain('watch: started');
     expect(made.typed).toEqual([]);
   });
@@ -311,7 +295,7 @@ describe('the watch in its own workspace', () => {
     const stale = testIo(root, { kind: 'owner' });
     expect(runTeamCheck({ file: '.agents/team.yaml' }, stale, checkSources(live))).toBe(1);
     expect(`${stale.out}${stale.err}`).toContain(
-      `difference: the watch's last pass was 5 minutes ago\n  repair: team watch --session ${SESSION}\n`,
+      `difference: the watch's last pass was 5 minutes ago\n  repair: team daemon status, or the lead runs team daemon install\n`,
     );
     // Inside the two intervals there is nothing to repair.
     seed(new Date(NOW.getTime() - 60_000).toISOString(), { pane: 'w9:p1', workspace: 'w9', pid: 4242 });

@@ -361,10 +361,17 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.herdr` | `down` | 2 | herdr doesn't answer | `team down` |
 | `down.invocation` | `down` | 2 | the invocation can't be read | `team down extra` |
 | `down.not-a-repo` | `down` | 2 | not inside a git repository | `team down` |
+| `drops.archive.ok` | `drops` | 0 | the inbox archive and migration finished | `team drops archive` |
 | `drops.ok` | `drops` | 0 | the caller's unread drops were listed, or followed until it stopped | `team drops` |
+| `drops.archive.file` | `drops` | 1 | the team file can't be read | `team drops archive` |
+| `drops.archive.key` | `drops` | 1 | no message key stands, so nothing was archived | `team drops archive` |
+| `drops.archive.migration` | `drops` | 1 | an archive move or a migration mark could not be finished | `team drops archive` |
+| `drops.archive.refused` | `drops` | 1 | archive is not the owner, a lead, or the seat itself | `team drops archive` |
 | `drops.file` | `drops` | 1 | the team file can't be read | `team drops` |
 | `drops.refused` | `drops` | 1 | the caller is not a placed seat of this team | `team drops` |
 | `drops.unreadable` | `drops` | 1 | the drop folder can't be read | `team drops` |
+| `drops.archive.invocation` | `drops` | 2 | archive was given an option it does not take | `team drops archive --follow` |
+| `drops.archive.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops archive` |
 | `drops.invocation` | `drops` | 2 | the invocation can't be read | `team drops extra` |
 | `drops.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops` |
 | `fallback.plan` | `fallback` | 0 | the dry run found no finished episode to retire | `team fallback prune` |
@@ -965,7 +972,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.server` | `up` | 1 | the session's server did not start | `team up` |
 | `up.stopped` | `up` | 1 | the session is stopped | `team up` |
 | `up.unknown` | `up` | 1 | a running agent is not in this file's state | `team up` |
-| `up.watch` | `up` | 1 | the watch did not start | `team up` |
 | `up.file` | `up` | 2 | the team file can't be read | `team up --file missing.yaml` |
 | `up.file-invalid` | `up` | 2 | the team file can't be parsed | `team up --file team.yaml` |
 | `up.invocation` | `up` | 2 | the invocation can't be read | `team up extra` |
@@ -978,15 +984,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `waits.configuration` | `waits` | 2 | the team file, the registry or the retention policy can't be read | `team waits` |
 | `waits.usage` | `waits` | 2 | the invocation can't be read | `team waits --all` |
 | `watch.standby` | `watch` | 0 | a hosted watch stood down for a running watch | `team watch` |
-| `watch.started` | `watch` | 0 | the watch started in its own workspace | `team watch` |
+| `watch.started` | `watch` | 0 | the daemon's watch was printed | `team watch` |
 | `watch.stopped` | `watch` | 0 | the watch ran and stopped | `team watch` |
-| `watch.already` | `watch` | 1 | a watch already runs | `team watch` |
-| `watch.caller` | `watch` | 1 | a run with no terminal | `team watch` |
 | `watch.file-owner` | `watch` | 1 | --file is the owner's | `team watch --file .agents/team.yaml` |
 | `watch.no-notify` | `watch` | 1 | a seat passed --no-notify | `team watch --no-notify` |
 | `watch.no-nudge` | `watch` | 1 | a seat passed --no-nudge | `team watch --no-nudge` |
-| `watch.watchdog` | `watch` | 1 | only the recorded watch may read the file up recorded | `team watch --session acme` |
-| `watch.workspace` | `watch` | 1 | the watch did not start in its workspace | `team watch` |
 | `watch.file` | `watch` | 2 | the team file can't be read | `team watch --file missing.yaml` |
 | `watch.file-invalid` | `watch` | 2 | the team file can't be parsed | `team watch --file team.yaml` |
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |
