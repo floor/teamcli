@@ -13,6 +13,7 @@ import { saveReadings, type Seen } from '../src/budgets/readings.ts';
 import { runChecks, type CheckOutcome } from '../src/budgets/run.ts';
 import { standingSource, runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { defaultBudgets, validateTeamFile } from '../src/file/validate.ts';
@@ -156,7 +157,8 @@ describe('the watch reads them', () => {
 
   function watchSources(passes: number, over: Partial<WatchSources> = {}): WatchSources {
     left = passes;
-    return {
+    // Daemon-only watch: the hosted loop is the pass, and the budget lines are still what it says.
+    return withHostedLoop({
       live: () => live(),
       machine: () => fine,
       standing: standingSource(home),
@@ -179,7 +181,7 @@ describe('the watch reads them', () => {
       alive: () => false,
       pid: 4242,
       ...over,
-    };
+    });
   }
 
   beforeEach(() => {

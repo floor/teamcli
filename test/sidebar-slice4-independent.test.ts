@@ -16,6 +16,7 @@ import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runUp, type Launch } from '../src/commands/up.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { hostConfigPath, SIDEBAR_TTL_CAP_MS } from '../src/herdr.ts';
@@ -494,6 +495,7 @@ describe('sidebar slice 4', () => {
     const start = NOW.getTime();
     let clock = start;
     const reported: { at: number; ttlMs: number | undefined }[] = [];
+    const cycled: number[] = [];
     const agent: HerdrAgent = {
       name: 'lead',
       agent: 'claude',
@@ -508,7 +510,7 @@ describe('sidebar slice 4', () => {
       workspaces: [{ id: 'space-lead', label: 'lead' }],
       screens: { 'pane-lead': '  main · Opus 5.5\n' },
     });
-    const sources: WatchSources = {
+    const sources: WatchSources = withHostedLoop({
       home,
       live: () => live(),
       machine: () => FINE,
@@ -540,11 +542,14 @@ describe('sidebar slice 4', () => {
         if (pane === 'pane-lead') reported.push({ at: clock - start, ttlMs });
         return true;
       },
-    };
+    }, {
+      cycled(at) { cycled.push(at.getTime()); },
+    });
     const io = testIo(root, OWNER);
     io.stdinIsTTY = true;
     expect(await runWatch(['--file', '.agents/team.yaml'], io, sources), io.out + io.err).toBe(0);
-    expect(reported.map((call) => call.at)).toEqual([0, 600_000]);
-    expect(reported.every((call) => call.ttlMs === SIDEBAR_TTL_CAP_MS)).toBe(true);
+    // A hosted watch records the pass and writes no pane sidebar line.
+    expect(reported).toEqual([]);
+    expect(cycled.length).toBeGreaterThan(0);
   });
 });

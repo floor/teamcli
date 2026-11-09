@@ -17,6 +17,7 @@ import { listDrops } from '../src/commands/drops.ts';
 import { listUnacked, plantMessage } from '../src/commands/messages.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { installCliHooks } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
@@ -1340,7 +1341,8 @@ describe('team watch retries a held drop', () => {
     };
 
     const io = testIo(directory, { kind: 'owner' });
-    const retired = await runWatch(['--file', file], io, sources);
+    // Daemon-only watch: the hosted loop is the pass, and it types nothing.
+    const retired = await runWatch(['--file', file], io, withHostedLoop(sources));
     expect(await retired).toBe(0);
     expect(typed).toEqual([]);
   });
@@ -1388,7 +1390,8 @@ describe('team watch promotes an inbox send its seat has read', () => {
       home: directory,
     };
     const io = testIo(directory, { kind: 'owner' });
-    const code = await runWatch(['--file', file], io, sources);
+    // Daemon-only watch: the hosted loop is the pass. It still promotes a read receipt and types nothing.
+    const code = await runWatch(['--file', file], io, withHostedLoop(sources));
     expect(code).toBe(0);
     expect(typed).toEqual([]);
     expect(one.enters).toBe(0);
@@ -1435,7 +1438,8 @@ describe('team watch promotes an inbox send its seat has read', () => {
     // The watch that types nothing still promotes: the receipt is the seat's own read, and the
     // sender's word is the history line, not a keystroke.
     const io = testIo(directory, { kind: 'owner' });
-    const code = await runWatch(['--file', file, '--no-nudge'], io, sources);
+    // Daemon-only watch: the hosted loop is the pass. It still promotes a read receipt and types nothing.
+    const code = await runWatch(['--file', file, '--no-nudge'], io, withHostedLoop(sources));
 
     expect(code).toBe(0);
     expect(typed).toEqual([]);
