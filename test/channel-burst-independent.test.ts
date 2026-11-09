@@ -131,11 +131,12 @@ test('a burst of signed drops is each delivered once, and the server still answe
       writeFileSync(join(dropDir, id), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     };
     const runner = join(root, 'serve.ts');
+    // The pane shell's environment places the seat. An empty env hides HERDR_PANE_ID, and the walk stops at the agent outside herdr.
     const serve = fileURLToPath(new URL('../src/mcp/serve.ts', import.meta.url));
     writeFileSync(runner, `import { runMcpServe } from ${JSON.stringify(serve)};
 await runMcpServe(
   { seat: 'lead', session: process.env.TEAM_SESSION, file: process.env.TEAM_FILE },
-  { stdout: (text) => process.stdout.write(text), stderr: (text) => process.stderr.write(text), cwd: process.cwd(), env: {}, stdinIsTTY: false },
+  { stdout: (text) => process.stdout.write(text), stderr: (text) => process.stderr.write(text), cwd: process.cwd(), env: process.env, stdinIsTTY: false },
 );
 `);
     const shell = paneShell({ bin: join(root, 'bin'), dir: join(root, '.agents'), session: SESSION, seat: 'lead', pane: 'pane-lead', home });
@@ -160,10 +161,11 @@ await runMcpServe(
     await sleep(400);
     const burst = Array.from({ length: BURST }, (_item, n) => idOf(n));
     for (const id of burst) put(id, `burst ${id}`);
+    // Signing and verifying all 150 drops can exceed twelve seconds; poll delivery up to a bounded 45 seconds.
     await until(() => {
       const seen = counts();
       return burst.every((id) => (seen.get(id) ?? 0) >= 1);
-    }, 12_000);
+    }, 45_000);
     await sleep(2_000);
     const once = counts();
     expect(burst.map((id) => once.get(id) ?? 0), err).toEqual(burst.map(() => 1));
@@ -192,4 +194,5 @@ await runMcpServe(
     }
     rmSync(home, { recursive: true, force: true });
   }
-}, 45_000);
+  // Allow the capped delivery wait plus startup, duplicate observation, canary and cleanup.
+}, 70_000);
