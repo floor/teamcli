@@ -413,33 +413,32 @@ describe('2. each fallback step in order', () => {
     expect(io.err).not.toContain('is not in the team this session was launched from');
   });
 
-  test('step 2 (folder team): when launched file omits the seat, cwd folder team answers before registry and prints the folder notice across normal, --dry-run, and --json', async () => {
+  test('step 2 (folder team): the cwd folder binds the team, so a stale launched pointer is not a fallback and no folder notice is printed', async () => {
     const fixture = makeFixture();
     seedStalePointer(fixture);
     seedRegistryTeam(fixture);
 
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
-    const expectedNotice = `note: worker is not in the team this session was launched from; reading the team this folder holds (${fixture.file})`;
+    // The folder the command runs in is the team. The launched pointer is not consulted, so the old fallback notice is not printed.
+    const notice = 'is not in the team this session was launched from';
 
-    // Dry run: notice appears on stdout prefixed with "! ".
     const dryHarness = makeHarness(fixture, false);
     const dryIo = testIo(fixture.root, leadCaller);
     expect(await runRestart(['worker', '--dry-run'], dryIo, dryHarness.sources)).toBe(0);
-    expect(dryIo.out).toContain(`! ${expectedNotice}\n`);
+    expect(dryIo.out).toContain('worker: not currently running\n');
+    expect(dryIo.out).not.toContain(notice);
     expect(dryIo.err).toBe('');
 
-    // JSON dry run: notice appears once in doc.notes.
     const jsonHarness = makeHarness(fixture, false);
     const jsonIo = testIo(fixture.root, leadCaller);
     expect(await runRestart(['worker', '--dry-run', '--json'], jsonIo, jsonHarness.sources)).toBe(0);
-    const parsed = JSON.parse(jsonIo.out) as { notes: string[] };
-    expect(parsed.notes.filter((n) => n === expectedNotice)).toHaveLength(1);
+    const parsed = JSON.parse(jsonIo.out) as { notes?: string[] };
+    expect((parsed.notes ?? []).filter((n) => n.includes(notice))).toHaveLength(0);
 
-    // Live run: notice appears once on stderr.
     const liveHarness = makeHarness(fixture, false);
     const liveIo = testIo(fixture.root, leadCaller);
     expect(await runRestart(['worker'], liveIo, liveHarness.sources)).toBe(0);
-    expect(liveIo.err).toContain(`${expectedNotice}\n`);
+    expect(liveIo.err).not.toContain(notice);
     expect(liveHarness.did.created).toBe(1);
   });
 
@@ -544,7 +543,8 @@ describe('4. a team file failing validation refuses with the configuration exit'
 
     const { sources, did } = makeHarness(fixture, false);
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
-    const io = testIo(fixture.root, leadCaller);
+    // The cwd folder binds the team, so this proof runs from the lobby, where that binding does not supersede the launched pointer.
+    const io = testIo(fixture.lobby, leadCaller);
 
     const code = await runRestart(['worker', '--json'], io, sources);
     expect(code).toBe(2);
