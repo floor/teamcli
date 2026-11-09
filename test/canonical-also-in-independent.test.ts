@@ -2,6 +2,7 @@
 // with that empty list left out, the same way an empty messaging map is left out.
 // Synthetic team text only.
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { expect, test } from 'bun:test';
 import { canonicalRecord, canonicalRecordBytes, teamRecordOf } from '../src/file/canonical-record.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -43,9 +44,12 @@ function asRecord(team: TeamFile): { seats?: readonly object[] } & Record<string
   return team as unknown as { seats?: readonly object[] } & Record<string, unknown>;
 }
 
+// Read the frozen 0.5.15 watch bytes; its explicit idleRepeat is absent in these minimal files.
+const { idleRepeat: _exampleIdleRepeat, ...RELEASE_WATCH } = JSON.parse(readFileSync(new URL('./fixtures/canonical-record/example.canonical.json', import.meta.url), 'utf8')).watch;
+
 /** The record a signature covered before also_in existed: empty also_in is absent. */
 function releaseRecord(team: TeamFile): Record<string, unknown> {
-  const copy: Record<string, unknown> = { ...team };
+  const copy: Record<string, unknown> = { ...team, watch: structuredClone(RELEASE_WATCH) };
   const messaging = copy.messaging;
   if (messaging !== null && typeof messaging === 'object' && !Array.isArray(messaging) && Object.keys(messaging).length === 0) {
     delete copy.messaging;

@@ -32,6 +32,9 @@ import { reportedPath, reportUnreadDrops, wakePath, wakeUnreadDrops } from '../s
 import { claudeBox, testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
+// Leads wake at 180 seconds, independently of the ordinary seat delivery order.
+const N = 180;
+
 let cleanup: () => void = () => {};
 afterEach(() => {
   cleanup();
@@ -188,17 +191,16 @@ test('the watch re-wakes a socket-delivered record like any other, and reports i
   const drops = dropDir(made.dir, 'lead');
   const id = recordName(drops);
 
-  // Eleven minutes later the record is unread and due. This build types nothing into a seat's
-  // pane, so the wake writes no line and leaves no reservation — the message keeps its place.
+  // Past the lead's window, socket delivery still has no seat receipt: one wake is due.
   const pane = watchPane();
-  const { scene, said } = watchScene(made, pane.source, new Date(NOW.getTime() + 11 * 60_000));
-  await wakeUnreadDrops(scene, { unreadAfter: 600 });
-  expect(pane.typed).toEqual([]);
-  expect(said).toEqual([]);
-  expect(existsSync(wakePath(drops, id))).toBe(false);
+  const { scene, said } = watchScene(made, pane.source, new Date(NOW.getTime() + (N + 1) * 1000));
+  await wakeUnreadDrops(scene, { unreadAfter: N });
+  expect(pane.typed).toEqual([expect.stringContaining(`ack ${id} or reply`)]);
+  expect(said).toEqual(['lead: a message from owner was unread and one wake was delivered; it counts when the read receipt appears']);
+  expect(existsSync(wakePath(drops, id))).toBe(true);
 
   // Twice the window with still no seat receipt: the sender's mailbox and the lead are told.
-  reportUnreadDrops(watchScene(made, watchPane().source, new Date(NOW.getTime() + 22 * 60_000)).scene, { unreadAfter: 600 });
+  reportUnreadDrops(watchScene(made, watchPane().source, new Date(NOW.getTime() + (2 * N + 1) * 1000)).scene, { unreadAfter: N });
   expect(existsSync(reportedPath(drops, id))).toBe(true);
 });
 

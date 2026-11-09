@@ -46,8 +46,8 @@ import {
   type World,
 } from './fixtures.ts';
 
-/** The watch's normal unread window: its one retry lands after this many seconds. */
-const N = 600;
+/** Leads wake at 180 seconds, independently of the ordinary seat delivery order. */
+const N = 180;
 
 let made: World | null = null;
 afterEach(() => {
@@ -121,13 +121,12 @@ test('a socket delivery no seat reads is woken at the window and reported at twi
   expect(await runSend(['lead', 'the socket note'], ownerIo(one.root), host)).toBe(0);
   const record = recordOf(drops);
 
-  // Past the window the unread pass wakes the record like any other. No pane messaging: the
-  // typed leg is refused, so nothing is typed and no wake marker is spent.
+  // Past the lead's window the unread pass sends one wake and waits for a seat receipt.
   const wakeBook = book();
   await wakeUnreadDrops(sceneOf(one, wakeBook, new Date(NOW.getTime() + (N + 1) * 1000)), { unreadAfter: N });
-  expect(wakeBook.typed).toEqual([]);
-  expect(wakeBook.enters).toBe(0);
-  expect(existsSync(wakePath(drops, record.id))).toBe(false);
+  expect(wakeBook.typed).toEqual([expect.stringContaining(`ack ${record.id} or reply`)]);
+  expect(wakeBook.enters).toBe(1);
+  expect(existsSync(wakePath(drops, record.id))).toBe(true);
 
   // Past twice the window, and still unread, the sender and the lead are told.
   reportUnreadDrops(sceneOf(one, book(), new Date(NOW.getTime() + (2 * N + 1) * 1000)), { unreadAfter: N });
@@ -157,7 +156,7 @@ test('a socket-taken frame under a held dialog writes no receipt, and the one wa
   expect(unreadAt(one).map((message) => message.id)).toEqual([record.id]);
   expect(listUnacked(one.root, 'acme', one.home).map((message) => message.id)).toEqual([record.id]);
 
-  // Before the normal window the record is not due; after it, exactly one retry line is typed.
+  // Before the lead's window the record is not due; after it, exactly one retry line is typed.
   const early = book();
   await wakeUnreadDrops(sceneOf(one, early, new Date(NOW.getTime() + (N - 1) * 1000)), { unreadAfter: N });
   expect(early.typed).toEqual([]);
@@ -165,9 +164,9 @@ test('a socket-taken frame under a held dialog writes no receipt, and the one wa
 
   const due = book();
   await wakeUnreadDrops(sceneOf(one, due, new Date(NOW.getTime() + (N + 1) * 1000)), { unreadAfter: N });
-  // No pane messaging: the watch types nothing after the window either, and nothing is a read.
-  expect(due.typed).toEqual([]);
-  expect(due.enters).toBe(0);
+  // A lead wake is delivered after 180 seconds; only the seat can supply the read receipt.
+  expect(due.typed).toEqual([expect.stringContaining(`ack ${record.id} or reply`)]);
+  expect(due.enters).toBe(1);
   expect(readReceipt(drops, record.id)).toBeNull();
 
   // One wake per message: a later pass at an idle box types nothing again.
