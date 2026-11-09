@@ -470,33 +470,33 @@
       },
       "launched_file": "<launched_file>",
       "retained_seats": {
-        "documentarist": {
+        "seat-22": {
           "id": "<id>",
           "last_active": "<last_active>"
         },
-        "archivist": {
+        "seat-14": {
           "id": "<id>",
           "last_active": "<last_active>"
         },
-        "reviewer-cursor": {
+        "seat-28": {
           "id": "<id>",
           "last_active": "<last_active>"
         },
-        "builder-6": {
+        "seat-20": {
           "id": "<id>",
           "last_active": "<last_active>"
         },
-        "builder-5": {
+        "seat-19": {
           "id": "<id>",
           "last_active": "<last_active>"
         },
-        "builder-4": {
+        "seat-18": {
           "id": "<id>",
           "last_active": "<last_active>"
         }
       },
       "briefs": {
-        "orchestrator": {
+        "seat-26": {
           "id": "<id>",
           "at": "2026-11-03T23:33:12.801Z",
           "incarnation": "<incarnation>",
@@ -512,7 +512,7 @@
             "<superseded>"
           ]
         },
-        "reviewer-grok": {
+        "seat-29": {
           "id": "<id>",
           "at": "2026-11-08T05:24:04.024Z",
           "incarnation": "<incarnation>",
@@ -527,7 +527,7 @@
             "<superseded>"
           ]
         },
-        "reviewer": {
+        "seat-27": {
           "id": "<id>",
           "at": "2026-11-08T09:11:45.117Z",
           "incarnation": "<incarnation>",
@@ -542,7 +542,7 @@
             "<superseded>"
           ]
         },
-        "builder-1": {
+        "seat-15": {
           "id": "<id>",
           "at": "2026-11-08T05:02:17.984Z",
           "incarnation": "<incarnation>",
@@ -557,7 +557,7 @@
             "<superseded>"
           ]
         },
-        "builder-2": {
+        "seat-16": {
           "id": "<id>",
           "at": "2026-11-06T11:58:38.924Z",
           "incarnation": "<incarnation>",
@@ -569,7 +569,7 @@
             "<superseded>"
           ]
         },
-        "builder-3": {
+        "seat-17": {
           "id": "<id>",
           "at": "2026-11-06T11:58:38.924Z",
           "incarnation": "<incarnation>",
@@ -581,7 +581,7 @@
             "<superseded>"
           ]
         },
-        "builder-4": {
+        "seat-18": {
           "id": "<id>",
           "at": "2026-11-06T09:54:10.348Z",
           "incarnation": "<incarnation>",
@@ -596,7 +596,7 @@
             "<superseded>"
           ]
         },
-        "builder-5": {
+        "seat-19": {
           "id": "<id>",
           "at": "2026-11-05T03:59:06.051Z",
           "incarnation": "<incarnation>",
@@ -611,7 +611,7 @@
             "<superseded>"
           ]
         },
-        "builder-6": {
+        "seat-20": {
           "id": "<id>",
           "at": "2026-11-06T01:31:44.402Z",
           "incarnation": "<incarnation>",
@@ -626,7 +626,7 @@
             "<superseded>"
           ]
         },
-        "builder-7": {
+        "seat-21": {
           "id": "<id>",
           "at": "2026-11-08T05:24:51.687Z",
           "incarnation": "<incarnation>",
@@ -641,7 +641,7 @@
             "<superseded>"
           ]
         },
-        "operator-1": {
+        "seat-23": {
           "id": "<id>",
           "at": "2026-11-08T05:02:29.956Z",
           "incarnation": "<incarnation>",
@@ -656,7 +656,7 @@
             "<superseded>"
           ]
         },
-        "operator-2": {
+        "seat-24": {
           "id": "<id>",
           "at": "2026-11-08T09:12:09.679Z",
           "incarnation": "<incarnation>",
@@ -671,7 +671,7 @@
             "<superseded>"
           ]
         },
-        "operator-3": {
+        "seat-25": {
           "id": "<id>",
           "at": "2026-11-08T05:07:47.126Z",
           "incarnation": "<incarnation>",
@@ -686,7 +686,7 @@
             "<superseded>"
           ]
         },
-        "tester-1": {
+        "seat-30": {
           "id": "<id>",
           "at": "2026-11-03T23:33:12.801Z",
           "incarnation": "<incarnation>",
@@ -703,7 +703,7 @@
             "<superseded>"
           ]
         },
-        "tester-2": {
+        "seat-31": {
           "id": "<id>",
           "at": "2026-11-08T05:22:53.684Z",
           "incarnation": "<incarnation>",
@@ -718,7 +718,7 @@
             "<superseded>"
           ]
         },
-        "tester-3": {
+        "seat-32": {
           "id": "<id>",
           "at": "2026-11-06T11:58:38.924Z",
           "incarnation": "<incarnation>",
@@ -730,7 +730,7 @@
             "<superseded>"
           ]
         },
-        "documentarist": {
+        "seat-22": {
           "id": "<id>",
           "at": "2026-11-03T23:33:12.801Z",
           "incarnation": "<incarnation>",
@@ -742,7 +742,7 @@
             "<superseded>"
           ]
         },
-        "archivist": {
+        "seat-14": {
           "id": "<id>",
           "at": "2026-11-03T23:33:12.801Z",
           "incarnation": "<incarnation>",
@@ -754,7 +754,7 @@
             "<superseded>"
           ]
         },
-        "reviewer-cursor": {
+        "seat-28": {
           "id": "<id>",
           "at": "2026-11-05T03:59:06.051Z",
           "incarnation": "<incarnation>",
@@ -771,70 +771,70 @@
         }
       },
       "idle_claims": {
-        "builder-1": {
+        "seat-15": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
           "claimed_at": "2026-10-28T10:07:10.819Z",
           "notice": "<notice>"
         },
-        "builder-2": {
+        "seat-16": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
           "claimed_at": "2026-10-28T10:07:10.819Z",
           "notice": "<notice>"
         },
-        "builder-4": {
+        "seat-18": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
           "claimed_at": "2026-10-28T10:07:10.819Z",
           "notice": "<notice>"
         },
-        "builder-5": {
+        "seat-19": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
           "claimed_at": "2026-10-28T10:07:10.819Z",
           "notice": "<notice>"
         },
-        "builder-7": {
+        "seat-21": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
           "claimed_at": "2026-10-28T10:07:10.819Z",
           "notice": "<notice>"
         },
-        "tester-1": {
+        "seat-30": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
           "claimed_at": "2026-10-28T10:07:10.819Z",
           "notice": "<notice>"
         },
-        "tester-2": {
+        "seat-31": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
           "claimed_at": "2026-10-28T10:07:10.819Z",
           "notice": "<notice>"
         },
-        "tester-3": {
+        "seat-32": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
           "claimed_at": "2026-10-28T10:07:10.819Z",
           "notice": "<notice>"
         },
-        "documentarist": {
+        "seat-22": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
           "claimed_at": "2026-10-28T10:07:10.819Z",
           "notice": "<notice>"
         },
-        "archivist": {
+        "seat-14": {
           "claim_id": "<claim_id>",
           "idle_since": "<idle_since>",
           "state": "refused",
