@@ -73,6 +73,8 @@ import { GENERAL_BRIEF_SHA256, currentBriefEpochs, deliverBriefForAttribution, w
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
+import { currentCodexRecipe } from '../launch/features.ts';
+import { featureDialogClose } from '../launch/reboot.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
@@ -1047,6 +1049,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   }
   const launcherDiscovery = input.resolveLaunch === true ? loadTeamLaunchers(root) : undefined;
   if (input.registryLaunch) planSeat.launch = input.registryLaunch;
+  if (next.cli === 'codex') {
+    const recipe = currentCodexRecipe(planSeat.launch);
+    if (recipe === null) return { kind: 'not-ready', message: `${name}: its obsolete Codex feature override cannot be safely removed from its launch line; update that recipe before restarting` };
+    planSeat.launch = recipe;
+  }
   const declaredLaunch = planSeat.launch;
   // The recorded conversation, resumed on the new declaration. The profile decides whether the
   // CLI can carry the id at all; the attempt is the log's fact, never a claim that it resumed
@@ -1086,6 +1093,26 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     launchRefusal({ name: declared.name, role: declared.role, cli: next.cli, launch }, launchRule);
   const policyProblem = refusalOf(next.launch) ?? (resumed === undefined ? null : refusalOf(planSeat.launch));
   if (policyProblem !== null) return { kind: 'not-ready', message: `${name}: ${policyProblem}` };
+  const preview = dry || next.cli === 'codex' ? upPlan({
+    root,
+    session,
+    sessionRunning: true,
+    seats: [planSeat],
+    startFolders: placedStartFolders(team.seats, recordedSession),
+    watchAlive: true,
+    teamFile: launchFile,
+    cliHooks: plannedCliHooks(dir, session, [planSeat]),
+    briefEpochs: currentBriefEpochs(dir, session),
+    watchLabel: watchLabel(team.project),
+    // The home and the team let the plan read the seat's codex-daemon policy, as `team up` does.
+    home,
+    team,
+    ...(input.resolveLaunch === true ? { resolveLaunch: true as const, launcherDiscovery } : {}),
+  }) : [];
+  if (next.cli === 'codex') {
+    const held = preview.find((step) => step.do?.do === 'refuse' && step.do.why.includes('obsolete Codex feature override'));
+    if (held?.do?.do === 'refuse') return { kind: 'not-ready', message: `${name}: ${held.do.why}` };
+  }
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
@@ -1100,22 +1127,6 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     const draftStep = inspected.draftScreen === undefined
       ? ''
       : `${plainLine(name)}: input box: holds unsent text; it is copied to ${restartDraftPath(dir, session, name)} before the close and pasted back once the new pane is ready\n`;
-    const preview = upPlan({
-      root,
-      session,
-      sessionRunning: true,
-      seats: [planSeat],
-      startFolders: placedStartFolders(team.seats, recordedSession),
-      watchAlive: true,
-      teamFile: launchFile,
-      cliHooks: plannedCliHooks(dir, session, [planSeat]),
-      briefEpochs: currentBriefEpochs(dir, session),
-      watchLabel: watchLabel(team.project),
-      // The home and the team let the plan read the seat's codex-daemon policy, as `team up` does.
-      home,
-      team,
-      ...(input.resolveLaunch === true ? { resolveLaunch: true as const, launcherDiscovery } : {}),
-    });
     // The stop comes before the launch the plan prints; a seat that is not running is a skip.
     const stopPlan: PlanStep[] = inspected.agent
       ? [{ step: 'stop', seat: name, detail: `stop ${name} in ${inspected.agent.pane} (${inspected.where})`, prefix: '+' }]
@@ -1237,7 +1248,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // `--json` they are collapsed notes on the document instead. A screen the profile cannot
       // read is not claimed empty: its input box was not read. The context line quotes the line
       // this run launches (`planSeat`'s, with the resume it carried), never the bare declaration.
-      const box = rechecked.unrecognised !== undefined
+      const box = rechecked.settingsDialog === true
+        ? 'not read (Codex settings dialog; closed without input)'
+        : rechecked.unrecognised !== undefined
         ? 'not read (the screen is not recognised)'
         : draftCopy !== undefined
           ? `holds unsent text, copied to ${draftCopy} and pasted back once the new pane is ready`
@@ -1318,7 +1331,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           // says "close without typing" here, and the owner's own `--abandon` stays what it was.
           // A broken screen (rate limit or provider error) gets the same close: nothing is typed
           // into a pane whose conversation cannot answer.
-          abandon: (abandon || stopObs.unrecognised !== undefined || stopObs.brokenScreen || draftCopy !== undefined) && stopObs.where !== 'free',
+          abandon: (abandon || stopObs.unrecognised !== undefined || stopObs.brokenScreen || stopObs.settingsDialog === true || draftCopy !== undefined) && stopObs.where !== 'free',
           closeUnasked: abandon,
           unasked: `team ${input.command} ${name} --abandon closes it`,
         });
@@ -1712,6 +1725,8 @@ type InspectedSeat =
       /** The screen reads as the CLI's rate limit or provider error and the caller observed it:
        *  the pane cannot answer, so it is closed without typing and never refused as busy. */
       brokenScreen: boolean;
+      /** A proven settings dialog is closed directly, without typing an exit or a choice. */
+      settingsDialog?: true;
       /** The pane was a `replaced` doubt the caller's `--abandon` takes: close it without typing. */
       taken?: boolean;
     };
@@ -1771,6 +1786,18 @@ function inspectSeat(
   const liveCwd = sources.foregroundCwd ? sources.foregroundCwd(session, agent.pane) : null;
   const screen = sources.screen(session, agent.pane, declared.cli, liveCwd);
   const profile = profileFor(declared.cli);
+  if (draftCapture && agent.pane === recorded?.pane && agent.workspace === recorded?.workspace && featureDialogClose({
+    screen: sources.screenText(session, agent.pane, declared.cli) ?? null,
+    cli: declared.cli,
+    launched: recorded?.launched,
+    processes: proc,
+    foreground: sources.foreground(session, agent.pane),
+    liveSession: agent.session,
+    recordedSession: continuitySession,
+    status: agent.status,
+  })) {
+    return { kind: 'ok', agent, where: 'unknown', exitInBox: false, atExitQuestion: false, brokenScreen: false, settingsDialog: true };
+  }
   const where = stateOfPane(agent.status, screen, {
     foreground: sources.foreground(session, agent.pane),
     shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,

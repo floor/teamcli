@@ -5,6 +5,7 @@ import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { featureDialog } from '../launch/reboot.ts';
 import { restoreProof, type RestoreProof } from '../launch/restore-proof.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { observedEffort } from '../labels/observe.ts';
@@ -411,6 +412,13 @@ export function compare(
       // A shell has no model to compare. Reading it would add an "unread" note beside the
       // repair that already says the pane runs no CLI.
       const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified, registered);
+      if (seat.cli === 'codex' && agent.status !== 'working' && featureDialog(live.screens[agent.pane] ?? null)) {
+        rows.push({ name: seat.name, ...idField, state: 'Codex settings dialog', model, pane: agent.pane,
+          ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
+        differences.push({ what: `${seat.name}: Codex settings dialog`,
+          repair: isLeadSeat(team, seat.name) ? relaunchRepair(team, seat.name, 'plain') : `team restart ${seat.name}` });
+        continue;
+      }
       const held = waitingView(
         seat.name,
         recorded,

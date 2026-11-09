@@ -9,7 +9,8 @@
 // a pin inside a quoted script that runs the CLI is one the CLI reads, and a pin after that
 // script's closing quote is not. A line neither can decode is read as carrying no pin and says
 // so, rather than as carrying one no CLI was shown to receive.
-import { decodedWordsOf } from './cli-scope.ts';
+import { cliBodyOn, cliWordListOf, decodedWordsOf, plainBodyOf, shellScriptWordOf } from './cli-scope.ts';
+import { shellWords } from './shell-words.ts';
 
 /** The words a launch line carries for one pinned feature set: `-c features.<name>=<value>`,
  *  one pair per entry. The profile refuses any pair that is not `name=true|false`, so these
@@ -87,4 +88,49 @@ export function featureMismatch(line: string | undefined, features: readonly str
   const gaps = featureGaps(line, features, words);
   if (gaps.length === 0) return null;
   return `its recorded launch line does not pin ${said(gaps)}; the profile pins ${said(features)} on every launch`;
+}
+
+/** Remove the fixed false override shipped for Codex in FLO-1190, including in an old
+ * recorded recipe. Other config values, positional text, wrappers and quoting stay byte for
+ * byte. Null means the obsolete pair is present but no source span proves safe to rewrite;
+ * the launch must refuse before closing anything rather than run the incompatible recipe. */
+export function currentCodexRecipe(line: string): string | null {
+  const obsolete = 'features.mcp_oauth_refresh_coordination=false';
+  const decoded = cliWordListOf('codex', line);
+  // An unreadable line containing the key cannot prove it will shed the old pin. A line
+  // without it needs no migration and keeps the existing launch-placement decision.
+  if (decoded === null) return line.includes('mcp_oauth_refresh_coordination') ? null : line;
+  const sites = (words: readonly { text: string; start: number; end: number }[]) => {
+    const spans: { start: number; end: number }[] = [];
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i]!;
+      if (word.text === '--') break;
+      if (word.text === '-c' || word.text === '--config') {
+        const value = words[++i];
+        if (value?.text.trim() === obsolete) spans.push({ start: word.start, end: value.end });
+      } else if (word.text.startsWith('--config=') && word.text.slice('--config='.length).trim() === obsolete) {
+        spans.push({ start: word.start, end: word.end });
+      }
+    }
+    return spans;
+  };
+  if (sites(decoded.map((text) => ({ text, start: 0, end: 0 }))).length === 0) return line;
+  const body = shellScriptWordOf(line) === null ? plainBodyOf(line) : cliBodyOn('codex', line);
+  if (body === null) return null;
+  const words = shellWords(body.text);
+  if (words === null) return null;
+  let text = body.text;
+  for (const span of sites(words).reverse()) {
+    let start = span.start;
+    while (start > 0 && /[ \t]/.test(text[start - 1]!)) start--;
+    text = text.slice(0, start) + text.slice(span.end);
+  }
+  const changed = line.slice(0, body.start) + text + line.slice(body.end);
+  // Removing words inside a script must not change what any retained word decodes to.
+  const after = cliWordListOf('codex', changed);
+  const expected = [...decoded];
+  for (const span of sites(decoded.map((text, start) => ({ text, start, end: start + 1 }))).reverse()) {
+    expected.splice(span.start, span.end - span.start);
+  }
+  return after !== null && JSON.stringify(after) === JSON.stringify(expected) ? changed : null;
 }
