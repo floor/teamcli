@@ -4,7 +4,7 @@
 // or CLI is read.
 import { execFileSync } from 'node:child_process';
 import { afterEach, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
@@ -223,6 +223,23 @@ test('a script in a repository, a docs repository, or a temp folder is a problem
   });
 
   expect(launchLineProblem('claude --model opus', repo, home, realLaunchPlace())).toBeNull();
+});
+
+test('a script under the realpath of a symlinked temp root is a temp folder', () => {
+  const base = scratch('launcher-link-');
+  const home = join(base, 'home');
+  const repo = join(base, 'repo');
+  const real = join(base, 'real-temp');
+  const link = join(base, 'link-temp');
+  mkdirSync(home);
+  mkdirSync(repo);
+  mkdirSync(real);
+  symlinkSync(real, link);
+  const script = join(realpathSync(link), 'run.sh');
+  writeFileSync(script, '# synthetic\n');
+  withTemp(link, () => {
+    expect(launchLineProblem(script, repo, home, realLaunchPlace())).toContain('temp folder');
+  });
 });
 
 test('team check reports a repository launch line and the migrate repair', () => {

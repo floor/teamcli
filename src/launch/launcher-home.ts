@@ -1,6 +1,6 @@
 // The launcher home and the line compiled from a declaration. A secret is a reference.
 // The identity wrapper is a field of the declaration, never a script path on the line.
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { Seat } from '../file/types.ts';
@@ -147,7 +147,9 @@ export type LaunchPlace = {
 };
 
 /** The temp roots a production check uses: `os.tmpdir()`, `TMPDIR` when it is set, `/tmp`
- *  and `/private/tmp`. Read at the call, so a test that changes `TMPDIR` is what runs. */
+ *  and `/private/tmp`. Read at the call, so a test that changes `TMPDIR` is what runs.
+ *  Each root and the script path are compared after `realpath`, so a symlink and the
+ *  directory it names are the same folder. */
 export function realLaunchPlace(): LaunchPlace {
   return { inTemp: realInTemp, insideRepo: realInsideRepo };
 }
@@ -181,10 +183,33 @@ function pathWords(line: string, home: string, root: string): string[] {
   return out;
 }
 
+/** The path with symlinks resolved. A missing file keeps the remainder under the nearest
+ *  existing directory, so a script that is not on disk still sits under its temp root. */
+function canonical(path: string): string {
+  const stripped = path.replace(/\/$/, '');
+  try {
+    return realpathSync(stripped);
+  } catch {
+    const parts = stripped.split('/');
+    for (let i = parts.length - 1; i > 0; i--) {
+      const parent = parts.slice(0, i).join('/') || '/';
+      try {
+        const root = realpathSync(parent);
+        const rest = parts.slice(i).join('/');
+        return rest === '' ? root : `${root}/${rest}`;
+      } catch {
+        continue;
+      }
+    }
+    return stripped;
+  }
+}
+
 function realInTemp(path: string): boolean {
   const named = [process.env.TMPDIR, tmpdir(), '/tmp', '/private/tmp'];
-  const roots = named.filter((dir): dir is string => dir !== undefined && dir !== '').map((dir) => dir.replace(/\/$/, ''));
-  return roots.some((dir) => path === dir || path.startsWith(`${dir}/`));
+  const roots = named.filter((dir): dir is string => dir !== undefined && dir !== '').map((dir) => canonical(dir));
+  const candidate = canonical(path);
+  return roots.some((dir) => candidate === dir || candidate.startsWith(`${dir}/`));
 }
 
 function realInsideRepo(path: string): boolean {
