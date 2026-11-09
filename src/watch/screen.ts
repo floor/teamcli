@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { stripSgr } from '../ansi.ts';
 import { classifyLines, composerBox, composeLines, foldMarked, foldOf, questionTextOf, statusRowOf, type Box, type Fold, type QuestionReading, type ReadClock, type ScreenOptions } from './screen-core.ts';
 import type { ScreenData, VersionRange } from './screen-data.ts';
+import { quotaFor } from '../profiles/profile.ts';
 import { loadScreen } from './screen-file.ts';
 
 export type { Box, Fold, ReadClock, ScreenOptions };
@@ -73,7 +74,10 @@ export function screenWord(screen: Screen): 'idle' | 'working' | 'blocked' | 'un
 }
 
 function load(name: string): ScreenData {
-  return loadScreen(readFileSync(new URL(`../profiles/${name}.yaml`, import.meta.url), 'utf8'), undefined, `${name}.yaml`);
+  const data = loadScreen(readFileSync(new URL(`../profiles/${name}.yaml`, import.meta.url), 'utf8'), undefined, `${name}.yaml`);
+  // loadScreen freezes its object. The quota patterns ride on a new frozen object, so the
+  // frozen screen is left unchanged and importing this module does not write a new property.
+  return Object.freeze({ ...data, quota: Object.freeze(quotaFor(name).slice()) });
 }
 
 // Every shipped CLI is data. The core owns the order.

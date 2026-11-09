@@ -2,6 +2,7 @@
 // safety floor live here, never in a profile. A profile is data: it can add a
 // pattern, and it cannot move a stage or turn the floor off.
 import { allDimAfter, colourAfter, dropPlainTail, hasSgr, stripSgr } from '../ansi.ts';
+import { figuresOf } from '../profiles/quota.ts';
 import type { Reset, Screen } from './screen.ts';
 import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
@@ -403,6 +404,26 @@ function resetOf(lines: string[], region?: Set<number>): Reset | null {
   return null;
 }
 
+/** A usage-limit line above the current prompt is the transcript, not the seat's state, when
+ *  every window the status row shows has quota left. The row is repainted on every refresh,
+ *  so it is the newer reading. One window with none left keeps the wall, as does a row the
+ *  profile does not read. A prompt the composer cannot read leaves the wall too. */
+function limitAbovePromptIsHistory(
+  data: ScreenData,
+  plain: string[],
+  styled: string[],
+  tick: () => boolean,
+  expectedCwd?: string | null,
+  home?: string,
+): boolean {
+  const patterns = data.quota;
+  if (patterns === undefined || patterns.length === 0) return false;
+  const hit = compose(data, plain, styled, tick, expectedCwd, home);
+  if (hit.kind !== 'idle' && hit.kind !== 'unsent') return false;
+  const figures = figuresOf(patterns, statusRowOf(data, plain, { cwd: expectedCwd, home }));
+  return figures.length > 0 && figures.every((figure) => figure.left > 0);
+}
+
 function asScreen(kind: Screen['kind'], lines: string[], region?: Set<number>, reason?: string): Screen {
   if (kind === 'rate limit') return { kind, reset: resetOf(lines, region), ...(reason === undefined ? {} : { reason }) };
   return { kind };
@@ -476,6 +497,10 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
               && working === 'cluster'
               && staleWorkingAboveIdle(data, plain, lines, tick, expectedCwd, home)
             ) continue;
+            // A limit line above a readable prompt is history when every window on the status
+            // row shows quota left. Any window with none left, or no readable prompt, keeps
+            // the wall.
+            if (name === 'rate_limit' && limitAbovePromptIsHistory(data, plain, lines, tick, expectedCwd, home)) continue;
             const block = rule.atComposer ? edge([...(rule.any ?? []), ...(rule.all ?? [])]) : null;
             return asScreen(kind, plain, block === null ? undefined : new Set(block), rule.reason ?? stage.reason);
           }
@@ -716,7 +741,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
           for (const rule of stage.rules) {
             const hit = ruleMatches(data, plain, rule, tick, live, edge);
             if (hit === 'stop') return { kind: 'unknown' };
-            if (hit) return { kind: 'unknown' };
+            if (hit && !(kind === 'rate_limit' && limitAbovePromptIsHistory(data, plain, lines, tick, expectedCwd, home))) return { kind: 'unknown' };
           }
         }
       }
@@ -752,13 +777,21 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
         if (hit) return { kind: 'unknown' };
       }
     }
-    // A provider error or a rate limit above an idle box is not a free composer: the box read
-    // stays unknown, the same as a dialog, so nothing types from the composer alone.
-    for (const stage of [data.provider_error, data.rate_limit]) {
-      if (!stage) continue;
-      for (const rule of stage.rules) {
+    // A provider error above an idle box is not a free composer: the box read stays unknown,
+    // the same as a dialog, so nothing types from the composer alone. A rate-limit line above
+    // the current prompt is history when every window on the status row shows quota left,
+    // and the composer then reads as the prompt it is. Any window with none left leaves it.
+    if (data.provider_error) {
+      for (const rule of data.provider_error.rules) {
         const hit = ruleMatches(data, plain, rule, tick, live, edge);
         if (hit === 'stop' || hit) return { kind: 'unknown' };
+      }
+    }
+    if (data.rate_limit) {
+      for (const rule of data.rate_limit.rules) {
+        const hit = ruleMatches(data, plain, rule, tick, live, edge);
+        if (hit === 'stop') return { kind: 'unknown' };
+        if (hit && !limitAbovePromptIsHistory(data, plain, lines, tick, expectedCwd, home)) return { kind: 'unknown' };
       }
     }
 
