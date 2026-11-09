@@ -1,11 +1,14 @@
 // Adversarial boundaries for a restored session (#324): the promise is that a live seat is
 // never closed, and that liveness is proven by the stored agent session over a pid mismatch —
-// never by the surviving name alone, and never on the wrong pane. These scenes try to break it
-// from both sides: a matching session that must NOT be adopted (wrong pane, or absent from this
-// session's agent list), a surviving name on a dead shell that must still be relaunched — in
+// never by the surviving name alone, and never on a different pane that does not hold the
+// recorded conversation. A different pane that does hold it, and that the launch's agent
+// list names, is adopted there. These scenes try to break it
+// from both sides: a different pane that does not hold the recorded conversation is not
+// adopted, one that does is adopted, a name absent from this session's agent list is not adopted,
+// a surviving name on a dead shell that must still be relaunched — in
 // that same pane, never a fresh one — a restored seat whose screen reads working that must still
-// not be closed or typed, and a dry run that closes nothing and prints the leave-it line for
-// restored and doubt. No live herdr: every
+// not be closed or typed, and a dry run that closes nothing, leaves a restored seat, and
+// relaunches a bare wrapper in its own pane. No live herdr: every
 // reading is a fixture. The happy paths live in live.test.ts; these are only the edges.
 //
 // Every scene starts from four seats recorded ready, each reading `same`, so the only seat that
@@ -74,7 +77,7 @@ async function approve() {
 function quietIo() {
   const standing = approvalStanding(root, home);
   if (standing.kind !== 'verified') throw new Error('the no-prompt run needs a verified approval');
-  const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w91:p1', session: 'acme-web' });
+  const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'lead-pane', session: 'acme-web' });
   io.env[OWNER_APPROVAL_ENV] = upFingerprint(standing.record.approval.fingerprints, standing.generation);
   return io;
 }
@@ -173,7 +176,10 @@ function world(): World {
     },
     agents: () => [],
     workspacePanes(_session, workspace) {
-      return [`${workspace}:p1`];
+      // A workspace created in this double is still w<n>, and its pane keeps that suffix.
+      // A seat pane is a synthetic name, and that name is the pane the workspace lists.
+      if (/^w\d+$/.test(workspace)) return [`${workspace}:p1`];
+      return [workspace];
     },
     paneText: () => IDLE,
     foreground: () => ['claude'],
@@ -213,10 +219,10 @@ const seatsOf = () => readState(join(root, '.agents')).sessions['acme-web']?.sea
 // record carries an agent session, and only when a scene stores one; the others read `same` and
 // are left untouched. Pids and labels match the fixtures the close-path tests use.
 const SEATS = {
-  'claude-coordinator-acme': { pane: 'w91:p1', workspace: 'w91', label: 'Claude Opus 5.5', shell: 420, cli: 421, kind: 'claude' },
-  'codex-acme': { pane: 'w92:p1', workspace: 'w92', label: 'GPT-6 Sol', shell: 410, cli: 411, kind: 'codex' },
-  'deepseek-acme': { pane: 'w93:p1', workspace: 'w93', label: 'DeepSeek V4.1 Flash', shell: 430, cli: 431, kind: 'claude' },
-  'deepseek-acme-2': { pane: 'w94:p1', workspace: 'w94', label: 'DeepSeek V4.1 Flash', shell: 440, cli: 441, kind: 'claude' },
+  'claude-coordinator-acme': { pane: 'lead-pane', workspace: 'lead-pane', label: 'Claude Opus 5.5', shell: 420, cli: 421, kind: 'claude' },
+  'codex-acme': { pane: 'peer-pane', workspace: 'peer-pane', label: 'GPT-6 Sol', shell: 410, cli: 411, kind: 'codex' },
+  'deepseek-acme': { pane: 'worker-pane', workspace: 'worker-pane', label: 'DeepSeek V4.1 Flash', shell: 430, cli: 431, kind: 'claude' },
+  'deepseek-acme-2': { pane: 'other-pane', workspace: 'other-pane', label: 'DeepSeek V4.1 Flash', shell: 440, cli: 441, kind: 'claude' },
 } as const;
 
 /** The pane the seat under test is recorded on, read from the fixture's own record so a scene's
@@ -258,7 +264,7 @@ function registerSeat(
     cli: fields.cli ?? 'claude-code',
     launcher: null,
     launch: fields.launch ?? 'claude --model claude-opus-5-5',
-    reach: { team: teamIdOf(root), seat: 'deepseek-acme', session: 'acme-web', agent_session: session, pane: 'w93:p1', address: null },
+    reach: { team: teamIdOf(root), seat: 'deepseek-acme', session: 'acme-web', agent_session: session, pane: 'worker-pane', address: null },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -273,7 +279,7 @@ function writeState(session?: string, drift = false): void {
     const registered = registerSeat(session, drift
       ? { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' }
       : {});
-    if (drift) updateAgent(home, registered.id, { reach: { pane: 'w93:p1' } });
+    if (drift) updateAgent(home, registered.id, { reach: { pane: 'worker-pane' } });
   }
 }
 
@@ -290,19 +296,25 @@ function baseline() {
 }
 
 describe('team up, a restored session: boundaries', () => {
-  // Scene 4 — the stored session matches, but the live agent that carries it is on another pane.
-  // `namedOnPane` is false, so this is doubt, not restored: the seat is not adopted onto the new
-  // pane, nothing is closed, and the recorded pids are left exactly as they were.
-  test('a matching session on a different pane is not adopted', async () => {
+  // The name is on another pane, and that pane's conversation is not the one the record
+  // names. The seat is not adopted onto it: nothing is closed, and the record stays.
+  test('a different pane whose conversation is not the recorded one is not adopted', async () => {
     await approve();
     writeState('kept');
     const { sameProcess, workspaces } = baseline();
     const made = world();
     // A program is in front of the recorded pane (a pid mismatch → replaced).
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === RECORDED_PANE ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const keys: string[] = [];
     made.launch.typeText = () => { keys.push('type'); return true; };
     made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const listed = (): HerdrAgent[] => [
+      agent('claude-coordinator-acme', 'lead-pane', 'idle'),
+      agent('codex-acme', 'peer-pane', 'idle', 'codex'),
+      agent('deepseek-acme-2', 'other-pane', 'idle'),
+      { ...agent('deepseek-acme', 'new-pane', 'idle'), session: 'other' },
+    ];
+    made.launch.agents = listed;
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,
@@ -310,32 +322,75 @@ describe('team up, a restored session: boundaries', () => {
       sources(
         {
           sessionState: () => 'running',
-          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
-          // deepseek-acme's name, with the matching session, is on w99 — never the recorded w93.
-          agents: () => [
-            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
-            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
-            agent('deepseek-acme-2', 'w94:p1', 'idle'),
-            { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
-          ],
+          workspaces: () => [...workspaces(), { id: 'new-pane', label: 'DeepSeek V4.1 Flash' }],
+          agents: listed,
           doctor: doctor(),
         },
         made,
       ),
     );
-    expect(code).toBe(1);
+    expect(code, `${io.out}\n${io.err}`).toBe(1);
     expect(made.closes).toEqual([]);
     expect(keys).toEqual([]);
     expect(made.creates).not.toContain('deepseek-acme · implementer');
-    // The non-working doubt is refused and held: the plan's record says left out, the owner
-    // summary counts one refusal with the seat's reason, and nothing was touched. The host no
-    // longer lists the recorded pane, so the place proof cannot be made.
     expect(io.out).toContain('deepseek-acme: left out: the terminal host does not list the pane any more; team cannot re-tie it\n');
     expect(io.err).toContain('  the terminal host does not list the pane any more; team cannot re-tie it\n');
     expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: the terminal host does not list the pane any more; team cannot re-tie it)\n');
-    // Not adopted: the record still names the pane it was launched on, with its original pids
-    // and session; the stray pane's pids never reach it.
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: RECORDED_PANE, launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+  });
+
+  // The same shape, except the other pane holds the recorded conversation and the launch's
+  // own agent list names it. The seat is adopted there and the re-tie is logged.
+  test('a different pane that holds the recorded conversation is adopted there', async () => {
+    await approve();
+    writeState('kept');
+    const { sameProcess, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => {
+      if (pane === RECORDED_PANE) return { shell: 900, foreground: [901] };
+      // The adopted pane holds a program in front. A foreground that still lists the shell
+      // reads as gone, and the re-tie proof refuses it.
+      if (pane === 'new-pane') return { shell: 700, foreground: [701] };
+      return sameProcess(pane);
+    };
+    const keys: string[] = [];
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const listed = (): HerdrAgent[] => [
+      agent('claude-coordinator-acme', 'lead-pane', 'idle'),
+      agent('codex-acme', 'peer-pane', 'idle', 'codex'),
+      agent('deepseek-acme-2', 'other-pane', 'idle'),
+      { ...agent('deepseek-acme', 'new-pane', 'idle'), session: 'kept' },
+    ];
+    made.launch.agents = listed;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [...workspaces(), { id: 'new-pane', label: 'DeepSeek V4.1 Flash' }],
+          agents: listed,
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code, `${io.out}\n${io.err}`).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(keys).toEqual([]);
+    expect(made.creates).not.toContain('deepseek-acme · implementer');
+    expect(made.renames).toContain('deepseek-acme');
+    expect(`${io.out}${io.err}`).toContain('deepseek-acme: restored and re-tied: its conversation is the one the record names; left as it is');
+    expect(`${io.out}${io.err}`).toContain('  restored and re-tied: its conversation is the one the record names\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({
+      stage: 'ready',
+      pane: 'new-pane',
+      workspace: 'new-pane',
+      launched: { shell: 700, cli: [701] },
+      agent_session: 'kept',
+    });
   });
 
   // Scene 4 — the stored session is present, but this session's agent list does not name the
@@ -345,7 +400,7 @@ describe('team up, a restored session: boundaries', () => {
     writeState('kept');
     const { sameProcess, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,
@@ -356,9 +411,9 @@ describe('team up, a restored session: boundaries', () => {
           workspaces,
           // deepseek-acme is simply not in this session's list.
           agents: () => [
-            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
-            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
-            agent('deepseek-acme-2', 'w94:p1', 'idle'),
+            agent('claude-coordinator-acme', 'lead-pane', 'idle'),
+            agent('codex-acme', 'peer-pane', 'idle', 'codex'),
+            agent('deepseek-acme-2', 'other-pane', 'idle'),
           ],
           doctor: doctor(),
         },
@@ -370,7 +425,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(io.out).toContain('deepseek-acme: left out: the terminal host does not list the pane any more; team cannot re-tie it\n');
     expect(io.err).toContain('  the terminal host does not list the pane any more; team cannot re-tie it\n');
     expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: the terminal host does not list the pane any more; team cannot re-tie it)\n');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'worker-pane', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 
   // Scene 3 — the shell is in front (the program is gone). The seat's name survives on the
@@ -384,7 +439,7 @@ describe('team up, a restored session: boundaries', () => {
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
     // The shell is in front on the recorded pane: gone, whatever the agent list and session say.
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [900] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [900] } : sameProcess(pane));
     // The name is still listed on the recorded pane, carrying the stored session. Nothing in
     // that reading makes the bare shell live.
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
@@ -415,8 +470,8 @@ describe('team up, a restored session: boundaries', () => {
     writeState('kept');
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
-    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? 'esc to interrupt' : IDLE);
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.paneText = (_session, pane) => (pane === 'worker-pane' ? 'esc to interrupt' : IDLE);
     const keys: string[] = [];
     made.launch.typeText = () => { keys.push('type'); return true; };
     made.launch.pressEnter = () => { keys.push('enter'); return true; };
@@ -441,7 +496,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(io.err).toContain('  restored; left as it is\n');
     expect(seatsOf()['deepseek-acme']).toMatchObject({
       stage: 'ready',
-      pane: 'w93:p1',
+      pane: 'worker-pane',
       launched: { shell: 900, cli: [901] },
       agent_session: 'kept',
     });
@@ -453,7 +508,7 @@ describe('team up, a restored session: boundaries', () => {
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
     made.launch.processInfo = (_session, pane) =>
-      pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane);
+      pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane);
     const live = () => {
       const launched = made.runs.find((run) => run.command.includes('team-deepseek'));
       return launched
@@ -472,7 +527,7 @@ describe('team up, a restored session: boundaries', () => {
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
     expect(code).toBe(0);
-    expect(made.closes).toEqual(['w93']);
+    expect(made.closes).toEqual(['worker-pane']);
     const seatLaunches = made.runs.filter((run) => run.command.includes('team-deepseek'));
     expect(seatLaunches).toHaveLength(1);
     expect(seatLaunches[0]?.command).toContain('--resume kept');
@@ -534,7 +589,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept');
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     made.launch.agents = live;
     const keys: string[] = [];
@@ -552,7 +607,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(io.err).toContain('  restored; left as it is\n');
     expect(seatsOf()['deepseek-acme']).toMatchObject({
       stage: 'ready',
-      pane: 'w93:p1',
+      pane: 'worker-pane',
       launched: { shell: 900, cli: [901] },
       agent_session: 'kept',
     });
@@ -568,7 +623,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept');
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'other' } : a));
     made.launch.agents = live;
     const io = testIo(root, { kind: 'owner' });
@@ -582,7 +637,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(io.out).toContain('deepseek-acme: left out: its pane holds another conversation (other; the record\'s launch ran kept)\n');
     expect(io.err).toContain('  its pane holds another conversation (other; the record\'s launch ran kept)\n');
     expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds another conversation (other; the record\'s launch ran kept))\n');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'worker-pane', launched: { shell: 430, cli: [431] } });
     expect(seatsOf()['deepseek-acme']?.agent_session).toBeUndefined();
   });
 
@@ -595,7 +650,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept');
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'state-copy' } : a));
     made.launch.agents = live;
     const io = testIo(root, { kind: 'owner' });
@@ -611,7 +666,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds a conversation (state-copy) the record\'s launch never named)\n');
     expect(seatsOf()['deepseek-acme']).toMatchObject({
       stage: 'ready',
-      pane: 'w93:p1',
+      pane: 'worker-pane',
       launched: { shell: 430, cli: [431] },
       agent_session: 'state-copy',
     });
@@ -625,7 +680,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept', { cli: 'codex' });
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     made.launch.agents = live;
     const io = testIo(root, { kind: 'owner' });
@@ -652,7 +707,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' });
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => {
       const launched = made.runs.find((run) => run.command.includes('team-deepseek'));
       return launched
@@ -671,7 +726,7 @@ describe('team up, a restored session: boundaries', () => {
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
     expect(code).toBe(0);
-    expect(made.closes).toEqual(['w93']);
+    expect(made.closes).toEqual(['worker-pane']);
     const seatLaunches = made.runs.filter((run) => run.command.includes('team-deepseek'));
     expect(seatLaunches).toHaveLength(1);
     // The record's launcher, then the id the live pane proved next to it.
@@ -698,7 +753,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' });
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => {
       const launched = made.runs.find((run) => run.command.includes('team-deepseek'));
       return launched
@@ -714,7 +769,7 @@ describe('team up, a restored session: boundaries', () => {
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
     expect(code).toBe(0);
-    expect(made.closes).toEqual(['w93']);
+    expect(made.closes).toEqual(['worker-pane']);
     const settings = readFileSync(join(root, '.agents/hooks/acme-web/deepseek-acme.json'), 'utf8');
     const minted = /prs_[0-9a-f]{12}/.exec(settings)?.[0];
     expect(minted).toBeDefined();
@@ -735,7 +790,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' });
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => {
       const launched = made.runs.find((run) => run.command.includes('team-deepseek'));
       return launched
@@ -762,7 +817,7 @@ describe('team up, a restored session: boundaries', () => {
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
     expect(code).toBe(1);
-    expect(made.closes).toEqual(['w93']);
+    expect(made.closes).toEqual(['worker-pane']);
     expect(io.out).toContain('deepseek-acme: left out: timeout\n');
     const settings = readFileSync(join(root, '.agents/hooks/acme-web/deepseek-acme.json'), 'utf8');
     const minted = /prs_[0-9a-f]{12}/.exec(settings)?.[0];
@@ -787,7 +842,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' });
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     made.launch.agents = live;
     made.launch.paneText = (_session, pane) => (pane === RECORDED_PANE ? DRIFTED_IDLE : IDLE);
@@ -799,7 +854,7 @@ describe('team up, a restored session: boundaries', () => {
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
     expect(code).toBe(1);
-    expect(made.closes).toEqual(['w93']);
+    expect(made.closes).toEqual(['worker-pane']);
     expect(seatsOf()['deepseek-acme']?.stage).toBe('launched');
     expect(seatsOf()['deepseek-acme']?.presence_binding).toBeUndefined();
   });
@@ -813,7 +868,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek --resume other' });
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     made.launch.agents = live;
     made.launch.paneText = (_session, pane) => (pane === RECORDED_PANE ? DRIFTED_IDLE : IDLE);
@@ -835,11 +890,11 @@ describe('team up, a restored session: boundaries', () => {
     expect(seatsOf()['deepseek-acme']?.agent_session).toBeUndefined();
   });
 
-  // Scene 6 — a dry run touches nothing. deepseek-acme restored, deepseek-acme-2 doubt, and the
-  // coordinator gone: the plan prints the leave-it line for the first two and the relaunch line
-  // for the gone one — in its own pane, with no close — and the state file is byte for byte what
-  // it was.
-  test('a dry run closes nothing and prints the leave-it line for restored and doubt', async () => {
+  // Scene 6 — a dry run touches nothing. deepseek-acme is restored and left. deepseek-acme-2
+  // holds the bare restored CLI rather than its own launch line, so the plan exits that pane
+  // and launches the recorded line there. The coordinator is at its shell and is relaunched in
+  // that same pane. Nothing is closed, and the state file is byte for byte what it was.
+  test('a dry run closes nothing, leaves a restored seat, and relaunches a bare wrapper in its pane', async () => {
     await approve();
     // deepseek-acme carries the stored session; a second record for deepseek-acme-2 does not.
     writeState('kept');
@@ -847,9 +902,9 @@ describe('team up, a restored session: boundaries', () => {
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
     made.launch.processInfo = (_session, pane) => {
-      if (pane === 'w93:p1') return { shell: 900, foreground: [901] }; // restored: program, session kept
-      if (pane === 'w94:p1') return { shell: 940, foreground: [941] }; // doubt: program, no session
-      if (pane === 'w91:p1') return { shell: 910, foreground: [910] }; // gone: shell in front
+      if (pane === 'worker-pane') return { shell: 900, foreground: [901] }; // restored: program, session kept
+      if (pane === 'other-pane') return { shell: 940, foreground: [941] }; // doubt: program, no session
+      if (pane === 'lead-pane') return { shell: 910, foreground: [910] }; // gone: shell in front
       return sameProcess(pane);
     };
     const io = testIo(root, { kind: 'owner' });
@@ -872,12 +927,12 @@ describe('team up, a restored session: boundaries', () => {
     expect(made.closes).toEqual([]);
     expect(made.creates).toEqual([]);
     expect(made.runs).toEqual([]);
-    // The plan names the two leave-it lines, and the seat at its shell is relaunched in its own
-    // pane: no close is planned for it.
+    // The restored seat is left. The bare wrapper is relaunched in its own pane, and the seat
+    // at its shell is relaunched in its own pane: no close is planned for either.
     expect(io.out).toContain('deepseek-acme: restored; left as it is');
-    expect(io.out).toContain('deepseek-acme-2: restored and re-tied: its pane runs claude-code alone in its workspace, at an idle prompt; left as it is');
+    expect(io.out).toContain('its pane holds the bare restored CLI, not its launch line; exited in place and launched again here');
     expect(io.out).toContain(`its recorded pane ${SEATS['claude-coordinator-acme'].pane} was at its shell; launched in the same pane`);
-    expect(io.out).not.toContain('workspace close w91');
+    expect(io.out).not.toContain('workspace close lead-pane');
     // Nothing was written: the restored seat's pids are still the stored ones, not re-recorded.
     expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(before);
     expect(seatsOf()['deepseek-acme']).toMatchObject({ launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
@@ -892,13 +947,13 @@ describe('team up, a restored session: boundaries', () => {
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
     made.launch.processInfo = (_session, pane) => {
-      if (pane === 'w93:p1') return null; // the recorded pane is gone
-      if (pane === 'w99:p1') return { shell: 750, foreground: [751] };
+      if (pane === 'worker-pane') return null; // the recorded pane is gone
+      if (pane === 'new-pane') return { shell: 750, foreground: [751] };
       return sameProcess(pane);
     };
     const live = () => [
       ...list().filter((item) => item.name !== 'deepseek-acme'),
-      { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
+      { ...agent('deepseek-acme', 'new-pane', 'idle'), session: 'kept' },
     ];
     made.launch.agents = live;
     // The list the test just installed replaced the one that records renames. Wrap it again.
@@ -914,7 +969,7 @@ describe('team up, a restored session: boundaries', () => {
       sources(
         {
           sessionState: () => 'running',
-          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          workspaces: () => [...workspaces(), { id: 'new-pane', label: 'DeepSeek V4.1 Flash' }],
           agents: live,
           doctor: doctor(),
         },
@@ -923,7 +978,7 @@ describe('team up, a restored session: boundaries', () => {
     );
     expect(code, io.out + io.err).toBe(0);
     // Closed on the pane the seat actually holds now, and relaunched with its conversation.
-    expect(made.closes).toEqual(['w99']);
+    expect(made.closes).toEqual(['new-pane']);
     expect(made.runs.map((run) => run.command).some((command) => command.includes('--resume kept'))).toBe(true);
     expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready' });
   });
@@ -936,13 +991,13 @@ describe('team up, a restored session: boundaries', () => {
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
     made.launch.processInfo = (_session, pane) => {
-      if (pane === 'w93:p1') return null;
-      if (pane === 'w99:p1') return { shell: 750, foreground: [751] };
+      if (pane === 'worker-pane') return null;
+      if (pane === 'new-pane') return { shell: 750, foreground: [751] };
       return sameProcess(pane);
     };
     const live = () => [
       ...list().filter((item) => item.name !== 'deepseek-acme'),
-      { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
+      { ...agent('deepseek-acme', 'new-pane', 'idle'), session: 'kept' },
     ];
     made.launch.agents = live;
     const io = testIo(root, { kind: 'owner' });
@@ -952,7 +1007,7 @@ describe('team up, a restored session: boundaries', () => {
       sources(
         {
           sessionState: () => 'running',
-          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          workspaces: () => [...workspaces(), { id: 'new-pane', label: 'DeepSeek V4.1 Flash' }],
           agents: live,
           doctor: doctor(),
         },
@@ -966,8 +1021,8 @@ describe('team up, a restored session: boundaries', () => {
     expect(io.err).toContain('  restored; left as it is\n');
     expect(seatsOf()['deepseek-acme']).toMatchObject({
       stage: 'ready',
-      pane: 'w99:p1',
-      workspace: 'w99',
+      pane: 'new-pane',
+      workspace: 'new-pane',
       launched: { shell: 750, cli: [751] },
       agent_session: 'kept',
     });
@@ -981,13 +1036,13 @@ describe('team up, a restored session: boundaries', () => {
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
     made.launch.processInfo = (_session, pane) => {
-      if (pane === 'w93:p1') return null;
-      if (pane === 'w99:p1') return { shell: 750, foreground: [751] };
+      if (pane === 'worker-pane') return null;
+      if (pane === 'new-pane') return { shell: 750, foreground: [751] };
       return sameProcess(pane);
     };
     const live = () => [
       ...list().filter((item) => item.name !== 'deepseek-acme'),
-      { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'ses-foreign' },
+      { ...agent('deepseek-acme', 'new-pane', 'idle'), session: 'ses-foreign' },
     ];
     made.launch.agents = live;
     const io = testIo(root, { kind: 'owner' });
@@ -997,7 +1052,7 @@ describe('team up, a restored session: boundaries', () => {
       sources(
         {
           sessionState: () => 'running',
-          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          workspaces: () => [...workspaces(), { id: 'new-pane', label: 'DeepSeek V4.1 Flash' }],
           agents: live,
           doctor: doctor(),
         },
@@ -1008,7 +1063,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(made.closes).toEqual([]);
     expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
     expect(io.out).toContain('deepseek-acme: left out: its recorded pane is gone and the pane naming this seat cannot be tied to its recorded conversation; nothing closed\n');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1' });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'worker-pane' });
   });
 
   // Gap 4A — the pane is gone and no name survived: the recorded conversation is resumed on a
@@ -1047,7 +1102,7 @@ describe('team up, a restored session: boundaries', () => {
     );
     expect(code, io.out + io.err).toBe(0);
     // The old workspace is closed after the replacement is ready; it holds only the old pane.
-    expect(made.closes).toEqual(['w93']);
+    expect(made.closes).toEqual(['worker-pane']);
     const resumed = made.runs.filter((run) => run.command.includes('--resume kept'));
     expect(resumed).toHaveLength(1);
     expect(resumed[0]?.pane).toBe('w1:p1');
@@ -1063,7 +1118,7 @@ describe('team up, a restored session: boundaries', () => {
     registerSeat('kept', { launch: 'team-deepseek --continue' });
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? null : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? null : sameProcess(pane));
     const live = () => list().filter((item) => item.name !== 'deepseek-acme');
     made.launch.agents = live;
     const io = testIo(root, { kind: 'owner' });
@@ -1086,20 +1141,27 @@ describe('team up, a restored session: boundaries', () => {
     expect(made.creates).toEqual([]);
     expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
     expect(io.err).toContain('  its recorded conversation cannot be resumed');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1' });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'worker-pane' });
   });
 
-  // The other side of the same doubt: the process in front of the record reads working. That
-  // seat is left to finish its turn — a successful skip, exit 0, nothing closed or typed, its
-  // record untouched — and the summary counts it as skipped working, not refused. The scene is
-  // row 312's (a matching session on another pane); only the recorded pane's screen differs.
+  // The process in front of the recorded pane reads working, and that pane does not show the
+  // recorded conversation. Nothing else holds it either, so this is not a new-pane adoption.
+  // The seat is left to finish its turn — a successful skip, exit 0, nothing closed or typed,
+  // its record untouched — and the summary counts it as skipped working, not refused.
   test('a doubtful pane whose screen reads working is skipped, not refused', async () => {
     await approve();
     writeState('kept');
     const { sameProcess, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
-    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? 'esc to interrupt' : IDLE);
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.paneText = (_session, pane) => (pane === 'worker-pane' ? 'esc to interrupt' : IDLE);
+    const listed = (): HerdrAgent[] => [
+      agent('claude-coordinator-acme', 'lead-pane', 'idle'),
+      agent('codex-acme', 'peer-pane', 'idle', 'codex'),
+      agent('deepseek-acme', 'worker-pane', 'idle'),
+      agent('deepseek-acme-2', 'other-pane', 'idle'),
+    ];
+    made.launch.agents = listed;
     const keys: string[] = [];
     made.launch.typeText = () => { keys.push('type'); return true; };
     made.launch.pressEnter = () => { keys.push('enter'); return true; };
@@ -1110,13 +1172,8 @@ describe('team up, a restored session: boundaries', () => {
       sources(
         {
           sessionState: () => 'running',
-          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
-          agents: () => [
-            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
-            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
-            agent('deepseek-acme-2', 'w94:p1', 'idle'),
-            { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
-          ],
+          workspaces,
+          agents: listed,
           doctor: doctor(),
         },
         made,
@@ -1130,7 +1187,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(io.out).toContain('deepseek-acme: ready\n');
     expect(io.err).toContain('  the process in its pane is working; nothing closed (stop it there, or run team remove deepseek-acme)\n');
     expect(io.err).toContain('0 seats repaired, 1 skipped (working), 0 refused\n');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'worker-pane', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 
   // The refusal contract under `--json`: the non-working doubt (row 312's scene, a free screen)
@@ -1141,7 +1198,7 @@ describe('team up, a restored session: boundaries', () => {
     writeState('kept');
     const { sameProcess, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       ['--json', ...FILE],
@@ -1149,12 +1206,12 @@ describe('team up, a restored session: boundaries', () => {
       sources(
         {
           sessionState: () => 'running',
-          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          workspaces: () => [...workspaces(), { id: 'new-pane', label: 'DeepSeek V4.1 Flash' }],
           agents: () => [
-            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
-            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
-            agent('deepseek-acme-2', 'w94:p1', 'idle'),
-            { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
+            agent('claude-coordinator-acme', 'lead-pane', 'idle'),
+            agent('codex-acme', 'peer-pane', 'idle', 'codex'),
+            agent('deepseek-acme-2', 'other-pane', 'idle'),
+            { ...agent('deepseek-acme', 'new-pane', 'idle'), session: 'kept' },
           ],
           doctor: doctor(),
         },
@@ -1171,7 +1228,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(doc.error.message).toContain('1 refused');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('deepseek-acme · implementer');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'worker-pane', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 
   // And the working skip under `--json`: a success document, `team.up`, whose action summary and
@@ -1181,8 +1238,15 @@ describe('team up, a restored session: boundaries', () => {
     writeState('kept');
     const { sameProcess, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
-    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? 'esc to interrupt' : IDLE);
+    made.launch.processInfo = (_session, pane) => (pane === 'worker-pane' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.paneText = (_session, pane) => (pane === 'worker-pane' ? 'esc to interrupt' : IDLE);
+    const listed = (): HerdrAgent[] => [
+      agent('claude-coordinator-acme', 'lead-pane', 'idle'),
+      agent('codex-acme', 'peer-pane', 'idle', 'codex'),
+      agent('deepseek-acme', 'worker-pane', 'idle'),
+      agent('deepseek-acme-2', 'other-pane', 'idle'),
+    ];
+    made.launch.agents = listed;
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       ['--json', ...FILE],
@@ -1190,13 +1254,8 @@ describe('team up, a restored session: boundaries', () => {
       sources(
         {
           sessionState: () => 'running',
-          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
-          agents: () => [
-            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
-            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
-            agent('deepseek-acme-2', 'w94:p1', 'idle'),
-            { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
-          ],
+          workspaces,
+          agents: listed,
           doctor: doctor(),
         },
         made,
@@ -1216,6 +1275,6 @@ describe('team up, a restored session: boundaries', () => {
     expect(doc.notes).toContain('deepseek-acme: ready');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('deepseek-acme · implementer');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'worker-pane', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 });

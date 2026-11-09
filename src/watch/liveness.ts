@@ -52,3 +52,31 @@ export function watchSitting(input: {
   }
   return { kind: 'pane', health };
 }
+
+/** Whether the daemon carries this session's watch and this checkout's bus. A watch counts
+ *  only while the daemon is actually running it for this session. Standby, stopped, and failed
+ *  leave the watch unhosted. The bus counts only while it is serving on this root. */
+export type DaemonRouteHost = { watch: boolean; bus: boolean };
+
+export function daemonRouteHost(
+  daemon: DaemonHealth | undefined,
+  root: string,
+  session: string,
+): DaemonRouteHost {
+  const canonical = canonicalRoot(root);
+  const entry = canonical === null ? undefined : daemon?.roots.find((item) => item.root === canonical);
+  const phase = entry?.watch?.phase;
+  const watch = entry?.watch !== undefined
+    && entry.watch.session === session
+    && (phase === 'starting' || phase === 'running' || phase === 'stopping');
+  return { watch, bus: entry?.bus === 'serving' };
+}
+
+/** The sentences a restore says when the daemon is not carrying the watch or the bus root.
+ *  Empty when both are hosted. */
+export function daemonRouteGaps(host: DaemonRouteHost): string[] {
+  const gaps: string[] = [];
+  if (!host.watch) gaps.push("watch: the daemon does not host this session's watch");
+  if (!host.bus) gaps.push("bus: the daemon does not host this session's bus root");
+  return gaps;
+}

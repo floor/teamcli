@@ -4,8 +4,10 @@
 // the agent registry's own binding, read against the live agent's session. These scenes drive the
 // real `team up` — a dry run for the plan line, a real run for the record and the effects — and
 // pin both sides: the registry-only record is recognized and left as it is, while a record whose
-// session, CLI or pane disagrees, a seat running another conversation, and a working seat are all
-// left alone. No live herdr: every reading is a fixture.
+// session or CLI disagrees, a new pane that holds another conversation, and a working seat are
+// all left alone. A new pane that holds the recorded conversation is adopted there: the name is
+// re-applied, nothing is typed, and the recorded workspace is not closed. No live herdr: every
+// reading is a fixture.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -126,13 +128,14 @@ type Trace = {
   typed: string[];
   runs: string[];
   renamed: { workspace: string; label: string }[];
+  named: { pane: string; name: string }[];
   reported: { pane: string; text: string }[];
 };
 
 /** The readings one run takes: herdr's list naming the seat on `pane` with `live` as the
  *  conversation it runs, and a pane whose process is the restored one. */
 function sources(live: string, opts: { pane?: string; status?: string } = {}): { sources: UpSources; trace: Trace } {
-  const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], reported: [] };
+  const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], named: [], reported: [] };
   const madePanes = new Map<string, string>();
   const pane = opts.pane ?? 'w2:p1';
   const agents = () => [
@@ -168,7 +171,11 @@ function sources(live: string, opts: { pane?: string; status?: string } = {}): {
       trace.reported.push({ pane, text });
       return true;
     },
-    renameAgent: () => true,
+    renameAgent(session, pane, name) {
+      expect(session).toBe(SESSION);
+      trace.named.push({ pane, name });
+      return true;
+    },
     closeWorkspace(_session, workspace) {
       trace.closed.push(workspace);
       return true;
@@ -329,17 +336,32 @@ test('a record that ran another CLI is not this seat', async () => {
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
 });
 
-test('a seat herdr names on another pane is not adopted', async () => {
+const MOVED = 'pane-moved';
+
+test('a seat herdr names on a new pane that holds the recorded conversation is adopted there', async () => {
   record(RECORD);
-  const made = sources(SESSION_ID, { pane: 'w9:p1' });
+  const made = sources(SESSION_ID, { pane: MOVED });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(io.out + io.err).toContain('restored and re-tied: its conversation is the one the record names');
+  expect(made.trace.named).toEqual([{ pane: MOVED, name: SEAT }]);
+  expect(made.trace.typed).toEqual([]);
+  expect(made.trace.closed).toEqual([]);
+  expect(seatState()?.pane).toBe(MOVED);
+  expect(seatState()?.workspace).toBe(MOVED);
+});
+
+test('a seat herdr names on a new pane that holds another conversation is left out', async () => {
+  record(RECORD);
+  const made = sources('ses_other', { pane: MOVED });
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
-  // The host no longer lists the recorded pane: the place proof cannot be made.
   const why = 'the terminal host does not list the pane any more; team cannot re-tie it';
   expect(io.out).toContain(`${SEAT}: left out: ${why}\n`);
   expect(io.err).toContain(why);
   expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${why})\n`);
-  // The recorded workspace is not closed: the match on the pane is what would allow it.
+  expect(seatState()?.pane).toBe(RECORD.pane);
+  expect(made.trace.named).toEqual([]);
   expect(made.trace.closed).toEqual([]);
   expect(made.trace.typed).toEqual([]);
 });

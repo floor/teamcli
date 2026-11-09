@@ -9,7 +9,7 @@
 // keeps the conversation the records name. All of it is synthetic: no live host, no CLI.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
@@ -18,7 +18,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
 import { findAgent, registerAgent } from '../src/registry/agents.ts';
-import { teamIdOf } from '../src/registry/teams.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, recordRenames, testIo } from './helpers.ts';
@@ -43,6 +43,23 @@ const DRIFTED = CLAUDE_IDLE.replace('Opus 5.5 · Acme billing', 'deepseek-v3 · 
 type Spec = { launch: string; vendor: string; model: string; version: string };
 const WRAPPER: Spec = { launch: 'team-deepseek', vendor: 'deepseek', model: 'DeepSeek Flash', version: 'V4.1' };
 const BARE: Spec = { launch: 'claude --model claude-opus-5-5', vendor: 'anthropic', model: 'Claude Opus', version: '5.5' };
+const CHANNEL: Spec = {
+  launch: 'claude --model claude-opus-5-5 --dangerously-load-development-channels server:team-inbox',
+  vendor: 'anthropic',
+  model: 'Claude Opus',
+  version: '5.5',
+};
+
+/** The captured restore record, with this scene's pane and launch written over the placeholders. */
+function capturedReady(): Record<string, unknown> {
+  const parsed = JSON.parse(readFileSync(new URL('./fixtures/restore-real-state/real-session-shape.json', import.meta.url), 'utf8')) as {
+    sessions: Record<string, { seats: Record<string, Record<string, unknown>> }>;
+  };
+  const session = Object.values(parsed.sessions)[0];
+  const ready = session === undefined ? undefined : Object.values(session.seats).find((seat) => seat.stage === 'ready');
+  if (ready === undefined) throw new Error('the captured session has no ready seat');
+  return structuredClone(ready);
+}
 
 let base: string;
 let root: string;
@@ -124,8 +141,10 @@ function record(
   });
 }
 
-function setup(spec: Spec): void {
-  const text = teamText(spec);
+function setup(spec: Spec, registered = false): void {
+  const text = registered
+    ? teamText(spec).replace(`session: ${SESSION}\n`, `session: ${SESSION}\nlobby: ${lobby}\n`)
+    : teamText(spec);
   writeFileSync(join(dir, 'team.yaml'), text);
   const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
@@ -135,6 +154,33 @@ function setup(spec: Spec): void {
     loaded.team.seats,
     home,
   );
+  if (!registered) return;
+  mkdirSync(lobby, { recursive: true, mode: 0o700 });
+  chmodSync(lobby, 0o700);
+  upsertTeam(home, teamIdOf(root), {
+    root,
+    project: 'acme',
+    session: SESSION,
+    lobby,
+    roster: [{ agent: 'agt_000000000001', seat: SEAT, role: 'implementer' }],
+  });
+}
+
+/** A current brief claim, so a channel launch has the epoch its config prepare requires. */
+function claimBrief(): void {
+  updateState(dir, (state) => {
+    const session = (state.sessions[SESSION] ??= emptySession());
+    session.briefs = {
+      [SEAT]: {
+        id: '01234567-0000-4000-8000-000000000001',
+        incarnation: 'inc_0123456789ab',
+        epoch: 'run_0123456789ab',
+        at: '2026-01-01T00:00:00Z',
+        sha256: 'a'.repeat(64),
+        stage: 'ready',
+      },
+    };
+  });
 }
 
 type Trace = {
@@ -456,4 +502,73 @@ test('a drifted model on a pane whose name the restore cleared is seen and relau
   expect(seatRuns(made.trace)[0]?.command).not.toContain('--resume');
   expect(made.trace.renamed).toEqual([{ pane: 'made-1', name: SEAT }]);
   expect(seatState()?.pane).toBe('made-1');
+});
+
+test('a restored seat whose model is not the record is relaunched in place from the captured record', async () => {
+  setup(BARE);
+  record(BARE, {
+    ...capturedReady(),
+    ...RECORD,
+    agent_session: SESSION_ID,
+    cli: 'claude-code',
+    model: BARE.model,
+    version: BARE.version,
+    launch_line: BARE.launch,
+  });
+  const made = sources({ screen: DRIFTED });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(made.trace.closed).toEqual([]);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  const command = seatRuns(made.trace)[0]?.command ?? '';
+  expect(firstWord(command)).toBe('claude');
+  expect(command).toContain(`--resume ${SESSION_ID}`);
+  expect(seatState()?.launch_line ?? '').not.toContain('--resume');
+});
+
+test('a restored channel seat with no live channel is relaunched from the recorded line', async () => {
+  setup(CHANNEL, true);
+  record(CHANNEL, {
+    ...capturedReady(),
+    ...RECORD,
+    agent_session: SESSION_ID,
+    cli: 'claude-code',
+    model: CHANNEL.model,
+    version: CHANNEL.version,
+    launch_line: CHANNEL.launch,
+  });
+  claimBrief();
+  const made = sources();
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(made.trace.typed.join('\n')).not.toContain('/mcp');
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  const command = seatRuns(made.trace)[0]?.command ?? '';
+  expect(command).toContain('--dangerously-load-development-channels');
+  expect(command).toContain(`--resume ${SESSION_ID}`);
+  const stored = seatState()?.launch_line ?? '';
+  expect(stored).not.toContain('--resume');
+  expect(stored).toContain('--dangerously-load-development-channels');
+});
+
+test('a working restored channel seat is left, and the log names the one step', async () => {
+  setup(CHANNEL, true);
+  record(CHANNEL, {
+    ...capturedReady(),
+    ...RECORD,
+    agent_session: SESSION_ID,
+    cli: 'claude-code',
+    model: CHANNEL.model,
+    version: CHANNEL.version,
+    launch_line: CHANNEL.launch,
+  });
+  claimBrief();
+  const made = sources({ status: 'working' });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(`${io.out}\n${io.err}`).toContain('its channel did not reconnect; the one step is to open /mcp in its pane');
 });
