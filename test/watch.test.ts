@@ -2380,6 +2380,7 @@ describe('team watch', () => {
     // does not ring again.
     const body = 'the message body itself';
     dropWaiting('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
+    if (scene === null) throw new Error('the synthetic live scene is missing');
     const operator = scene.agents.find((one) => one.name === 'claude-operator-acme');
     if (!operator) throw new Error('the synthetic live scene has no operator');
     scene.screens['pane-ring'] = scene.screens[operator.pane] ?? idle;
