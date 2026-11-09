@@ -24,6 +24,7 @@ const PANE = 'fixture-pane-one';
 const WORKSPACE = 'fixture-workspace';
 const SHELL = 7001;
 const CLI = 7002;
+const CONVERSATION = 'conversation-alpha';
 const START = 1_760_000_000_000;
 
 const owned: string[] = [];
@@ -278,7 +279,9 @@ function dropped(kind: 'cli' | 'shell' | 'other-cli' | 'other-pane'): {
     cli: 'claude-code',
     launcher: null,
     launch: 'claude',
-    reach: { team: teamIdOf(project), seat: SEAT, session: SESSION, pane: PANE, address: null },
+    // The positive unnamed-pane scene proves its recorded conversation as well as its CLI.
+    reach: { team: teamIdOf(project), seat: SEAT, session: SESSION, pane: PANE, address: null,
+      ...(ownCli ? { agent_session: CONVERSATION } : {}) },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -293,6 +296,7 @@ function dropped(kind: 'cli' | 'shell' | 'other-cli' | 'other-pane'): {
       agent: ownCli ? 'claude' : 'other',
       workspace_id: WORKSPACE,
       agent_status: 'idle',
+      ...(ownCli ? { agent_session: CONVERSATION } : {}),
     }],
   }));
   setHerdrCapture((args) => {
@@ -311,6 +315,7 @@ function dropped(kind: 'cli' | 'shell' | 'other-cli' | 'other-pane'): {
       workspace: WORKSPACE,
       status: 'idle',
       cwd: null,
+      ...(ownCli ? { session: CONVERSATION } : {}),
     }],
     paneRootPid: (pane) => (pane === livePane ? SHELL : null),
     env: io.env,

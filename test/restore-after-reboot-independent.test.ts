@@ -33,6 +33,7 @@ import { CLAUDE_IDLE, fixtureBase, gitEnv, testIo } from './helpers.ts';
 
 const SESSION = 'crate';
 const CONVERSATION = 'conversation-cobble';
+const PEBBLE_CONVERSATION = 'conversation-pebble';
 const SAME = 'pane-pebble';
 const BEFORE = 'pane-cobble-before';
 const AFTER = 'pane-cobble-after';
@@ -96,7 +97,7 @@ function readyCaptured(session: CapturedSession): CapturedSeat {
   return structuredClone(found);
 }
 
-function restored(): Restored {
+function restored(conversation?: string): Restored {
   const base = fixtureBase('.restore-after-reboot-');
   owned.push(base);
   const root = join(base, 'crate');
@@ -142,7 +143,9 @@ seats:
     cli: 'claude-code',
     launcher: null,
     launch: CHANNEL_LAUNCH,
-    reach: { team: id, seat: 'pebble', session: SESSION, pane: SAME, address: null },
+    // Restoring an unnamed positive pane requires the conversation its registry record holds.
+    reach: { team: id, seat: 'pebble', session: SESSION, pane: SAME, address: null,
+      ...(conversation === undefined ? {} : { agent_session: conversation }) },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -233,7 +236,7 @@ function sources(home: string, agent: HerdrAgent, processName: string): CallerSo
 const commands: string[][] = [];
 const typed: string[] = [];
 
-function scriptHost(): void {
+function scriptHost(conversation?: string): void {
   commands.length = 0;
   typed.length = 0;
   const named: { pane: string; name: string }[] = [];
@@ -247,6 +250,7 @@ function scriptHost(): void {
           workspace_id: 'ws-crate',
           agent: 'claude',
           agent_status: 'idle',
+          ...(one.pane === SAME && conversation !== undefined ? { agent_session: conversation } : {}),
         })),
       };
     }
@@ -358,9 +362,9 @@ function restoreHost(
 }
 
 test('a restored host names every seat again, including a pane whose id is new', async () => {
-  const made = restored();
-  scriptHost();
-  const same = placeCaller(sources(made.home, unnamed(SAME), 'claude'), SESSION);
+  const made = restored(PEBBLE_CONVERSATION);
+  scriptHost(PEBBLE_CONVERSATION);
+  const same = placeCaller(sources(made.home, unnamed(SAME, PEBBLE_CONVERSATION), 'claude'), SESSION);
   expect(same).toEqual({ kind: 'seat', name: 'pebble', pane: SAME, session: SESSION });
   const log = readFileSync(join(made.dir, LOG_FILE), 'utf8');
   expect(log).toContain(`re-applied the herdr name on pane ${SAME}`);

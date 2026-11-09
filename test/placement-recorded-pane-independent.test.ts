@@ -20,6 +20,7 @@ const PANE = 'pane-pebble';
 const OTHER = 'pane-other';
 const SHELL = 70;
 const CLI = 80;
+const CONVERSATION = 'conversation-pebble';
 
 const owned: string[] = [];
 afterEach(() => {
@@ -31,7 +32,7 @@ afterEach(() => {
 
 type Crate = { base: string; root: string; home: string; dir: string };
 
-function crate(): Crate {
+function crate(conversation?: string): Crate {
   const base = fixtureBase('.recorded-pane-');
   owned.push(base);
   const root = join(base, 'crate');
@@ -69,7 +70,9 @@ seats:
     cli: 'claude-code',
     launcher: null,
     launch: 'claude',
-    reach: { team: id, seat: 'pebble', session: SESSION, pane: PANE, address: null },
+    // An unnamed positive pane must prove the same conversation as its registry record.
+    reach: { team: id, seat: 'pebble', session: SESSION, pane: PANE, address: null,
+      ...(conversation === undefined ? {} : { agent_session: conversation }) },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -91,11 +94,11 @@ seats:
   return { base, root, home, dir };
 }
 
-function unnamed(pane: string): HerdrAgent {
-  return { name: null, agent: null, pane, workspace: 'ws-crate', status: 'idle', cwd: null };
+function unnamed(pane: string, conversation?: string): HerdrAgent {
+  return { ...(conversation === undefined ? {} : { session: conversation }), name: null, agent: null, pane, workspace: 'ws-crate', status: 'idle', cwd: null };
 }
 
-function sources(home: string, pane: string, foreground: readonly string[], processes: { shell: number; foreground: number[] }): CallerSources {
+function sources(home: string, pane: string, foreground: readonly string[], processes: { shell: number; foreground: number[] }, conversation?: string): CallerSources {
   const rootPid = pane === PANE ? SHELL : 90;
   return {
     ancestors: () => [
@@ -104,7 +107,7 @@ function sources(home: string, pane: string, foreground: readonly string[], proc
       { pid: 50, name: 'herdr' },
       { pid: 1, name: 'launch' },
     ],
-    agents: () => [unnamed(pane)],
+    agents: () => [unnamed(pane, conversation)],
     paneRootPid: (asked) => (asked === pane ? rootPid : null),
     env: { HERDR_PANE_ID: pane },
     stdinIsTTY: true,
@@ -116,7 +119,7 @@ function sources(home: string, pane: string, foreground: readonly string[], proc
 }
 
 /** The host answers a rename by listing the seat's name on the next read. Nothing is launched. */
-function scriptRename(seat: string, pane: string): void {
+function scriptRename(seat: string, pane: string, conversation?: string): void {
   let named = false;
   setHerdrRun((args) => {
     if (args[0] === 'agent' && args[1] === 'list') {
@@ -127,6 +130,7 @@ function scriptRename(seat: string, pane: string): void {
           workspace_id: 'ws-crate',
           agent: 'claude',
           agent_status: 'idle',
+          ...(conversation === undefined ? {} : { agent_session: conversation }),
         }],
       };
     }
@@ -147,9 +151,9 @@ function logText(dir: string): string {
 }
 
 test('the recorded pane with no host name and this seat\'s CLI is placed, and the name is put back', () => {
-  const made = crate();
-  scriptRename('pebble', PANE);
-  const placed = placeCaller(sources(made.home, PANE, ['claude'], { shell: SHELL, foreground: [CLI] }), SESSION);
+  const made = crate(CONVERSATION);
+  scriptRename('pebble', PANE, CONVERSATION);
+  const placed = placeCaller(sources(made.home, PANE, ['claude'], { shell: SHELL, foreground: [CLI] }, CONVERSATION), SESSION);
   expect(placed).toEqual({ kind: 'seat', name: 'pebble', pane: PANE, session: SESSION });
   expect(logText(made.dir)).toContain(`re-applied the herdr name on pane ${PANE}`);
 });
@@ -194,11 +198,11 @@ function streams(): ServeStreams {
   return { lines: noLines(), write: () => {} };
 }
 
-async function serve(made: Crate, pane: string, foreground: readonly string[], processes: { shell: number; foreground: number[] }) {
+async function serve(made: Crate, pane: string, foreground: readonly string[], processes: { shell: number; foreground: number[] }, conversation?: string) {
   const io = testIo(made.root);
   io.env = { HERDR_PANE_ID: pane };
   io.stdinIsTTY = true;
-  io.callerSources = () => sources(made.home, pane, foreground, processes);
+  io.callerSources = () => sources(made.home, pane, foreground, processes, conversation);
   return runMcpServe(
     { seat: 'pebble', session: SESSION, file: join(made.dir, 'team.yaml') },
     io,
@@ -214,9 +218,9 @@ async function serve(made: Crate, pane: string, foreground: readonly string[], p
 }
 
 test('the inbox server starts on the recorded pane and refuses a bare shell, another CLI, and another pane', async () => {
-  const placed = crate();
-  scriptRename('pebble', PANE);
-  const started = await serve(placed, PANE, ['claude'], { shell: SHELL, foreground: [CLI] });
+  const placed = crate(CONVERSATION);
+  scriptRename('pebble', PANE, CONVERSATION);
+  const started = await serve(placed, PANE, ['claude'], { shell: SHELL, foreground: [CLI] }, CONVERSATION);
   expect(started).toBe(0);
   expect(logText(placed.dir)).toContain(`re-applied the herdr name on pane ${PANE}`);
 
