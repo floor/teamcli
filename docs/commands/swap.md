@@ -220,15 +220,15 @@ claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the ent
 exit 0
 ```
 
-The orchestrator's seat queues on the pane the state records for it, and only the owner forces a
-swap:
+The orchestrator's seat queues on the pane the state records for it. A seat whose model the rule
+already allows is not swapped:
 
 ```console caller=claude-keeper
 $ team swap queue claude-keeper ; echo "exit $?"
 swap queued: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z
 exit 0
 $ team swap now worker ; echo "exit $?"
-team swap: only the owner forces a swap; this call is claude-keeper
+team swap: worker declares a model the rule allows; there is nothing to swap to
 exit 1
 ```
 
