@@ -11,6 +11,7 @@ import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
+import { placedCallerTeam } from '../registry/binding.ts';
 import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
@@ -777,7 +778,10 @@ function needsTeam(spec: string): string {
  * no team to resolve in and is refused with `needsTeam`'s sentence.
  */
 function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
-  const loaded = readTeamConfig(io.cwd, { home: host.home });
+  // The pane places the sender before the folder does. A seat whose shell sits in another
+  // team's bound root is still that seat; an unnamed pane leaves the folder to decide.
+  const placed = placedCallerTeam(host.home, io);
+  const loaded = readTeamConfig(placed === null ? io.cwd : placed.root, { home: host.home });
   if (!loaded.ok) {
     if (noTeamFolder(loaded.errors)) {
       const parsed = parseSpec(seatName);
