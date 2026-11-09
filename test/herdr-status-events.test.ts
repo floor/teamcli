@@ -7,6 +7,7 @@ import { verifiedOf } from '../src/approve/approval.ts';
 import { isEventKind, EVENT_KINDS, OWNER_PROMPT_KINDS } from '../src/bus/kinds.ts';
 import { appendEvent, readEvents, verifySignedEvent, type SignedEventRecord } from '../src/bus/log.ts';
 import { realWatchSources, runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { EVENT_ROUTING_DEFAULTS } from '../src/policy/events.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -904,7 +905,8 @@ describe('production watch wiring, assigned-work gate, and screen verification',
     };
 
     const io = testIo(root, { kind: 'owner' });
-    expect(await runWatch(['--file', file], io, sources), io.err).toBe(0);
+    // Daemon-only watch: the hosted loop is the pass that still starts the status waiters.
+    expect(await runWatch(['--file', file], io, withHostedLoop(sources)), io.err).toBe(0);
 
     // Waiters were started for eligible running seats (crew-lead, worker-1) and aborted cleanly on stop;
     // jules-1 (unreliable) and owner-pane (human: true) were never waited on.
@@ -1122,7 +1124,8 @@ describe('production watch wiring, assigned-work gate, and screen verification',
     };
 
     const io = testIo(root, { kind: 'owner' });
-    expect(await runWatch(['--file', file], io, sources), io.err).toBe(0);
+    // Daemon-only watch: the hosted loop is the pass that still dispatches the idle worker.
+    expect(await runWatch(['--file', file], io, withHostedLoop(sources)), io.err).toBe(0);
 
     // The status engine's nudge is drained, not typed: the dispatcher's direct route is the one
     // automatic work request, made exactly once for the idle worker.

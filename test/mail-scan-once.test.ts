@@ -20,6 +20,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const realFs = await import('node:fs');
 // Captured by value before the wrapper stands: the restore below must name the module's own
@@ -241,7 +242,8 @@ describe('one watch pass reads the mail once', () => {
     const message = seed(w, 'deepseek-acme', UNREAD, new Date(clock), { session: 'acme-web', home: w.root });
     watchingNow(dropOf(w, 'deepseek-acme', 'acme-web'));
 
-    const code = await runWatch(['--file', join(w.dir, 'team.yaml')], testIo(w.root, { kind: 'owner' }), {
+    // Daemon-only watch: the hosted loop is the pass that still scans each drop once.
+    const code = await runWatch(['--file', join(w.dir, 'team.yaml')], testIo(w.root, { kind: 'owner' }), withHostedLoop({
       live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
       machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
       standing: () => ({ kind: 'none' }),
@@ -258,7 +260,7 @@ describe('one watch pass reads the mail once', () => {
       alive: () => false,
       pid: 4242,
       home: w.root,
-    });
+    }));
 
     expect(code).toBe(0);
     expect(opensOf(message)).toBe(1);
@@ -273,7 +275,8 @@ describe('one watch pass reads the mail once', () => {
     const at = new Date(clock);
     seed(w, 'deepseek-acme', UNREAD, at, { session: 'acme-web', home: w.root });
     const teams = join(w.root, '.config', 'team', 'teams.yaml');
-    const sources = (): WatchSources => ({
+    // Daemon-only watch: the hosted loop is the pass that still reads the registry once.
+    const sources = (): WatchSources => withHostedLoop({
       live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
       machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
       standing: () => ({ kind: 'none' }),

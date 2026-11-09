@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { readEvents, verifySignedEvent } from '../src/bus/log.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -119,7 +120,8 @@ function scene(statuses: Record<string, string>): Live {
 function watchSources(fixture: Fixture, scenes: Live[], statusSource: StatusSource, typed: string[], notified: string[]): WatchSources {
   let index = 0;
   let clock = Date.parse('2026-10-19T05:00:00Z');
-  return {
+  // Daemon-only watch: the hosted loop is the pass that still raises the seat events.
+  return withHostedLoop({
     live: () => scenes[Math.min(index, scenes.length - 1)]!,
     machine: () => fine,
     standing: (root) => verifiedOf(fixture.team, TEAM, root),
@@ -149,7 +151,7 @@ function watchSources(fixture: Fixture, scenes: Live[], statusSource: StatusSour
     pid: 4242,
     home: fixture.home,
     statusSource,
-  };
+  });
 }
 
 function readLog(fixture: Fixture) {

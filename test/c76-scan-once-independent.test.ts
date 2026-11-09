@@ -27,6 +27,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const realFs = await import('node:fs');
 const realFsCalls = {
@@ -290,7 +291,8 @@ describe('1. 50,000-file synthetic fixture: file-open bound per watch pass', () 
 
       resetWatchCounters(dropDir);
 
-      const code = await runWatch(['--file', teamPath], testIo(w.root, { kind: 'owner' }), {
+      // Daemon-only watch: the hosted loop is the pass that still opens each waiting record once.
+      const code = await runWatch(['--file', teamPath], testIo(w.root, { kind: 'owner' }), withHostedLoop({
         live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
         machine: () => ({
           loadPerCore: 1,
@@ -314,7 +316,7 @@ describe('1. 50,000-file synthetic fixture: file-open bound per watch pass', () 
         alive: () => false,
         pid: 4242,
         home: w.home,
-      });
+      }));
 
       expect(code).toBe(0);
 

@@ -12,6 +12,7 @@ import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
 import { claudeBox, testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const idle = claudeBox('');
 const limited = readFileSync(new URL('./fixtures/claude-code/rate-limit.txt', import.meta.url), 'utf8');
@@ -202,7 +203,8 @@ async function watchScenario(options: { noNudge?: boolean; busy?: boolean; clear
   const attempts: string[] = [];
   let entered = 0;
   const lead = live.agents.find((agent) => agent.name === 'lead')!;
-  const sources: WatchSources = {
+  // Daemon-only watch: the hosted loop is the pass that still reports the queue summary.
+  const sources: WatchSources = withHostedLoop({
     live: () => live, machine: () => machine, standing: () => verifiedOf(team, text, root), readChecks: () => [],
     screen: (pane) => typed[pane] ? claudeBox(typed[pane]!) : live.screens[pane] ?? null,
     status: (pane) => live.agents.find((agent) => agent.pane === pane)?.status ?? null,
@@ -217,7 +219,7 @@ async function watchScenario(options: { noNudge?: boolean; busy?: boolean; clear
       return tick < 5;
     },
     alive: () => false, pid: 987654321, home,
-  };
+  });
   const io = testIo(root, { kind: 'owner' });
   const args = ['--file', file, '--no-notify', ...(options.noNudge ? ['--no-nudge'] : []), ...(options.foreign ? ['--session', 'other-team'] : [])];
   expect(await runWatch(args, io, sources), io.err).toBe(0);
