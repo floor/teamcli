@@ -3,6 +3,7 @@ import * as child from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import * as processTools from '../src/process-tools-adapter.ts';
 import type { WatchSources } from '../src/commands/watch.ts';
 import type { UpSources } from '../src/commands/up.ts';
 import type { HostedWatch } from '../src/daemon/watch.ts';
@@ -17,12 +18,14 @@ const kill = spyOn(process, 'kill').mockImplementation(((pid: number, signal: an
 const realExec = child.execFileSync;
 const exec = spyOn(child, 'execFileSync').mockImplementation(((command: any, args: any, options: any) => {
   if (command === 'git' && options?.cwd?.startsWith(fixturePrefix)) return realExec(command, args, options);
-  if (command === 'ps') return ''; // Synthetic unavailable ancestry; never run a process reader.
   forbidden.push(String(command)); throw Error('independent scene refused an external command');
 }) as typeof child.execFileSync);
 const spawn = spyOn(child, 'spawn').mockImplementation((() => {
   forbidden.push('spawn'); throw Error('independent scene refused an external launch');
 }) as typeof child.spawn);
+// Synthetic unavailable ancestry, never run: ps evidence is answered at the trusted adapter
+// seam the readers call, which resolves absolute system paths the raw child spy never sees.
+const processTool = spyOn(processTools, 'execProcessToolSync').mockImplementation(() => '');
 const { intoRegistry, underRegistry } = await import('./helpers/registry-team.ts');
 const { routeOf } = await import('../src/daemon/routes.ts');
 const { hostedWatchAuthority } = await import('../src/daemon/watch-authority.ts');
@@ -37,7 +40,7 @@ afterEach(async () => {
   for (const host of hosts.splice(0)) await host.stop('independent scene complete');
   expect(forbidden.splice(0)).toEqual([]);
 });
-afterAll(() => { kill.mockRestore(); exec.mockRestore(); spawn.mockRestore(); });
+afterAll(() => { kill.mockRestore(); exec.mockRestore(); spawn.mockRestore(); processTool.mockRestore(); });
 const session = 'independent-session';
 const team = `format: 1
 project: independent-registry

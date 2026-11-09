@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,6 +16,8 @@ import { findRoot, loadTeamFile, NOT_A_REPO } from '../src/file/load.ts';
 import type { LoadResult } from '../src/file/types.ts';
 import { commitTrace } from '../src/labels/traces.ts';
 import { codexCommandOf, processStartOf as codexProcessStartOf } from '../src/launch/codex-endpoint.ts';
+import * as processTools from '../src/process-tools-adapter.ts';
+import { createProcessToolsAdapter } from '../src/process-tools-adapter.ts';
 import { processCommandOf, processStartOf as watchProcessStartOf } from '../src/watch/pane.ts';
 import { processWorkingFolderOf } from '../src/watch/process-adapter.ts';
 import { createFixture } from './docs/fixture.ts';
@@ -312,6 +314,7 @@ describe('synchronous child calls bound their wait and close stdin', () => {
     const stubDir = realpathSync(mkdtempSync(join(tmpdir(), 'team-sync-stub-')));
     const originalPath = process.env.PATH;
     const originalTimeout = process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
+    let restoreProcessTool: (() => void) | undefined;
     try {
       const writeStub = (name: string, stdoutLine: string): void => {
         const file = join(stubDir, name);
@@ -328,12 +331,27 @@ describe('synchronous child calls bound their wait and close stdin', () => {
         );
         chmodSync(file, 0o755);
       };
+      // git still resolves through PATH, so its sleeping stub keeps shadowing it there. ps and
+      // lsof are process tools: the trusted adapter calls fixed absolute paths and never reads
+      // PATH, so their sleeping stubs are handed in through the adapter seam, while the PATH
+      // copies answer at once with impostor rows — a reader that ever resolves a process tool
+      // through PATH again returns those rows and fails the null expects below.
       writeStub('git', '/tmp/fake-repo/.git');
-      writeStub('ps', '1 /usr/local/bin/codex');
-      writeStub('lsof', 'n/tmp/fake-cwd');
+      const trustedPs = join(stubDir, 'trusted-ps');
+      const trustedLsof = join(stubDir, 'trusted-lsof');
+      writeStub('trusted-ps', '1 /usr/local/bin/codex');
+      writeStub('trusted-lsof', 'n/tmp/fake-cwd');
+      writeStub('ps', '1 /usr/local/bin/impostor');
+      writeStub('lsof', 'n/tmp/impostor-cwd');
 
       process.env.PATH = `${stubDir}:${originalPath ?? ''}`;
       process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = '60';
+      const adapter = createProcessToolsAdapter(
+        { ps: [trustedPs], lsof: [trustedLsof] },
+        (candidate) => candidate === trustedPs || candidate === trustedLsof,
+      );
+      const processTool = spyOn(processTools, 'execProcessToolSync').mockImplementation(adapter.execSync);
+      restoreProcessTool = () => processTool.mockRestore();
 
       const startedAt = performance.now();
       expect(findRoot(project)).toBeNull();
@@ -367,6 +385,7 @@ describe('synchronous child calls bound their wait and close stdin', () => {
 
       expect(() => createFixture('acme', { at: 1_700_000_000 })).toThrow(/git init:.*ETIMEDOUT/);
     } finally {
+      restoreProcessTool?.();
       if (originalPath === undefined) delete process.env.PATH;
       else process.env.PATH = originalPath;
       if (originalTimeout === undefined) delete process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
