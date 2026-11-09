@@ -310,19 +310,16 @@ describe('a granted agent mounts the team with no approval record', () => {
     // roster, itself included, and every seat is named.
     expect(made.renames).toHaveLength(5);
     expect(made.renames.slice().sort()).toEqual(['lead', 'builder-1', 'builder-2', 'tester-1', 'tester-2'].sort());
-    // The five seats and the watch's own pane, which the same run starts.
-    expect(made.launch.agentPanes('acme')).toHaveLength(6);
+    // 1352 starts the five seats and no watch pane.
+    expect(made.launch.agentPanes('acme')).toHaveLength(5);
     // Concurrent: every seat's launch began before any seat's pane was first read at its
     // prompt — no seat waited behind another seat's start. Each pane is named at create now,
-    // so the renames come first; the sixth launch is the watch's pane, still started after
-    // the seats are named.
+    // so the renames come first.
     const reads = made.events.map((line, at) => (line.startsWith('read:') ? at : -1)).filter((at) => at >= 0);
-    const renamesAt = made.events.map((line, at) => (line.startsWith('rename:') ? at : -1)).filter((at) => at >= 0);
     const launches = made.events.map((line, at) => (line.startsWith('launch:') ? at : -1)).filter((at) => at >= 0);
-    expect(launches).toHaveLength(6);
+    expect(launches).toHaveLength(5);
     expect(reads.length).toBeGreaterThanOrEqual(5);
     expect(reads[0]).toBeGreaterThan(launches[4]!);
-    expect(renamesAt.at(-1)).toBeLessThan(launches[5]!);
     // Ready inside the budget on the clock the mount itself reports.
     expect(made.clock - NOW.getTime()).toBeLessThan(30_000);
     // No record was written anywhere: the mount never created an approval store.
