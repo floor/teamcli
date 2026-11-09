@@ -19,6 +19,7 @@ import { runImport } from '../src/commands/import.ts';
 import { runForget } from '../src/commands/forget.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch } from '../src/commands/up.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { LEADS_AUTHORITY_EXCLUDED, LEADS_DOOR_COMMANDS, leadsCommandExcluded, orchestratorSeatStaysOwner, policyNeedsOwner } from '../src/leads-authority.ts';
@@ -380,14 +381,22 @@ function grantScopedToDown(home: string, root: string): void {
   });
 }
 
-test('a grant does not narrow the default: lead runs up past a grant scoped to down', async () => {
+test('a grant does not narrow the default: lead runs status past a grant scoped to down', async () => {
   const { home, root } = repo();
   grantScopedToDown(home, root);
   const io = testIo(root, seat('lead'));
-  const code = await runUp([], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
-  expect(code).toBe(1);
-  expect(io.err).toContain('no way to reach herdr');
+  const sources: StatusSources = {
+    live: () => null,
+    branch: () => null,
+    standing: () => ({ kind: 'none' }),
+    now: () => NOW,
+    home,
+  };
+  const code = await runStatus([], io, sources);
+  expect(code).toBe(2);
+  expect(io.err).toContain('herdr doesn\'t answer');
   expect(io.err.includes('deny')).toBe(false);
+  expect(io.err.includes('not yours to read')).toBe(false);
 });
 
 test('owner-asks: a grant scoped to down refuses up', async () => {
@@ -707,7 +716,7 @@ test('a placed lead\'s project-level policy set is not a default-rule admission'
 });
 
 test('the owner-seat door and the exclusion list name the same acts', () => {
-  expect(Object.keys(LEADS_DOOR_COMMANDS).sort()).toEqual(['approvals', 'import']);
+  expect(Object.keys(LEADS_DOOR_COMMANDS).sort()).toEqual(['approvals', 'import', 'up']);
   for (const [door, gate] of Object.entries(LEADS_DOOR_COMMANDS)) {
     expect(LEADS_AUTHORITY_EXCLUDED.has(gate)).toBe(true);
     expect(leadsCommandExcluded(door)).toBe(true);

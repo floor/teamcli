@@ -18,9 +18,10 @@
 // `planRevocation`/`writeRevocation` own that, and a dry run refuses exactly what a write refuses.
 
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { AuthorityEditOptions, AuthorityEditResult } from '../authority-edit.ts';
-import { describeCaller, isOwner, walkCaller } from '../caller.ts';
-import { charterGate } from '../charter/check.ts';
+import { callerLabel, describeCaller, isOwner, walkCaller } from '../caller.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -77,6 +78,9 @@ export function runStandingGrant(rawIo: Io, edit: StandingGrantEdit, options: Au
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(gate.message), `the owner widens the charter with team setup --edit`, 1, 'owner-only');
     else io.stderr(`team grant: ${gate.message}\n`);
     return 'refused';
+  }
+  if (gate.kind === 'block') {
+    passCharterOwner(io, gate.message, { dir: join(io.cwd, '.agents'), command: 'grant', caller: callerLabel(caller) });
   }
   // A charter never admits a grant. A covered folder is not the owner's signature, and an
   // entity-wide or cross-team grant has no one folder the charter can cover.
@@ -205,6 +209,9 @@ export function runSendGrant(rawIo: Io, edit: SendGrantEdit, options: AuthorityE
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(gate.message), `the owner widens the charter with team setup --edit`, 1, 'owner-only');
     else io.stderr(`team grant: ${gate.message}\n`);
     return 'refused';
+  }
+  if (gate.kind === 'block') {
+    passCharterOwner(io, gate.message, { dir: join(io.cwd, '.agents'), command: 'grant', caller: callerLabel(caller) });
   }
   // A charter never admits a grant. A covered folder is not the owner's signature, and an
   // entity-wide or cross-team grant has no one folder the charter can cover.

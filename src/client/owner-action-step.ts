@@ -6,10 +6,10 @@
 
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { callerLabel, callerOf, isOwner, standingOf, type Caller } from '../caller.ts';
 import { syncChildTimeout } from '../child.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import { isSameOrInside } from '../grant.ts';
 import { admitOwnerAction, admitOwnerActionByRule, auditRuleAdmission, boundWords, canonicalRoot, createOwnerActionRequest, listOwnerActionRules, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './owner-seat.ts';
@@ -119,24 +119,43 @@ export function ownerSeatStep(
   io: Io,
   sources: OwnerSeatSources,
   targets: readonly string[] = [],
+  // The team session a send already resolved. The gate's placement then shares that key with
+  // the prologue. Absent, the caller's own placement is asked, and nothing new is admitted.
+  callerSession?: string,
 ): OwnerSeatStep {
   const home = sources.home ?? homedir();
   const now = sources.now?.() ?? new Date();
-  // A charter the owner wrote is a deny, and it is asked before the default rule. A block
-  // refuses a placed lead. Absent is not a deny. The owner at a terminal is admitted by being
-  // the owner on this door; a command whose scene refuses the owner asks the charter itself.
-  // Development mode is the machine's, so only the owner's own answer admits it. An empty
-  // target list is no charter admission and is never the caller's cwd.
+  // A charter the owner wrote is a deny for every seat, and it is asked before the default rule.
+  // A block refuses a placed lead or operator. The owner is never refused: one warning names the
+  // charter and the repair, and the run continues as the owner. Config prints that warning on
+  // its own write. Absent is not a deny. Development mode is the machine's, so only the owner's
+  // own answer admits it. An empty target list is no charter admission and is never the caller's cwd.
+  const gateCaller = callerSession === undefined ? callerOf(io) : callerOf(io, callerSession);
+  const ownerCaller = isOwner(gateCaller);
   let charterSigner: string | null = null;
-  if (!isOwner(callerOf(io)) && command !== 'development-mode' && targets.length > 0) {
+  let ownerBlocked: string | null = null;
+  if (command !== 'development-mode' && targets.length > 0) {
     for (const target of targets) {
       const gate = charterGate(home, { operation: command === 'client' ? 'grant' : command, cwd: io.cwd, path: target }, sources.ownerSeatStore);
       if (gate.kind === 'block') {
-        refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
-        return { kind: 'refused' };
+        if (!ownerCaller) {
+          refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
+          return { kind: 'refused' };
+        }
+        ownerBlocked ??= gate.message;
+        continue;
       }
-      if (gate.kind === 'admit') charterSigner = gate.signer;
+      if (gate.kind === 'admit' && ownerBlocked === null) charterSigner = gate.signer;
     }
+  }
+  if (ownerBlocked !== null && command !== 'config') {
+    passCharterOwner(io, ownerBlocked, {
+      dir: join(targets[0] ?? io.cwd, '.agents'),
+      command,
+      caller: callerLabel(callerOf(io)),
+      now,
+    });
+    charterSigner = null;
   }
   // An excluded command stays on the path this door had before the default rule. Forget is
   // one of them: the charter above already judged the named targets, and the rule must not
