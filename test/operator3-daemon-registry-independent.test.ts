@@ -117,8 +117,9 @@ for (const stale of [false, true]) {
   }));
   test(`registry ${stale ? 'with stale file' : 'without file'} keeps cycling after a long blocked pass`, () => underRegistry(async () => {
     const w = world(stale); w.block(); const { host } = start(w);
-    const before = readState(w.dir).sessions[session]!.watch!;
     await settle();
+    // The hosted acquire writes the epoch after its first await, so the record is read once the pass has started.
+    const before = readState(w.dir).sessions[session]!.watch!;
     expect(w.refusedWhileBlocked()).toBe(true);
     host.tick(w.now()); await settle();
     const renewed = readState(w.dir).sessions[session]?.watch;
