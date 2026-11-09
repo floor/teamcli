@@ -12,11 +12,12 @@
 // or a prompt the composer cannot read leaves the wall. This preflight does not read the
 // status row on its own: a row with quota left and no current prompt is still the wall the
 // reader named.
+import { TOKEN_SKIP } from '../quota/token-fallback.ts';
 import { readScreen, type Reset } from '../watch/screen.ts';
 
 /** The wall a pane's text shows. `reset` is the displayed text with the preposition the CLI's
  *  own sentence uses, or null when the screen names no time. */
-export type QuotaOut = { reset: Reset | null };
+export type QuotaOut = { reset: Reset | null; outOfTokens?: true };
 
 /** The wall a pane's text shows, or null. `text` is the pane as the terminal host reads it;
  *  undefined or null is no read at all, and never a wall. A rate-limit reading stands. The
@@ -27,6 +28,7 @@ export function quotaOutOf(cli: string, text: string | null | undefined): QuotaO
   if (text === null || text === undefined || text === '') return null;
   const screen = readScreen(cli, text);
   if (screen.kind !== 'rate limit') return null;
+  if (screen.reason === 'out of tokens') return { reset: null, outOfTokens: true };
   return { reset: screen.reset };
 }
 
@@ -35,6 +37,7 @@ export function quotaOutOf(cli: string, text: string | null | undefined): QuotaO
  *  span — or an explicit "names no reset time", and the fact that nothing was sent, so a
  *  refused send never reads as one. */
 export function quotaOutDetail(seat: { account?: string | null; vendor?: string | null } | undefined, quota: QuotaOut): string {
+  if (quota.outOfTokens === true) return TOKEN_SKIP;
   const account = seat?.account ?? seat?.vendor ?? '';
   const on = account === '' ? '' : ` on ${account}`;
   if (quota.reset === null) return `quota out${on}; the screen names no reset time; nothing was sent`;

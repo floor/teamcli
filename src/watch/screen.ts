@@ -4,9 +4,11 @@
 // runs on the plain form, and the styling tells a greyed suggestion from typed text.
 import { readFileSync } from 'node:fs';
 import { stripSgr } from '../ansi.ts';
+import { outOfTokensReset, outOfTokensTail } from '../quota/token-fallback.ts';
 import { classifyLines, composerBox, composeLines, foldMarked, foldOf, questionTextOf, statusRowOf, type Box, type Fold, type QuestionReading, type ReadClock, type ScreenOptions } from './screen-core.ts';
 import type { ScreenData, VersionRange } from './screen-data.ts';
 import { quotaFor } from '../profiles/profile.ts';
+import { figuresOf } from '../profiles/quota.ts';
 import { loadScreen } from './screen-file.ts';
 
 export type { Box, Fold, ReadClock, ScreenOptions };
@@ -55,11 +57,14 @@ export type Screen =
   | { kind: 'rate limit'; reset: Reset | null; reason?: string } // a usage limit, with the reset the
                                      // screen names and how it words it, or null when it names none;
                                      // a matched rule may also name an action the screen requires
-  | { kind: 'unknown'; matched?: string } // no shape this CLI's profile reads. `matched` is the
-                                     // safety floor's own line when one is on the screen — the
-                                     // one piece of an unrecognised prompt a reader may quote
-                                     // back (the floor's footer or its numbered choice), never a
-                                     // guess at what the dialog says
+  | { kind: 'unknown'; matched?: string; provenance?: 'profile' | 'custom' | 'floor' } // no shape this CLI's profile reads.
+                                     // `matched` is the safety floor's own line when one is on the
+                                     // screen — the one piece of an unrecognised prompt a reader
+                                     // may quote back (the floor's footer or its numbered choice),
+                                     // never a guess at what the dialog says. `provenance` names
+                                     // the rule that recognised the screen: the shipped profile,
+                                     // an added custom rule, or the floor. A screen with none is
+                                     // one no rule recognised.
 
 /** What a screen says a seat is doing, in the state words the readers use: an idle table or a
  *  composer holding text is `idle` (the two the CLI takes a line at), a running turn is
@@ -145,9 +150,42 @@ export function classifyComposer(cli: string | ScreenData, lines: string[], opti
   return composeLines(data, linesFor(data, lines), options);
 }
 
+// The core's history condition through its public composer and status-row readers: a
+// readable current prompt and quota left in every displayed window. A missing reading keeps
+// the tail eligible for the fallback; a profile, custom rule or floor verdict is kept below.
+function limitTailIsHistory(data: ScreenData, text: string, options?: ScreenOptions | ReadClock): boolean {
+  const patterns = data.quota;
+  if (patterns === undefined || patterns.length === 0) return false;
+  const lines = linesFor(data, text.split('\n'));
+  const prompt = composeLines(data, lines, options);
+  if (prompt.kind !== 'idle' && prompt.kind !== 'unsent') return false;
+  const rowOptions = options !== undefined && !('now' in options || 'budgetMs' in options) ? options : undefined;
+  const plain = lines.map((line) => stripSgr(line).trimEnd());
+  const figures = figuresOf(patterns, statusRowOf(data, plain, rowOptions));
+  return figures.length > 0 && figures.every((figure) => figure.left > 0);
+}
+
+/** A limit sentence on the live tail is out of tokens when the profile's own rate-limit rule
+ *  did not match and the pane would otherwise look idle or done. A wall already classified, a
+ *  running turn, and a dialog stay what they were. An unknown screen a rule recognised — the
+ *  shipped profile, an added custom rule, or the floor — stays unknown. Only a tail no rule
+ *  recognised becomes the limit. */
+export function withOutOfTokens(cli: string, text: string, screen: Screen, options?: ScreenOptions | ReadClock): Screen {
+  const data = DATA[cli];
+  if (!data) return screen;
+  if (screen.kind === 'unknown' && (screen.provenance !== undefined || screen.matched !== undefined)) return screen;
+  if (screen.kind !== 'idle' && screen.kind !== 'unknown' && screen.kind !== 'unsent' && screen.kind !== 'scroll back') return screen;
+  if (!outOfTokensTail(cli, text)) return screen;
+  if (limitTailIsHistory(data, text, options)) return screen;
+  const value = outOfTokensReset(text);
+  return { kind: 'rate limit', reset: value === null ? null : { kind: 'at', value }, reason: 'out of tokens' };
+}
+
 export function readScreen(cli: string | ScreenData, screen: string | undefined, options?: ScreenOptions | ReadClock): Screen {
   if (screen === undefined) return { kind: 'unknown' };
-  return classify(cli, screen.split('\n'), options);
+  const read = classify(cli, screen.split('\n'), options);
+  if (typeof cli !== 'string') return read;
+  return withOutOfTokens(cli, screen, read, options);
 }
 
 /** The question text a dialog screen carries, as the profile places it — frame, marker and

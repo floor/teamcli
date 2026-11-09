@@ -502,6 +502,7 @@
             "enum": [
               "restored",
               "provider-error",
+              "out-of-tokens",
               "unsent",
               "idle",
               "extra",

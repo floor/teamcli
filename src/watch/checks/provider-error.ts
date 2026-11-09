@@ -16,7 +16,9 @@ type Held = { kind: 'provider error' } | { kind: 'rate limit'; reset: Reset | nu
 
 function held(screen: Screen): Held | null {
   if (screen.kind === 'provider error') return screen;
-  if (screen.kind === 'rate limit') return screen;
+  // An out-of-tokens screen has its own check and its own one line to the lead. This report
+  // stays the usage wall the profile already classified.
+  if (screen.kind === 'rate limit' && screen.reason !== 'out of tokens') return screen;
   return null;
 }
 

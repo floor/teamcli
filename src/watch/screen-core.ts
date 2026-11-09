@@ -477,7 +477,10 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
       const fn = getProfileFn(data.profile, name);
       if (fn !== undefined) {
         const outcome = evalPredicate(fn, plain);
-        if (outcome === 'match') return asScreen(kind, plain, undefined, stage?.reason);
+        if (outcome === 'match') {
+          if (name === 'unknown') return { kind: 'unknown', provenance: 'profile' };
+          return asScreen(kind, plain, undefined, stage?.reason);
+        }
         if (outcome === 'fail') return { kind: 'unknown' };
       }
       if (stage) {
@@ -502,6 +505,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
             // the wall.
             if (name === 'rate_limit' && limitAbovePromptIsHistory(data, plain, lines, tick, expectedCwd, home)) continue;
             const block = rule.atComposer ? edge([...(rule.any ?? []), ...(rule.all ?? [])]) : null;
+            if (name === 'unknown') return { kind: 'unknown', provenance: rule.added === true ? 'custom' : 'profile' };
             return asScreen(kind, plain, block === null ? undefined : new Set(block), rule.reason ?? stage.reason);
           }
         }
@@ -1717,7 +1721,9 @@ function floorLast(lines: string[], chrome: RegExp[], tick: () => boolean): fals
 /** The unknown screen a floor hit leaves. A budget stop carries no line: nothing was read to
  *  quote, and the screen is unknown all the same. */
 function floorScreen(marked: false | 'stop' | string): Screen {
-  return typeof marked === 'string' && marked !== 'stop' ? { kind: 'unknown', matched: marked } : { kind: 'unknown' };
+  return typeof marked === 'string' && marked !== 'stop'
+    ? { kind: 'unknown', matched: marked, provenance: 'floor' }
+    : { kind: 'unknown' };
 }
 
 /** A composer read that failed is unknown whatever the floor says. The floor is asked only for

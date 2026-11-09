@@ -1476,6 +1476,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           mailbox,
           queued,
           onUnsent: (name, since) => { unsentNotes.set(name, since); },
+          // The out-of-tokens mark lives beside the state, so a later send can skip the seat
+          // after this pass has left the pane.
+          agentsDir: dir,
         });
         // The pass computes on a snapshot read before the lock and returns its result outside
         // it: a long pass never keeps another command out of the state. Only the merge of its

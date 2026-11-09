@@ -50,6 +50,7 @@ import { classify, readScreen } from '../watch/screen.ts';
 import { nativeAllowsTyping, prefetchPresence, presenceSeatOf, presenceVerdict } from '../watch/presence.ts';
 import { appendHistory, type HistoryEntry } from './history.ts';
 import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliver.ts';
+import { tokenUnavailable } from '../quota/token-fallback.ts';
 import { quotaOutDetail, quotaOutOf } from './quota-out.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
@@ -1349,14 +1350,15 @@ async function executeQueuedSend(
   // refusal is the caller's to make.
   const wallText = await hostPaneText(host, team.session, pane);
   const wall = quotaOutOf(configured.cli, wallText);
-  if (wall !== null) {
+  const marked = wall === null ? tokenUnavailable(dir, seatName) : null;
+  if (wall !== null || marked !== null) {
     return {
       v: 1,
       ok: false,
       id: msgId,
       seat: seatName,
       outcome: 'refused',
-      detail: `${seatName}: ${quotaOutDetail(configured, wall)}`,
+      detail: `${seatName}: ${wall !== null ? quotaOutDetail(configured, wall) : marked ?? ''}`,
     };
   }
 

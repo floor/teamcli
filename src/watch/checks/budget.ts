@@ -5,6 +5,7 @@
 import type { BudgetAccount } from '../../file/types.ts';
 import { countedFor, type Seen } from '../../budgets/readings.ts';
 import { WINDOWS, type WindowName } from '../../profiles/quota.ts';
+import { tokenWarnLine, weeklyBelowWarning } from '../../quota/token-fallback.ts';
 import { reported, type CheckContext, type Report, type TeamCheck, type TeamObservation } from '../check.ts';
 
 // A window with a figure that counts this pass, from the first source the account's `sources`
@@ -39,6 +40,10 @@ export const budget: TeamCheck = {
         continue;
       }
       reports.push(...crossings(marks, name, counted.windows, ctx.budgets.marks, ctx.now));
+      const weekly = counted.windows.find((window) => window.window === 'weekly');
+      if (weekly !== undefined && weeklyBelowWarning(weekly.left)) {
+        reports.push(...reported(ctx.once(`budget:token-warn:${name}`, tokenWarnLine(name, weekly.left), 'orchestrator')));
+      }
       const reserve = account.reserve;
       if (reserve === null) continue;
       const inside = counted.windows.filter((window) => window.left <= reserve);

@@ -77,6 +77,7 @@ import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
+import { tokenUnavailable } from '../quota/token-fallback.ts';
 import { quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
@@ -5268,6 +5269,10 @@ export async function walkBriefDelivery(input: {
   payload: RecordPayload;
 }): Promise<BriefWalkResult> {
   const seatName = input.seat;
+  const markedBrief = tokenUnavailable(input.dir, seatName);
+  if (markedBrief !== null) {
+    return { via: null, walked: false, exit: 1, failures: [`${seatName}: ${markedBrief}`] };
+  }
   const from = input.payload.from;
   const startedAt = input.host.now().getTime();
   const dropDir = join(input.dir, 'send-drops', input.session, seatName);

@@ -18,6 +18,17 @@ import { statusQuota } from '../src/information/quota-observe.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { requestDaemon, startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { storePath } from '../src/store/store.ts';
+import {
+  heldWork,
+  outOfTokensState,
+  tokenLeadLine,
+  tokenSwapHook,
+  tokenUnavailable,
+  tokenWarnLine,
+  weeklyBelowWarning,
+} from '../src/quota/token-fallback.ts';
+import type { CheckContext, Report, SeatObservation } from '../src/watch/check.ts';
+import { outOfTokens } from '../src/watch/checks/out-of-tokens.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
 
@@ -347,5 +358,127 @@ describe('a walled seat takes no send effect', () => {
     expect(host.typed).toEqual([]);
     const store = storePath(w.team.project, w.root, w.home);
     expect(existsSync(join(store, 'drops'))).toBe(false);
+  });
+});
+
+const SHIPPED = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse', 'jules'] as const;
+
+const LIMIT_TAILS = [
+  "There's an issue with the selected model (k3-256k)\n❯ ",
+  'Usage limit reached\n❯ ',
+  'Request rejected (429)\n❯ ',
+  'weekly quota exhausted\n❯ ',
+  'weekly limit reached\n❯ ',
+  'rate limit\n❯ ',
+];
+
+function tokenSeat(dir: string, over: Partial<SeatObservation> = {}): SeatObservation {
+  return {
+    name: 'alpha',
+    running: true,
+    working: false,
+    vendor: 'kimi',
+    role: 'builder',
+    agentsDir: dir,
+    screen: { kind: 'rate limit', reset: null, reason: 'out of tokens' },
+    ...over,
+  } as SeatObservation;
+}
+
+function onceHarness(): { ctx: CheckContext; finish: () => void } {
+  const active = new Set<string>();
+  let current = new Set<string>();
+  const ctx: CheckContext = {
+    now: 1_000,
+    watch: {} as CheckContext['watch'],
+    budgets: {} as CheckContext['budgets'],
+    once(key: string, text: string, to: Report['to'] = 'operator'): Report | null {
+      current.add(key);
+      return active.has(key) ? null : { key, text, to };
+    },
+    keep(key: string): void {
+      if (active.has(key)) current.add(key);
+    },
+    memory<T>(_kind: string, start: () => T): T {
+      return start();
+    },
+  };
+  return {
+    ctx,
+    finish() {
+      active.clear();
+      for (const key of current) active.add(key);
+      current = new Set();
+    },
+  };
+}
+
+describe('an out-of-tokens screen is not idle or done', () => {
+  test('each shipped CLI reads the model-issue screen as out of tokens, never idle or done', () => {
+    const tail = "There's an issue with the selected model (k3-256k)\n❯ ";
+    for (const cli of SHIPPED) {
+      const screen = readScreen(cli, tail);
+      expect(screen, cli).toEqual({ kind: 'rate limit', reset: null, reason: 'out of tokens' });
+      expect(outOfTokensState(screen)).toBe('out of tokens');
+    }
+  });
+
+  test('a usage limit, a 429, and an exhausted weekly quota on the live tail are out of tokens', () => {
+    for (const tail of LIMIT_TAILS) {
+      expect(readScreen('claude-code', tail), tail).toEqual({
+        kind: 'rate limit',
+        reset: null,
+        reason: 'out of tokens',
+      });
+    }
+  });
+
+  test('the status word is out of tokens, and a quoted sentence above the live box is not', () => {
+    const live = readScreen('claude-code', "There's an issue with the selected model (k3-256k)\n❯ ");
+    expect(outOfTokensState(live)).toBe('out of tokens');
+    expect(outOfTokensState(live)).not.toBe('idle');
+    expect(outOfTokensState(live)).not.toBe('done');
+    const quoted = [
+      "There's an issue with the selected model (k3-256k)",
+      'I answered it before the tests ran, so this is the box after.',
+      '',
+      claudeBox(''),
+    ].join('\n');
+    expect(outOfTokensState(readScreen('claude-code', quoted))).toBeNull();
+  });
+
+  test('a running turn that mentions the sentence stays a running turn', () => {
+    const busy = "There's an issue with the selected model (k3-256k)\nesc to interrupt\n";
+    expect(readScreen('claude-code', busy).kind).toBe('working');
+  });
+
+  test('one message to the lead names the seat, the vendor, and what it held, and the seat is marked', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'token-fallback-'));
+    try {
+      const { ctx, finish } = onceHarness();
+      const first = outOfTokens.run(tokenSeat(dir), ctx);
+      expect(first.map((report) => `${report.to}: ${report.text}`)).toEqual([
+        `orchestrator: ${tokenLeadLine('alpha', 'kimi', 'task')}`,
+      ]);
+      expect(tokenUnavailable(dir, 'alpha')).toContain('not taking a send or a review');
+      expect(tokenSwapHook({ seat: 'alpha', vendor: 'kimi', held: heldWork('builder') })).toEqual({
+        kind: 'waiting',
+        why: 'the automatic swap waits for team swap',
+      });
+      finish();
+      expect(outOfTokens.run(tokenSeat(dir), ctx)).toEqual([]);
+      const review = outOfTokens.run(tokenSeat(dir, { name: 'reviewer-a', role: 'reviewer', vendor: 'kimi' }), onceHarness().ctx);
+      expect(review.map((report) => report.text)).toEqual([tokenLeadLine('reviewer-a', 'kimi', 'review')]);
+      outOfTokens.run(tokenSeat(dir, { screen: { kind: 'idle' } }), onceHarness().ctx);
+      expect(tokenUnavailable(dir, 'alpha')).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a weekly figure below 20% warns, and exactly 20% does not', () => {
+    expect(weeklyBelowWarning(19)).toBe(true);
+    expect(weeklyBelowWarning(20)).toBe(false);
+    expect(tokenWarnLine('kimi', 19)).toBe('kimi weekly quota is 19% left, below the 20% warning');
   });
 });
