@@ -1282,6 +1282,22 @@ export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Pro
   }
 }
 
+/** The team session the rest of this send will judge the caller in, read once from the folder
+ *  the shell is in. `default` is the sessionless key `judgeCallerIn` already uses. A folder
+ *  that is not a team leaves the session unset, and the gate keeps the placement it has today. */
+function sendTeamSession(io: Io, home: string): string | undefined {
+  let loaded: ReturnType<typeof readTeamConfig>;
+  try {
+    loaded = readTeamConfig(io.cwd, { home });
+  } catch {
+    return undefined;
+  }
+  if (!loaded.ok) return undefined;
+  const session = loaded.team.session;
+  if (session === '' || session === 'default') return undefined;
+  return session;
+}
+
 /** The folder the charter judges for this send: the recipient team's root, or this checkout for a
  *  read that names no recipient. A spec that names a team the registry cannot place is no
  *  admission. */
@@ -1335,8 +1351,14 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
   const sendTargets = sendCharterTargets(host.home, seatName, args, io, host);
   let seatApproved = false;
+  // The default rule lifts the owner gate and leaves the sender as the seat. An owner-seat
+  // signature still admits the run as the owner, because the owner seat signed it.
+  let leadsLift = false;
+  // A registry record that is not running never becomes the sender, including through a later
+  // always-rule lift that would otherwise admit the run as the owner.
+  let recordNotRunning = false;
   if (internalCallerOf(host) === null) {
-    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources, sendTargets);
+    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources, sendTargets, sendTeamSession(io, host.home));
     if (step.kind === 'requested') {
       // exit: send.approval-requested
       return 0;
@@ -1345,11 +1367,51 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       // exit: send.approval-refused
       return 1;
     }
-    seatApproved = step.kind === 'admitted';
+    // The default rule lifts the gate. Attribution stays the seat: a record that is not running
+    // is refused, and a running record or a missing one is judged as that seat.
+    if (step.kind === 'admitted') {
+      seatApproved = true;
+      if (step.admission.via === 'leads') {
+        leadsLift = true;
+        const seated = callerOf(io);
+        if (seated.kind === 'seat') {
+          // A seat caller may carry no session. The team file's session is the same one the
+          // record is filed under. With neither, the not-running check cannot be skipped:
+          // skipping it would admit the seat as the owner.
+          let session = seated.session !== undefined && seated.session !== '' ? seated.session : null;
+          if (session === null) {
+            try {
+              const loaded = readTeamConfig(io.cwd, { home: host.home });
+              if (loaded.ok && loaded.team.session !== '') session = loaded.team.session;
+            } catch {
+              session = null;
+            }
+          }
+          if (session === null) {
+            let lifecycle: string | null = null;
+            for (const agent of readAgents(host.home)) {
+              if (agent.lifecycle === 'retired' || agent.reach.seat !== seated.name || agent.lifecycle === 'running') continue;
+              lifecycle = agent.lifecycle;
+              break;
+            }
+            const why = lifecycle === null
+              ? `the registry's record for seat ${seated.name} is not running: only a running seat acts as its own record`
+              : `the registry's record for seat ${seated.name} is ${lifecycle}, not running: only a running seat acts as its own record`;
+            return refuse(io, null, seated.name, why, host, report);
+          }
+          const held = recordFor(host.home, session, seated.name);
+          if (held !== null && held.lifecycle !== 'running') {
+            seatApproved = false;
+            leadsLift = false;
+            recordNotRunning = true;
+          }
+        }
+      }
+    }
   }
   const preCaller = internalCallerOf(host) ?? (seatApproved ? undefined : walkCaller(io));
   if (
-    internalCallerOf(host) === null && !seatApproved && preCaller !== undefined && !isOwner(preCaller)
+    internalCallerOf(host) === null && !seatApproved && !recordNotRunning && preCaller !== undefined && !isOwner(preCaller)
     && !args.flags.has('list') && args.values.confirm === undefined && args.values.record === undefined
   ) {
     seatApproved = ownerSeatRuleCovers(io.cwd, sendTargets) && ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
@@ -1416,7 +1478,9 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   const { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit } = pro;
   // An owner-seat answer admits this one send the way the owner would. The caller's own identity
   // stays on the log line; the admission is the owner's, because the owner seat signed it.
-  const acting: Caller = seatApproved ? { kind: 'owner' } : caller;
+  // The default rule lifts the same gate and leaves the sender as the seat: the header names
+  // the seat, and the id rides the seat's own record, or the file's seat when it has none.
+  const acting: Caller = seatApproved && !leadsLift ? { kind: 'owner' } : caller;
   // The line's own team, for every reader outside this one: the history the receiving team keeps
   // must say where its sender stood, not leave a shared seat name to the local roster.
   report.from_team = fileTeamId;

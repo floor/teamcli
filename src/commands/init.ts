@@ -7,7 +7,7 @@ import { declaredRoots } from '../entities.ts';
 import { readArgs } from '../args.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import { admitOwnerAction, approveOwnerAction, canonicalRoot, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
 import { ownerAdmitsRecord } from '../client/owner-action-step.ts';
 import { canonicalScope } from '../client/emission.ts';
@@ -266,7 +266,15 @@ export async function runInit(
   if (charter.kind === 'block' && !isOwner(callerOf(io))) {
     actionRefusal(charter.message);
     actionOutcome = 'refused';
-  } else if (args.flags.has('request')) {
+  } else if (charter.kind === 'block') {
+    passCharterOwner(io, charter.message, {
+      dir: join(findRoot(io.cwd) ?? io.cwd, '.agents'),
+      command: 'init',
+      caller: callerLabel(callerOf(io)),
+      now,
+    });
+  }
+  if (actionOutcome !== 'refused' && args.flags.has('request')) {
     const root = findRoot(io.cwd);
     if (root === null) actionRefusal('not inside a git repository');
     else if (existsSync(join(root, TEAM_FILE))) actionRefusal(`${TEAM_FILE} exists already`);
@@ -285,7 +293,7 @@ export async function runInit(
       actionOutcome = made.ok ? 'done' : 'refused';
     }
     actionOutcome ??= 'refused';
-  } else if (approving) {
+  } else if (actionOutcome !== 'refused' && approving) {
     const assertion = assertionFile(args.values.assertion, io.cwd);
     const answerId = args.values['approve-as-owner-seat']!;
     const answered = (OWNER_ACTION_ID_PATTERN.test(answerId) ? approveOwnerAction : approveTeamCreate)(actionHome, answerId, args.rest[0] ?? '', store, now, {
@@ -295,11 +303,11 @@ export async function runInit(
     if (!answered.ok) actionRefusal(answered.why);
     else actionDone('answered', `team init: owner seat answered ${answered.choice}`, { request_id: args.values['approve-as-owner-seat']!, ...(answered.ruleId !== undefined ? { rule_id: answered.ruleId } : {}) });
     actionOutcome = answered.ok ? 'done' : 'refused';
-  } else if (args.flags.has('approvals')) {
+  } else if (actionOutcome !== 'refused' && args.flags.has('approvals')) {
     const listed = listTeamCreateRules(actionHome, store, now);
     actionDone('answered', 'team init: team-create approval rules', { rules: listed.rules, ignored: listed.ignored });
     actionOutcome = 'done';
-  } else if (args.values['approval-mode'] !== undefined) {
+  } else if (actionOutcome !== 'refused' && args.values['approval-mode'] !== undefined) {
     // A mode change replaces the folder's signed record, so it is a revoke as much as a set:
     // the owner's act, on the shared record check (src/client/owner-action-step.ts) — her
     // terminal, or an owner-signer's `team-revoke-approval` always rule covering the folder the
@@ -336,11 +344,11 @@ export async function runInit(
       else actionDone('answered', `team init: approval mode for team-create is ${args.values['approval-mode']}`, { ...(set.modeId !== undefined ? { mode_id: set.modeId } : {}), revoked: set.revoked });
       actionOutcome = set.ok ? 'done' : 'refused';
     }
-  } else if (args.flags.has('approval-modes')) {
+  } else if (actionOutcome !== 'refused' && args.flags.has('approval-modes')) {
     const listed = listApprovalModes(actionHome, store, now);
     actionDone('answered', 'team init: approval modes', { modes: listed.modes, ignored: listed.ignored });
     actionOutcome = 'done';
-  } else if (args.values['revoke-approval'] !== undefined) {
+  } else if (actionOutcome !== 'refused' && args.values['revoke-approval'] !== undefined) {
     // Revoking is the owner's, on the shared record check `team approvals revoke` and
     // `team grant --revoke-approval` read (src/client/owner-action-step.ts): her terminal
     // outside the terminal host, or an owner-signer's `team-revoke-approval` always rule
