@@ -25,6 +25,7 @@ import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { agentsDir, findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { recordedSeatSession } from '../src/registry/resume.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { placedCallerTeam, teamBinding } from '../src/registry/binding.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalOf } from '../src/approve/approval.ts';
 import { unverifiedRecordSentence } from '../src/approve/unverified-record.ts';
@@ -106,7 +107,9 @@ seats:
 // exactly as the entity's main orchestrator is. A restart of that seat, run from the main
 // orchestrator, is the pair a name comparison refuses.
 function crossTeamTargetYaml(entity: string): string {
-  return TEAM_YAML
+  // These admission scenes opt out of the channel so their exact diagnostic assertions keep their purpose.
+  return TEAM_YAML.split('\n  - role:').map((part, index) => index === 0 || /\n    channel:/.test(part)
+    ? part : part.replace('\n    launch: claude', '\n    channel: off\n    launch: claude')).join('\n  - role:')
     .replace('coordinator: lead', 'coordinator: orchestrator')
     .replace('    name: lead\n', '    name: orchestrator\n')
     .replace('workspace:\n', `entity: ${entity}\nworkspace:\n`);
@@ -313,6 +316,22 @@ function recordMainOrchestrator(dir: string, session: string, pane: string): voi
     const held = (state.sessions[session] ??= emptySession());
     held.seats.orchestrator = { stage: 'ready', pane, workspace: 'ws-main' };
   });
+}
+
+/** The reach proof stays real; two recorded placements deliberately leave pane targeting unproven. */
+function cwdTargetForReach(fixture: Fixture, head: { session: string }, io: ReturnType<typeof testIo>): void {
+  // Pane-first falls back to cwd only when no unique team records this caller; this scene targets the other team.
+  const root = join(fixture.base, 'placement-shadow');
+  const dir = join(root, '.agents');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'team.yaml'), headTeamYaml('placement-shadow', 'other-entity'));
+  recordMainOrchestrator(dir, head.session, 'pane-main');
+  upsertTeam(fixture.home, teamIdOf(root), {
+    project: 'placement-shadow', entity: 'other-entity', session: head.session, root, at: NOW.toISOString(),
+  });
+  expect(placedCallerTeam(fixture.home, io)).toBeNull();
+  const target = teamBinding(fixture.home, fixture.root, undefined, io);
+  expect(target.kind === 'bound' ? target.team.root : null).toBe(fixture.root);
 }
 
 /**
@@ -852,7 +871,7 @@ describe('team restart <seat>', () => {
     // The shape the power-loss note measured: the session's launched pointer names a team file
     // that no longer holds today's seats, while the registry's roster still places the seat on
     // this team. The pointer is a place, not a frozen definition: the seat is declared, so the
-    // restart proceeds, and the fallback is spoken aloud.
+    // restart proceeds from the pane-proven team without a pointer fallback.
     const fixture = makeFixture();
     const lobby = join(fixture.home, '.config', 'team', 'lobby');
     mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
@@ -882,7 +901,9 @@ describe('team restart <seat>', () => {
     expect(code).toBe(0);
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
     expect(did.created).toBe(1);
-    expect(io.err).toContain('reading the team registered for session acme');
+    // Pane-first reads the proven team directly, so the retired-pointer fallback notice is absent.
+    expect(placedCallerTeam(fixture.home, io)?.root).toBe(fixture.root);
+    expect(io.err).not.toContain('reading the team registered for session acme');
   });
 
   test('real process sources place the caller in the registry team\'s own session', async () => {
@@ -919,7 +940,9 @@ describe('team restart <seat>', () => {
     expect(code).toBe(0);
     expect(did.created).toBe(1);
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
-    expect(io.err).toContain(`reading the team registered for session acme (${fixture.root})`);
+    // Pane-first reads the proven team directly, so the retired-pointer fallback notice is absent.
+    expect(placedCallerTeam(fixture.home, io)?.root).toBe(fixture.root);
+    expect(io.err).not.toContain(`reading the team registered for session acme (${fixture.root})`);
   });
 
   test('a seat name on two sessions\' teams resolves by placement, not by the shared name', async () => {
@@ -965,7 +988,9 @@ describe('team restart <seat>', () => {
     expect(code).toBe(0);
     expect(did.created).toBe(1);
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
-    expect(io.err).toContain(`reading the team registered for session acme (${fixture.root})`);
+    // Pane-first reads the proven team directly, so the retired-pointer fallback notice is absent.
+    expect(placedCallerTeam(fixture.home, io)?.root).toBe(fixture.root);
+    expect(io.err).not.toContain(`reading the team registered for session acme (${fixture.root})`);
     expect(io.err).not.toContain(beta.root);
   });
 
@@ -1001,10 +1026,21 @@ describe('team restart <seat>', () => {
     upsertTeam(fixture.home, otherId, { project: 'beta', session: 'acme', root: otherRoot, at: NOW.toISOString() });
     setRoster(fixture.home, otherId, [{ agent: 'agt_444444444444', seat: 'worker', role: 'implementer' }]);
 
+    // A third team records the caller but not worker: pane-first is unproven while the two worker candidates stay ambiguous.
+    const shadowRoot = join(fixture.base, 'placement-shadow');
+    const shadowDir = join(shadowRoot, '.agents');
+    mkdirSync(shadowDir, { recursive: true });
+    writeFileSync(join(shadowDir, 'team.yaml'), olderTeamYaml(fixture.yaml));
+    updateState(shadowDir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-shadow-lead' };
+    });
+    upsertTeam(fixture.home, teamIdOf(shadowRoot), { project: 'placement-shadow', session: 'acme', root: shadowRoot, at: NOW.toISOString() });
+
     const { sources, did } = makeHarness(fixture, { initialRunning: false });
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
     const io = testIo(lobby, leadCaller);
 
+    expect(placedCallerTeam(fixture.home, io)).toBeNull();
     const code = await runRestart(['worker'], io, sources);
     expect(code).toBe(1);
     expect(did.created).toBe(0);
@@ -1620,6 +1656,8 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
     const io = testIo(fixture.root);
     io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
 
     expect(await runRestart(['orchestrator'], io, sources), io.err).toBe(0);
     expect(did.typed).toEqual(['/exit']);
@@ -1640,6 +1678,8 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
     const io = testIo(fixture.root);
     io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
 
     expect(await runRestart(['parked-seat'], io, sources), io.err).toBe(0);
     expect(io.err).toBe('');
@@ -1668,6 +1708,8 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
     const io = testIo(fixture.root);
     io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
 
     expect(await runRestart(['orchestrator'], io, sources), io.err).toBe(0);
     expect(did.typed).toEqual(['/exit']);
@@ -1722,6 +1764,8 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
     const io = testIo(fixture.root);
     io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
 
     expect(await runRestart(['orchestrator'], io, sources)).toBe(1);
     expect(io.err).toContain('not the pane this call is on');
@@ -1743,6 +1787,8 @@ describe('team restart <seat>', () => {
     const failedHarness = makeHarness(fixture, { createFails: true });
     const failIo = testIo(fixture.root);
     failIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, failIo);
     expect(await runRestart(['parked-seat'], failIo, failedHarness.sources)).not.toBe(0);
     expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(true);
     expect(failIo.err).toContain('its sign-off was put back in the team file');
@@ -1751,6 +1797,7 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture);
     const okIo = testIo(fixture.root);
     okIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, okIo);
     expect(await runRestart(['parked-seat'], okIo, sources), okIo.err).toBe(0);
     expect(okIo.out).toContain('team restart: restarted parked-seat; pane none -> pane-new\n');
     expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(false);
@@ -1774,6 +1821,8 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
     const io = testIo(fixture.root);
     io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
     expect(await runRestart(['orchestrator', '--abandon'], io, sources)).toBe(1);
     expect(io.err).toBe('team restart: a seat caller does not abandon the orchestrator\'s seat; this call is orchestrator\n');
     expect(did.closed).toEqual([]);
@@ -1783,6 +1832,7 @@ describe('team restart <seat>', () => {
     const opsHarness = makeHarness(fixture, { workerName: 'ops' });
     const opsIo = testIo(fixture.root);
     opsIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, opsIo);
     expect(await runRestart(['ops', '--abandon'], opsIo, opsHarness.sources)).toBe(1);
     expect(opsIo.err).toBe('team restart: ops: herdr lists more than one agent of this name; left as it is\n');
     expect(opsHarness.did.closed).toEqual([]);
@@ -1791,6 +1841,7 @@ describe('team restart <seat>', () => {
     const workingHarness = makeHarness(fixture, { workerScreen: 'working', workerStatus: 'working' });
     const workingIo = testIo(fixture.root);
     workingIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, workingIo);
     expect(await runRestart(['worker', '--abandon'], workingIo, workingHarness.sources)).toBe(1);
     expect(workingIo.err).toContain('worker is working');
     expect(workingHarness.did.closed).toEqual([]);
@@ -1847,6 +1898,8 @@ describe('team restart <seat>', () => {
     const noEntityHarness = makeHarness(noEntityFixture, { workerName: 'orchestrator' });
     const noEntityIo = testIo(noEntityFixture.root);
     noEntityIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: noEntityHead.root, targetRoot: noEntityFixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(noEntityFixture, noEntityHead, noEntityIo);
     expect(await runRestart(['orchestrator'], noEntityIo, noEntityHarness.sources)).toBe(1);
     expect(noEntityHarness.did.created).toBe(0);
 
@@ -1874,6 +1927,7 @@ describe('team restart <seat>', () => {
     const noOrchestratorHarness = makeHarness(fixture, { workerName: 'orchestrator' });
     const noOrchestratorIo = testIo(fixture.root);
     noOrchestratorIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, noOrchestratorIo);
     expect(await runRestart(['orchestrator'], noOrchestratorIo, noOrchestratorHarness.sources)).toBe(1);
     expect(noOrchestratorHarness.did.created).toBe(0);
 
@@ -1888,6 +1942,7 @@ describe('team restart <seat>', () => {
     const otherLeadHarness = makeHarness(fixture, { workerName: 'orchestrator' });
     const otherLeadIo = testIo(fixture.root);
     otherLeadIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, otherLeadIo);
     expect(await runRestart(['orchestrator'], otherLeadIo, otherLeadHarness.sources)).toBe(1);
     expect(otherLeadHarness.did.created).toBe(0);
 
@@ -1902,15 +1957,17 @@ describe('team restart <seat>', () => {
     const singleLeadsHarness = makeHarness(fixture, { workerName: 'orchestrator' });
     const singleLeadsIo = testIo(fixture.root);
     singleLeadsIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, singleLeadsIo);
     expect(await runRestart(['orchestrator'], singleLeadsIo, singleLeadsHarness.sources), singleLeadsIo.err).toBe(0);
     expect(singleLeadsHarness.did.created).toBe(1);
 
     // 3. Restore valid head `team.yaml`, then corrupt `~/.config/team/teams.yaml`: unreadable registry fails closed.
     writeFileSync(headFile, validHeadText);
-    writeFileSync(join(fixture.home, '.config', 'team', 'teams.yaml'), 'teams:\n  broken: [\n');
     const unreadableHarness = makeHarness(fixture, { workerName: 'orchestrator' });
     const unreadableIo = testIo(fixture.root);
     unreadableIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, unreadableIo);
+    writeFileSync(join(fixture.home, '.config', 'team', 'teams.yaml'), 'teams:\n  broken: [\n');
     expect(await runRestart(['orchestrator'], unreadableIo, unreadableHarness.sources)).toBe(1);
     expect(unreadableHarness.did.created).toBe(0);
   });
