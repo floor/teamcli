@@ -2448,16 +2448,26 @@ function fail(line: number, message: string): never {
   throw new YamlError(line, message);
 }
 
+/** Only a direct CLI line uses the measured conversation store; wrappers keep resume intact. */
+export function directConversationLaunch(cli: string, command: string): boolean {
+  const binary = profileFor(cli)?.binary;
+  const words = shellWords(command);
+  return binary !== undefined && plainBodyOf(command) !== null && words !== null
+    && words.length > 0 && words.every((word) => !word.expands)
+    && words[0]!.text.split('/').pop() === binary;
+}
+
 /**
  * Whether the conversation a resume line names is on disk for its CLI, read before the line
  * runs: a resume of a conversation the CLI never wrote stops at the CLI's own error and leaves
  * the pane at its shell. Claude Code keeps each conversation as
  * `<config>/projects/<cwd with every non-alphanumeric character as "-">/<id>.jsonl`, written on
- * the conversation's first turn (measured on the owner's Mac: a `--session-id` launch that never
+ * the conversation's first turn (the recorded CLI measurement: a `--session-id` launch that never
  * took a turn left no file, and `claude --resume <id>` then said "No conversation found with
- * session ID"). Null for a CLI whose store is not measured: the resume goes ahead as before.
+ * session ID"). Null for a CLI or wrapper launch whose store is not measured: resume stays intact.
  */
-export function conversationOnDisk(cli: string, cwd: string, id: string, env: NodeJS.ProcessEnv = process.env): boolean | null {
+export function conversationOnDisk(cli: string, cwd: string, id: string, env: NodeJS.ProcessEnv = process.env, command?: string): boolean | null {
+  if (command !== undefined && !directConversationLaunch(cli, command)) return null;
   if (cli !== 'claude-code' || id === '' || cwd === '') return null;
   const config = env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR !== '' ? env.CLAUDE_CONFIG_DIR : join(homedir(), '.claude');
   return existsSync(join(config, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${id}.jsonl`));

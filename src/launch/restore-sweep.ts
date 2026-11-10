@@ -164,6 +164,7 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
       lockHeld: true,
       nonInteractive: true,
       restore: true,
+      restoreMissingOnly: true,
       ...(input.isClosing ? { isClosing: input.isClosing } : {}),
       onReport: (next) => {
         seen.report = next;
