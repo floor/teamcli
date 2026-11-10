@@ -1,20 +1,26 @@
 // Independent scenes for the channel opt-out preserved through lobby canonicalization:
 // a declared `channel: off` claude seat that waits in the lobby stays in the lobby's common
-// root at both canonicalization sites (the verified-lobby plan and the lobby a run creates),
-// while a default seat keeps its owned channel folder and flag. The refusal guards around
-// placement — trust, protected checkout, a foreign pair, and the channel config lease — refuse
-// an opted-out seat exactly as they refuse a default one.
+// root at both canonicalization sites (the verified-lobby plan and the lobby a run creates)
+// and on restart, while a default seat keeps its owned channel folder and flag. The refusal
+// guards around placement — trust, protected checkout, a foreign pair, and the channel config
+// lease — refuse an opted-out seat exactly as they refuse a default one.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { DoctorSources } from '../src/commands/doctor.ts';
+import type { DownLaunch } from '../src/commands/down.ts';
+import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { importTeamFile } from '../src/file/team-import.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
+import type { HerdrAgent } from '../src/herdr.ts';
 import { prepareChannelConfig } from '../src/mcp/launch-config.ts';
+import { registerLaunch } from '../src/registry/sync.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { CLAUDE_IDLE, deliverBriefs, gitEnv, recordRenames, testIo } from './helpers.ts';
+import { emptySession, updateState } from '../src/state.ts';
+import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const FLAG = '--dangerously-load-development-channels';
 const EPOCH = 'run_0123456789ab';
@@ -179,6 +185,132 @@ async function fullRun(w: World) {
   return { code, out: io.out, err: io.err, created, commandAt };
 }
 
+/** The restart sources for a world whose lobby waiters already run, over a launch host that
+ *  records each restarted workspace's cwd. The state file the world wrote gains the running
+ *  panes; the lead's launch is registered the way a live session would have it. */
+function restartHarness(w: World) {
+  updateState(join(w.root, '.agents'), (state) => {
+    const session = (state.sessions[SESSION] ??= emptySession());
+    session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    session.seats.open = { stage: 'ready', pane: 'pane-open', workspace: 'ws-open' };
+    session.seats.quiet = { stage: 'ready', pane: 'pane-quiet', workspace: 'ws-quiet' };
+  });
+  const lead = w.team.seats.find((seat) => seat.name === 'lead');
+  if (lead === undefined) throw new Error('no lead');
+  const placed = registerLaunch({ home: w.home, team: w.team, root: w.root, by: 'owner' }, lead, 'pane-lead');
+  if ('note' in placed) throw new Error(placed.note);
+  const created: { pane: string; cwd: string }[] = [];
+  const runs: { pane: string; command: string }[] = [];
+  const drawn = new Map<string, string>();
+  const fresh = new Map<string, { text: string; agent: boolean; name: string | null; workspace: string }>();
+  const closed = new Set<string>();
+  const shelled = new Set<string>();
+  let n = 0;
+  const agents = (): HerdrAgent[] => [
+    { name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd: w.root },
+    ...(['open', 'quiet'] as const).filter((name) => !closed.has(`ws-${name}`)).map((name) => ({
+      name, agent: 'claude-code' as const, pane: `pane-${name}`, workspace: `ws-${name}`, status: 'idle' as const, cwd: w.root,
+    })),
+    ...[...fresh.entries()].filter(([, slot]) => slot.agent).map(([pane, slot]) => ({
+      name: slot.name, agent: 'claude-code' as const, pane, workspace: slot.workspace, status: 'idle' as const, cwd: w.root,
+    })),
+  ];
+  const downLaunch: DownLaunch = {
+    typeText(_session, pane, text) {
+      drawn.set(pane, claudeBox(text));
+      return text.includes('/exit');
+    },
+    sendKey: () => true,
+    pressEnter(_session, pane) {
+      shelled.add(pane);
+      return true;
+    },
+    agentPanes: () => agents().map((item) => item.pane),
+    closeWorkspace(_session, workspace) {
+      closed.add(workspace);
+      return true;
+    },
+    stopSession: () => true,
+    deleteSession: () => true,
+    kill: () => true,
+    sleep: async () => {},
+    now: () => NOW,
+  };
+  const upLaunch: Launch = {
+    sessionState: () => 'running',
+    startServer: () => true,
+    sessionUp: () => true,
+    registerInbox: () => ({ ok: true }),
+    createWorkspace(_session, cwd) {
+      n += 1;
+      const pane = `pane-new-${n}`;
+      const workspace = `ws-new-${n}`;
+      fresh.set(pane, { text: CLAUDE_IDLE, agent: false, name: null, workspace });
+      created.push({ pane, cwd });
+      return { pane, workspace };
+    },
+    paneRun(_session, pane, command) {
+      runs.push({ pane, command });
+      const slot = fresh.get(pane);
+      if (slot) slot.agent = true;
+      return true;
+    },
+    renameAgent(_session, pane, name) {
+      const slot = fresh.get(pane);
+      if (slot) slot.name = name;
+      return true;
+    },
+    closeWorkspace: downLaunch.closeWorkspace,
+    agentPanes: () => agents().map((item) => item.pane),
+    agents: () => agents(),
+    workspacePanes: (_session, workspace) => [
+      ...(['open', 'quiet'] as const).filter((name) => `ws-${name}` === workspace && !closed.has(workspace)).map((name) => `pane-${name}`),
+      ...[...fresh.entries()].filter(([, slot]) => slot.workspace === workspace).map(([pane]) => pane),
+    ],
+    paneText: (_session, pane) => drawn.get(pane) ?? fresh.get(pane)?.text ?? CLAUDE_IDLE,
+    typeText(_session, pane, text) {
+      const slot = fresh.get(pane);
+      if (slot) slot.text = claudeBox(text);
+      return true;
+    },
+    pressEnter: () => true,
+    agentStatus: () => 'idle',
+    foreground: (_session, pane) => (shelled.has(pane) ? ['zsh'] : ['claude']),
+    shellBack: (_session, pane) => shelled.has(pane),
+    sleep: async () => {},
+    now: () => NOW,
+  };
+  const doctor: DoctorSources = {
+    version: () => '2.1.288',
+    onPath: () => true,
+    loggedIn: () => true,
+    herdrVersion: () => '0.7.1',
+    sessionRunning: () => true,
+    now: () => NOW,
+    home: w.home,
+  };
+  const sources: RestartSources = {
+    home: w.home,
+    sessionRunning: () => true,
+    sessionState: () => 'running',
+    agents: () => agents(),
+    workspaces: () => agents().map((item) => ({ id: item.workspace })),
+    alive: () => true,
+    screen: () => ({ kind: 'idle' }),
+    screenText: (_session, pane) => drawn.get(pane) ?? claudeBox(''),
+    status: () => 'idle',
+    foreground: (_session, pane) => (shelled.has(pane) ? ['zsh'] : ['claude']),
+    now: () => NOW,
+    sleep: async () => {},
+    launch: downLaunch,
+    upLaunch,
+    doctor,
+    autoOrder: () => null,
+  };
+  const commandAt = (cwd: string) => runs.filter((one) => created.find((made) => made.pane === one.pane)?.cwd === cwd).map((one) => one.command);
+  return { sources, created, commandAt };
+}
+
 test('the dry plan keeps an opted-out seat in the lobby root and a default seat in its channel folder', async () => {
   const w = world();
   const plan = await dryPlan(w);
@@ -249,4 +381,28 @@ test('a protected checkout still refuses an explicit cwd for an opted-out seat',
   // The lobby waiters are unaffected: their folders are outside the protected root.
   expect(said).not.toContain('seat quiet would start');
   expect(said).not.toContain('seat open would start');
+});
+
+test('a restart keeps an opted-out seat in the lobby root and a default seat in its channel folder', async () => {
+  const w = world();
+  const restart = restartHarness(w);
+  const openIo = testIo(w.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
+  const openCode = await runRestart(['open'], openIo, restart.sources);
+  expect(openCode, openIo.out + openIo.err).toBe(0);
+  const quietIo = testIo(w.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
+  const quietCode = await runRestart(['quiet'], quietIo, restart.sources);
+  expect(quietCode, quietIo.out + quietIo.err).toBe(0);
+  // The restarted workspaces land exactly where the up command's canonicalization puts them:
+  // the default seat in its channel folder, the opted-out seat in the common lobby root.
+  const cwds = restart.created.map((one) => one.cwd);
+  expect(cwds).toContain(join(w.lobby, 'open'));
+  expect(cwds).toContain(w.lobby);
+  expect(cwds).not.toContain(join(w.lobby, 'quiet'));
+  expect(existsSync(join(w.lobby, 'quiet'))).toBe(false);
+  expect(restart.commandAt(join(w.lobby, 'open')).join('\n')).toContain(FLAG);
+  expect(restart.commandAt(w.lobby).join('\n')).not.toContain(FLAG);
+  // The default seat's restarted folder holds its channel pair; the common root holds none.
+  const pair = JSON.parse(readFileSync(join(w.lobby, 'open', '.mcp.json'), 'utf8')) as { mcpServers: Record<string, { args: string[] }> };
+  expect(pair.mcpServers['team-inbox']?.args).toContain('open');
+  expect(existsSync(join(w.lobby, '.mcp.json'))).toBe(false);
 });
