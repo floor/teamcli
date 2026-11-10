@@ -3,6 +3,7 @@ import * as child from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { join } from 'node:path';
+import * as processTools from '../src/process-tools-adapter.ts';
 import type { WatchSources } from '../src/commands/watch.ts';
 import type { MachineDaemon } from '../src/daemon/host.ts';
 import type { DaemonHost } from '../src/send/daemon.ts';
@@ -14,11 +15,13 @@ const kill = spyOn(process, 'kill').mockImplementation(((pid: number, signal: an
 const realExec = child.execFileSync;
 const exec = spyOn(child, 'execFileSync').mockImplementation(((command: any, args: any, options: any) => {
   if (command === 'git' && options?.cwd?.startsWith(fixturePrefix)) return realExec(command, args, options);
-  if (command === 'ps') return ''; // No real process inspection in these scenes.
   forbidden.push(String(command)); throw Error('no external command in listener scene');
 }) as typeof child.execFileSync);
 const spawn = spyOn(child, 'spawn').mockImplementation((() => { forbidden.push('spawn'); throw Error('no external launch'); }) as typeof child.spawn);
 const spawnSync = spyOn(child, 'spawnSync').mockImplementation((() => { forbidden.push('spawnSync'); throw Error('no external launch'); }) as typeof child.spawnSync);
+// No real process inspection in these scenes: ps evidence is answered at the trusted adapter
+// seam the readers call, which resolves absolute system paths the raw child spy never sees.
+const processTool = spyOn(processTools, 'execProcessToolSync').mockImplementation(() => '');
 const { shortSocketBase } = await import('./helpers.ts');
 const fixturePrefix = join(shortSocketBase(), 'o3listen-');
 const { startMachineDaemon } = await import('../src/daemon/host.ts');
@@ -32,7 +35,7 @@ const { intoRegistry, underRegistry } = await import('./helpers/registry-team.ts
 setHerdrRun(() => { forbidden.push('terminal-host'); throw Error('no real terminal-host call'); });
 const active: MachineDaemon[] = [];
 afterEach(async () => { for (const daemon of active.splice(0)) await daemon.close(); expect(forbidden.splice(0)).toEqual([]); });
-afterAll(() => { setHerdrRun(null); kill.mockRestore(); exec.mockRestore(); spawn.mockRestore(); spawnSync.mockRestore(); });
+afterAll(() => { setHerdrRun(null); kill.mockRestore(); exec.mockRestore(); spawn.mockRestore(); spawnSync.mockRestore(); processTool.mockRestore(); });
 const session = 'listener-independent';
 async function until(check: () => boolean, timeout = 2500) {
   const end = Date.now() + timeout;

@@ -98,6 +98,7 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/state.ts',
       'src/file-write.ts',
       'src/caller.ts',
+      'src/process-tools-adapter.ts',
       'src/herdr.ts',
       'src/child.ts',
       'src/entities.ts',
@@ -269,6 +270,7 @@ export const ROUTINE_ALLOWLIST: readonly LaneRule[] = [
  */
 export const ADMISSION_MODULES: readonly string[] = [
   'src/caller.ts',
+  'src/process-tools-adapter.ts',
   'src/check/signature.ts',
   'src/file/signature.ts',
   'src/signing/owner-request.ts',
