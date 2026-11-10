@@ -1,9 +1,11 @@
 // Independent scenes for the send host's two capability doors. A snapshot of the host keeps
 // pane readers absent when the host has none: a minimal or partial host never looks readable,
 // never crashes the walk, and the drop the send leaves behind survives for the seat's own
-// read. The typed leg stays behind the receiver's profile: a host whose hook can type one
-// gains no leg for a profile that cannot, and a no-store walk carries no typed leg at all,
-// while a profile that declares the typed wake still types and delivers.
+// read — the caller reads the unreachable reason, the record answers queued with the failed
+// typed leg, and no read receipt exists. The typed leg stays behind the receiver's profile:
+// a host whose hook can type one gains no leg for a profile that cannot, and a no-store walk
+// carries no typed leg at all, while a profile that declares the typed wake still types and
+// delivers.
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -87,10 +89,24 @@ test('a host with no pane readers keeps them absent: the walk skips the pane leg
   expect(pane.reads).toBe(0);
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
+  // The caller reads the unreachable reason, not a crash: the send says the typed wake did
+  // not run because the host cannot read a pane, and the queue line answers for the drop.
+  expect(io.out).toContain('queued, not woken (drop');
+  expect(io.out).toContain('the typed wake did not run (the send host cannot read a pane)');
+  expect(io.err).toContain('queued, no event adapter');
   // The message survives as the seat's drop, body whole.
   const records = dropRecordsOf(made);
   expect(records).toHaveLength(1);
   expect(recordBody(join(made.dir, 'send-drops', 'acme', 'muse', records[0] as string))).toBe(filed('hello'));
+  // The durable record answers queued with the one failed leg, and nothing was read: no
+  // receipt exists for the seat's own read to race.
+  const history = readHistory('acme', made.root, host.home);
+  expect(history.ok).toBe(true);
+  if (history.ok) {
+    expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'queued, not woken', via: 'drop' });
+    expect(history.entries[0]?.failed).toEqual(['typed: the send host cannot read a pane']);
+    expect(existsSync(join(made.dir, 'send-drops', 'acme', 'muse', `${history.entries[0]?.id}.read.json`))).toBe(false);
+  }
 });
 
 test('either half of the pane readers alone is still no capability: both partial hosts skip the leg safely', async () => {
@@ -108,6 +124,14 @@ test('either half of the pane readers alone is still no capability: both partial
     expect(pane.reads, JSON.stringify(partial)).toBe(0);
     expect(pane.typed, JSON.stringify(partial)).toEqual([]);
     expect(dropRecordsOf(made)).toHaveLength(1);
+    // Either missing half answers the same unreachable reason, so no partial host is
+    // privileged over the other.
+    const history = readHistory('acme', made.root, host.home);
+    expect(history.ok, JSON.stringify(partial)).toBe(true);
+    if (history.ok) {
+      expect(history.entries[0]?.failed, JSON.stringify(partial)).toEqual(['typed: the send host cannot read a pane']);
+      expect(history.entries[0]?.outcome).toBe('queued, not woken');
+    }
   }
 });
 
