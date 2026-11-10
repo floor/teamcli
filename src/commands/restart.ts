@@ -1,3 +1,4 @@
+import { evictHerdrAgentList, evictHerdrPaneProcessInfo } from '../herdr.ts';
 import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -94,12 +95,13 @@ import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
-import { updateAgent } from '../registry/agents.ts';
+import { findAgent as findRegisteredAgent, recordProvenAgentAddress, updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
-import { refreshAgentAddress } from '../send/address.ts';
+import { defaultSocketsDirs, liveSocketOf } from '../send/address.ts';
+import { livePlacement } from '../send/placement.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
 import { approvalStanding, findStore, readApproval, type Ceilings, type Standing } from '../store/store.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
@@ -126,6 +128,8 @@ Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restar
 
 export type RestartSources = RemoveSources & {
   home: string;
+  /** Socket discovery folders; tests provide synthetic folders. */
+  sockets?: string | readonly string[];
   sessionState(session: string): 'absent' | 'running' | 'stopped' | null;
   workspaces(session: string): { id: string }[] | null;
   upLaunch: Launch;
@@ -1592,6 +1596,31 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       logLine(dir, input.command, who, `${name}: launch did not reach ready; its state is gone`, sources.now());
       return { kind: 'not-ready', message: `${name} did not reach a ready prompt` };
     }
+    // Refresh only after the replacement is ready and live placement agrees with its
+    // registry identity. Use the launch host, including synthetic readers in tests.
+    if (launching.cli === 'claude-code') {
+      const agent = findRegisteredAgent(home, { team: teamIdOf(root), seat: name });
+      if (agent !== null && agent.reach.session === session && agent.cli === launching.cli) {
+        evictHerdrAgentList(aim(session));
+        const placed = livePlacement({ agents: (targetSession) => sources.upLaunch.agents(targetSession)?.map((one) => ({
+          name: one.name, pane: one.pane, cli: one.agent,
+        })) ?? null }, agent);
+        if (!('error' in placed) && placed.pane === afterwards.pane) {
+          evictHerdrPaneProcessInfo(placed.pane, aim(session));
+          const processes = sources.upLaunch.processInfo?.(session, placed.pane) ?? null;
+          const address = liveSocketOf(agent.reach.address, processes, sources.sockets ?? defaultSocketsDirs());
+          if (processes !== null && address !== null) {
+            try {
+              if (!recordProvenAgentAddress(home, agent, address)) {
+                logLine(dir, input.command, who, `${name}: its address record changed; the socket address was not written`, sources.now());
+              }
+            } catch {
+              logLine(dir, input.command, who, `${name}: the proven socket address could not be recorded`, sources.now());
+            }
+          }
+        }
+      }
+    }
     // The state this run wrote is ready; the registry write that binds the seat to it may not
     // have landed. The record is read back with the binding the seat's native route needs: a
     // route addressed by the conversation the CLI holds needs the recorded agent session as well,
@@ -2184,11 +2213,6 @@ function hostOf(input: {
             kept?.agent_session,
           );
           if ('note' in made) logLine(dir, input.command, input.caller, made.note, input.now());
-          else {
-            // The address: the live session socket this relaunch answers at, recorded on the agent.
-            const refreshed = refreshAgentAddress(input.home, made.id, patch.pane, session);
-            if (refreshed.note) logLine(dir, input.command, input.caller, refreshed.note, input.now());
-          }
         }
       }
     },

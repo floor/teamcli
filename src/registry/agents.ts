@@ -306,6 +306,27 @@ export function recordAgentAddress(home: string, id: string, address: string | n
   return updateAgent(home, id, { reach: { address } });
 }
 
+/** Compare and record a proven socket under the registry lock. A replaced placement or
+ * identity never receives an address measured for the previous record. */
+export function recordProvenAgentAddress(home: string, expected: Agent, address: string): boolean {
+  if (!isAgentId(expected.id)) return false;
+  return withLock(agentsDir(home), () => {
+    const file = agentFile(home, expected.id);
+    const current = readAgentFile(file, expected.id);
+    if (!current || current.lifecycle !== 'running' || current.cli !== expected.cli
+      || current.reach.team !== expected.reach.team || current.reach.session !== expected.reach.session
+      || current.reach.seat !== expected.reach.seat || current.reach.pane !== expected.reach.pane
+      || current.reach.address !== expected.reach.address || current.provenance.seq !== expected.provenance.seq) return false;
+    if (current.reach.address === address) return true;
+    const next = patchedAgent(current, { reach: { address } });
+    next.provenance.seq = takeSeq(agentsDir(home));
+    const problem = invalid(next);
+    if (problem) throw new Error(`cannot update ${expected.id}: ${problem}`);
+    writeAgentFile(file, next);
+    return true;
+  });
+}
+
 /** Records the agent session herdr reported for the seat's live CLI — the id the launch also
  *  keeps in the seat state — or clears it with null. The caller hands in the measured reading;
  *  nothing here reads herdr, and nothing here derives an id from a pane, a pid or a name. */
