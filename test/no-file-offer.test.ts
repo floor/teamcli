@@ -81,6 +81,7 @@ const REACHED = [
   'grant',
   'hold',
   'issues',
+  'launchers migrate',
   'lock',
   'messages',
   'next',
