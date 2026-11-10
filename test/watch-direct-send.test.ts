@@ -17,7 +17,7 @@ import { sendWatchDirect } from '../src/watch/direct-send.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
 const SESSION = 'acme';
-const PANE = 'w1:p1';
+const PANE = 'pane-lead-1';
 const EPOCH = `watch_${'0f'.repeat(16)}`;
 const OTHER = `watch_${'ab'.repeat(16)}`;
 

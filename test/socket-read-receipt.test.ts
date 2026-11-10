@@ -349,7 +349,7 @@ test('a direct-only push leaves the record unread: its receiving runtime is the 
   declare(made);
   const host = fake(made);
 
-  const run = await sendDirect(owner(made.root), host, { seat: 'lead', pane: 'w1:p1', cli: 'claude-code', body: 'run team next' });
+  const run = await sendDirect(owner(made.root), host, { seat: 'lead', pane: 'pane-lead-1', cli: 'claude-code', body: 'run team next' });
 
   expect(run.code).toBe(0);
   expect(run.result?.route).toBe('socket');
