@@ -4,11 +4,11 @@
 // 2. With no covering rule, `ownerSeatRuleAdmits` returns before reading the caller at all; a
 //    rule for another action does not cover; a covering rule does read and admits its lead.
 // 3. An owner-seat `always` rule still admits what it admitted before: a down on another team's
-//    folder by the same entity's main orchestrator, and an add by the target team's lead; a plain
-//    seat keeps both refusals.
+//    folder by the same entity's main orchestrator (proved directly), and an add by the target
+//    team's lead; a plain seat keeps both refusals. A no-terminal rule admission reaches the launch seam.
 // 4. The dev-mode lift is unchanged: the target lead's add continues with the warning and the
-//    audit line, the main orchestrator's `down --abandon` continues with both warnings, and a
-//    plain seat keeps the abandon refusal.
+//    audit line, an unrecorded main orchestrator's `down --abandon` warns before the owner-only
+//    abandon refusal, and a plain seat keeps the abandon refusal.
 // 5. A no-terminal owner with a covering `team-down` always rule is admitted at the detached
 //    check (the run then stops only for its missing launch seam), and without the rule it is
 //    refused there with no caller read.
@@ -49,6 +49,7 @@ afterEach(() => {
   for (const dir of cleanupDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+// These admission scenes opt their launch template out so channel preparation adds no unrelated warning.
 function renderTeamYaml(opts: { project: string; entity: string; session: string; lead: string; root: string }): string {
   return `format: 1
 project: ${opts.project}
@@ -84,6 +85,7 @@ seats:
     name: builder
     label: builder
     cli: claude-code
+    channel: off
     vendor: anthropic
     model: Claude Opus
     version: "5.5"
@@ -186,7 +188,7 @@ interface HierarchyFixture {
   entityRoot: string;
   acmeRoot: string;
   acmeTeam: TeamFile;
-  callers: { mainLead: Caller; acmeLead: Caller; acmeWorker: Caller };
+  callers: { mainLead: Caller; unrecordedMainLead: Caller; acmeLead: Caller; acmeWorker: Caller };
 }
 
 /**
@@ -265,6 +267,8 @@ function setupHierarchy(options: { devMode?: boolean } = {}): HierarchyFixture {
     acmeTeam: acmeTeam!,
     callers: {
       mainLead: { kind: 'seat', name: 'main-lead', pane: 'pane-main-lead', session: 'main' },
+      // A recorded parent pane selects the parent; an unrecorded pane leaves cwd selecting the child gate.
+      unrecordedMainLead: { kind: 'seat', name: 'main-lead', pane: 'pane-unrecorded-main-lead', session: 'main' },
       acmeLead: { kind: 'seat', name: 'lead', pane: 'pane-acme-lead', session: 'acme' },
       acmeWorker: { kind: 'seat', name: 'worker', pane: 'pane-acme-worker', session: 'acme' },
     },
@@ -430,10 +434,10 @@ describe('2. with no covering rule the caller is never read; a covering rule rea
 });
 
 describe('3. an owner-seat always rule still admits what it admitted before', () => {
-  test('down: the entity main orchestrator is refused without the rule and admitted past the caller gate with it', async () => {
+  test('down: an unrecorded main lead is refused; its recorded placement still spends the covering rule', async () => {
     const fx = setupHierarchy({ devMode: false });
 
-    const refusedIo = testIo(fx.acmeRoot, fx.callers.mainLead);
+    const refusedIo = testIo(fx.acmeRoot, fx.callers.unrecordedMainLead);
     const refusedCode = await runDown([], refusedIo, downSources(fx.home, fx.store));
     expect(refusedCode).toBe(1);
     expect(refusedIo.err).toBe(`team down: ${DOWN_CALLER_PREFIX} main-lead\n`);
@@ -441,6 +445,17 @@ describe('3. an owner-seat always rule still admits what it admitted before', ()
 
     const ruleId = signAlwaysRule(fx.home, fx.store, fx.acmeRoot, 'acme', 'team-down');
     const admittedIo = testIo(fx.acmeRoot, fx.callers.mainLead);
+    expect(ownerSeatRuleAdmits('team-down', fx.acmeRoot, false, admittedIo, seatSources(fx))).toBe(true);
+    const entries = auditFiles(fx.home);
+    expect(entries).toHaveLength(1);
+    const entry = JSON.parse(readFileSync(join(actionAuditFolder(fx.home), entries[0]!), 'utf8')) as Record<string, unknown>;
+    expect(entry).toMatchObject({ action: 'team-down', via: 'rule', rule_id: ruleId });
+  });
+
+  test('down: a covering rule admits a no-terminal caller past the child caller gate to the launch seam', async () => {
+    const fx = setupHierarchy({ devMode: false });
+    const ruleId = signAlwaysRule(fx.home, fx.store, fx.acmeRoot, 'acme', 'team-down');
+    const admittedIo = testIo(fx.acmeRoot, { kind: 'owner-no-tty' });
     const admittedCode = await runDown([], admittedIo, downSources(fx.home, fx.store));
     expect(admittedCode).toBe(1);
     expect(admittedIo.err).toBe(`team down: ${NO_LAUNCH}\n`);
@@ -506,10 +521,10 @@ describe('4. the dev-mode lift is unchanged', () => {
     expect(worker.creates).toEqual([]);
   });
 
-  test('down --abandon: the main orchestrator continues with both warnings; a plain seat keeps the abandon refusal', async () => {
+  test('down --abandon: an unrecorded main lead gets the down warning before abandon refuses; a plain seat stays refused', async () => {
     const fx = setupHierarchy({ devMode: true });
 
-    const mainLeadIo = testIo(fx.acmeRoot, fx.callers.mainLead);
+    const mainLeadIo = testIo(fx.acmeRoot, fx.callers.unrecordedMainLead);
     const mainLeadCode = await runDown(['--abandon'], mainLeadIo, downSources(fx.home, fx.store));
     expect(mainLeadCode).toBe(1);
     // 1364: abandon stays the owner's. The down warning remains; the abandon itself is a refusal.

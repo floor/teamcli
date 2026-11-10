@@ -21,10 +21,11 @@ import { setHerdrCapture, setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { pinnedWords } from '../src/launch/features.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { CHANNEL_FLAG, CHANNEL_SERVER } from '../src/mcp/channel.ts';
+import { planChannelPair, publishChannelPair } from '../src/mcp/launch-config.ts';
 import { ensureInboxFolder, inboxLive, writeListener } from '../src/mcp/inbox.ts';
 import { profileFor } from '../src/profiles/profile.ts';
 import { registerAgent } from '../src/registry/agents.ts';
-import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { registeredRootOf, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import { canonicalRoot } from '../src/daemon/routes.ts';
@@ -727,6 +728,11 @@ function channelHost(made: Restored, now: Date, busy: boolean): { sources: UpSou
 
 test('an idle channel seat with no live channel is relaunched from its recorded line, and the channel answers', async () => {
   const made = restored();
+  // The restored default channel keeps its unique registered root and the lead's own project pair.
+  expect(registeredRootOf(made.home, 'pebble', SESSION)).toEqual({ ok: true, root: made.root, session: SESSION });
+  const prepared = publishChannelPair(planChannelPair({ root: made.root, cwd: made.root, seat: 'pebble', session: SESSION }, false), () => {});
+  if (!prepared.ok) throw new Error(prepared.reason);
+  prepared.lease.release();
   const now = approvedAsWritten(made);
   const host = channelHost(made, now, false);
   const drop = join(made.dir, 'send-drops', SESSION, 'pebble');
