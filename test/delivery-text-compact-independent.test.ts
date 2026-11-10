@@ -397,10 +397,10 @@ describe('2. reply and ack by prefix, in the caller mailbox', () => {
 
 describe('3. compact sender headers at each reading surface', () => {
   const cases = [
-    { id: '11111111-0000-4000-8000-000000000001', seat: 'selene', header: 'Selene', prefix: 'Gemini seat Selene', body: 'Gemini lane clear.' },
-    { id: '11111111-0000-4000-8000-000000000002', seat: 'corvid', header: 'Corvid', prefix: 'Codex seat Corvid', body: 'Codex lane clear.' },
-    { id: '11111111-0000-4000-8000-000000000003', seat: 'lyra', header: 'Lyra', prefix: 'Grok seat Lyra', body: 'Grok lane clear.' },
-    { id: '11111111-0000-4000-8000-000000000004', seat: 'meadow', header: 'Meadow', prefix: 'from Meadow', body: 'Claude lane clear.' },
+    { id: '11111111-0000-4000-8000-000000000001', seat: 'selene', header: 'Selene', prefix: 'Selene · selene@acme · 2026-11-05 15:00Z', body: 'Gemini lane clear.' },
+    { id: '11111111-0000-4000-8000-000000000002', seat: 'corvid', header: 'Corvid', prefix: 'Corvid · corvid@acme · 2026-11-05 15:00Z', body: 'Codex lane clear.' },
+    { id: '11111111-0000-4000-8000-000000000003', seat: 'lyra', header: 'Lyra', prefix: 'Lyra · lyra@acme · 2026-11-05 15:00Z', body: 'Grok lane clear.' },
+    { id: '11111111-0000-4000-8000-000000000004', seat: 'meadow', header: 'Meadow', prefix: 'Meadow · meadow@acme · 2026-11-05 15:00Z', body: 'Claude lane clear.' },
   ] as const;
 
   test('inbox_read folds from/admitted-by into one header and leaves the signed record untouched', () => {
@@ -419,7 +419,7 @@ describe('3. compact sender headers at each reading surface', () => {
       );
       expect(read.ok).toBe(true);
       if (read.ok) {
-        expect(read.body.startsWith(`${one.prefix} (to orchestrator):\n\n`)).toBe(true);
+        expect(read.body.startsWith(`${one.prefix} · admitted: to orchestrator\n\n`)).toBe(true);
         expect(read.body).not.toContain('— admitted by:');
         expect(read.body).not.toContain('[attributed sender:');
       }
@@ -463,7 +463,7 @@ describe('3. compact sender headers at each reading surface', () => {
     );
     expect(read.ok).toBe(true);
     if (read.ok) {
-      expect(read.body.startsWith('Client Grok Bot (owner relay):\n\n')).toBe(true);
+      expect(read.body.startsWith('Grok Bot · 2026-11-05 15:00Z · admitted: owner relay\n\n')).toBe(true);
       expect(read.body).not.toContain('— admitted by:');
     }
   });
@@ -510,7 +510,7 @@ describe('3. compact sender headers at each reading surface', () => {
       });
     const io = seatIo(at, 'orchestrator', PANE_ORCH);
     expect(await runDrops(['--read', '--seat', 'orchestrator', '--session', 'acme'], io, { home: at.home })).toBe(0);
-    expect(io.out).toContain('Gemini seat Selene (to orchestrator):\n\nStaged report.');
+    expect(io.out).toContain('Selene · selene@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nStaged report.');
     expect(io.out).not.toContain('— admitted by:');
   });
 
@@ -526,7 +526,7 @@ describe('3. compact sender headers at each reading surface', () => {
       });
     const io = owner(at.root);
     expect(await runMessages([], io, { home: at.home, now: () => NOW })).toBe(0);
-    expect(io.out).toContain('Codex seat Corvid (to orchestrator):\n\nQueue report.');
+    expect(io.out).toContain('Corvid · corvid@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nQueue report.');
     expect(io.out).not.toContain('— admitted by:');
   });
 
@@ -604,7 +604,7 @@ describe('3. compact sender headers at each reading surface', () => {
       const frame = JSON.parse(host.frames[0]!) as { msg_id: string; message: { content: string } };
       const prefix = frame.msg_id.slice(0, 8);
       expect(frame.message.content).toBe(
-        `Codex seat Corvid (to orchestrator):\n\nstatus report\n\n↩ team reply ${prefix} "…" · team ack ${prefix}`,
+        `Corvid · corvid@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nstatus report\n\n↩ team reply ${prefix} "…" · team ack ${prefix}`,
       );
       expect(frame.message.content).not.toContain('Answer with team reply');
       expect(frame.message.content).not.toContain('— admitted by:');
@@ -740,10 +740,10 @@ describe('3. compact sender headers at each reading surface', () => {
       const parsed = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
       const prefix = parsed.msg_id.slice(0, 8);
       expect(parsed.message.content).toBe(
-        `Codex seat Corvid (to orchestrator):\n\nSummary headline\nDetails below.\n\n↩ team reply ${prefix} "…" · team ack ${prefix}`,
+        `Corvid · corvid@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nSummary headline\nDetails below.\n\n↩ team reply ${prefix} "…" · team ack ${prefix}`,
       );
       // The opening line is the sender alone: the summary never rides in the header.
-      expect(parsed.message.content.split('\n')[0]).toBe('Codex seat Corvid (to orchestrator):');
+      expect(parsed.message.content.split('\n')[0]).toBe('Corvid · corvid@acme · 2026-11-05 15:00Z · admitted: to orchestrator');
       expect(parsed.message.content).not.toContain('Message from');
       expect(parsed.message.content).not.toContain('[attributed sender:');
     } finally {

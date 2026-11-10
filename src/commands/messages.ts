@@ -761,6 +761,7 @@ function waitingRow(
             root,
             ...(fields.from_id === null ? {} : { fromId: fields.from_id }),
             ...(fields.rule === undefined ? {} : { rule: fields.rule }),
+            at: fields.at,
           }),
         }
       : {}),
@@ -1094,6 +1095,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       renderedBody: attributedBody(result.body, result.from ?? candidate.seat, {
         record: recordPayload, home: sources.home, root,
         ...(recordPayload?.rule === undefined ? {} : { rule: recordPayload.rule }),
+        at: result.at,
       }),
     };
     rows.push(row);

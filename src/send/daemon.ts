@@ -1813,6 +1813,7 @@ async function executeSocketSend(
     root,
     displayName: senderName === '' ? null : senderName === 'owner' ? 'the owner' : senderName,
     ...(rule === '' ? {} : { rule }),
+    at: host.now(),
     compact,
   });
   const reply = personPane

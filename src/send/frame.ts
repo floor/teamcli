@@ -88,6 +88,11 @@ export type SocketMessageFrameOptions = {
   carried?: string;
   home?: string;
   root?: string;
+  /** The send instant: the record's own `at`, so the receiver's line carries the send time. */
+  at?: string | Date | null;
+  /** The sender's seat and team, when the caller knows them without the registry. */
+  seat?: string | null;
+  team?: string | null;
 };
 
 /**
@@ -103,6 +108,7 @@ export function socketMessageFrame(
   options: SocketMessageFrameOptions = {},
 ): string {
   const rendered = attributedBody(body, options.from ?? '', {
+    fromId: options.from_id,
     cli: options.cli,
     displayName: options.displayName,
     senderLabel: options.senderLabel,
@@ -110,6 +116,9 @@ export function socketMessageFrame(
     compact: options.compact,
     home: options.home,
     root: options.root,
+    at: options.at,
+    seat: options.seat,
+    team: options.team,
   });
   const reply = options.human
     ? null
