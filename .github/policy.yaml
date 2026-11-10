@@ -32,6 +32,7 @@ signers:
   - { display: "Gemini 4 Argon", role: "operator", model: "Gemini Argon", version: "4" }
   - { display: "Gemini 3.8 Flash", role: "operator", model: "Gemini Flash", version: "3.8" }
   - { display: "GLM 5.3", role: "tester", model: "GLM", version: "5.3" }
+  - { display: "GLM 5.3", role: "operator", model: "GLM", version: "5.3" }
   - { display: "DeepSeek V4.1 Flash", role: "documentarist", model: "DeepSeek Flash", version: "V4.1" }
   - { display: "GPT-5.6 Terra", role: "reviewer", model: "GPT Terra", version: "5.6" }
   - { display: "DeepSeek V4.1 Flash", role: "builder", model: "DeepSeek Flash", version: "V4.1" }
