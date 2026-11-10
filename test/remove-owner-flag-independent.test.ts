@@ -13,8 +13,8 @@ import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-10T08:00:00Z');
-const other = { kind: 'seat', name: 'other', pane: 'w9:p1' } as const;
-const leadSeat = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' } as const;
+const other = { kind: 'seat', name: 'other', pane: 'pane9' } as const;
+const leadSeat = { kind: 'seat', name: 'lead', pane: 'pane1', session: 'acme' } as const;
 const owner = { kind: 'owner' } as const;
 const noTty = { kind: 'owner-no-tty' } as const;
 
@@ -42,7 +42,7 @@ operator: lead
 workspace:
   mode: shared
 ${options.delegates ? `delegates:
-  - pane: main/w2:p1
+  - pane: main/pane2
     commands: [add, remove]
 ` : ''}seats:
   - role: coordinator
@@ -130,7 +130,7 @@ test('a team with delegates hands the flag refusal to the delegate gate', async 
   expect(denied.said).not.toContain("--file is the owner's");
   // A gate that passes returns the flag refusal to the caller.
   const passed = await remove(w, ['worker', '--file', '.agents/team.yaml', '--json'], other, {
-    delegateGate: () => ({ kind: 'passed', pane: 'main/w2:p1' }),
+    delegateGate: () => ({ kind: 'passed', pane: 'main/pane2' }),
   });
   expect(passed.code).toBe(1);
   expect(passed.said).toContain("--file is the owner's");
