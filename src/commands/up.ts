@@ -3737,6 +3737,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         team,
         state: recorded ?? emptySession(),
         attributed: briefSeats,
+        // A sweep's protected seats must not be added back by the brief rollout path.
+        onlyAttributed: internal?.restoreMissingOnly === true,
       });
       await walkBriefDeliveries(briefs, { dir, home: sources.home });
       for (const delivery of briefs.deliveries) {
