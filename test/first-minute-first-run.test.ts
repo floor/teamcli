@@ -13,7 +13,7 @@ describe('first-run skips', () => {
     const argv = codexOwnServerArgv('unix://seat.sock');
     expect(argv).toEqual(['codex', 'app-server', '--listen', 'unix://seat.sock']);
     expect(argv).not.toContain('--remote');
-    const verdicts = firstRunVerdicts('codex', 'codex-cli 0.161.0', argv);
+    const verdicts = firstRunVerdicts('codex', 'codex-cli 0.167.0', argv);
     const feature = verdicts.find((one) => one.class === 'feature-settings');
     expect(feature).toEqual({
       state: 'skipped',
@@ -50,7 +50,7 @@ describe('first-run skips', () => {
       const loaded = loadTeamFile(dir, { file });
       if (!loaded.ok) throw new Error('example must load');
       const sources: DoctorSources = {
-        version: (binary) => (binary === 'codex' ? 'codex-cli 0.161.0' : '1.2.3'),
+        version: (binary) => (binary === 'codex' ? 'codex-cli 0.167.0' : '1.2.3'),
         onPath: () => true,
         loggedIn: () => true,
         herdrVersion: () => null,

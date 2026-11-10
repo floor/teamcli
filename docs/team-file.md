@@ -232,7 +232,7 @@ project or the session.
 
 The Claude Code profile is tested with CLI 2.1.288 to 2.1.302 (`claude`).
 
-The Codex profile is tested with CLI 0.157.0 to 0.161.0. Its status line is read for a weekly figure
+The Codex profile is tested with CLI 0.157.0 to 0.167.0. Its status line is read for a weekly figure
 (`weekly N% left`) when the pane is wide enough to show the number; a cut line is not a figure.
 Every launch also pins the profile's feature set, appended last as `-c features.<pair>` words, so
 every seat presents the same settings to the one background server they share.

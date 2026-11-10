@@ -7,7 +7,7 @@ process_names:
   - codex
 tested:
   from: '0.157.0'
-  to: '0.161.0'
+  to: '0.167.0'
 unattended:
   - -a
   - never
@@ -76,8 +76,8 @@ timeouts:
 # - `0.161.0/question.txt`: the footer's `esc to interrupt`; Escape closed the question and
 #   interrupted that turn, the composer back over an empty box.
 # Both are exact, and spelled as `codex --version` prints (`codex-cli 0.161.0`): the answer
-# layer compares that print, and an exact record matches it byte for byte. No other version
-# was captured with either dialog, so no range is claimed.
+# layer compares that print, and an exact record matches it byte for byte. The 0.167.0
+# captures below prove that version separately; no intervening dialog versions are claimed.
 question_answer:
   - kind: plan approval
     key: escape
@@ -87,6 +87,15 @@ question_answer:
     key: escape
     from: 'codex-cli 0.161.0'
     to: 'codex-cli 0.161.0'
+  # 0.167.0 scratch captures record both dialogs returning to the composer with Escape.
+  - kind: plan approval
+    key: escape
+    from: 'codex-cli 0.167.0'
+    to: 'codex-cli 0.167.0'
+  - kind: question
+    key: escape
+    from: 'codex-cli 0.167.0'
+    to: 'codex-cli 0.167.0'
 startup_reads:
   - AGENTS.md
   - .codex/config.toml
@@ -191,6 +200,13 @@ screen:
         - '^\s*›?\s*2\. Yes, clear context and implement\s*$'
         - '^\s*›?\s*3\. No, stay in Plan mode\s*$'
       footer: 'enter select · esc back'
+    # 0.167.0 at wide width puts each choice's explanation on the same row.
+    - all:
+        - '^\s*Implement this plan\?\s*$'
+        - '^\s*›?\s*1\. Yes, implement this plan\s+Switch to Default and start coding\s*$'
+        - '^\s*›?\s*2\. Yes, clear context and implement\s+Start a fresh thread \(current context: [0-9]+% used\)\s*$'
+        - '^\s*›?\s*3\. No, stay in Plan mode\s+Continue planning with the model\s*$'
+      footer: 'enter select · esc back'
   # The agent's own question, from the same capture (question.txt): the dialog's
   # `Question N/N (N unanswered)` header, its first option row, and its footer. The footer's
   # `esc to interrupt` is the working row's phrase too; the header is what makes this a
@@ -200,6 +216,11 @@ screen:
         - '^\s*Question [0-9]+/[0-9]+ \([0-9]+ unanswered\)\s*$'
         - '^\s*›?\s*1\.\s'
       footer: 'esc to interrupt'
+    # The 0.167.0 wide question capture combines the action hints into its last row.
+    - all:
+        - '^\s*Question [0-9]+/[0-9]+ \([0-9]+ unanswered\)\s*$'
+        - '^\s*›?\s*1\.\s'
+      footer: 'tab to add notes | enter to submit answer | esc to interrupt'
   # Codex's own update screen, drawn at startup before any composer (startup.txt, 0.157.0).
   # A vendor notice, not a question the agent asked: never answered, and the `tested` range
   # says the version the capture was taken on. The `question` stage above is the 0.161.0
