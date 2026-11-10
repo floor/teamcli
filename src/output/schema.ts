@@ -2330,7 +2330,7 @@ export const ROUTE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     cli: { type: 'string', minLength: 1 },
     pane: { type: 'string', minLength: 1 },
     address: { type: ['string', 'null'] },
-    socket_state: { type: 'string', enum: ['live', 'stale', 'pane', 'none', 'unread'] },
+    socket_state: { type: 'string', enum: ['live', 'stale', 'pane', 'none', 'unread', 'ineligible'] },
     native: { type: 'boolean' },
     rule: { type: 'string', minLength: 1 },
   },

@@ -73,6 +73,8 @@ In `src/cli.ts` command order (`contract/exit-codes.json` is authoritative for t
 | 49 | `trace` | reading | `team <project>, session "<session>"` | `TIME  STEP  VIA  OUTCOME  MS  DELTA  NOTE` | `<n> step` / `<n> steps` summary | `team.trace` | `schema/trace.schema.json` | `0, 1, 2` (5 rows) | `Exits 0 when the trace is printed, 1 when the log holds no step under that id or the event log can't be read, 2 when the invocation or team file can't be read.` |
 | 50 | `conformance-adapter` | protocol (hidden) | — | — | wire protocol | — (protocol) | — | `0` (1 row) | Hidden protocol command (not in `commands` or `--help`); exits `0` when the protocol finishes. |
 
+`team route` reports an existing socket as `socket_state: ineligible` when send's inbound or held-socket gate refuses it. Its action summary names the same reason as send; `native` describes CLI capability alone. A send dry run includes the skipped socket and its reason even when the resolved delivery order is declared.
+
 ### 1.2 Context Line
 
 Team-scoped reading commands that open with a multi-row table or findings block (`status`, `seats`, `check`, `doctor`, `messages`, `issues`, `feed`, `trace`, `plan`, `drops`, `policy`, `raise`, `reply`, `worktree list`, `proc list`, `send --list`) print a single context line (`contextLine(project, session)`):

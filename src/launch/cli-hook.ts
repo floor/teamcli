@@ -55,10 +55,8 @@ export type CliHookSeat = {
    *  seat with no recorded binding gets no presence entry rather than a binding its running
    *  process never loaded. */
   fresh?: boolean;
-  /** The team file's own `inbound` word for the seat. An `accept` there is written into the
-   *  generated settings when the launch scripts declare no word of their own, so a seat whose
-   *  owner accepts cross-session frames is launched able to take them: its socket is its event
-   *  adapter, with nothing ever typed into its pane. */
+  /** The seat's inbound word. Generated Claude settings default to accept; explicit hold
+   *  and refuse override that default and any accepting launch script. */
   inbound?: CrossSessionInbound;
 };
 
@@ -632,7 +630,9 @@ export function restorePresenceBinding(
  *  A seat whose launch scripts declare `crossSessionInbound` gets that word merged into the same
  *  file: the file is appended last on the launch line, so it overrides the scripts' own
  *  `--settings` and would otherwise leave the CLI with the setting unset. `root` resolves a
- *  relative script word; it defaults to the folder holding the state folder.
+ *  relative script word; it defaults to the folder holding the state folder. Generated Claude
+ *  settings default to accept when neither seat nor script declares a word; the seat's explicit
+ *  hold or refuse always wins. Existing script refusals are retained.
  *
  *  A seat marked `fresh` (a launch this run is about to type) mints and records a new presence
  *  binding before its settings are written, so its hooks carry the successor incarnation. A
@@ -669,7 +669,9 @@ export function installCliHooks(
     const command = guarded ? commandGuardHookCommand(guard, session, seat) ?? undefined : undefined;
     const launchWord = wrapperInboundOf({ root, launch: launches.get(seat) ?? '' }).policy;
     const teamWord = byName.get(seat)?.inbound;
-    const inbound = launchWord ?? (teamWord === 'accept' ? teamWord : launchWord);
+    const inbound = byName.get(seat)?.cli === 'claude-code'
+      ? (teamWord === 'hold' || teamWord === 'refuse' ? teamWord : launchWord ?? teamWord ?? 'accept')
+      : launchWord ?? (teamWord === 'accept' ? teamWord : launchWord);
     const fresh = byName.get(seat)?.fresh === true;
     const binding = fresh
       ? recordPresenceBinding(dir, session, seat)

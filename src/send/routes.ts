@@ -33,8 +33,9 @@ export const NATIVE_BODY_MARKER = '(native delivery; the text did not pass throu
 
 /** Where the address stands: `live` (the recorded one is still the pane's), `stale` (recorded,
  *  but its process is gone or its path is), `pane` (none recorded, one found on the pane now),
- *  `none` (no address anywhere), `unread` (the pane could not be read, so nothing is claimed). */
-export type SocketState = 'live' | 'stale' | 'pane' | 'none' | 'unread';
+ *  `none` (no address anywhere), `unread` (the pane could not be read), or `ineligible`
+ *  (the address exists but send's inbound or held-socket gate refuses it). */
+export type SocketState = 'live' | 'stale' | 'pane' | 'none' | 'unread' | 'ineligible';
 
 /** One address handed out: the socket path, or null, and which of the states above it is. */
 export type RouteAddress = { socket: string | null; state: SocketState };
