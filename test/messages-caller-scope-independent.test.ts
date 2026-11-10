@@ -138,7 +138,7 @@ describe('independent caller mailbox scope verification', () => {
     expect(resA.code).toBe(0);
     expect(resA.err).toBe('');
     expect(resA.out).toContain('orchestrator (unverified claim)');
-    expect(resA.out).toContain(`worker-a/${idA}:\nfrom orchestrator (team lead):\n\nSECRET_BODY_WORKER_A`);
+    expect(resA.out).toContain(`worker-a/${idA}:\norchestrator · orchestrator@acme · 2026-11-04 07:55Z · admitted: team lead\n\nSECRET_BODY_WORKER_A`);
     expect(resA.out).not.toContain('SECRET_BODY_WORKER_B');
     expect(resA.out).not.toContain('SECRET_BODY_ORCHESTRATOR');
     expect(resA.out).not.toContain('SECRET_BODY_OWNER');
@@ -274,8 +274,8 @@ describe('independent caller mailbox scope verification', () => {
     // 2. Owner reads in text mode: prints verified waiting bodies under their headings, hides tampered body, writes no receipts
     const ownerText = await run([], OWNER);
     expect(ownerText.code).toBe(0);
-    expect(ownerText.out).toContain(`worker-a/${idA}:\nfrom orchestrator (team lead):\n\nVERIFIED_BODY_WORKER_A`);
-    expect(ownerText.out).toContain(`worker-b/${idB}:\nfrom orchestrator:\n\nVERIFIED_LEGACY_BODY_WORKER_B`);
+    expect(ownerText.out).toContain(`worker-a/${idA}:\norchestrator · orchestrator@acme · 2026-11-04 07:55Z · admitted: team lead\n\nVERIFIED_BODY_WORKER_A`);
+    expect(ownerText.out).toContain(`worker-b/${idB}:\norchestrator · orchestrator@acme · 2026-11-04 07:55Z\n\nVERIFIED_LEGACY_BODY_WORKER_B`);
     expect(ownerText.out).not.toContain('TAMPERED_SECRET_BODY');
     expect(ownerText.out).toContain(
       'note: 3 messages addressed to another mailbox are waiting; they are shown read-only, and no receipts are written for them.',
