@@ -2,6 +2,8 @@
 
 Moves a team's repository or temporary launch scripts onto launcher declarations. The owner,
 or a lead of this team, runs it from a terminal in the team's folder.
+General grants, including wildcard grants, never admit this command. A lead uses the
+ordinary own-team admission; a grant holder does not become the owner for migration.
 
 ## Synopsis
 

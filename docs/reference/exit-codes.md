@@ -445,6 +445,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `issues.shape` | `issues` | 1 | a record is not a task, or the task file is not a list | `team issues` |
 | `issues.invocation` | `issues` | 2 | the invocation can't be read | `team issues extra` |
 | `issues.not-a-repo` | `issues` | 2 | not inside a git repository | `team issues` |
+| `launchers.migrated` | `launchers` | 0 | the dry-run rows were listed or the selected changes applied; unmapped and stale rows may remain | `team launchers migrate --dry-run` |
+| `launchers.refused` | `launchers` | 1 | admission, the migration map, the launcher home or a write was refused | `team launchers migrate` |
+| `launchers.configuration` | `launchers` | 2 | the team configuration or its record could not be read | `team launchers migrate` |
+| `launchers.usage` | `launchers` | 2 | the invocation could not be read | `team launchers` |
 | `list.empty` | `list` | 0 | herdr answered and there is nothing to list | `team list` |
 | `list.herdr-down` | `list` | 0 | herdr cannot be asked, so the list is empty | `team list` |
 | `list.shown` | `list` | 0 | the sessions are printed | `team list` |

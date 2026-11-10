@@ -318,7 +318,12 @@ export function generalDoor(name: string, rest: string[], io: Io, now: Date = ne
   const general = take(rest, 'general');
   if (!general.present) return { kind: 'pass', argv: rest, io };
   const json = rest.includes('--json') || rest.some((word) => word.startsWith('--json='));
-  if (GENERAL_REFUSED_COMMANDS.has(name)) return { kind: 'refused', why: `only the owner runs team ${name}, from a terminal outside a team session; a general grant never admits it`, json };
+  if (GENERAL_REFUSED_COMMANDS.has(name)) {
+    const why = name === 'launchers'
+      ? 'the owner, or a placed lead of this team, runs team launchers through its ordinary admission; a general grant never admits it'
+      : `only the owner runs team ${name}, from a terminal outside a team session; a general grant never admits it`;
+    return { kind: 'refused', why, json };
+  }
   if (issuesGrants(name, rest)) return { kind: 'usage', why: 'team client general-grant issues grants and takes no --general (a holder issues with --via <grant.json> --key <client.key>)', json };
   if (general.value === undefined) return { kind: 'usage', why: '--general takes <grant.json>', json };
   const key = take(general.rest, 'key');
