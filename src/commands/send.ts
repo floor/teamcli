@@ -1189,6 +1189,12 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     const connected = probe.live === true && probe.listener.channel === true;
     if (connected && !declaredWithWake.includes('channel')) declaredWithWake.unshift('channel');
   }
+  // A permitted Claude session socket leads every model and role. Explicit route
+  // exclusions and inbound refusal still stand; a channel is the socket's fallback.
+  if (input.cli === 'claude-code' && !human && socketNow && declaredWithWake.includes('socket')) {
+    declaredWithWake.splice(declaredWithWake.indexOf('socket'), 1);
+    declaredWithWake.unshift('socket');
+  }
   const ordered: readonly DeliveryLeg[] = declaredWithWake;
   // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked,
   // with one profile-gated exception (src/send/typed-wake.ts). A profile that declares
