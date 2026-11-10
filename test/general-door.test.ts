@@ -200,7 +200,8 @@ test('every command is a general-grant op or explicitly refused, never both', ()
   for (const name of Object.keys(commands)) {
     expect(Number((GENERAL_OPS as readonly string[]).includes(name)) + Number(GENERAL_REFUSED_COMMANDS.has(name))).toBe(1);
   }
-  expect([...GENERAL_REFUSED_COMMANDS]).toEqual(['start']);
+  // Launcher migration keeps its ordinary owner/own-team lead gate, outside general grants.
+  expect([...GENERAL_REFUSED_COMMANDS]).toEqual(['start', 'launchers']);
   expect(GENERAL_OPS as readonly string[]).not.toContain('start');
 });
 

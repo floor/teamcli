@@ -3793,21 +3793,9 @@
       "flags": [
         {
           "hidden": false,
-          "name": "--general",
-          "repeatable": false,
-          "takesValue": true
-        },
-        {
-          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
-        },
-        {
-          "hidden": false,
-          "name": "--key",
-          "repeatable": false,
-          "takesValue": true
         },
         {
           "hidden": true,
@@ -3830,12 +3818,6 @@
             },
             {
               "hidden": false,
-              "name": "--general",
-              "repeatable": false,
-              "takesValue": true
-            },
-            {
-              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
@@ -3845,12 +3827,6 @@
               "name": "--json",
               "repeatable": false,
               "takesValue": false
-            },
-            {
-              "hidden": false,
-              "name": "--key",
-              "repeatable": false,
-              "takesValue": true
             },
             {
               "hidden": true,

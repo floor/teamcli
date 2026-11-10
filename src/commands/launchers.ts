@@ -40,6 +40,7 @@ Without it the same list is applied. A record is never deleted. The command neve
 script's secrets or environment values. The owner, or a lead of this team, runs it from a
 terminal. Run it inside the team's folder; another team's lines are that team's lead's, or the
 owner's, from that folder.
+General grants do not admit this command, including a wildcard grant.
 
 Generic provider scripts have built-in declarations. For other scripts, write a local
 ~/.config/team/launcher-migrations.json with format 1 and a scripts object mapping exact
@@ -143,7 +144,7 @@ export async function runLaunchers(argv: string[], io: Io, home = homedir()): Pr
   const loaded = readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
     const message = loaded.errors.map((problem) => problem.message).join('; ') || 'the team cannot be read';
-    return fail(out, json, message, 2);
+    return configuration(out, json, message);
   }
   const { team, root, path } = loaded;
   const dir = dirname(path);
@@ -152,22 +153,22 @@ export async function runLaunchers(argv: string[], io: Io, home = homedir()): Pr
   const judged = judgeCallerIn(io, dir, team, verdictOf);
   const standing = standingOf(dir, judged.session, judged.caller);
   const verdict = gateVerdict(judged.caller, team, root, home, 'launchers', standing, now);
-  if (verdict.kind !== 'ok') return fail(out, json, `${WHY} (${describeCaller(judged.caller)})`, 1);
+  if (verdict.kind !== 'ok') return refused(out, json, `${WHY} (${describeCaller(judged.caller)})`);
 
   const teamId = teamIdOf(root);
   let text: string;
   try {
     text = readTeamText(path, { home });
   } catch (error) {
-    return fail(out, json, `the team record cannot be read: ${(error as Error).message}`, 2);
+    return configuration(out, json, `the team record cannot be read: ${(error as Error).message}`);
   }
   const recorded = readAgents(home).filter((agent) => agent.reach.team === teamId && agent.lifecycle !== 'retired');
   const existing = readLauncherHome(home);
   const mappings = readLauncherMigrations(home);
-  if (!mappings.ok) return fail(out, json, mappings.why, 1);
+  if (!mappings.ok) return refused(out, json, mappings.why);
   const configured = new Map<string, LauncherDecl>();
   if (existing.ok) for (const decl of existing.launchers) {
-    if (configured.has(decl.name)) return fail(out, json, 'the launcher home names a declaration more than once', 1);
+    if (configured.has(decl.name)) return refused(out, json, 'the launcher home names a declaration more than once');
     configured.set(decl.name, decl);
   }
   const known = new Map(configured);
@@ -206,13 +207,14 @@ export async function runLaunchers(argv: string[], io: Io, home = homedir()): Pr
   }
 
   if (!dry && !existing.ok) {
-    return fail(out, json, `the launcher home cannot be read: ${existing.problems.join('; ')}`, 1);
+    return refused(out, json, `the launcher home cannot be read: ${existing.problems.join('; ')}`);
   }
   if (!dry) {
     const wrote = applyRows(home, path, next, text, rows, recorded, known, configured);
-    if (!wrote.ok) return fail(out, json, wrote.why, 1);
+    if (!wrote.ok) return refused(out, json, wrote.why);
   }
   report(out, json, dry, rows);
+  // exit: launchers.migrated
   return 0;
 }
 
@@ -379,11 +381,23 @@ function report(io: Io, json: boolean, dry: boolean, rows: readonly MigrateRow[]
 function usage(io: Io, message: string, json: boolean): number {
   if (json) writeJsonError(io, 'launchers.usage', message, 'team launchers migrate [--dry-run] [--json]');
   else io.stderr(`team launchers: ${message}\n${USAGE}`);
+  // exit: launchers.usage
   return 2;
 }
 
-function fail(io: Io, json: boolean, message: string, code: number): number {
+function failure(io: Io, json: boolean, message: string): void {
   if (json) writeJsonError(io, 'launchers.migrate', message, null);
   else io.stderr(`team launchers: ${message}\n`);
-  return code;
+}
+
+function configuration(io: Io, json: boolean, message: string): number {
+  failure(io, json, message);
+  // exit: launchers.configuration
+  return 2;
+}
+
+function refused(io: Io, json: boolean, message: string): number {
+  failure(io, json, message);
+  // exit: launchers.refused
+  return 1;
 }

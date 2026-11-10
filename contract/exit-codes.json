@@ -3076,6 +3076,34 @@
     },
     {
       "code": 0,
+      "command": "launchers",
+      "id": "launchers.migrated",
+      "meaning": "the dry-run rows were listed or the selected changes applied; unmapped and stale rows may remain",
+      "trigger": "team launchers migrate --dry-run"
+    },
+    {
+      "code": 1,
+      "command": "launchers",
+      "id": "launchers.refused",
+      "meaning": "admission, the migration map, the launcher home or a write was refused",
+      "trigger": "team launchers migrate"
+    },
+    {
+      "code": 2,
+      "command": "launchers",
+      "id": "launchers.configuration",
+      "meaning": "the team configuration or its record could not be read",
+      "trigger": "team launchers migrate"
+    },
+    {
+      "code": 2,
+      "command": "launchers",
+      "id": "launchers.usage",
+      "meaning": "the invocation could not be read",
+      "trigger": "team launchers"
+    },
+    {
+      "code": 0,
       "command": "list",
       "id": "list.empty",
       "meaning": "herdr answered and there is nothing to list",

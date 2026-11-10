@@ -1825,9 +1825,7 @@ A run with no terminal is refused: only the owner or a lead of this team runs th
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
-| `--general` | yes | no | no |
 | `--help` | no | no | no |
-| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1853,10 +1851,8 @@ A run with no terminal is refused: only the owner or a lead of this team runs th
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
-| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
-| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
