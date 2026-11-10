@@ -116,13 +116,15 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
-import { findAgent } from '../registry/agents.ts';
+import { findAgent, recordProvenAgentAddress } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { nativePushBindingFor } from '../send/push.ts';
-import { defaultSocketsDirs, refreshAgentAddressFrom } from '../send/address.ts';
+import { livePlacement } from '../send/placement.ts';
+import { declaredInboundOf, inboundStaleReason } from '../send/inbound.ts';
+import { defaultSocketsDirs, liveSocketOf } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
@@ -3552,7 +3554,40 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // exit: up.run-lock
     return 1;
   }
+  const refreshAddresses = (): void => {
+    // Refresh existing live seats before the launch pass. A reboot can leave a null or old
+    // address even when the restored session already owns a live socket. Dry and refused
+    // runs returned above; protected automatic restores must leave their records untouched.
+    for (const seat of team.seats) {
+      if (seat.cli !== 'claude-code' || seat.human === true || seat.stopped === true
+        || restoreKeepOf(seat.name) !== undefined) continue;
+      const agent = findAgent(sources.home, { team: teamIdOf(root), seat: seat.name });
+      if (!agent || agent.cli !== seat.cli || agent.lifecycle !== 'running'
+        || agent.reach.session !== session || agent.reach.pane === null) continue;
+      evictHerdrAgentList(aim(session));
+      const placed = livePlacement({ agents: (targetSession) => launch.agents(targetSession)?.map((one) => ({
+        name: one.name, pane: one.pane, cli: one.agent,
+      })) ?? null }, agent);
+      if ('error' in placed || placed.pane !== agent.reach.pane) continue;
+      evictHerdrPaneProcessInfo(placed.pane, aim(session));
+      const measured = launch.processInfo?.(session, placed.pane) ?? null;
+      if (measured === null) continue;
+      const held = readState(dir).sessions[session]?.seats[seat.name];
+      if (held?.pane !== placed.pane || seatProcessVerdict(held.launched, measured) !== 'same') continue;
+      const address = liveSocketOf(agent.reach.address, measured, sources.sockets ?? defaultSocketsDirs());
+      const inbound = declaredInboundOf({ dir, root, session, seat: seat.name, launch: agent.launch });
+      if (address === null || inboundStaleReason(inbound, address) !== null) continue;
+      try {
+        if (!recordProvenAgentAddress(sources.home, agent, address)) {
+          logLine(dir, 'up', callerLabel(caller), `${seat.name}: its address record changed; the socket address was not written`, sources.now?.() ?? new Date());
+        }
+      } catch {
+        logLine(dir, 'up', callerLabel(caller), `${seat.name}: the proven socket address could not be recorded`, sources.now?.() ?? new Date());
+      }
+    }
+  };
   try {
+    refreshAddresses();
     // A restore whose daemon already hosts this session's watch drops a dead pane-watch record.
     // The pane and the pid go; one audit line names the pane. A live or fresh record stays.
     // Under the lock the holder is read again: the same pane and pid, no epoch, the beat still
@@ -4412,45 +4447,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       }),
       { preserveLifecycle: internal?.restoreMissingOnly === true },
     )) logLine(dir, 'up', callerLabel(caller), note, now());
-    // The address: every declared claude-code seat this run leaves live records the socket its
-    // session answers at, so a later send reaches it without re-reading herdr — a seat it left
-    // ready and one it could not take as well, because a run that gave up on a seat does not
-    // stop the pane being the one the seat's record names. Each pane is read once, through the
-    // same seam the run's own steps used, and the record's identity is the gate: `same` is the
-    // very process the record names, whose socket is the seat's; `gone` is that seat's shell
-    // back in front, and clears an address the dead CLI left. A pane holding a process the
-    // record does not name, or a record that names none, is never given an address — a send
-    // that dialed one would wake a process this record cannot name (`team register` is that
-    // seat's repair). `unknown` covers a pane herdr cannot read, which writes nothing. The
-    // note, if any, is a log line like the registry's own.
-    //
-    // Two records are never refreshed from here. A record whose reach names another session's
-    // pane describes a launch standing where this run is not: the address found here, or the
-    // silence of a dead pane there, is another session's to write, and writing it from this one
-    // would clear or re-point a live seat this run never read. A pane is one seat's as well: a
-    // pane herdr names for another seat belongs to that seat, and an unnamed pane another
-    // declared seat's own record already claims is no seat's to dial — `team register` refuses
-    // both the same way (`paneNamedRefused`, `paneTakenRefused`), and a send that followed
-    // either address would wake a process this seat does not own.
-    const listedAgents = launch.agents(session);
-    for (const seat of team.seats) {
-      if (restoreKeepOf(seat.name) !== undefined) continue;
-      const held = afterwards[seat.name];
-      if (seat.cli !== 'claude-code' || !held?.pane) continue;
-      const agent = findAgent(sources.home, { team: teamIdOf(root), seat: seat.name });
-      if (!agent) continue;
-      if (agent.reach.session !== session || agent.reach.pane !== held.pane) continue;
-      const named = listedAgents?.find((entry) => entry.pane === held.pane);
-      if (named !== undefined && named.name !== null && named.name !== seat.name) continue;
-      const claimedByOther = named?.name !== seat.name
-        && team.seats.some((other) => other.name !== seat.name && other.human !== true && afterwards[other.name]?.pane === held.pane);
-      if (claimedByOther) continue;
-      const processes = launch.processInfo?.(session, held.pane) ?? null;
-      const verdict = seatProcessVerdict(held.launched, processes);
-      if (verdict !== 'same' && verdict !== 'gone') continue;
-      const refreshed = refreshAgentAddressFrom(sources.home, agent.id, processes, sources.sockets ?? defaultSocketsDirs());
-      if (refreshed.note) logLine(dir, 'up', callerLabel(caller), refreshed.note, now());
-    }
+    // Newly launched sockets use the same proof and guarded write as the entry refresh.
+    refreshAddresses();
     const pending = team.seats.filter((seat) => {
       // A human's pane is left as it is: nothing this run could have made ready, nothing pending.
       if (seat.stopped || seat.human || !profileFor(seat.cli)) return false;
