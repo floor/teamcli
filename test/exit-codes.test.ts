@@ -23,6 +23,7 @@ import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/approve/command.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
 import { runBrief } from '../src/commands/brief.ts';
+import { runLaunchers } from '../src/commands/launchers.ts';
 import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { runApprovals } from '../src/commands/approvals.ts';
 import { runBatch } from '../src/commands/batch.ts';
@@ -8643,6 +8644,29 @@ scene('analyse.report', async (place) => {
   namedAnalyser(place, 'full', [place.root]);
   return show(await analysed(place, ['.']), 'analysis cost:');
 });
+
+async function launched(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runLaunchers(argv, io, place.home), out: io.out, err: io.err };
+}
+
+// The four launchers rows the exit contract carries: a green dry run, the admission refusal,
+// an unreadable team configuration, and the bare invocation. The dry run has nothing to list
+// when no seat's line names a script, so it reports exactly that and writes nothing.
+scene('launchers.usage', async (place) => show(await launched(place, []), 'team launchers:'), false);
+scene('launchers.migrated', async (place) => {
+  write(place, TEAM);
+  intoRegistry(place.root, place.home);
+  return show(await launched(place, ['migrate', '--dry-run']), 'nothing to migrate');
+});
+scene('launchers.refused', async (place) => {
+  write(place, TEAM);
+  intoRegistry(place.root, place.home);
+  return show(await launched(place, ['migrate', '--dry-run'], other), 'migrates its launchers');
+});
+// Measured: a broken registry fails soft to the team file (exit 0), so the configuration row's
+// own shape is a repo with no team file and an empty home — the reader says exactly this.
+scene('launchers.configuration', async (place) => show(await launched(place, ['migrate', '--dry-run']), 'no team file here'));
 
 // The source probe reads every command file (~2 s); the tree does not change during a run.
 let analyzed: ReturnType<typeof analyzeSource> | undefined;
