@@ -484,14 +484,14 @@ describe('3. compact sender headers at each reading surface', () => {
       const past = new Date(Date.now() - 60_000);
       utimesSync(settingsPath, past, past);
 
-      const host = fake(made, { agents: () => [{ name: 'lead', pane: 'pane-lead' }] });
+      const host = fake(made, { agents: () => [{ name: 'lead', pane: 'pane-lead', cli: 'claude' }], now: () => NOW });
       const io = owner(made.root);
       expect(await runSend(['lead', 'plain note'], io, host)).toBe(0);
       expect(host.frames).toHaveLength(1);
       const frame = JSON.parse(host.frames[0]!) as { msg_id: string; message: { content: string } };
       const prefix = frame.msg_id.slice(0, 8);
       expect(frame.message.content).toBe(
-        `from the owner (owner):\n\nplain note\n\n↩ team reply ${prefix} "…" · team ack ${prefix}`,
+        `the owner · 2026-11-05 15:00Z · admitted: owner\n\nplain note\n\n↩ team reply ${prefix} "…" · team ack ${prefix}`,
       );
     } finally {
       made.cleanup();
@@ -554,7 +554,7 @@ describe('3. compact sender headers at each reading surface', () => {
         cli: 'codex',
         launcher: null,
         launch: 'codex -m gpt-6-sol',
-        reach: { team: 'acme', seat: 'corvid', session: 'acme', pane: 'pane-corvid', address: null },
+        reach: { team: teamIdOf(made.root), seat: 'corvid', session: 'acme', pane: 'pane-corvid', address: null },
         mcp: [],
         skills: [],
         lifecycle: 'running',
@@ -567,7 +567,7 @@ describe('3. compact sender headers at each reading surface', () => {
         cli: 'claude-code',
         launcher: null,
         launch: 'claude --model claude-opus-5-5',
-        reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
+        reach: { team: teamIdOf(made.root), seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
         mcp: [],
         skills: [],
         lifecycle: 'running',
@@ -594,9 +594,10 @@ describe('3. compact sender headers at each reading surface', () => {
 
       const host = fake(made, {
         agents: () => [
-          { name: 'lead', pane: 'pane-lead' },
-          { name: 'corvid', pane: 'pane-corvid' },
+          { name: 'lead', pane: 'pane-lead', cli: 'claude' },
+          { name: 'corvid', pane: 'pane-corvid', cli: 'codex' },
         ],
+        now: () => NOW,
       });
       const io = testIo(made.root, { kind: 'seat', name: 'corvid', pane: 'pane-corvid', session: 'acme' });
       expect(await runSend(['lead', 'status report'], io, host)).toBe(0);
@@ -692,8 +693,8 @@ describe('3. compact sender headers at each reading surface', () => {
       const frames: string[] = [];
       const daemonHost: DaemonHost = {
         agents: () => [
-          { name: 'lead', pane: 'pane-lead' },
-          { name: 'corvid', pane: 'pane-corvid' },
+          { name: 'lead', pane: 'pane-lead', cli: 'claude' },
+          { name: 'corvid', pane: 'pane-corvid', cli: 'codex' },
         ],
         processInfo: () => ({ shell: 111, foreground: [222] }),
         socketsDir: made.sockets,

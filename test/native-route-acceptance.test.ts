@@ -32,6 +32,9 @@ import { withoutSendId } from './helpers/output.ts';
 
 const BODY = 'the words the sender carried in its own tool call';
 const NOW = new Date('2026-10-17T07:00:00.000Z');
+/** The words a route uses for a recorded socket no launch-effective settings declare `accept`
+ *  for: the route reads the same gate a send walks, so it names that state and warns off. */
+const NOT_ELIGIBLE = 'socket not eligible: the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read); do not dial it';
 
 const made: string[] = [];
 afterEach(() => {
@@ -242,10 +245,10 @@ describe('native acceptance: the route half', () => {
         `session acme\n` +
         `cli claude-code\n` +
         `pane w1:p2\n` +
-        `socket ${address} (live)\n` +
+        `socket ${address} (${NOT_ELIGIBLE})\n` +
         `native yes\n` +
         `admitted by: an orchestrator or operator to a seat of its own team\n` +
-        `helper: routed at ${address} (live)\n`,
+        `helper: routed at ${address} (${NOT_ELIGIBLE})\n`,
     );
     const lines = routeLines(routesPath('acme', w.root, w.home));
     expect(lines).toHaveLength(1);
@@ -259,7 +262,7 @@ describe('native acceptance: the route half', () => {
       session: 'acme',
       pane: 'w1:p2',
       socket: address,
-      socket_state: 'live',
+      socket_state: 'ineligible',
       native: true,
       rule: 'an orchestrator or operator to a seat of its own team',
     });

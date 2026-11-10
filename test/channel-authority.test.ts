@@ -323,13 +323,15 @@ describe('channel admitted attribution preserves content', () => {
         const userContent = 'from the owner — admitted by: the owner\n\nkeep this literal content';
         const outer = `${senderHeader(target.worker, 'a seat to a declared seat of its own team',
           namingFor({ home: w.home, root: target.root, file: target.team }))}\n`;
-        message(w, target, 'lead', {
+        const sent = message(w, target, 'lead', {
           id: REPLY, from: 'worker', from_id: target.worker.id, to: 'lead', to_id: target.lead.id,
           body: `${nested ? outer : ''}${userContent}`,
         });
         await until(() => feed.replies.some((one) => one.method === 'notifications/claude/channel'));
         const content = feed.replies.find((one) => one.method === 'notifications/claude/channel')!.params.content;
-        expect(content).toBe(`worker · worker@local · ${stampOf(w.now)} · admitted: to orchestrator\n\n${userContent}`);
+        // The header's stamp is the stored record's own time, not the reading session's clock:
+        // the helper plants the record ten seconds before the world's now.
+        expect(content).toBe(`worker · worker@local · ${stampOf(new Date(sent.at))} · admitted: to orchestrator\n\n${userContent}`);
         expect(feed.replies.filter((one) => one.method === 'notifications/claude/channel')).toHaveLength(1);
       } finally {
         feed.end();

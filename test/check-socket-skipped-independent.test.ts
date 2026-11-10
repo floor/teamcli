@@ -210,7 +210,7 @@ async function statusReach(made: World, seat: string, names: readonly string[]):
 /** The real send to the same fixture: what its walk actually did with the socket leg. */
 async function sendTo(made: World, seat: string) {
   const host = fake(made, {
-    agents: () => [{ name: seat, pane: paneOf(seat) }],
+    agents: () => [{ name: seat, pane: paneOf(seat), cli: seat === 'native' ? 'codex' : 'claude' }],
     processInfo: () => ({ shell: SHELL_PID, foreground: [SESSION_PID] }),
     socketsDir: socketsDir(made),
   });

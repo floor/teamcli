@@ -310,13 +310,14 @@ describe('the send path honours the receiving seat only', () => {
     const frames: string[] = [];
     const host = fake(made, {
       agents: () => [
-        { name: 'lead', pane: 'pane-lead' },
-        { name: 'scout', pane: 'pane-scout' },
+        { name: 'lead', pane: 'pane-lead', cli: 'claude' },
+        { name: 'scout', pane: 'pane-scout', cli: 'claude' },
       ],
       deliver: async (_socket: string, frame: string) => {
         frames.push(frame);
         return { ok: true };
       },
+      now: () => NOW,
     });
 
     const multi = 'Only this headline\nSecond detail\nThird detail';
@@ -326,7 +327,7 @@ describe('the send path honours the receiving seat only', () => {
     const leadFrame = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
     const leadPrefix = leadFrame.msg_id.slice(0, 8);
     expect(leadFrame.message.content).toBe(
-      `Scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nOnly this headline\n\n↩ team show ${leadPrefix} · team reply ${leadPrefix} · team ack ${leadPrefix}`,
+      `Scout · scout@acme · 2026-11-05 18:00Z · admitted: to orchestrator\n\nOnly this headline\n\n↩ team show ${leadPrefix} · team reply ${leadPrefix} · team ack ${leadPrefix}`,
     );
     expect(leadFrame.message.content).not.toContain('Second detail');
 
@@ -345,7 +346,7 @@ describe('the send path honours the receiving seat only', () => {
     const scoutFrame = JSON.parse(frames[1]!) as { msg_id: string; message: { content: string } };
     const scoutPrefix = scoutFrame.msg_id.slice(0, 8);
     expect(scoutFrame.message.content).toBe(
-      `Captain · captain@harbor · 2026-11-05 18:00Z · admitted: team lead\n\n${replyBody}\n\n↩ team reply ${scoutPrefix} "…" · team ack ${scoutPrefix}`,
+      `Captain · lead@acme · 2026-11-05 18:00Z · admitted: team lead\n\n${replyBody}\n\n↩ team reply ${scoutPrefix} "…" · team ack ${scoutPrefix}`,
     );
   });
 
@@ -355,8 +356,8 @@ describe('the send path honours the receiving seat only', () => {
     const frames: string[] = [];
     const daemonHost: DaemonHost = {
       agents: () => [
-        { name: 'lead', pane: 'pane-lead' },
-        { name: 'scout', pane: 'pane-scout' },
+        { name: 'lead', pane: 'pane-lead', cli: 'claude' },
+        { name: 'scout', pane: 'pane-scout', cli: 'claude' },
       ],
       processInfo: () => ({ shell: 111, foreground: [222] }),
       socketsDir: made.sockets,

@@ -171,7 +171,7 @@ test('an accepted socket frame writes no read receipt, and the frame opens with 
   expect(code).toBe(0);
   expect(host.frames).toHaveLength(1);
   // The frame's first line is the compact sender header; the body follows it under one blank line.
-  expect(frameContent(host.frames[0] as string).startsWith('from the owner (owner):\n\na note')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('the owner · 2026-10-05 04:00Z · admitted: owner\n\na note')).toBe(true);
   // The taken frame is a delivery, never a read: the record has no receipt beside it and waits
   // for the seat's own read.
   const drops = dropDir(made.dir, 'lead');
@@ -320,26 +320,36 @@ test('a seat with no nickname opens the frame with its written label name, and w
   ]);
   cleanup = made.cleanup;
   declare(made);
-  const labelled = registerSeat(made, 'labelled', 'w4:p1');
-  place(made, 'labelled', 'w4:p1');
+  const labelled = registerSeat(made, 'labelled', 'fixture-pane-a');
+  place(made, 'labelled', 'fixture-pane-a');
   roster(made, { agent: labelled, seat: 'labelled', role: 'builder' });
-  const host = fake(made, { agents: () => [{ name: 'labelled', pane: 'w4:p1' }, { name: 'lead', pane: 'w2:p1' }] });
-  const io = testIo(made.root, { kind: 'seat', name: 'labelled', pane: 'w4:p1', session: 'acme' });
+  const host = fake(made, {
+    agents: () => [
+      { name: 'labelled', pane: 'fixture-pane-a', cli: 'claude' },
+      { name: 'lead', pane: 'fixture-pane-b', cli: 'claude' },
+    ],
+  });
+  const io = testIo(made.root, { kind: 'seat', name: 'labelled', pane: 'fixture-pane-a', session: 'acme' });
 
   // The roster holds no nickname, so the written label's name before the middle dot stands.
   expect(await runSend(['lead', 'from the label'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('from Seat Eight (to orchestrator):\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Seat Eight · labelled@acme · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 
   // A written label with nothing before the middle dot falls through to the seat name.
-  const blank = registerSeat(made, 'blank', 'w5:p1');
-  place(made, 'blank', 'w5:p1');
+  const blank = registerSeat(made, 'blank', 'fixture-pane-c');
+  place(made, 'blank', 'fixture-pane-c');
   roster(made, { agent: blank, seat: 'blank', role: 'builder' });
-  const again = fake(made, { agents: () => [{ name: 'blank', pane: 'w5:p1' }, { name: 'lead', pane: 'w2:p1' }] });
-  const fromBlank = testIo(made.root, { kind: 'seat', name: 'blank', pane: 'w5:p1', session: 'acme' });
+  const again = fake(made, {
+    agents: () => [
+      { name: 'blank', pane: 'fixture-pane-c', cli: 'claude' },
+      { name: 'lead', pane: 'fixture-pane-b', cli: 'claude' },
+    ],
+  });
+  const fromBlank = testIo(made.root, { kind: 'seat', name: 'blank', pane: 'fixture-pane-c', session: 'acme' });
   expect(await runSend(['lead', 'from the blank'], fromBlank, again)).toBe(0);
   expect(again.frames).toHaveLength(1);
-  expect(frameContent(again.frames[0] as string).startsWith('from blank (to orchestrator):\n\n')).toBe(true);
+  expect(frameContent(again.frames[0] as string).startsWith('blank · blank@acme · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 });
 
 test('a direct-only push leaves the record unread: its receiving runtime is the reader', async () => {
@@ -367,23 +377,33 @@ test('a seat sender opens the frame with its nickname, and with its seat name wh
   const made = world(null);
   cleanup = made.cleanup;
   declare(made);
-  const helper = registerSeat(made, 'helper', 'w1:p1', 'Bea');
-  place(made, 'helper', 'w1:p1');
+  const helper = registerSeat(made, 'helper', 'fixture-pane-a', 'Bea');
+  place(made, 'helper', 'fixture-pane-a');
   roster(made, { agent: helper, seat: 'helper', role: 'implementer', nickname: 'Bea' });
-  const host = fake(made, { agents: () => [{ name: 'helper', pane: 'w1:p1' }, { name: 'lead', pane: 'w2:p1' }] });
-  const io = testIo(made.root, { kind: 'seat', name: 'helper', pane: 'w1:p1', session: 'acme' });
+  const host = fake(made, {
+    agents: () => [
+      { name: 'helper', pane: 'fixture-pane-a', cli: 'claude' },
+      { name: 'lead', pane: 'fixture-pane-b', cli: 'claude' },
+    ],
+  });
+  const io = testIo(made.root, { kind: 'seat', name: 'helper', pane: 'fixture-pane-a', session: 'acme' });
 
   expect(await runSend(['lead', 'from bea'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('from Bea (to orchestrator):\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Bea · helper@acme · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 
   // The roster without a nickname for the seat: the same line falls back to the seat name.
-  const native = registerSeat(made, 'native', 'w3:p1');
-  place(made, 'native', 'w3:p1');
+  const native = registerSeat(made, 'native', 'fixture-pane-c');
+  place(made, 'native', 'fixture-pane-c');
   roster(made, { agent: native, seat: 'native', role: 'reviewer' });
-  const again = fake(made, { agents: () => [{ name: 'native', pane: 'w3:p1' }, { name: 'lead', pane: 'w2:p1' }] });
-  const fromNative = testIo(made.root, { kind: 'seat', name: 'native', pane: 'w3:p1', session: 'acme' });
+  const again = fake(made, {
+    agents: () => [
+      { name: 'native', pane: 'fixture-pane-c', cli: 'claude' },
+      { name: 'lead', pane: 'fixture-pane-b', cli: 'claude' },
+    ],
+  });
+  const fromNative = testIo(made.root, { kind: 'seat', name: 'native', pane: 'fixture-pane-c', session: 'acme' });
   expect(await runSend(['lead', 'from native'], fromNative, again)).toBe(0);
   expect(again.frames).toHaveLength(1);
-  expect(frameContent(again.frames[0] as string).startsWith('from native (to orchestrator):\n\n')).toBe(true);
+  expect(frameContent(again.frames[0] as string).startsWith('native · native@acme · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 });

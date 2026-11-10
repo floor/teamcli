@@ -28,6 +28,14 @@ import { storePath } from '../src/store/store.ts';
 import { liveAgentsOf, testIo, type TestIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema, withoutSendId } from './helpers/output.ts';
 
+/** The words a route uses for a socket a send would pass over. A socket no launch-effective
+ *  settings declare `accept` for is ineligible; a session with no cross-session socket at all
+ *  says so in its own words; a live socket older than its declaration is stale by the shared
+ *  reason above. */
+const INBOUND_UNDECLARED_REASON = 'the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)';
+const NOT_ELIGIBLE = `socket not eligible: ${INBOUND_UNDECLARED_REASON}; do not dial it`;
+const CODEX_NOT_ELIGIBLE = 'socket not eligible: codex sessions have no cross-session socket; do not dial it';
+
 const OWNER = { kind: 'owner' as const };
 const BODY = 'the native delivery, written down after the fact';
 const NOW = new Date('2026-10-17T06:00:00.000Z');
@@ -194,7 +202,7 @@ describe('route: the address the native channel answers', () => {
     // The log says what the route read, never that anything was delivered: a seat that reads the
     // log cannot take a lookup for a message that arrived.
     const log = readFileSync(join(w.root, '.agents', LOG_FILE), 'utf8');
-    expect(log).toContain('route [owner] looked up lead: live, native yes');
+    expect(log).toContain(`route [owner] looked up lead: ${NOT_ELIGIBLE}, native yes`);
     expect(log).not.toContain('routed (');
     const at = routesPath('acme', w.root, w.home);
     const lines = routeLines(at);
@@ -209,7 +217,7 @@ describe('route: the address the native channel answers', () => {
         session: 'acme',
         pane: 'w1:p1',
         socket: address,
-        socket_state: 'live',
+        socket_state: 'ineligible',
         native: true,
         rule: 'the owner',
       },
@@ -229,7 +237,7 @@ describe('route: the address the native channel answers', () => {
     // The lookup says what it read, and the caller's own seat stands in the bracket: the
     // coordinator's seat is `lead`, never the role word.
     const log = readFileSync(join(w.root, '.agents', LOG_FILE), 'utf8');
-    expect(log).toContain('route [lead] looked up helper: found on the pane, native no');
+    expect(log).toContain(`route [lead] looked up helper: ${CODEX_NOT_ELIGIBLE}, native no`);
     expect(log).not.toContain('[orchestrator]');
     const [record] = routeLines(routesPath('acme', w.root, w.home));
     expect(record).toMatchObject({
@@ -237,7 +245,7 @@ describe('route: the address the native channel answers', () => {
       from_id: lead.id,
       to: 'helper',
       to_id: helper.id,
-      socket_state: 'pane',
+      socket_state: 'ineligible',
       native: false,
     });
   });
@@ -259,10 +267,10 @@ describe('route: the address the native channel answers', () => {
         'session acme\n' +
         'cli claude-code\n' +
         'pane w1:p1\n' +
-        `socket ${address} (live)\n` +
+        `socket ${address} (${NOT_ELIGIBLE})\n` +
         'native yes\n' +
         'admitted by: the owner\n' +
-        `lead: routed at ${address} (live)\n`,
+        `lead: routed at ${address} (${NOT_ELIGIBLE})\n`,
     );
     expect(io.err).toBe('');
   });
@@ -331,7 +339,7 @@ describe('route: the address the native channel answers', () => {
       format: 1,
       dry_run: false,
       status: 'routed',
-      action_summary: `lead: routed at ${address} (live)`,
+      action_summary: `lead: routed at ${address} (${NOT_ELIGIBLE})`,
       project: 'acme',
       session: 'acme',
       seat: 'lead',
@@ -340,7 +348,7 @@ describe('route: the address the native channel answers', () => {
       cli: 'claude-code',
       pane: 'w1:p1',
       address,
-      socket_state: 'live',
+      socket_state: 'ineligible',
       native: true,
       rule: 'the owner',
     });
@@ -358,7 +366,7 @@ describe('route: the address the native channel answers', () => {
     const code = await runRoute(['lead'], io, run);
 
     expect(code).toBe(0);
-    expect(io.out).toContain(`socket ${address} (stale; do not dial it)`);
+    expect(io.out).toContain(`socket ${address} (stale; do not dial it (${INBOUND_UNDECLARED_REASON}))`);
     expect(routeLines(routesPath('acme', w.root, w.home))[0]?.socket_state).toBe('stale');
     expect(run.frames).toEqual([]);
   });
@@ -401,8 +409,8 @@ describe('route: the address the native channel answers', () => {
     const code = await runRoute(['lead'], io, host(w, { processInfo: () => ({ shell: 111, foreground: [4242] }) }));
 
     expect(code).toBe(0);
-    expect(io.out).toContain(`socket ${found} (found on the pane)`);
-    expect(routeLines(routesPath('acme', w.root, w.home))[0]?.socket_state).toBe('pane');
+    expect(io.out).toContain(`socket ${found} (${NOT_ELIGIBLE})`);
+    expect(routeLines(routesPath('acme', w.root, w.home))[0]?.socket_state).toBe('ineligible');
   });
 
   test('a pane the seat no longer stands on never yields its socket', async () => {
@@ -410,10 +418,11 @@ describe('route: the address the native channel answers', () => {
     const id = teamIdOf(w.root);
     const ours = socketAt(w.sockets, 4242);
     socketAt(w.sockets, 9001); // the socket the reused pane carries: another seat's session
-    // The record still says w1:p1, and that pane now holds another seat's Claude session; herdr
-    // names this seat on w1:p2. A recorded-pane read would answer 9001.sock — the other seat's.
-    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null });
-    const helper = agent(w.home, { name: 'helper', role: 'implementer', cli: 'claude-code', team: id, seat: 'helper', session: 'acme', pane: 'w1:p1' });
+    // The record still names the old pane, and that pane now holds another seat's Claude
+    // session; herdr names this seat on a fresh pane. A recorded-pane read would answer
+    // 9001.sock — the other seat's.
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'acme', pane: 'fixture-pane-a', address: null });
+    const helper = agent(w.home, { name: 'helper', role: 'implementer', cli: 'claude-code', team: id, seat: 'helper', session: 'acme', pane: 'fixture-pane-a' });
     team(w.home, id, 'acme', 'acme', w.root, [
       { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
       { agent: helper.id, seat: 'helper', role: 'implementer', leads: false },
@@ -421,19 +430,19 @@ describe('route: the address the native channel answers', () => {
     const io = testIo(w.root, OWNER);
     const run = host(w, {
       agents: () => [
-        { name: 'lead', pane: 'w1:p2', cli: 'claude' },
-        { name: 'helper', pane: 'w1:p1', cli: 'claude' },
+        { name: 'lead', pane: 'fixture-pane-b', cli: 'claude' },
+        { name: 'helper', pane: 'fixture-pane-a', cli: 'claude' },
       ],
-      processInfo: (_session, pane) => ({ shell: 111, foreground: pane === 'w1:p2' ? [4242] : [9001] }),
+      processInfo: (_session, pane) => ({ shell: 111, foreground: pane === 'fixture-pane-b' ? [4242] : [9001] }),
     });
 
     const code = await runRoute(['lead'], io, run);
 
     expect(code).toBe(0);
-    expect(io.out).toContain('pane w1:p2\n');
-    expect(io.out).toContain(`socket ${ours} (found on the pane)`);
+    expect(io.out).toContain('pane fixture-pane-b\n');
+    expect(io.out).toContain(`socket ${ours} (${NOT_ELIGIBLE})`);
     expect(io.out).not.toContain('9001.sock');
-    expect(routeLines(routesPath('acme', w.root, w.home))[0]).toMatchObject({ pane: 'w1:p2', socket: ours, socket_state: 'pane' });
+    expect(routeLines(routesPath('acme', w.root, w.home))[0]).toMatchObject({ pane: 'fixture-pane-b', socket: ours, socket_state: 'ineligible' });
   });
 
   test('a seat herdr does not name there is refused, and no address is answered', async () => {
@@ -591,7 +600,7 @@ describe('route: the address the native channel answers', () => {
         'session acme\n' +
         'cli claude-code\n' +
         'pane w1:p1\n' +
-        `socket ${address} (live)\n` +
+        `socket ${address} (${NOT_ELIGIBLE})\n` +
         'native yes\n' +
         'admitted by: the owner\n' +
         `+ record: lead: append the route to ~/.config/team/acme-${id}/routes.jsonl\n` +
