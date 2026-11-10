@@ -14,6 +14,7 @@ It is early and herdr only. Every command `team --help` lists is here. Node 22 o
 
 ```sh
 npm install -g team
+team --version # 0.5.21
 ```
 
 ## Your first team in five minutes
@@ -66,6 +67,22 @@ edge. Approvals guard against mistakes, not against a hostile process running as
 
 Every command, flag, refusal and exit code is in
 [the command reference](https://github.com/floor/teamcli/blob/main/docs/commands/README.md).
+
+## What's new in 0.5.21
+
+- **Restore with proof.** The automatic restore sweep leaves live seats alone and relaunches
+  or moves a record only when the recorded pane is proven gone. A wrapper launch's conversation
+  check stays "not measured" when its store is unknown.
+- **Messages stay in the inbox.** A send that cannot be delivered keeps the pending message,
+  prints the reason and exits 1. Restored seats need conversation proof to send as themselves.
+- **Team commands for leads and operators.** They run their own team's commands within the
+  owner's reserved gates; the complete exceptions are in the changelog.
+- **Launch and mail tools.** `team launchers migrate` moves mapped scripts to launcher
+  declarations, `team swap` starts a seat with another preset, and `team drops archive` moves
+  settled mail. Each offers a dry run.
+- **Quiet channels and quota reports.** Claude Code seats use the inbox channel by default;
+  temporary copies start quietly in the common lobby. The watch reports an exhausted quota
+  and warns the lead when the weekly quota falls below 20%.
 
 ## What's new in 0.5.10
 

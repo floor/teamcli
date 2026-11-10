@@ -7,17 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.21] - 2026-11-10
+
+### Added
+
+- `team launchers migrate` moves a launch line that runs a script inside a repository or a temp folder onto a launcher declaration in the launcher home. `--dry-run` lists every change and every stale record and writes nothing; without it the launch lines are rewritten and each old script becomes a forwarding stub. Local scripts are named in `~/.config/team/launcher-migrations.json` (format 1, exact absolute script path to a declaration name); unmapped and stale rows are reported and left unchanged. The owner, or a team's lead, runs it from a terminal, and general grants never admit it.
+
+- `team swap <seat> <preset>` installs that recipe and starts the seat fresh; `--dry-run` plans it and writes nothing.
+
+- `team drops archive` moves settled mail into `send-drops/<session>/<seat>/archive/<YYYY-MM>/` and marks unread drops delivered before the seat's channel started as read. Unread mail stays and nothing is deleted; `--dry-run` lists the moves and the marks and writes nothing.
+
+- `team mcp setup <seat>` prepares a hand-started Claude seat's scoped inbox channel, launch flag and calling-pane record, with a zero-write dry run and scoped removal.
+
+- The watch reports out-of-tokens as its own state: it tells the lead once with the seat, vendor and whether the seat held a task or a review, marks the seat unavailable so `team send` keeps new messages in its inbox without waking it, and warns the lead when weekly quota drops below 20%.
+
 ### Changed
 
-- A team's lead and operator now run every command for their own team without the owner, except grant, delegate, revoke, the owner's identity and keys, recording a served project (`also_in`), and migrate, which writes a team's first authority record. The owner can restore the old gates with leads.authority: owner-asks.
+- A team's lead and operator run every command for their own team without the owner, except grant, delegate, revoke, the owner's identity and keys, recording a served project (`also_in`), and migrate, which writes a team's first authority record. The owner can restore the old gates with `leads.authority: owner-asks`.
 
 - The owner-reserved scope now names major releases; minor and patch releases are the leads' within their gates.
 
-- `team mcp setup <seat>` prepares a hand-started Claude seat’s scoped inbox channel, launch flag and calling-pane record, with a zero-write dry run and scoped removal.
-
 - `team mcp setup` admits the owner, the seat on its recorded pane, and that team's placed lead or operator, with no owner card. A seat of another team, or a pane that is not the recorded one, stays refused.
 
+- Seats come back after a host reboot: `team up` adopts a restored seat in place, including on a pane id the record has never seen, when the running CLI and the recorded conversation match the agent record, and relaunches it from its recorded line with `--resume` when it needs its launcher, declared model or quiet channel restored. A pane that cannot prove its identity is left out.
+
+- The team-inbox channel is on by default for claude-code seats: `channel` omitted or `on` prepares the channel on `team up` and `team restart`; `off` leaves that seat's launch and its MCP pair alone. Default-channel lobby seats start in `lobby/<seat>`.
+
+- A temporary seat added with `team add --like <seat> --until <stop>` starts in the common lobby without the team-inbox channel, stripping any channel flag it inherits from the source launch line; declared seats keep the default channel.
+
+- A command run from a seat's pane acts on that seat's own team even when the current folder sits inside another team's root.
+
+- A launch recipe that carries the old Codex background-server override is normalized, and a recognized Codex settings dialog is closed, not answered: no input is typed and no identity guard is weakened.
+
 ### Fixed
+
+- A send that cannot be delivered is kept: the pending record stays in the seat's inbox, the command prints `not delivered: <reason>` and exits 1, and the seat reads the message at its next turn or wake. A confirmed wake still reports delivery.
+
+- A restored seat sends as itself: unnamed recorded-CLI placement now needs conversation proof, and a send, route or reply that reports a different conversation is refused, including before a client thread is written.
+
+- The restore sweep leaves a live seat alone: it relaunches a seat or moves a record only with positive proof that the recorded pane is gone, and a wrapper launch's conversation check reads "not measured" instead of guessing. A pane that is really gone is still restored.
+
+- Process evidence comes from fixed system executable paths with a clean environment and no `PATH` fallback; if the system tool is missing or unusable, no identity evidence is drawn.
+
+- Owner-only file and session flags are refused before the team is read, for aimed `up`/`add` runs and `down`/`remove` targets, and a signed approval or charter cannot bypass them.
+
+- A supervised watch that stays in starting past its start limit, or whose child misses late beats, is restarted, at most three times an hour, and the placed lead is told once per restart.
 
 - Rewriting a marked sidebar table changes only the rows line, and the row gap only when `workspace.sidebar.row_gap` is set. Every other key in that table stays.
 
