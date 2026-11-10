@@ -151,23 +151,26 @@ describe('the compact frame is the first content line and the show footer', () =
     const compact = senderMod.attributedBody(
       `from Scout — admitted by: ${TO_ORCH}\n\n\n\nAlpha headline\nBeta detail`,
       'scout',
-      { rule: TO_ORCH, cli: 'claude-code', compact: true },
+      { rule: TO_ORCH, cli: 'claude-code', compact: true, seat: 'scout', team: 'harbor', at: NOW },
     );
-    expect(compact).toBe('from scout (to orchestrator):\n\nAlpha headline');
+    expect(compact).toBe('scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline');
 
     const full = senderMod.attributedBody(
       `from Scout — admitted by: ${TO_ORCH}\n\nAlpha headline\nBeta detail`,
       'scout',
-      { rule: TO_ORCH, cli: 'claude-code' },
+      { rule: TO_ORCH, cli: 'claude-code', seat: 'scout', team: 'harbor', at: NOW },
     );
-    expect(full).toBe('from scout (to orchestrator):\n\nAlpha headline\nBeta detail');
+    expect(full).toBe('scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline\nBeta detail');
 
     const headerless = senderMod.attributedBody('No header line one\nline two', 'scout', {
       rule: TO_ORCH,
       cli: 'claude-code',
       compact: true,
+      seat: 'scout',
+      team: 'harbor',
+      at: NOW,
     });
-    expect(headerless).toBe('from scout (to orchestrator):\n\nNo header line one');
+    expect(headerless).toBe('scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nNo header line one');
     expect(firstContentLineOf(senderMod)('\n\n\n')).toBe('');
   });
 
@@ -180,11 +183,14 @@ describe('the compact frame is the first content line and the show footer', () =
         rule: TO_ORCH,
         cli: 'claude-code',
         compact: true,
+        seat: 'scout',
+        team: 'harbor',
+        at: NOW,
       }),
     ) as { msg_id: string; message: { content: string } };
     expect(frame.msg_id).toBe(id);
     expect(frame.message.content).toBe(
-      'from scout (to orchestrator):\n\nAlpha headline\n\n↩ team show ab12cd34 · team reply ab12cd34 · team ack ab12cd34',
+      'scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline\n\n↩ team show ab12cd34 · team reply ab12cd34 · team ack ab12cd34',
     );
 
     const human = JSON.parse(
@@ -193,20 +199,26 @@ describe('the compact frame is the first content line and the show footer', () =
         rule: TO_ORCH,
         cli: 'claude-code',
         compact: true,
+        seat: 'scout',
+        team: 'harbor',
+        at: NOW,
         human: true,
       }),
     ) as { message: { content: string } };
-    expect(human.message.content).toBe('from scout (to orchestrator):\n\nAlpha headline');
+    expect(human.message.content).toBe('scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline');
 
     const plain = JSON.parse(
       frameMod.socketMessageFrame('harbor', 'captain', body, id, {
         from: 'scout',
         rule: TO_ORCH,
         cli: 'claude-code',
+        seat: 'scout',
+        team: 'harbor',
+        at: NOW,
       }),
     ) as { message: { content: string } };
     expect(plain.message.content).toBe(
-      'from scout (to orchestrator):\n\nAlpha headline\nBeta detail\n\n↩ team reply ab12cd34 "…" · team ack ab12cd34',
+      'scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline\nBeta detail\n\n↩ team reply ab12cd34 "…" · team ack ab12cd34',
     );
   });
 });
@@ -314,7 +326,7 @@ describe('the send path honours the receiving seat only', () => {
     const leadFrame = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
     const leadPrefix = leadFrame.msg_id.slice(0, 8);
     expect(leadFrame.message.content).toBe(
-      `from Scout (to orchestrator):\n\nOnly this headline\n\n↩ team show ${leadPrefix} · team reply ${leadPrefix} · team ack ${leadPrefix}`,
+      `Scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nOnly this headline\n\n↩ team show ${leadPrefix} · team reply ${leadPrefix} · team ack ${leadPrefix}`,
     );
     expect(leadFrame.message.content).not.toContain('Second detail');
 
@@ -333,7 +345,7 @@ describe('the send path honours the receiving seat only', () => {
     const scoutFrame = JSON.parse(frames[1]!) as { msg_id: string; message: { content: string } };
     const scoutPrefix = scoutFrame.msg_id.slice(0, 8);
     expect(scoutFrame.message.content).toBe(
-      `from Captain (team lead):\n\n${replyBody}\n\n↩ team reply ${scoutPrefix} "…" · team ack ${scoutPrefix}`,
+      `Captain · captain@harbor · 2026-11-05 18:00Z · admitted: team lead\n\n${replyBody}\n\n↩ team reply ${scoutPrefix} "…" · team ack ${scoutPrefix}`,
     );
   });
 
@@ -391,7 +403,7 @@ describe('the send path honours the receiving seat only', () => {
     // The daemon's compact header names the sender as the team file declares the seat (this
     // fixture's seat carries no label); the frame's subject is the line count, not the casing.
     expect(frame.message.content).toBe(
-      `from scout (to orchestrator):\n\nDaemon headline\n\n↩ team show ${prefix} · team reply ${prefix} · team ack ${prefix}`,
+      `scout · scout@acme · 2026-11-05 18:00Z · admitted: to orchestrator\n\nDaemon headline\n\n↩ team show ${prefix} · team reply ${prefix} · team ack ${prefix}`,
     );
     expect(frame.message.content).not.toContain('Daemon detail');
   });
@@ -503,7 +515,7 @@ describe('team show reads the whole record for its addressee', () => {
     // The first show writes the receipt and prints the whole body even though the captain's seat
     // is marked compact_delivery: show reads the signed record, never the socket frame.
     const expected =
-      'from Scout (to orchestrator):\n\nHarbor line one\nHarbor line two\nHarbor line three\n\n↩ team reply d1f0a7c2 "…" · team ack d1f0a7c2';
+      'Scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nHarbor line one\nHarbor line two\nHarbor line three\n\n↩ team reply d1f0a7c2 "…" · team ack d1f0a7c2';
     const jsonIo = captainIo(at);
     expect(await runShow([id, '--json'], jsonIo, { home: at.home, now: () => NOW })).toBe(0);
     const doc = JSON.parse(jsonIo.out) as Record<string, unknown>;
@@ -583,7 +595,7 @@ describe('team show reads the whole record for its addressee', () => {
     const io = captainIo(at);
     expect(await runShow(['019a0000'], io, { home: at.home, now: () => NOW })).toBe(0);
     expect(io.out).toBe(
-      'Client Grok Bot (owner relay):\n\nClient line one\nClient line two\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
+      'Grok Bot · 2026-11-05 18:00Z · admitted: owner relay\n\nClient line one\nClient line two\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
     );
     expect(existsSync(join(at.dropDir, `${id}.read.json`))).toBe(true);
   });
@@ -622,7 +634,7 @@ describe('team show refuses what is not this caller\'s record', () => {
     const whole = captainIo(at);
     expect(await runShow([id1], whole, { home: at.home, now: () => NOW })).toBe(0);
     expect(whole.out).toBe(
-      'from Scout (to orchestrator):\n\nAlpha line\nmore\n\n↩ team reply d1f0a7c2-1 "…" · team ack d1f0a7c2-1\n',
+      'Scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha line\nmore\n\n↩ team reply d1f0a7c2-1 "…" · team ack d1f0a7c2-1\n',
     );
 
     // A record waiting in another seat's folder is refused without naming its text, and no read

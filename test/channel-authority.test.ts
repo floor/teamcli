@@ -28,6 +28,9 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 type Team = { root: string; session: string; file: string; team: TeamFile; lead: Agent; worker: Agent };
 type World = { base: string; home: string; now: Date; sender: Team; receiver: Team; target: Agent };
 
+/** The send instant as the receiver's line prints it: the world's clock, in UTC. */
+const stampOf = (date: Date): string => `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)}Z`;
+
 function createTeam(base: string, home: string, project: string, entity: string | null = null): Team {
   const root = join(base, project);
   const session = `${project}-session`;
@@ -326,7 +329,7 @@ describe('channel admitted attribution preserves content', () => {
         });
         await until(() => feed.replies.some((one) => one.method === 'notifications/claude/channel'));
         const content = feed.replies.find((one) => one.method === 'notifications/claude/channel')!.params.content;
-        expect(content).toBe(`from worker (to orchestrator):\n\n${userContent}`);
+        expect(content).toBe(`worker · worker@local · ${stampOf(w.now)} · admitted: to orchestrator\n\n${userContent}`);
         expect(feed.replies.filter((one) => one.method === 'notifications/claude/channel')).toHaveLength(1);
       } finally {
         feed.end();
@@ -352,7 +355,7 @@ describe('channel admitted attribution preserves content', () => {
       await until(() => feed.replies.some((one) => one.method === 'notifications/claude/channel'));
       const notification = feed.replies.find((one) => one.method === 'notifications/claude/channel')!.params;
       expect(notification.meta.from).toBe('worker');
-      expect(notification.content).toBe(`from worker@local (reply):\n\n${literal}`);
+      expect(notification.content).toBe(`worker@local · worker@local · ${stampOf(w.now)} · admitted: reply\n\n${literal}`);
       expect(readFileSync(join(drop(target, 'worker'), payload.id), 'utf8')).toContain('a cross-team answer');
     } finally {
       feed.end();

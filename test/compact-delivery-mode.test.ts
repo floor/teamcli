@@ -265,9 +265,12 @@ describe('2. compact socket frame vs full socket frame', () => {
       rule: TO_ORCH_RULE,
       displayName: 'Argon',
       senderLabel: 'Gemini seat Argon',
+      seat: 'builder-gemini',
+      team: 'acme',
+      at: NOW,
       compact: true,
     } as never);
-    expect(compactBlock).toBe('Gemini seat Argon (to orchestrator):\n\nLane S1 green (8/8).');
+    expect(compactBlock).toBe('Gemini seat Argon · builder-gemini@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nLane S1 green (8/8).');
     expect(compactBlock).not.toContain('Commit 2ad6cb3c7');
 
     const frame = frameMod.socketMessageFrame('acme', 'orchestrator', rawBody, id, {
@@ -276,11 +279,14 @@ describe('2. compact socket frame vs full socket frame', () => {
       rule: TO_ORCH_RULE,
       displayName: 'Argon',
       senderLabel: 'Gemini seat Argon',
+      seat: 'builder-gemini',
+      team: 'acme',
+      at: NOW,
       compact: true,
     } as never);
     const parsed = JSON.parse(frame) as { msg_id: string; message: { content: string } };
     expect(parsed.message.content).toBe(
-      'Gemini seat Argon (to orchestrator):\n\nLane S1 green (8/8).\n\n↩ team show 47c25f34 · team reply 47c25f34 · team ack 47c25f34',
+      'Gemini seat Argon · builder-gemini@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nLane S1 green (8/8).\n\n↩ team show 47c25f34 · team reply 47c25f34 · team ack 47c25f34',
     );
     expect(parsed.message.content).not.toContain('Commit 2ad6cb3c7');
     expect(parsed.message.content).not.toContain('All gates pass.');
@@ -393,7 +399,7 @@ describe('2. compact socket frame vs full socket frame', () => {
     const leadFrame = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
     const leadPrefix = leadFrame.msg_id.slice(0, 8);
     expect(leadFrame.message.content).toBe(
-      `Gemini seat Argon (to orchestrator):\n\nSummary headline for lead\n\n↩ team show ${leadPrefix} · team reply ${leadPrefix} · team ack ${leadPrefix}`,
+      `Argon · argon@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nSummary headline for lead\n\n↩ team show ${leadPrefix} · team reply ${leadPrefix} · team ack ${leadPrefix}`,
     );
     expect(leadFrame.message.content).not.toContain('Second detail line');
     expect(leadFrame.message.content).not.toContain('Third detail line');
@@ -542,7 +548,7 @@ describe('2. compact socket frame vs full socket frame', () => {
     const parsed = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
     const prefix = parsed.msg_id.slice(0, 8);
     expect(parsed.message.content).toBe(
-      `Gemini seat Argon (to orchestrator):\n\nSummary headline\n\n↩ team show ${prefix} · team reply ${prefix} · team ack ${prefix}`,
+      `Argon · argon@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nSummary headline\n\n↩ team show ${prefix} · team reply ${prefix} · team ack ${prefix}`,
     );
     expect(parsed.message.content).not.toContain('Details below line 2.');
   });
@@ -571,7 +577,7 @@ describe('3. team show <id> full-body inspection, read receipt, re-show, and mai
     const firstIo = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
     expect(await runShow(['47c25f34'], firstIo, { home: f.home, now: () => NOW })).toBe(0);
     expect(firstIo.out).toBe(
-      'Gemini seat Argon (to orchestrator):\n\nHeadline line 1\nBody line 2\nBody line 3\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34\n',
+      'Argon · builder-gemini@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nHeadline line 1\nBody line 2\nBody line 3\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34\n',
     );
     expect(existsSync(join(f.dropDir, `${id}.read.json`))).toBe(true);
 
@@ -596,7 +602,7 @@ describe('3. team show <id> full-body inspection, read receipt, re-show, and mai
     expect(parsedJson.seat).toBe('orchestrator');
     expect(parsedJson.written).toBe(false);
     expect(parsedJson.content).toBe(
-      'Gemini seat Argon (to orchestrator):\n\nHeadline line 1\nBody line 2\nBody line 3\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34',
+      'Argon · builder-gemini@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nHeadline line 1\nBody line 2\nBody line 3\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34',
     );
 
     // 3. Even after `team reply` writes `<id>.replied.json`, `team show` still displays the message
@@ -648,7 +654,7 @@ describe('3. team show <id> full-body inspection, read receipt, re-show, and mai
     const io = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
     expect(await runShow(['019a0000'], io, { home: f.home, now: () => NOW })).toBe(0);
     expect(io.out).toBe(
-      'Client Grok Bot (owner relay):\n\nClient ping line 1.\nClient ping line 2.\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
+      'Grok Bot · 2026-11-05 15:00Z · admitted: owner relay\n\nClient ping line 1.\nClient ping line 2.\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
     );
     expect(existsSync(join(f.dropDir, `${clientId}.read.json`))).toBe(true);
   });

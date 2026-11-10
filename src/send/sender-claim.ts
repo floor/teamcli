@@ -12,6 +12,7 @@
 import { readTeamConfig } from '../file/team-config.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE, type CurrentBriefClaim } from '../launch/general-brief.ts';
 import { getAgent } from '../registry/agents.ts';
+import { readTeams } from '../registry/teams.ts';
 import type { RecordPayload } from './record.ts';
 
 /** What a reader knows about a record's sender. `unverified_claim` rests on the shared checkout
@@ -52,6 +53,11 @@ export type SenderRenderContext = {
   senderLabel?: string | null;
   /** The verified admission rule. The body's opening line never supplies this. */
   rule?: string | null;
+  /** The verified sender's seat and team, when the caller knows them without the registry. */
+  seat?: string | null;
+  team?: string | null;
+  /** The send instant (ISO or Date). The record's own `at` wins when it is handed in. */
+  at?: string | Date | null;
   /** When true, only the first non-empty content line of the body is rendered (compact socket frame). */
   compact?: boolean;
 };
@@ -172,23 +178,6 @@ export function seatKindPrefix(cli: string | null | undefined): string | null {
   }
 }
 
-function isSystemOrOwner(claimed: string, displayName: string): boolean {
-  return (
-    claimed === 'owner' ||
-    claimed === 'the owner' ||
-    claimed === 'watch' ||
-    claimed === 'the watch' ||
-    claimed === 'daemon' ||
-    claimed === 'the daemon' ||
-    claimed === GENERAL_BRIEF_FROM ||
-    displayName === 'the owner' ||
-    displayName === 'owner' ||
-    displayName === 'the watch' ||
-    displayName === 'the daemon' ||
-    displayName === GENERAL_BRIEF_FROM
-  );
-}
-
 function clientDisplayName(claimed: string, clientId?: string): string {
   const id = clientId ?? (claimed.startsWith('client:') ? claimed.slice('client:'.length) : claimed);
   if (id === 'grok-bot') return 'Grok Bot';
@@ -212,32 +201,39 @@ function registrySenderName(context: SenderRenderContext): string | null {
   }
 }
 
-function resolveSenderCli(context: SenderRenderContext, claimed: string): string | null {
-  if (context.cli !== undefined && context.cli !== null) return context.cli;
+/** The verified sender's seat and team, when the reader can name both. The registry answers by
+ *  the agent id, and the team field reads the team file's own `project:` name — the same
+ *  spelling the sender-name word prints, and a team no registry names reads as its id. Without
+ *  an id, the sending team's own file answers by the seat name it declares. A principal that is
+ *  no seat (the owner, the watch, the daemon, a client) has no answer here: its line carries the
+ *  sender word and the time only. */
+function registrySenderIdentity(context: SenderRenderContext, claimed: string): { seat: string; team: string } | null {
   const fromId = context.fromId ?? context.record?.from_id ?? null;
   if (fromId !== null && context.home !== undefined) {
     try {
       const agent = getAgent(context.home, fromId);
-      if (agent !== null) return agent.cli;
+      if (agent !== null) {
+        const teams = readTeams(context.home);
+        const team = teams[agent.reach.team]?.project ?? agent.reach.team;
+        return { seat: agent.reach.seat, team };
+      }
     } catch {
-      // Fallback to team file below.
+      // Fall through to the team file.
     }
   }
   const root = context.root ?? context.record?.root;
   const seatName = context.record?.from ?? claimed;
-  if (root !== undefined && seatName !== '') {
-    try {
-      const loaded = readTeamConfig(root, context.home === undefined ? undefined : { home: context.home });
-      if (loaded.ok) {
-        const seat = loaded.team.seats.find((one) => one.name === seatName);
-        if (seat !== undefined) return seat.cli;
-      }
-    } catch {
-      // Ignore config read errors on fallback.
-    }
+  if (root === undefined || seatName === '') return null;
+  try {
+    const loaded = readTeamConfig(root, context.home === undefined ? undefined : { home: context.home });
+    if (!loaded.ok) return null;
+    const seat = loaded.team.seats.find((one) => one.name === seatName);
+    return seat === undefined ? null : { seat: seat.name, team: loaded.team.project };
+  } catch {
+    return null;
   }
-  return null;
 }
+
 
 /**
  * Extracts the first non-empty line of a message body (excluding the `from … — admitted by: …`
@@ -250,30 +246,50 @@ export function firstContentLine(text: string): string {
   return '';
 }
 
+/** The send instant, or now when the record's own time is missing or unreadable, as UTC
+ *  `YYYY-MM-DD HH:MMZ`: the clock reads on the receiver's line are the send's, never the
+ *  render's. */
+export function utcStamp(at?: string | Date | null): string {
+  const date = at instanceof Date ? at : typeof at === 'string' ? new Date(at) : new Date();
+  const safe = Number.isNaN(date.getTime()) ? new Date() : date;
+  const iso = safe.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
+}
+
 /**
- * Formats the single-line compact sender header for a rendered message:
- * - Client:      `"Client <Name> (<short rule>):"` (or `"Client <Name>:"` when no rule is given)
- * - Non-Claude:  `"<Kind> seat <Name> (<short rule>):"` (or `"<Kind> seat <Name>:"` when no rule is given)
- * - Claude/else: `"from <Name> (<short rule>):"` (or `"from <Name>:"` when no rule is given)
+ * The receiver's one sender line, shared by the socket, channel and typed legs:
+ *
+ *   `<nickname> · <seat>@<team> · <YYYY-MM-DD HH:MMZ> · admitted: <short rule>`
+ *
+ * The timestamp is the send time in UTC, taken from the record when the caller has one. The
+ * address field is the seat the registry records for the sender; a non-seat principal (the
+ * owner, the watch, the daemon, a client) has none, so its line carries the sender word and the
+ * time only. No short rule means no admission tail.
  */
+export function receiverHeaderLine(
+  name: string,
+  rule: string,
+  options: { seat?: string | null; team?: string | null; at?: string | Date | null } = {},
+): string {
+  const seat = options.seat ?? '';
+  const team = options.team ?? '';
+  const parts = [name];
+  if (seat !== '' && team !== '') parts.push(`${seat}@${team}`);
+  parts.push(utcStamp(options.at));
+  const shortRule = compactRule(rule);
+  if (shortRule !== '') parts.push(`admitted: ${shortRule}`);
+  return parts.join(' · ');
+}
+
+/** The single-line compact sender header for a rendered message. One shape for every leg; the
+ *  old `from …:`, `Client …:` and `<Kind> seat …:` variants are gone. `preformatted` and
+ *  `client` remain accepted so a caller need not change, and never add a prefix back. */
 export function compactSenderHeader(
   name: string,
   rule = '',
-  options: { client?: boolean; cli?: string | null; preformatted?: boolean } = {},
+  options: { client?: boolean; cli?: string | null; preformatted?: boolean; seat?: string | null; team?: string | null; at?: string | Date | null } = {},
 ): string {
-  const shortRule = compactRule(rule);
-  const ruleSuffix = shortRule === '' ? '' : ` (${shortRule})`;
-  if (options.preformatted === true) {
-    return `${name}${ruleSuffix}:`;
-  }
-  if (options.client === true) {
-    return `Client ${name}${ruleSuffix}:`;
-  }
-  const kind = seatKindPrefix(options.cli);
-  if (kind !== null) {
-    return `${kind} ${name}${ruleSuffix}:`;
-  }
-  return `from ${name}${ruleSuffix}:`;
+  return receiverHeaderLine(name, rule, { seat: options.seat, team: options.team, at: options.at });
 }
 
 /**
@@ -308,15 +324,22 @@ export function attributedBody(body: string, claimed: string, context: SenderRen
     && verifiedNames.some((name) => sameSender(name, openingName))
     && (header[2] ?? '') === rule;
   const rest = renderRest(openingAgrees ? body.slice(header[0].length) : body);
+  // The one line every leg reads: nickname, seat@team, the send instant, the admitting rule.
+  const identity = registrySenderIdentity(context, claimed);
+  const seat = context.seat ?? identity?.seat ?? null;
+  const team = context.team ?? identity?.team ?? null;
+  const at = context.at ?? context.record?.at ?? null;
+  const line = (label: string): string =>
+    `${compactSenderHeader(label, rule, { seat, team, at })}\n\n${rest}`;
   if (context.senderLabel && context.senderLabel !== '') {
-    return `${compactSenderHeader(context.senderLabel, rule, { preformatted: true })}\n\n${rest}`;
+    return line(context.senderLabel);
   }
   if (isClient) {
     const display =
       context.displayName && context.displayName !== ''
         ? context.displayName
         : clientDisplayName(claimed, context.record?.from_client?.client_id);
-    return `${compactSenderHeader(display, rule, { client: true })}\n\n${rest}`;
+    return line(display);
   }
   const display = noticeDisplay ?? (
     context.displayName && context.displayName !== ''
@@ -325,6 +348,5 @@ export function attributedBody(body: string, claimed: string, context: SenderRen
         ? registered
         : claimed
   );
-  const cli = isSystemOrOwner(claimed, display) ? null : resolveSenderCli(context, claimed);
-  return `${compactSenderHeader(display, rule, { cli })}\n\n${rest}`;
+  return line(display);
 }

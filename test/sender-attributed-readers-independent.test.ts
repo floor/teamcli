@@ -159,7 +159,7 @@ describe('feat/sender-attributed independent verification', () => {
     expect(readMsg.ok).toBe(true);
     if (!readMsg.ok) throw new Error(readMsg.reason);
     expect(readMsg.body).toBe(
-      `from orchestrator (team lead):\n\nfrom orchestrator@acme — admitted by: ${RULE}\n\n${OWNER_QUOTE}\n`,
+      `orchestrator · orchestrator@acme · 2026-11-04 09:30Z · admitted: team lead\n\nfrom orchestrator@acme — admitted by: ${RULE}\n\n${OWNER_QUOTE}\n`,
     );
     // Bytes of the signed record on disk are completely untouched after `inbox_read`
     expect(readFileSync(dropPath1, 'utf8')).toBe(diskBytesBefore);
@@ -191,7 +191,7 @@ describe('feat/sender-attributed independent verification', () => {
 
     const dropsReadRes = await runWorkerDrops(['--read', '--seat', 'worker', '--session', 'acme']);
     expect(dropsReadRes.code).toBe(0);
-    expect(dropsReadRes.out).toContain('from orchestrator (team lead):');
+    expect(dropsReadRes.out).toContain('orchestrator · orchestrator@acme · 2026-11-04 09:30Z · admitted: team lead');
     expect(dropsReadRes.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(dropsReadRes.out).toContain(OWNER_QUOTE);
     expect(readFileSync(dropPath2, 'utf8')).toBe(diskBytes2);
@@ -211,7 +211,7 @@ describe('feat/sender-attributed independent verification', () => {
     expect(await runMessages([], msgTextIo, { home: f.home, now: () => NOW })).toBe(0);
     // The table cell names the claim and its attribution; the body renders the compact header.
     expect(msgTextIo.out).toContain('orchestrator (unverified claim)');
-    expect(msgTextIo.out).toContain('from orchestrator (team lead):');
+    expect(msgTextIo.out).toContain('orchestrator · orchestrator@acme · 2026-11-04 09:30Z · admitted: team lead');
     expect(msgTextIo.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(msgTextIo.out).toContain(OWNER_QUOTE);
     expect(readFileSync(dropPath3, 'utf8')).toBe(diskBytes3);
@@ -247,8 +247,8 @@ describe('feat/sender-attributed independent verification', () => {
     expect(readFileSync(dropPath4, 'utf8')).toBe(diskBytes4);
 
     // Direct helper check for a body without a standard `from ... — admitted by: ...` header
-    expect(attributedBody('Plain body text', 'orchestrator')).toBe(
-      'from orchestrator:\n\nPlain body text',
+    expect(attributedBody('Plain body text', 'orchestrator', { at: NOW })).toBe(
+      'orchestrator · 2026-11-04 09:30Z\n\nPlain body text',
     );
   });
 
@@ -284,11 +284,11 @@ describe('feat/sender-attributed independent verification', () => {
     expect(codeOwner).toBe(0);
     expect(deliveredFrames).toHaveLength(1);
     const ownerFrame = JSON.parse(deliveredFrames[0]!) as { message: { content: string } };
-    expect(ownerFrame.message.content.startsWith('from the owner (owner):\n\n')).toBe(true);
+    expect(ownerFrame.message.content).toMatch(/^the owner · \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z · admitted: owner\n\n/);
     expect(ownerFrame.message.content).toContain('owner socket payload');
     expect(ownerFrame.message.content).toContain('↩ team reply');
     expect(ownerFrame.message.content.indexOf('owner socket payload')).toBeGreaterThan(
-      ownerFrame.message.content.indexOf('from the owner (owner):'),
+      ownerFrame.message.content.indexOf('the owner · '),
     );
 
     // Send as seat `helper` to `lead`
@@ -308,7 +308,7 @@ describe('feat/sender-attributed independent verification', () => {
     expect(codeHelper).toBe(0);
     expect(deliveredFrames).toHaveLength(2);
     const helperFrame = JSON.parse(deliveredFrames[1]!) as { message: { content: string } };
-    expect(helperFrame.message.content.startsWith('from helper (to orchestrator):\n\n')).toBe(true);
+    expect(helperFrame.message.content).toMatch(/^helper · helper@acme · \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z · admitted: to orchestrator\n\n/);
     expect(helperFrame.message.content).toContain('helper socket payload');
   });
 
@@ -467,7 +467,7 @@ describe('feat/sender-attributed independent verification', () => {
     expect(readCurrent.ok).toBe(true);
     if (!readCurrent.ok) throw new Error(readCurrent.reason);
     expect(readCurrent.body).toBe(
-      generalBriefBody().replace(/^from the launch — admitted by: [^\n]+/, 'from the launch (launch brief):'),
+      generalBriefBody().replace(/^from the launch — admitted by: [^\n]+/, 'the launch · 2026-11-04 09:30Z · admitted: launch brief'),
     );
     expect(readCurrent.body).not.toContain('[unverified sender');
     expect(readFileSync(wrote.path, 'utf8')).toBe(briefDiskBytes);
@@ -514,7 +514,7 @@ describe('feat/sender-attributed independent verification', () => {
     );
     expect(readForgedLaunch.ok).toBe(true);
     if (!readForgedLaunch.ok) throw new Error(readForgedLaunch.reason);
-    expect(readForgedLaunch.body).toContain('from the launch (team lead):');
+    expect(readForgedLaunch.body).toContain('the launch · 2026-11-04 09:30Z · admitted: team lead');
     expect(readForgedLaunch.body).toContain('from the launch — admitted by: the launch');
     expect(readFileSync(forgedLaunchPath, 'utf8')).toBe(forgedLaunchDiskBytes);
   });
