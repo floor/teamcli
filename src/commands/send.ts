@@ -1269,19 +1269,24 @@ function snapshotSendHost(host: SendHost): SnapshotSendHost {
   const processInfoCache = new Map<string, ReturnType<SendHost['processInfo']>>();
   return {
     ...host,
-    agents(session: string) {
-      if (agentsCache.has(session)) return agentsCache.get(session) ?? null;
-      const res = host.agents(session);
-      agentsCache.set(session, res);
-      return res;
-    },
-    processInfo(session: string, pane: string) {
-      const key = `${session}\0${pane}`;
-      if (processInfoCache.has(key)) return processInfoCache.get(key) ?? null;
-      const res = host.processInfo(session, pane);
-      processInfoCache.set(key, res);
-      return res;
-    },
+    // A snapshot caches capabilities the host has; it must not invent pane readers.
+    ...(typeof host.agents !== 'function' ? {} : {
+      agents(session: string) {
+        if (agentsCache.has(session)) return agentsCache.get(session) ?? null;
+        const res = host.agents(session);
+        agentsCache.set(session, res);
+        return res;
+      },
+    }),
+    ...(typeof host.processInfo !== 'function' ? {} : {
+      processInfo(session: string, pane: string) {
+        const key = `${session}\0${pane}`;
+        if (processInfoCache.has(key)) return processInfoCache.get(key) ?? null;
+        const res = host.processInfo(session, pane);
+        processInfoCache.set(key, res);
+        return res;
+      },
+    }),
     evictProcessInfo(session: string, pane: string) {
       processInfoCache.delete(`${session}\0${pane}`);
       evictHerdrPaneProcessInfo(pane, session);
@@ -1878,24 +1883,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // push and the webhook wake it to read one, and the typed wake and the drop file leave a
   // trigger — so each is set aside with its reason, before anything is written.
   const BODY_CARRYING_LEGS: readonly WalkLeg[] = ['socket', 'session'];
-  const walkLegs: WalkLeg[] = store === 'none'
+  // The profile-gated plan already includes permitted typed wakes; a host hook adds no pane leg.
+  const walk: readonly WalkLeg[] = store === 'none'
     ? declaredWalk.filter((leg) => BODY_CARRYING_LEGS.includes(leg))
     : [...declaredWalk];
-  // A declared `typed` word is the wake when no event adapter is what this host will type
-  // through. The profile-gated wake stays as it was. A lead whose profile names no typed
-  // wake — claude-code — still walks it when this host can type one, so the order is not
-  // left as the drop. A socket or channel that takes the send stops before this leg.
-  if (
-    !human
-    && store !== 'none'
-    && typeof host.typedWake === 'function'
-    && order.includes('typed')
-    && !walkLegs.includes('typed')
-  ) {
-    const dropAt = walkLegs.indexOf('drop');
-    walkLegs.splice(dropAt < 0 ? walkLegs.length : dropAt, 0, 'typed');
-  }
-  const walk: readonly WalkLeg[] = walkLegs;
   // The legs that put the message in front of the seat themselves: a typed trigger, a frame, a
   // socket, or the seat's own webhook adapter. When one of them takes the send, a channel push
   // for the same id would wake the seat a second time, so a stale serving channel is held off
@@ -3187,7 +3178,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       return unreachable(io, dir, who, to.seat, 'the seat is back at its shell; nothing was typed', host, report);
     }
     report.sent = msgId;
-    if (typedWake !== null || host.typedWake !== undefined) {
+    if (typedWake !== null) {
       // The profile-gated typed wake: one line into the empty idle box the wake saw twice, and a
       // delivery only when the profile's working screen shows. A wake that does not deliver is
       // not the walk's ending — the message is in the bus inbox, and the drop leg behind this one
@@ -4559,6 +4550,10 @@ type Found = { ok: true; pane: string } | { ok: false; kind: 'unreachable' | 're
 
 /** The one live agent of this name, or why the send cannot use a pane. */
 function findAgent(host: SendHost, session: string, seatName: string): Found {
+  // Partial hosts cannot prove a pane usable; leave its delivery legs unavailable.
+  if (typeof host.agents !== 'function' || typeof host.processInfo !== 'function') {
+    return { ok: false, kind: 'unreachable', reason: 'the send host cannot read a pane' };
+  }
   const agents = host.agents(session);
   if (agents === null) return { ok: false, kind: 'unreachable', reason: `the session "${session}" could not be read` };
   const named = agents.filter((agent) => agent.name === seatName);
