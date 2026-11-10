@@ -217,8 +217,8 @@ describe('the codex launch line round-trips its values through shell quoting and
   function pairs(line: string): Map<string, string> {
     const argv = words(line);
     const at = argv.flatMap((word, index) => (word === '-c' ? [index] : []));
-    // The two team-inbox pairs, and the profile's one pinned feature word.
-    expect(at).toHaveLength(3);
+    // Codex keeps only the two inbox pairs after the obsolete OAuth refresh override was removed.
+    expect(at).toHaveLength(2);
     const filled = new Map<string, string>();
     for (const index of at) {
       const value = argv[index + 1] ?? '';
