@@ -256,7 +256,7 @@ describe('the typed wake: one line into an empty idle box', () => {
     const pane = wakeFake(() => UNSENT);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
     expect(out.delivered).toBe(false);
-    expect(out.reason).toBe('the first read showed unsent, not an empty idle prompt; nothing was typed');
+    expect(out.reason).toBe('the box held a draft; it was kept in a file and no Enter was pressed');
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
@@ -367,7 +367,7 @@ describe('the typed wake: one line into an empty idle box', () => {
 
       const firstRead = wakeFake(() => frame);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'muse', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -413,7 +413,7 @@ describe('the typed wake: one line into an empty idle box', () => {
 
       const firstRead = wakeFake(() => draft);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'muse', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -466,7 +466,7 @@ describe('the typed wake: one line into an empty idle box', () => {
 
       const firstRead = wakeFake(() => workingFrame);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'muse', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -602,7 +602,7 @@ describe('the typed wake: a line already in the box is pressed into, never typed
   test('a working screen holding the line on the first look is still refused, not pressed', async () => {
     const pane = wakeFake(() => workingHolding(LINE));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
     expect(pane.enters).toBe(0);
   });
 
@@ -980,7 +980,7 @@ describe('team send: the typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: queued, not woken (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed); nothing wakes muse while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: queued, not woken (drop, 0 ms); queued; the typed wake failed (the box held a draft; it was kept in a file and no Enter was pressed); nothing wakes muse while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn\n');
     expect(io.err).toBe(queuedLine('muse', NO_EVENT_ADAPTER_TOOK_IT));
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
@@ -990,7 +990,7 @@ describe('team send: the typed wake', () => {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'queued, not woken', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
-        'typed: the first read showed unsent, not an empty idle prompt; nothing was typed',
+        'typed: the box held a draft; it was kept in a file and no Enter was pressed',
       ]);
     }
   });
@@ -1055,8 +1055,10 @@ describe('team send: the typed wake', () => {
       typedWake: () => pane.host,
     });
     const io = owner(made.root);
-    expect(await runSend(['muse', 'check held'], io, host)).toBe(0);
-    expect(io.out).toContain('muse: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after 1 Enter; the line was not submitted)');
+    // 1345 never-drop: a typed wake that stays working through the bound is terminal — the
+    // record is kept in the inbox, the sender is told `not delivered: wake not taken`, exit 1.
+    expect(await runSend(['muse', 'check held'], io, host)).toBe(1);
+    expect(io.err).toContain('team send: muse: not delivered: wake not taken; kept in muse\'s inbox');
     expect(pane.typed).toHaveLength(1);
     expect(pane.enters).toBe(1);
     const drops = join(made.dir, 'send-drops', 'acme', 'muse');

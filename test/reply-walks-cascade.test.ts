@@ -853,7 +853,8 @@ exit 0
       to: 'native',
       via: 'drop',
       outcome: 'delivered',
-      failed: ['typed: the first read showed working, not an empty idle prompt; nothing was typed'],
+      // 1345 never-drop: the busy screen waits to the bound, and the refusal reason says so.
+      failed: ['typed: the screen stayed working until the bound; nothing was typed'],
     });
     assertSingleReceiptsOnAnsweredRecord(home, root, 'acme', 'owner', SENT_4, 'native', REPLY_4);
   } finally {

@@ -297,7 +297,8 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        // 1345 never-drop: the held draft is kept in a file, and the refusal reason says so.
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       expect(refusedHost.typed).toEqual([]);
       expect(refusedHost.enters).toBe(0);

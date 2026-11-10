@@ -89,7 +89,8 @@ test('a pane mid-turn is never typed into', async () => {
   expect(out.delivered).toBe(false);
   expect(out.typed).toEqual([]);
   expect(out.enters).toBe(0);
-  expect(out.reason).toContain('the first read showed working');
+  // 1345 never-drop: the working-screen refusal reason is the bounded wait's own wording.
+  expect(out.reason).toContain('the screen stayed working until the bound');
   expect(out.reason).toContain('nothing was typed');
   expect(out.prompts).toEqual([]);
 });
@@ -99,8 +100,9 @@ test('an empty prompt with leftover text in the input box is not typed over', as
   expect(out.delivered).toBe(false);
   expect(out.typed).toEqual([]);
   expect(out.enters).toBe(0);
-  expect(out.reason).toContain('the first read showed unsent');
-  expect(out.reason).toContain('nothing was typed');
+  // 1345 never-drop: a held draft is kept in a file; 'no Enter was pressed' is the new
+  // 'nothing was typed', and the old wording is gone with the wipe-it-clean design.
+  expect(out.reason).toContain('the box held a draft; it was kept in a file and no Enter was pressed');
   expect(out.prompts).toEqual([]);
   expect(UNSENT).toContain('RULES_RECEIVED');
 });

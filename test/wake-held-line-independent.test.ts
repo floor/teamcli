@@ -390,7 +390,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        // 1345 never-drop: the held draft is kept in a file, and the refusal reason says so.
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       expect(openScene.typed).toEqual([]);
       expect(openScene.enters).toBe(0);
@@ -456,7 +457,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       expect(openScene.typed).toEqual([]);
       expect(openScene.enters).toBe(0);
@@ -506,7 +507,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
           delivered: false,
           typed: false,
           tries: 0,
-          reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+          reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
         });
         expect(firstRead.typed).toEqual([]);
         expect(firstRead.enters).toBe(0);
@@ -586,7 +587,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       delivered: false,
       typed: false,
       tries: 0,
-      reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+      reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
     });
     expect(exitScene.typed).toEqual([]);
     expect(exitScene.enters).toBe(0);
@@ -617,7 +618,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
           delivered: false,
           typed: false,
           tries: 0,
-          reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+          reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
         });
         expect(startScene.typed).toEqual([]);
         expect(startScene.enters).toBe(0);
@@ -682,7 +683,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       expect(rowScene.typed).toEqual([]);
       expect(rowScene.enters).toBe(0);

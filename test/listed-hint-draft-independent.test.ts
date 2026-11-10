@@ -102,7 +102,8 @@ describe('a listed Muse hint stays a draft unless it is faint or the declared gr
           delivered: false,
           typed: false,
           tries: 0,
-          reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+          // 1345 never-drop: the held draft is kept in a file, and the refusal reason says so.
+          reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
         });
         expect(wake.typed).toEqual([]);
         expect(wake.enters).toBe(0);

@@ -230,7 +230,8 @@ describe('exact /tasks hint rows plus extra words and /tasks shows the queue sta
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        // 1345 never-drop: the held draft is kept in a file, and the refusal reason says so.
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       expect(firstReadPane.typed).toEqual([]);
       expect(firstReadPane.enters).toBe(0);
@@ -267,7 +268,7 @@ describe('exact /tasks hint rows plus extra words and /tasks shows the queue sta
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       expect(firstReadPane.typed).toEqual([]);
       expect(firstReadPane.enters).toBe(0);
@@ -305,7 +306,7 @@ describe('exact /tasks hint rows plus extra words and /tasks shows the queue sta
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       expect(pane.typed).toEqual([]);
       expect(pane.enters).toBe(0);
@@ -351,7 +352,7 @@ describe('a real draft is never wiped or submitted over in either profile', () =
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       // The draft in the box is byte-for-byte intact and still verified by boxHoldsText.
       expect(current).toBe(draft.screen);
@@ -394,7 +395,7 @@ describe('a real draft is never wiped or submitted over in either profile', () =
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       expect(current).toBe(draft.screen);
       expect(boxHoldsText('muse', draft.text, current)).toBe(true);

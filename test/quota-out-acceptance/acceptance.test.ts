@@ -152,60 +152,71 @@ describe('send at a quota-out screen', () => {
   test('a live individual-quota frame refuses the send with no record, no socket frame and no typing', async () => {
     const scene = await sendAt(agyWorld(), 'agy1', AGY_QUOTA, 'done');
     expect(scene.code).toBe(1);
-    expect(scene.doc?.error?.id).toBe('send.refused');
-    expect(scene.out).toContain('quota');
-    expect(scene.out).toContain('47h31m');
+    // 1345 never-drop: the wall is the detector's `out of tokens`, so the id is send.not-delivered.
+    expect(scene.doc?.error?.id).toBe('send.not-delivered');
+    // The reset time moved to the watch's own reporting; the send names the reason and the keep.
+    expect(scene.out).toContain('out of tokens');
+    expect(scene.out).toContain("kept in agy1's inbox");
     expect(scene.out).not.toContain('sent (unconfirmed)');
     expect(scene.typed).toEqual([]);
     expect(scene.enters).toBe(0);
     expect(scene.frames).toBe(0);
-    expect(scene.records).toEqual([]);
+    expect(scene.records.some((one) => one.endsWith('.pending'))).toBe(true);
   });
 
   test('a wall the host still calls working refuses too: a busy host never bypasses a read wall', async () => {
     const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_LIMIT, 'working');
     expect(scene.code).toBe(1);
-    expect(scene.doc?.error?.id).toBe('send.refused');
-    expect(scene.out).toContain('quota');
-    expect(scene.out).toContain('11:00');
+    // 1345 never-drop: the wall is the detector's `out of tokens`, so the id is send.not-delivered.
+    expect(scene.doc?.error?.id).toBe('send.not-delivered');
+    // The reset time moved to the watch's own reporting; the send names the reason and the keep.
+    expect(scene.out).toContain('out of tokens');
+    expect(scene.out).toContain("kept in helper's inbox");
     expect(scene.typed).toEqual([]);
-    expect(scene.records).toEqual([]);
+    expect(scene.records.some((one) => one.endsWith('.pending'))).toBe(true);
   });
 
   test('a wall frame the profile cannot place in a composer stays held, with no effects', async () => {
     const scene = await sendAt(claudeWorld(), 'helper', NO_COMPOSER, 'done');
     expect(scene.code).toBe(1);
-    expect(scene.doc?.error?.id).toBe('send.refused');
-    expect(scene.out).toContain('quota');
-    expect(scene.out).toContain('11:00');
+    // 1345 never-drop: the wall is the detector's `out of tokens`, so the id is send.not-delivered.
+    expect(scene.doc?.error?.id).toBe('send.not-delivered');
+    // The reset time moved to the watch's own reporting; the send names the reason and the keep.
+    expect(scene.out).toContain('out of tokens');
+    expect(scene.out).toContain("kept in helper's inbox");
     expect(scene.typed).toEqual([]);
-    expect(scene.records).toEqual([]);
+    expect(scene.records.some((one) => one.endsWith('.pending'))).toBe(true);
   });
 
   test('a wall over a composer that holds unsent text refuses before any retry record, and the draft is never typed into', async () => {
     const scene = await sendAt(agyWorld(), 'agy1', AGY_DRAFT, 'done');
     expect(scene.code).toBe(1);
-    expect(scene.doc?.error?.id).toBe('send.refused');
-    expect(scene.out).toContain('quota');
-    expect(scene.out).toContain('47h31m');
+    // 1345 never-drop: the wall is the detector's `out of tokens`, so the id is send.not-delivered.
+    expect(scene.doc?.error?.id).toBe('send.not-delivered');
+    // The reset time moved to the watch's own reporting; the send names the reason and the keep.
+    expect(scene.out).toContain('out of tokens');
+    expect(scene.out).toContain("kept in agy1's inbox");
     expect(scene.out).not.toContain('unsent');
     expect(scene.out).not.toContain('send-drops');
     expect(scene.typed).toEqual([]);
     expect(scene.enters).toBe(0);
     expect(scene.frames).toBe(0);
-    expect(scene.records).toEqual([]);
+    expect(scene.records.some((one) => one.endsWith('.pending'))).toBe(true);
   });
 
   test('a quota frame that names no reset says so and invents no time', async () => {
     const scene = await sendAt(agyWorld(), 'agy1', AGY_NO_RESET, 'done');
     expect(scene.code).toBe(1);
-    expect(scene.doc?.error?.id).toBe('send.refused');
-    expect(scene.out).toContain('quota');
-    expect(scene.out).toMatch(/no reset/i);
+    // 1345 never-drop: the wall is the detector's `out of tokens`, so the id is send.not-delivered.
+    expect(scene.doc?.error?.id).toBe('send.not-delivered');
+    // The reset wording moved to the watch's own reporting; the send says only the reason and
+    // the keep, and invents no time of its own.
+    expect(scene.out).toContain('out of tokens');
+    expect(scene.out).toContain("kept in agy1's inbox");
     expect(scene.out).not.toMatch(/resets?\s+(?:at|in)\s/i);
     expect(scene.out).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
     expect(scene.typed).toEqual([]);
-    expect(scene.records).toEqual([]);
+    expect(scene.records.some((one) => one.endsWith('.pending'))).toBe(true);
   });
 
   test('a sentence quoted inside a working turn is not a wall, and the send goes through', async () => {
@@ -225,9 +236,12 @@ describe('send at a quota-out screen', () => {
   });
 
   test('an ordinary provider error keeps its existing caution and is not read as quota', async () => {
-    // No pane messaging: the screen is never typed at, so the send waits in the bus inbox.
     const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_PROVIDER_ERROR, 'idle');
-    expect(scene.code).toBe(0);
+    // 1345 never-drop: the detector reads the screen before sending, a provider error is `model
+    // failing`, and the refusal keeps the record in the inbox — exit 1, not a silent queue.
+    expect(scene.code).toBe(1);
+    expect(scene.out).toContain('model failing');
+    expect(scene.out).toContain("kept in helper's inbox");
     expect(scene.out).not.toContain('quota');
     expect(scene.typed).toEqual([]);
     expect(scene.enters).toBe(0);

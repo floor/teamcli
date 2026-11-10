@@ -72,7 +72,8 @@ test('a working agy frame is never typed into', async () => {
   expect(out.delivered).toBe(false);
   expect(out.typed).toEqual([]);
   expect(out.enters).toBe(0);
-  expect(out.reason).toContain('the first read showed working');
+  // 1345 never-drop: the working-screen refusal reason is the bounded wait's own wording.
+  expect(out.reason).toContain('the screen stayed working until the bound');
   expect(out.reason).toContain('nothing was typed');
   expect(out.prompts).toEqual([]);
 });

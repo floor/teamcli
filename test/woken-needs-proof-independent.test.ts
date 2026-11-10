@@ -310,7 +310,8 @@ describe('woken-needs-proof independent scenes', () => {
     expect(wakeReads).toBe(1);
     expect(wakeTypes).toBe(0);
     expect(plainIo.out).toContain(
-      'muse-worker: queued, not woken (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed);',
+      // 1345 never-drop: the held draft is kept in a file, and the refusal reason says so.
+      'muse-worker: queued, not woken (drop, 0 ms); queued; the typed wake failed (the box held a draft; it was kept in a file and no Enter was pressed);',
     );
     expect(plainIo.out).not.toContain('sent (unconfirmed)');
     assertNeverClaimsWoken(plainIo.out);
@@ -322,7 +323,7 @@ describe('woken-needs-proof independent scenes', () => {
     expect(doc.status).toBe('queued, not woken');
     expect(doc.channel).toBe('drop');
     expect(doc.action_summary).toContain(
-      'muse-worker: queued, not woken (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed);',
+      'muse-worker: queued, not woken (drop, 0 ms); queued; the typed wake failed (the box held a draft; it was kept in a file and no Enter was pressed);',
     );
     expect(doc.action_summary).not.toContain('sent (unconfirmed)');
     assertNeverClaimsWoken(doc.action_summary);
@@ -330,7 +331,7 @@ describe('woken-needs-proof independent scenes', () => {
       {
         leg: 'typed',
         state: 'attempted',
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       },
       {
         leg: 'drop',
@@ -344,7 +345,7 @@ describe('woken-needs-proof independent scenes', () => {
       expect(entry.outcome).toBe('queued, not woken');
       expect(entry.via).toBe('drop');
       expect(entry.failed).toEqual([
-        'typed: the first read showed unsent, not an empty idle prompt; nothing was typed',
+        'typed: the box held a draft; it was kept in a file and no Enter was pressed',
       ]);
     }
   });
