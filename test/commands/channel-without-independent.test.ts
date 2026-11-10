@@ -84,6 +84,17 @@ rule\ttwo keeps  two  spaces, "double quotes", $HOME and a \\ backslash'`;
     expect(withoutChannel(line)).toBe('zsh /opt/channel-seats/wrapper.sh  claude --model m');
   });
 
+  // Decisive per the lead's sharpening: a channel seat whose launch program is a wrapper NAME,
+  // not the claude binary. The flag and server words go; the wrapper and model words stay
+  // byte-identical. A literal-claude program gate would keep the whole line, flag included —
+  // exactly the wrapper-seat break its cancellation named — so every position is pinned here.
+  test('a wrapper-named channel seat line loses only the pair: the wrapper and model words stay byte-identical', () => {
+    expect(withoutChannel(`claude-x --model m ${PAIR}`)).toBe('claude-x --model m ');
+    expect(withoutChannel(`${PAIR} claude-x --model m`)).toBe(' claude-x --model m');
+    expect(withoutChannel(`claude-x --model m ${FLAG}=server:${CHANNEL_SERVER}`)).toBe('claude-x --model m ');
+    expect(withoutChannel(`claude-glm --model glm-5.3 ${PAIR} --resume abc`)).toBe('claude-glm --model glm-5.3  --resume abc');
+  });
+
   test('a script arm whose program is not claude is untouched, byte for byte', () => {
     const line = `zsh -c 'cursor-agent --model m ${PAIR} --prompt hi'`;
     expect(withoutChannel(line)).toBe(line);
