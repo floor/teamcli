@@ -256,6 +256,7 @@
     "test/commands/aimed-preflight-independent.test.ts": 4,
     "test/commands/brief-prune-race.test.ts": 0,
     "test/commands/brief.test.ts": 3,
+    "test/commands/channel-without-independent.test.ts": 3,
     "test/commands/check-watch-health.test.ts": 4,
     "test/commands/coordinator-lead.test.ts": 5,
     "test/commands/coordinator-session.test.ts": 4,
