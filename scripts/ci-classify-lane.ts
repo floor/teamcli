@@ -133,6 +133,8 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/permissions',
       'src/policy',
       'src/profiles',
+      // Quota exhaustion and fallback can change admission to a wake.
+      'src/quota',
       'src/reach',
       'src/registry',
       'src/release',
@@ -269,6 +271,8 @@ export const ROUTINE_ALLOWLIST: readonly LaneRule[] = [
  * cannot widen its own lane by editing a helper this script imports.
  */
 export const ADMISSION_MODULES: readonly string[] = [
+  'src/quota/out-of-tokens.ts',
+  'src/quota/token-fallback.ts',
   'src/caller.ts',
   'src/process-tools-adapter.ts',
   'src/check/signature.ts',

@@ -730,7 +730,8 @@ describe('team up, a restored session: boundaries', () => {
     const seatLaunches = made.runs.filter((run) => run.command.includes('team-deepseek'));
     expect(seatLaunches).toHaveLength(1);
     // The record's launcher, then the id the live pane proved next to it.
-    expect(seatLaunches[0]?.command).toContain('team-deepseek --resume kept');
+    // Removing the runtime channel words preserves both surrounding separators.
+    expect(seatLaunches[0]?.command).toContain('team-deepseek  --resume kept');
     expect(keys).toEqual([]);
     expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', agent_session: 'kept' });
     expect(findAgent(home, { team: teamIdOf(root), seat: 'deepseek-acme' })?.signing).toMatchObject({

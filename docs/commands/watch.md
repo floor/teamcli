@@ -798,6 +798,6 @@ seats:
 ```console
 $ team up ; echo "exit $?"
 team up: line 9: watch.checks can't turn off attention: attention, missing, model-drift, model-rule, prompt-escalation, approval always run
-team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, model-rule, attention, provider-error, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-growth, budget
+team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, model-rule, attention, provider-error, out-of-tokens, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-growth, budget
 exit 2
 ```
