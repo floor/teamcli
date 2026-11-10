@@ -16,6 +16,7 @@ import { runSend, sendDirect, type WatchSendPrincipal } from '../src/commands/se
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { MESSAGE_ID } from '../src/mcp/inbox.ts';
+import { readHistory } from '../src/send/history.ts';
 import { getAgent, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readState, STATE_FILE, updateState } from '../src/state.ts';
@@ -341,8 +342,9 @@ describe('the direct wake legs', () => {
     }
 
     expect(dials).toBe(1);
-    // The direct ending the caller reads names the last live route's transport failure; the
-    // refused resume leg is the walk's own line, and it is a refusal, never the unavailable
+    // The direct ending the caller reads names the last live route's transport failure and
+    // nothing of the legs behind it; the walk's own lines, including the refused resume leg, are
+    // recorded on the message's history. The refusal is the guard's, never the unavailable
     // runtime the build would have recorded had the guard passed. The staged copy is part of
     // the answer: the seat reads it at its next wake.
     expect(result).toEqual({
@@ -350,13 +352,22 @@ describe('the direct wake legs', () => {
       refused: 'socket: unreachable: the receiver closed the socket',
       staged: true,
     });
-    expect(logged).toContain("headless-resume: refused: the recorded watch is another watch's epoch");
-    expect(logged).not.toContain('headless-resume: this build carries no headless resume runtime');
+    expect(logged).toContain('lead: not delivered: no live route');
+    expect(logged).not.toContain('headless-resume:');
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
     // The prepared record was staged before the first attempt; the successor's record is left
     // exactly as the replacement wrote it.
-    expect(staged(made)).toHaveLength(1);
+    const stagedIds = staged(made);
+    expect(stagedIds).toHaveLength(1);
+    const history = readHistory('acme', made.root, made.home);
+    if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
+    const entry = history.entries.filter((one) => one.id === stagedIds[0]).at(-1);
+    if (entry === undefined) throw new Error('the send wrote no history line');
+    const failed = (entry.failed ?? []).join('\n');
+    expect(entry.outcome).toBe('unreachable');
+    expect(failed).toContain("headless-resume: refused: the recorded watch is another watch's epoch");
+    expect(failed).not.toContain('headless-resume: this build carries no headless resume runtime');
     expect(readFileSync(join(made.dir, STATE_FILE), 'utf8')).toContain(successor);
   });
 
