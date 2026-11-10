@@ -77,6 +77,11 @@ export function endHerdrSnapshot(id: number | null): void {
   }
 }
 
+/** A mutation guard must not reuse the planning pass's cached agent list. */
+export function evictHerdrAgentList(session?: string): void {
+  activeSnapshot?.agents.delete(session ?? '');
+}
+
 export function evictHerdrPaneProcessInfo(pane: string, session?: string): void {
   activeSnapshot?.processInfo.delete(`${session ?? ''}\0${pane}`);
 }
@@ -121,21 +126,30 @@ function agentSessionOf(value: unknown): string | undefined {
 }
 
 // The agents a `agent list` result names, in its order. One parser for the sync and async reads.
-function agentsOf(result: unknown): HerdrAgent[] {
-  return (((result as { agents?: Record<string, unknown>[] })?.agents) ?? []).map((agent) => {
+function agentsOf(result: unknown): HerdrAgent[] | null {
+  if (!result || typeof result !== 'object') return null;
+  const rows = (result as { agents?: unknown }).agents;
+  if (!Array.isArray(rows)) return null;
+  const agents: HerdrAgent[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+    const agent = row as Record<string, unknown>;
+    if (typeof agent.pane_id !== 'string' || agent.pane_id === ''
+      || typeof agent.workspace_id !== 'string' || agent.workspace_id === '') return null;
     const session = agentSessionOf(agent.agent_session);
     const displayAgent = typeof agent.display_agent === 'string' && agent.display_agent ? agent.display_agent : undefined;
-    return {
+    agents.push({
       name: typeof agent.name === 'string' && agent.name ? agent.name : null,
       agent: typeof agent.agent === 'string' ? agent.agent : null,
-      pane: String(agent.pane_id),
-      workspace: String(agent.workspace_id),
+      pane: agent.pane_id,
+      workspace: agent.workspace_id,
       status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
       cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
       ...(session ? { session } : {}),
       ...(displayAgent ? { displayAgent } : {}),
-    };
-  });
+    });
+  }
+  return agents;
 }
 
 // The agents herdr lists, or null when herdr can't be reached.
@@ -288,11 +302,18 @@ export async function paneProcessesAsync(pane: string, session: string | undefin
 
 export type HerdrWorkspace = { id: string; label: string };
 
-function workspacesOf(result: unknown): HerdrWorkspace[] {
-  return (((result as { workspaces?: Record<string, unknown>[] })?.workspaces) ?? []).map((workspace) => ({
-    id: String(workspace.workspace_id),
-    label: typeof workspace.label === 'string' ? workspace.label : '',
-  }));
+/** An unread or malformed inventory cannot prove a recorded workspace absent. */
+function workspacesOf(result: unknown): HerdrWorkspace[] | null {
+  if (!result || typeof result !== 'object') return null;
+  const rows = (result as { workspaces?: unknown }).workspaces;
+  if (!Array.isArray(rows)) return null;
+  const workspaces: HerdrWorkspace[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+    if (typeof row.workspace_id !== 'string' || row.workspace_id === '') return null;
+    workspaces.push({ id: row.workspace_id, label: typeof row.label === 'string' ? row.label : '' });
+  }
+  return workspaces;
 }
 
 export function workspaceList(session?: string): HerdrWorkspace[] | null {

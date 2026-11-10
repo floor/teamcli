@@ -598,6 +598,8 @@ export interface UpSeat {
    * skips it before any close or launch: the run does not relaunch or close the caller's pane.
    */
   grantKeep?: string;
+  /** Automatic restore keeps a live or unmeasured original pane and its record untouched. */
+  restoreKeep?: { reason: string; uncertain: boolean };
 }
 
 /**
@@ -1058,6 +1060,20 @@ export function upPlan(input: UpInput): Step[] {
     }
     if (seat.stopped) {
       steps.push({ kind: 'skip', text: `${seat.name}: stopped in the file; start it with \`team add ${seat.name}\`` });
+      continue;
+    }
+    if (seat.restoreKeep !== undefined) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: ${seat.restoreKeep.reason}`,
+        do: {
+          do: 'record', seat: seat.name,
+          record: seat.restoreKeep.uncertain || seat.stage !== 'ready'
+            ? { kind: 'left out', reason: seat.restoreKeep.reason } : { kind: 'ready' },
+          detail: `  ${seat.restoreKeep.reason}\n`,
+          held: seat.restoreKeep.uncertain,
+        },
+      });
       continue;
     }
     const profile = profileFor(seat.cli);
@@ -1826,7 +1842,7 @@ export function upPlan(input: UpInput): Step[] {
   // A human's pane and a granted seat's are not this run's to close, whatever a plan built by
   // hand attached to them: neither reaches the swept collection.
   const swept = [
-    ...input.seats.flatMap((seat) => (seat.sweep === undefined || seat.human || seat.grantKeep !== undefined
+    ...input.seats.flatMap((seat) => (seat.sweep === undefined || seat.human || seat.grantKeep !== undefined || seat.restoreKeep !== undefined
       ? []
       : [{ seat: seat.name, cli: seat.cli, ...seat.sweep }])),
     ...(input.vacated ?? []),

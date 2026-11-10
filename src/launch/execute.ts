@@ -13,7 +13,7 @@ function saveTextFile(path: string, text: string): boolean {
 }
 import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { boxHoldsText, refusalReport, type Refusal } from './deliver.ts';
-import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
+import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, directConversationLaunch, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { ownStartFolderProblem } from '../worktree/place.ts';
 import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
@@ -114,7 +114,7 @@ export type Host = {
    */
   stopManagedCodexEndpoint?(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   /** Whether the conversation a resume line names is on disk for its CLI; null when unknown. */
-  conversationExists?(cli: string, cwd: string, id: string): boolean | null;
+  conversationExists?(cli: string, cwd: string, id: string, command?: string): boolean | null;
   /**
    * Registers the seat's team inbox with its CLI, run in the seat's folder directly before the
    * launch command. `session` is the launch's own, which narrows the registry to the team the
@@ -412,6 +412,10 @@ function restoreBucketsOf(seats: readonly UpSeat[], evidence: RestoreEvidence): 
     // it was granted for. None of them is a restore outcome.
     if (seat.stopped || seat.human || seat.grantKeep !== undefined) continue;
     const name = seat.name;
+    if (seat.restoreKeep !== undefined) {
+      if (seat.restoreKeep.uncertain) buckets.push({ seat: name, outcome: 'refused', reason: seat.restoreKeep.reason });
+      continue;
+    }
     const candidate = seat.repair !== undefined || seat.replacedPane !== undefined;
     if (seat.driftHold !== undefined) {
       buckets.push({ seat: name, outcome: 'skipped_working', detail: seat.driftHold });
@@ -624,6 +628,8 @@ export type ExecuteOptions = {
   /** The host is closing: stop between seat steps, and let the stop pass finish what this run
    *  made. The daemon's restore sweep passes its closing flag here. */
   isClosing?: () => boolean;
+  /** Recheck original-pane absence before automatic restore mutates a seat. */
+  restoreGuard?(seat: string): string | null;
 };
 
 /** Runs a plan. Steps carry the operation beside the command the dry run prints. */
@@ -867,7 +873,18 @@ export async function executePlan(
     return 'settled';
   };
 
+  const guardRestore = (seat: string): boolean => {
+    if (options?.restoreGuard === undefined) return true;
+    if (invalidStart.has(seat)) return false;
+    const problem = options.restoreGuard(seat);
+    if (problem === null) return true;
+    invalidStart.add(seat);
+    leftOut(seat, problem);
+    return false;
+  };
+
   const guardStart = (op: Extract<Op, { do: 'launch' }>): boolean => {
+    if (!guardRestore(op.seat)) return false;
     const problem = startProblem(op);
     if (problem === null) return true;
     invalidStart.add(op.seat);
@@ -876,6 +893,7 @@ export async function executePlan(
   };
 
   const dropRecord = (seat: string): boolean => {
+    if (!guardRestore(seat)) return false;
     if (host.drop(seat)) return true;
     leftOut(seat, 'its endpoint was not stopped; its launch record was kept');
     return false;
@@ -931,6 +949,7 @@ export async function executePlan(
   // A seat this run did not launch has no entry, so a later record keeps what an earlier launch wrote.
   const recordLines = new Map<string, string>();
   const recordSeat = (seat: string, patch: Parameters<Host['record']>[1]): void => {
+    if (!guardRestore(seat)) return;
     const line = recordLines.get(seat);
     host.record(seat, line === undefined || patch.launch_line !== undefined ? patch : { ...patch, launch_line: line });
   };
@@ -1202,6 +1221,7 @@ export async function executePlan(
     // A path can change after planning or workspace creation. Check before the first write
     // for this seat, including inbox registration; a refused start also suppresses cleanup.
     if (seat && invalidStart.has(seat)) return;
+    if (seat && (step.kind !== 'skip' || (op?.do === 'record' && op.launched !== undefined)) && !guardRestore(seat)) return;
     const launch = seat === undefined ? undefined : launches.get(seat);
     if (launch !== undefined && !guardStart(launch)) return;
 
@@ -1365,6 +1385,7 @@ export async function executePlan(
             break;
           }
         }
+        if (op.seat && !guardRestore(op.seat)) break;
         const made = host.createWorkspace(session, op.cwd, op.label);
         if (!made) {
           if (op.seat) {
@@ -1618,7 +1639,8 @@ export async function executePlan(
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.
         const resumeTarget = namedResumeTarget(op.cli ?? '', command);
-        if (resumeTarget && op.cwd !== undefined && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget) === false) {
+        if (resumeTarget && op.cwd !== undefined && directConversationLaunch(op.cli ?? '', command)
+          && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget, command) === false) {
           const fresh = withoutResume(op.cli ?? '', command);
           if (fresh !== null) {
             freshFrom = resumeTarget;
@@ -1639,6 +1661,7 @@ export async function executePlan(
         launchedThisRun.add(op.seat);
         let channelCurrent = true;
         try { if (channel?.ok) channel.lease.check(); } catch { channelCurrent = false; }
+        if (!guardRestore(op.seat)) break;
         if (!here || !channelCurrent || !host.paneRun(session, here.pane, launch.command)) {
           // The fresh-start fallback is logged with its real outcome, never as a launch that
           // did not happen: the terminal's scrollback loses this, so the log keeps the truth.
@@ -1842,6 +1865,7 @@ export async function executePlan(
         let shellBackAfterSubmit = 0;
         for (;;) {
           if (stopped || closing()) break;
+          if (!guardRestore(op.seat)) return;
           if (parallel && !identities.has(op.seat)) {
             const live = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
             if (live) identities.set(op.seat, live);
@@ -1883,6 +1907,7 @@ export async function executePlan(
                 hold(op.seat, `${op.seat}: ${relaunch.notice}\n`);
                 host.log(op.seat, relaunch.notice);
               }
+              if (!guardRestore(op.seat)) return;
               if (host.paneRun(session, here.pane, relaunch.command)) {
                 hold(op.seat, `${op.seat}: its recorded conversation was not found by the CLI; launched a fresh one\n`);
                 // The runtime refusal is logged too: the pane's own error text never reaches the

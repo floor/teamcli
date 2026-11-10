@@ -145,7 +145,7 @@ function aim(session: string): string | undefined {
 }
 
 const realUpLaunch: Launch = {
-  conversationExists: (cli, cwd, id) => conversationOnDisk(cli, cwd, id),
+  conversationExists: (cli, cwd, id, command) => conversationOnDisk(cli, cwd, id, process.env, command),
   sessionState,
   startServer,
   sessionUp: sessionRunning,
