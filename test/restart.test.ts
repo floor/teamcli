@@ -2845,6 +2845,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     // The launch line runs the CLI inside a quoted script: a word after the closing quote never
     // reaches `claude`, so the resume and the profile's options go inside it, and the pre-close
     // line quotes the line the run launches rather than the bare declaration.
+    // This scene proves resume/profile placement; opt out of the unrelated default channel.
     const launch = 'zsh -lc "claude --model claude-opus-5-5"';
     const worker = `  - role: implementer
     name: worker
@@ -2860,7 +2861,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       workerSession: 'ses_keep',
       launched: true,
       launch,
-      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `channel: off\n    launch: ${launch}`)),
     });
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
     const io = testIo(fixture.root, { kind: 'owner' });
@@ -2962,6 +2963,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     // option, not the CLI's continue. Both lines carry the recorded conversation, and the
     // profile's options go inside the script with it. The line is planned and recorded here;
     // the next scene runs one.
+    // This scene proves resume/profile placement; opt out of the unrelated default channel.
     for (const launch of ['/bin/sh -c "claude --model claude-opus-5-5"', 'zsh -c "claude --model claude-opus-5-5"']) {
       const worker = `  - role: implementer
     name: worker
@@ -2977,7 +2979,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
         workerSession: 'ses_keep',
         launched: true,
         launch,
-        yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+        yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `channel: off\n    launch: ${launch}`)),
       });
       run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
       const io = testIo(fixture.root, { kind: 'owner' });
