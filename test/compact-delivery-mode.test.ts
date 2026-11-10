@@ -325,7 +325,7 @@ describe('2. compact socket frame vs full socket frame', () => {
       cli: 'antigravity',
       launcher: null,
       launch: 'agy --model gemini-4-argon',
-      reach: { team: 'acme', seat: 'argon', session: 'acme', pane: 'pane-argon', address: null },
+      reach: { team: teamIdOf(made.root), seat: 'argon', session: 'acme', pane: 'pane-argon', address: null },
       mcp: [],
       skills: [],
       lifecycle: 'running',
@@ -338,7 +338,7 @@ describe('2. compact socket frame vs full socket frame', () => {
       cli: 'claude-code',
       launcher: null,
       launch: 'claude --model claude-sonnet-5-5',
-      reach: { team: 'acme', seat: 'bea', session: 'acme', pane: 'pane-bea', address: null },
+      reach: { team: teamIdOf(made.root), seat: 'bea', session: 'acme', pane: 'pane-bea', address: null },
       mcp: [],
       skills: [],
       lifecycle: 'running',
@@ -351,7 +351,7 @@ describe('2. compact socket frame vs full socket frame', () => {
       cli: 'claude-code',
       launcher: null,
       launch: 'claude --model claude-opus-5-5',
-      reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
+      reach: { team: teamIdOf(made.root), seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
       mcp: [],
       skills: [],
       lifecycle: 'running',
@@ -382,14 +382,15 @@ describe('2. compact socket frame vs full socket frame', () => {
     const frames: string[] = [];
     const host = fake(made, {
       agents: () => [
-        { name: 'lead', pane: 'pane-lead' },
-        { name: 'argon', pane: 'pane-argon' },
-        { name: 'bea', pane: 'pane-bea' },
+        { name: 'lead', pane: 'pane-lead', cli: 'claude' },
+        { name: 'argon', pane: 'pane-argon', cli: 'agy' },
+        { name: 'bea', pane: 'pane-bea', cli: 'claude' },
       ],
       deliver: async (_socket: string, frame: string) => {
         frames.push(frame);
         return { ok: true };
       },
+      now: () => NOW,
     });
 
     const multiLineBody = 'Summary headline for lead\nSecond detail line\nThird detail line';
@@ -422,7 +423,7 @@ describe('2. compact socket frame vs full socket frame', () => {
     const beaFrame = JSON.parse(frames[1]!) as { msg_id: string; message: { content: string } };
     const beaPrefix = beaFrame.msg_id.slice(0, 8);
     expect(beaFrame.message.content).toBe(
-      `from Dora (team lead):\n\n${multiLineBody}\n\n↩ team reply ${beaPrefix} "…" · team ack ${beaPrefix}`,
+      `Dora · lead@acme · 2026-11-05 15:00Z · admitted: team lead\n\n${multiLineBody}\n\n↩ team reply ${beaPrefix} "…" · team ack ${beaPrefix}`,
     );
   });
 
@@ -455,7 +456,7 @@ describe('2. compact socket frame vs full socket frame', () => {
       cli: 'antigravity',
       launcher: null,
       launch: 'agy --model gemini-4-argon',
-      reach: { team: 'acme', seat: 'argon', session: 'acme', pane: 'pane-argon', address: null },
+      reach: { team: teamIdOf(made.root), seat: 'argon', session: 'acme', pane: 'pane-argon', address: null },
       mcp: [],
       skills: [],
       lifecycle: 'running',
@@ -468,7 +469,7 @@ describe('2. compact socket frame vs full socket frame', () => {
       cli: 'claude-code',
       launcher: null,
       launch: 'claude --model claude-opus-5-5',
-      reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
+      reach: { team: teamIdOf(made.root), seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
       mcp: [],
       skills: [],
       lifecycle: 'running',
