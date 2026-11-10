@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Generated claude-code launches accept inbound messages on the session socket by default; a seat or its launcher can still declare `inbound: hold` or `refuse`, and sender admission is unchanged.
+
+- A delivered message carries one header line: `<nickname> · <seat>@<team> · <UTC date and time> · admitted: <rule>`, the same on every delivery leg.
+
 - A team's lead and operator run every command for their own team without the owner, except grant, delegate, revoke, the owner's identity and keys, recording a served project (`also_in`), and migrate, which writes a team's first authority record. The owner can restore the old gates with `leads.authority: owner-asks`.
 
 - The owner-reserved scope now names major releases; minor and patch releases are the leads' within their gates.
@@ -40,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A launch recipe that carries the old Codex background-server override is normalized, and a recognized Codex settings dialog is closed, not answered: no input is typed and no identity guard is weakened.
 
 ### Fixed
+
+- A send to a claude-code seat whose record has no address uses its proven live session socket and records it; `team up` and `team restart` refresh it; with no live route the send says `not delivered: no live route` and keeps the message in the inbox.
+
+- `team route` reports a socket it may not use as `ineligible` with the reason, and `team send --dry-run` shows why a socket was skipped.
 
 - A send that cannot be delivered is kept: the pending record stays in the seat's inbox, the command prints `not delivered: <reason>` and exits 1, and the seat reads the message at its next turn or wake. A confirmed wake still reports delivery.
 
