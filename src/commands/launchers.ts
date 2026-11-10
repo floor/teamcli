@@ -7,6 +7,7 @@ import { lstatSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
+import { withoutFileOffer } from '../file/load.ts';
 import { editedRecordText, getAt, withValue } from '../config/team-record.ts';
 import { describeCaller, judgeCallerIn, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -143,7 +144,7 @@ export async function runLaunchers(argv: string[], io: Io, home = homedir()): Pr
   const dry = args.flags.has('dry-run');
   const loaded = readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
-    const message = loaded.errors.map((problem) => problem.message).join('; ') || 'the team cannot be read';
+    const message = loaded.errors.map((problem) => withoutFileOffer(problem.message)).join('; ') || 'the team cannot be read';
     return configuration(out, json, message);
   }
   const { team, root, path } = loaded;
