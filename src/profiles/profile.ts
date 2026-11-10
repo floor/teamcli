@@ -2452,9 +2452,14 @@ function fail(line: number, message: string): never {
 export function directConversationLaunch(cli: string, command: string): boolean {
   const binary = profileFor(cli)?.binary;
   const words = shellWords(command);
-  return binary !== undefined && plainBodyOf(command) !== null && words !== null
-    && words.length > 0 && words.every((word) => !word.expands)
-    && words[0]!.text.split('/').pop() === binary;
+  if (binary === undefined || plainBodyOf(command) === null || words === null
+    || words.length === 0 || words.some((word) => word.expands)) return false;
+  // The launch builder's literal marker changes neither the start folder nor the store.
+  // Other assignments and wrapper programs remain unmeasured; quoted text is no assignment.
+  const first = words[0]!;
+  const at = first.text === 'AGENT_UNATTENDED=1'
+    && command.slice(first.start, first.end) === 'AGENT_UNATTENDED=1' ? 1 : 0;
+  return words[at]?.text.split('/').pop() === binary;
 }
 
 /**
