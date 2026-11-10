@@ -6,6 +6,7 @@
 // Cards stay the default workflow's: a cardless seat, or label change asks none, while a
 // general-grant change is carded, and `team check` names any other pending card under dev mode
 // as policy drift. Every folder, caller, key, pane and client below is synthetic.
+import { cwdTargetForReach } from './helpers/cwd-reach.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -270,9 +271,11 @@ function families(): Families {
   return { floorRoot, targetRoot, outsideRoot, otherRoot, home };
 }
 
-async function configAt(root: string, home: string, caller: typeof CEDAR, key: string, value: string): Promise<{ code: number; err: string }> {
+async function configAt(root: string, home: string, caller: typeof CEDAR, key: string, value: string, cwdReach = false): Promise<{ code: number; err: string }> {
   const io = testIo(root, caller);
   io.env = { TEAMCLI_DEV_MODE: '1' };
+  // Only the deliberately cross-team positive needs cwd to win over pane placement.
+  if (cwdReach) cwdTargetForReach(home, root, io, caller.session);
   const code = await runConfig(['set', key, value], io, { home, env: io.env, now: () => NOW });
   return { code, err: io.err };
 }
@@ -280,7 +283,7 @@ async function configAt(root: string, home: string, caller: typeof CEDAR, key: s
 describe('the main orchestrator and the teams around it', () => {
   test('it changes a team of its own entity under the main folder', async () => {
     const at = families();
-    const ran = await configAt(at.targetRoot, at.home, CEDAR, 'seats.worker.model', 'Claude Sonnet');
+    const ran = await configAt(at.targetRoot, at.home, CEDAR, 'seats.worker.model', 'Claude Sonnet', true);
     expect(ran.code).toBe(0);
     expect(ran.err).toBe(`warning: ${CONFIG_LINE} cedar; dev mode continues\n`);
     expect(readFileSync(join(at.targetRoot, '.agents', 'team.yaml'), 'utf8')).toContain('    model: Claude Sonnet\n');

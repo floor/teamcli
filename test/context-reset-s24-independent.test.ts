@@ -6,6 +6,7 @@
 // Slice 4: --resume pins this seat's own conversation in this checkout's store. A foreign seat,
 // terminal-host session, CLI, or checkout is refused before any stop, and so is a store that
 // cannot be read.
+import { cwdTargetForReach } from './helpers/cwd-reach.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -252,6 +253,8 @@ describe('team checkpoint', () => {
       { kind: 'seat', session: 'corp', name: 'orchestrator', pane: 'pane-corp-orch' },
       world.home,
     );
+    // Preserve the cross-team target rather than the caller's pane-proven head team.
+    cwdTargetForReach(world.home, world.root, orchestrator.io, 'corp');
     const orchestratorCode = await runCheckpoint(['worker', '--json'], orchestrator.io, { home: world.home, now: () => NOW });
     const recorded = orchestratorCode === 0 ? (JSON.parse(orchestrator.out()) as { status: string; by: string; seat: string }) : null;
     expect({ code: orchestratorCode, err: orchestrator.err(), status: recorded?.status ?? orchestrator.out() }).toEqual({
@@ -267,6 +270,7 @@ describe('team checkpoint', () => {
       { kind: 'seat', session: 'corp', name: 'helper', pane: 'pane-corp-helper' },
       world.home,
     );
+    cwdTargetForReach(world.home, world.root, helper.io, 'corp');
     expect(await runCheckpoint(['lead', '--json'], helper.io, { home: world.home, now: () => NOW })).toBe(1);
     const refused = JSON.parse(helper.out()) as { error: { id: string; rule?: string; message: string } };
     expect(refused.error.id).toBe('checkpoint.caller');

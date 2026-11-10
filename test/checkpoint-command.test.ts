@@ -1,3 +1,4 @@
+import { cwdTargetForReach } from './helpers/cwd-reach.ts';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -418,6 +419,8 @@ describe('team checkpoint (R2)', () => {
       pane: 'pane-corp-orch',
     });
 
+    // Pane-first must be unproven for this cross-team reach control.
+    cwdTargetForReach(home, root, io, 'corp');
     const code = await runCheckpoint(['worker', '--json'], io, { home, now: () => NOW });
 
     expect(code).toBe(0);
