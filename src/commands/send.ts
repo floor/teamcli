@@ -1,4 +1,4 @@
-import { isTypingLeg, NO_EVENT_ADAPTER_TOOK_IT, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, queuedLine, refuseTyping } from '../send/no-pane-messaging.ts';
+import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -19,7 +19,7 @@ import { NOT_A_REPO } from '../file/load.ts';
 import { labelPersona } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { agentList, agentStatus, beginHerdrSnapshot, endHerdrSnapshot, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, beginHerdrSnapshot, endHerdrSnapshot, evictHerdrAgentList, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
@@ -34,11 +34,12 @@ import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor, type TypedWake } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
-import { getAgent, readAgents, type Agent } from '../registry/agents.ts';
+import { getAgent, readAgents, recordProvenAgentAddress, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { findTeams, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { crossTeamsFor } from '../send/cross-teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
+import { livePlacement } from '../send/placement.ts';
 import { socketAddressOf, type SocketAddress } from '../send/address.ts';
 import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitProjects, type AdmitTeam, type AdmitTeams, type DeclaredSender, type ReplyContext, type SendSide } from '../send/admit.ts';
 import { deliverCompose } from '../send/compose.ts';
@@ -1180,22 +1181,19 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     && !declaredWithWake.includes('session')) {
     declaredWithWake.splice(declaredWithWake.indexOf('typed'), 0, 'session');
   }
-  // A seat whose channel is on — the launch loads this team's channel server, or the deciding
-  // word begins with the retired inbox name — is delivered on that channel while the server is
-  // connected, and the socket is not also dialed. The socket remains only as a fallback when
-  // that server is not connected and the live order itself names it. An order that does not
-  // name it never grows one here, including the socket the typed wake would otherwise stand in.
-  // A seat with neither word keeps the walk above, socket included.
+  // Prefer a connected channel, retaining the authorized socket as fallback if its
+  // notification does not complete. The walk stops at the first successful delivery.
   const inboxFirst = input.cli === 'claude-code' && chainNamesInboxFirst(input.rawChain);
   if ((channelProbe !== null || inboxFirst) && !human) {
     const probe = channelProbe ?? inboxLive(dropDir, input.root, input.session, input.seat, input.build?.());
     const connected = probe.live === true && probe.listener.channel === true;
-    if (connected || !order.includes('socket')) {
-      for (let i = declaredWithWake.length - 1; i >= 0; i -= 1) {
-        if (declaredWithWake[i] === 'socket') declaredWithWake.splice(i, 1);
-      }
-    }
     if (connected && !declaredWithWake.includes('channel')) declaredWithWake.unshift('channel');
+  }
+  // A permitted Claude session socket leads every model and role. Explicit route
+  // exclusions and inbound refusal still stand; a channel is the socket's fallback.
+  if (input.cli === 'claude-code' && !human && socketNow && declaredWithWake.includes('socket')) {
+    declaredWithWake.splice(declaredWithWake.indexOf('socket'), 1);
+    declaredWithWake.unshift('socket');
   }
   const ordered: readonly DeliveryLeg[] = declaredWithWake;
   // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked,
@@ -1262,6 +1260,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
 
 type SnapshotSendHost = SendHost & {
   evictProcessInfo?: (session: string, pane: string) => void;
+  evictAgents?: (session: string) => void;
 };
 
 function snapshotSendHost(host: SendHost): SnapshotSendHost {
@@ -1287,6 +1286,11 @@ function snapshotSendHost(host: SendHost): SnapshotSendHost {
         return res;
       },
     }),
+    evictAgents(session: string) {
+      agentsCache.delete(session);
+      evictHerdrAgentList(session);
+      if (session === 'default') evictHerdrAgentList(undefined);
+    },
     evictProcessInfo(session: string, pane: string) {
       processInfoCache.delete(`${session}\0${pane}`);
       evictHerdrPaneProcessInfo(pane, session);
@@ -1860,7 +1864,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   const {
     dropDir, order, inbound, socketWord, heldStanding, socketNow, declaredOrder,
     staleChannel, channelSkip, human, typedWake, walkingTyped, webhookWalked, webhookReason,
-    typingSetAside, noEventAdapter, chosen,
+    typingSetAside, chosen,
   } = plan;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
   // reaches a live receiver without a keystroke stays. The typed and native legs type, and the
@@ -3008,14 +3012,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       walkLost.endpoint = true;
       lowerDelivery();
       await ensureEpisode();
-      // The drop leg is the bus inbox, never a wake: when it takes the send no event adapter
-      // did (src/send/no-pane-messaging.ts). It is the cascade's last resort, under every other
-      // class (src/send/walk-cascade.ts). Across teams the outcome line below names the full
-      // address, so this line would print the same recipient a second time — once by its bare
-      // resolved seat name — and read as a second target; the summary is the one statement.
-      if (!human && !dry && !to.cross) {
-        io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
-      }
+      // The durable inbox is kept, but no event leg delivered: the ending reports no live route.
       if (endpointDown !== undefined) {
         report.endpointBlocked = endpointDown;
         writeEndpointBlockedNotice({
@@ -3239,7 +3236,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     note(walkAttempt(walk[walk.length - 1] as string, 'unreachable', false, host.now(), startedAt, { reason: why }));
   }
   appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) });
-  return unreachable(io, dir, who, to.seat, why, host, report);
+  return notDelivered(io, dir, who, label, 'no live route', host, report, store === 'none');
 }
 
 /** Why the native leg cannot be walked for this receiver and sender, or null when it can. A
@@ -4698,15 +4695,12 @@ async function deliverDropped(
   const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken', project, staged);
   if (stored.ok) {
     stored.release();
-    if (wait) {
+    if (human && wait) {
       return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
     }
     const ms = host.now().getTime() - startedAt;
-    // The drop leg stores and wakes nothing, so a seat nothing wakes while it is idle is left with
-    // a message only a turn can serve: that ending is `queued, not woken`, on the history line and
-    // the console line alike (the daemon's re-wake reads this line — `via: 'drop'` is the only leg
-    // this word ever names).
-    const notWoken = dropNotWoken(report);
+    // Keeping a copy is not delivery. A person's explicitly addressed inbox keeps its existing
+    // acceptance; every agent with no successful live leg returns the not-delivered contract.
     appendHistory(project, root, host.home, {
       ts: host.now().toISOString(),
       from,
@@ -4716,12 +4710,12 @@ async function deliverDropped(
       body,
       id: msgId,
       thread: payload.thread,
-      outcome: notWoken ? 'queued, not woken' : 'sent (unconfirmed)',
+      outcome: human ? 'sent (unconfirmed)' : 'not delivered',
       ms,
       via: 'drop',
       ...failed,
     });
-    return sentUnconfirmed(io, label, report, ms, 'drop');
+    return human ? sentUnconfirmed(io, label, report, ms, 'drop') : notDelivered(io, dir, who, label, 'no live route', host, report);
   }
   if (!('busy' in stored)) {
     return refuse(io, dir, who, `${seatName}: ${stored.reason}; nothing was sent`, host, report);
@@ -4782,11 +4776,13 @@ async function deliverDropped(
     body,
     id: msgId,
     thread: payload.thread,
-    outcome: 'queued (receiver busy)',
+    outcome: human ? 'queued (receiver busy)' : 'not delivered',
     ms: host.now().getTime() - startedAt,
     ...failed,
   });
-  return queuedBusy(io, dir, who, seatName, 'drop', msgId, { held: stored.busy, startedAt: stored.startedAt }, host, report, startedAt);
+  report.sent = msgId;
+  return human ? queuedBusy(io, dir, who, seatName, 'drop', msgId, { held: stored.busy, startedAt: stored.startedAt }, host, report, startedAt)
+    : notDelivered(io, dir, who, label, 'no live route', host, report);
 }
 
 /**
@@ -6360,26 +6356,6 @@ function crossTeamRows(host: SendHost, teams: Record<string, TeamRecord>, ownId:
   return rows;
 }
 
-/**
- * The first of the pane's processes with a socket in the sockets folders: the foreground
- * processes first (the running CLI is one of them), then the shell; each pid's folders in
- * order — `socketsDir`, then the alt folder when the real host has one. The probe's socket
- * is derived from one process — the session — so more than one match is not resolved here:
- * the first is used, in that order.
- */
-function socketOf(host: SendHost, processes: PaneProcesses): string | null {
-  const dirs = host.socketsDirAlt === undefined ? [host.socketsDir] : [host.socketsDir, host.socketsDirAlt];
-  const pids = [...processes.foreground, processes.shell].filter((pid, index, all) => all.indexOf(pid) === index);
-  for (const pid of pids) {
-    for (const dir of dirs) {
-      const path = join(dir, `${String(pid)}.sock`);
-      if (existsSync(path)) return path;
-    }
-  }
-  return null;
-}
-
-/** The folders discovery looked in, as one phrase for a refusal's text. */
 function socketDirs(host: SendHost): string {
   return host.socketsDirAlt === undefined ? host.socketsDir : `${host.socketsDir}, ${host.socketsDirAlt}`;
 }
@@ -6544,6 +6520,8 @@ async function deliverSocketFrame(
   if (seatLockHolder(to.dir, to.session, to.seat) !== null) {
     return { kind: 'fallback', reason: 'another command holds the seat' };
   }
+  (host as SnapshotSendHost).evictAgents?.(to.session);
+  (host as SnapshotSendHost).evictProcessInfo?.(to.session, found.pane);
   const first = socketPathFor(host, to, found.pane);
   if (first === null) return { kind: 'fallback', reason: noSocketReason(host), socketUnusable: true };
   if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path, host.home), socketUnusable: true };
@@ -6575,20 +6553,54 @@ async function deliverSocketFrame(
   // so an injected host's transport is the transport this attempt uses. A recorded address whose
   // write refuses gets the same one live re-resolution it always did, as a second attempt.
   const message = { id: msgId, record: recordText, frame };
+  const expectedAddressRecord = to.agentId === null ? null : getAgent(host.home, to.agentId);
+  if (to.agentId !== null && (expectedAddressRecord === null || expectedAddressRecord.lifecycle !== 'running'
+    || expectedAddressRecord.cli !== to.cli || expectedAddressRecord.reach.team !== teamIdOf(to.root)
+    || expectedAddressRecord.reach.session !== to.session || expectedAddressRecord.reach.seat !== to.seat)) {
+    return { kind: 'fallback', reason: 'the addressed seat record changed', socketUnusable: true };
+  }
+  (host as SnapshotSendHost).evictAgents?.(to.session);
+  (host as SnapshotSendHost).evictProcessInfo?.(to.session, found.pane);
+  const dialProof = socketPathFor(host, to, found.pane);
+  if (dialProof?.kind !== 'path' || dialProof.path !== first.path || inboundStaleReason(inbound, first.path) !== null) {
+    return { kind: 'fallback', reason: 'the socket placement changed before delivery', socketUnusable: true };
+  }
+  let usedAddress = first.path;
   let taken = await relayDeliver(
     { route: 'socket', socket: first.path, runtime: to.cli, copy },
     message,
     { now: host.now, dial: host.deliver },
   );
-  if (taken.outcome !== 'delivered' && first.recorded) {
+  if (taken.outcome !== 'delivered' && first.recorded
+    && (expectedAddressRecord === null || getAgent(host.home, expectedAddressRecord.id)?.provenance.seq === expectedAddressRecord.provenance.seq)) {
     (host as SnapshotSendHost).evictProcessInfo?.(to.session, found.pane);
-    const processes = host.processInfo(to.session, found.pane);
-    const live = processes === null ? null : socketOf(host, processes);
-    if (live !== null && live !== first.path) {
+    (host as SnapshotSendHost).evictAgents?.(to.session);
+    const retried = socketPathFor(host, { ...to, address: null }, found.pane);
+    const live = retried?.kind === 'path' ? retried.path : null;
+    if (live !== null && live !== first.path && inboundStaleReason(inbound, live) === null) {
+      usedAddress = live;
       taken = await relayDeliver({ route: 'socket', socket: live, runtime: to.cli, copy }, message, { now: host.now, dial: host.deliver });
     }
   }
   if (taken.outcome !== 'delivered') return { kind: 'fallback', reason: taken.reason };
+  // Only a taken socket with fresh placement proof is written back, under an identity
+  // compare-and-write. A failed dial or a record replaced during the dial writes nothing.
+  if (expectedAddressRecord !== null && expectedAddressRecord.cli === to.cli
+    && expectedAddressRecord.reach.team === teamIdOf(to.root)
+    && expectedAddressRecord.reach.session === to.session && expectedAddressRecord.reach.seat === to.seat) {
+    (host as SnapshotSendHost).evictAgents?.(to.session);
+    (host as SnapshotSendHost).evictProcessInfo?.(to.session, found.pane);
+    const confirmed = socketPathFor(host, { ...to, address: usedAddress }, found.pane);
+    if (confirmed?.kind === 'path' && confirmed.path === usedAddress && inboundStaleReason(inbound, usedAddress) === null) {
+      try {
+        if (!recordProvenAgentAddress(host.home, expectedAddressRecord, usedAddress)) {
+          logLine(to.dir, 'send', who, `${to.seat}: its address record changed; the socket address was not written`, host.now());
+        }
+      } catch {
+        logLine(to.dir, 'send', who, `${to.seat}: the proven socket address could not be recorded`, host.now());
+      }
+    }
+  }
   logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
   // `parallel` ends the send only when both settled: the frame was taken, and the walk's own
   // write is joined here before this leg calls itself delivered. A write that failed leaves the
@@ -6703,8 +6715,13 @@ export async function redeliverChannelOnSocket(input: {
  *  holder has one — so the recorded address is read against the primary folder exactly as this
  *  walk always read it. */
 function socketPathFor(host: SendHost, to: Aim, pane: string): SocketAddress | null {
+  if (to.cli !== 'claude-code') return null;
   const sockets = host.socketsDirAlt === undefined ? host.socketsDir : [host.socketsDir, host.socketsDirAlt];
-  return socketAddressOf(to.address, host.processInfo(to.session, pane), sockets);
+  const placed = livePlacement(host, { id: to.agentId ?? to.seat, cli: to.cli, reach: { session: to.session, seat: to.seat } });
+  if ('error' in placed || placed.pane !== pane) return null;
+  const processes = host.processInfo(to.session, pane);
+  if (processes === null) return null;
+  return socketAddressOf(to.address, processes, sockets);
 }
 
 /** The receiving seat's webhook row, read from its team file: an `Aim` carries the address, not
@@ -7605,7 +7622,7 @@ function notDelivered(
   dir: string,
   who: string,
   seat: string,
-  reason: CantWorkReason,
+  reason: CantWorkReason | 'no live route',
   host: SendHost,
   report: Report,
   /** The recipient's store is `none`: nothing was written, and the line says so. */
