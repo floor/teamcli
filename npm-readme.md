@@ -11,19 +11,10 @@ The live file is what they read. It runs the team in
 
 ## What's new in 0.5.21
 
-- **Restore with proof.** The automatic restore sweep leaves live seats alone and relaunches
-  or moves a record only when the recorded pane is proven gone. A wrapper launch's conversation
-  check stays "not measured" when its store is unknown.
-- **Messages stay in the inbox.** A send that cannot be delivered keeps the pending message,
-  prints the reason and exits 1. Restored seats need conversation proof to send as themselves.
-- **Team commands for leads and operators.** They run their own team's commands within the
-  owner's reserved gates; the complete exceptions are in the changelog.
-- **Launch and mail tools.** `team launchers migrate` moves mapped scripts to launcher
-  declarations, `team swap` starts a seat with another preset, and `team drops archive` moves
-  settled mail. Each offers a dry run.
-- **Quiet channels and quota reports.** Claude Code seats use the inbox channel by default;
-  temporary copies start quietly in the common lobby. The watch reports an exhausted quota
-  and warns the lead when the weekly quota falls below 20%.
+Automatic restore leaves live seats alone; undelivered messages stay in the inbox.
+Leads and operators run their team's commands within the owner's reserved gates.
+Launcher migration, preset swaps, mail archiving, quiet channels and quota reports are included.
+See [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md) for the full release notes.
 
 ## What's new in 0.5.0
 
