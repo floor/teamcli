@@ -1269,19 +1269,24 @@ function snapshotSendHost(host: SendHost): SnapshotSendHost {
   const processInfoCache = new Map<string, ReturnType<SendHost['processInfo']>>();
   return {
     ...host,
-    agents(session: string) {
-      if (agentsCache.has(session)) return agentsCache.get(session) ?? null;
-      const res = host.agents(session);
-      agentsCache.set(session, res);
-      return res;
-    },
-    processInfo(session: string, pane: string) {
-      const key = `${session}\0${pane}`;
-      if (processInfoCache.has(key)) return processInfoCache.get(key) ?? null;
-      const res = host.processInfo(session, pane);
-      processInfoCache.set(key, res);
-      return res;
-    },
+    // A snapshot caches capabilities the host has; it must not invent pane readers.
+    ...(typeof host.agents !== 'function' ? {} : {
+      agents(session: string) {
+        if (agentsCache.has(session)) return agentsCache.get(session) ?? null;
+        const res = host.agents(session);
+        agentsCache.set(session, res);
+        return res;
+      },
+    }),
+    ...(typeof host.processInfo !== 'function' ? {} : {
+      processInfo(session: string, pane: string) {
+        const key = `${session}\0${pane}`;
+        if (processInfoCache.has(key)) return processInfoCache.get(key) ?? null;
+        const res = host.processInfo(session, pane);
+        processInfoCache.set(key, res);
+        return res;
+      },
+    }),
     evictProcessInfo(session: string, pane: string) {
       processInfoCache.delete(`${session}\0${pane}`);
       evictHerdrPaneProcessInfo(pane, session);
