@@ -61,7 +61,7 @@ test('a direct-only send takes the socket, types nothing and names the route tha
 
   const run = await sendDirect(owner(made.root), host, {
     seat: 'lead',
-    pane: 'w1:p1',
+    pane: 'pane-lead-1',
     cli: 'claude-code',
     body: 'a note',
   });
@@ -95,7 +95,7 @@ test('a direct-only send whose order holds no direct route attempts nothing and 
 
   const run = await sendDirect(owner(made.root), host, {
     seat: 'lead',
-    pane: 'w1:p1',
+    pane: 'pane-lead-1',
     cli: 'claude-code',
     body: 'a note',
   });
@@ -115,7 +115,7 @@ test('a direct-only send never counts an inbox record or a drop copy as a wake',
 
   const run = await sendDirect(owner(made.root), host, {
     seat: 'lead',
-    pane: 'w1:p1',
+    pane: 'pane-lead-1',
     cli: 'claude-code',
     body: 'a note',
   });

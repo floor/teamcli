@@ -133,7 +133,9 @@ export function fake(made: World, patch: Partial<SendHost> = {}): Fake {
   const frames: string[] = [];
   return {
     frames,
-    agents: () => [{ name: 'lead', pane: 'w1:p1' }],
+    // The CLI herdr reports on the pane, as the real host reads it: the send's placement
+    // proof refuses a live read that does not name one.
+    agents: () => [{ name: 'lead', pane: 'pane-lead-1', cli: 'claude' }],
     processInfo: () => ({ shell: 111, foreground: [222] }),
     socketsDir: made.sockets,
     deliver: async (_socketPath: string, frame: string) => {

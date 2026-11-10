@@ -16,16 +16,16 @@ import { runSend, sendDirect, type WatchSendPrincipal } from '../src/commands/se
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { MESSAGE_ID } from '../src/mcp/inbox.ts';
-import { registerAgent, updateAgent } from '../src/registry/agents.ts';
+import { getAgent, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { STATE_FILE, updateState } from '../src/state.ts';
+import { readState, STATE_FILE, updateState } from '../src/state.ts';
 import { verifyWatchAuthority, WATCH_DIRECT_WORK } from '../src/watch/authority.ts';
 import { sendWatchDirect } from '../src/watch/direct-send.ts';
 import { mintWatchEpoch } from '../src/watch/epoch.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
 const SESSION = 'acme';
-const PANE = 'w1:p1';
+const PANE = 'pane-lead-1';
 const BODY = 'take the next task';
 
 let cleanup: () => void = () => {};
@@ -263,10 +263,12 @@ describe('the exact target evidence', () => {
   });
 
   test('refuses a registry pane that is not the pane the pass read', async () => {
+    let recorded = '';
     const why = await refusal((made, agent) => {
       updateAgent(made.home, agent.id, { reach: { pane: 'w2:p2' } });
+      recorded = getAgent(made.home, agent.id)?.reach.pane ?? '';
     });
-    expect(why).toContain('the registry records pane w2:p2 for seat lead, and the pass read pane w1:p1');
+    expect(why).toContain(`the registry records pane ${recorded} for seat lead, and the pass read pane pane-lead-1`);
   });
 
   test('refuses a registry CLI that is not the CLI the pass read', async () => {
@@ -279,13 +281,15 @@ describe('the exact target evidence', () => {
   });
 
   test('refuses a state pane that disagrees with the pass', async () => {
+    let recorded = '';
     const why = await refusal((made) => {
       updateState(made.dir, (state) => {
         const seat = state.sessions[SESSION]?.seats.lead;
         if (seat !== undefined) seat.pane = 'w2:p2';
       });
+      recorded = readState(made.dir).sessions[SESSION]?.seats.lead?.pane ?? '';
     });
-    expect(why).toContain('the state records pane w2:p2 for seat lead, and the pass read pane w1:p1');
+    expect(why).toContain(`the state records pane ${recorded} for seat lead, and the pass read pane pane-lead-1`);
   });
 });
 
