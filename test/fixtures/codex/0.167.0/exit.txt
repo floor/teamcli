@@ -33,5 +33,5 @@ To reconnect, run:
   codex resume <session-id>                        
 Stop the current turn: run codex agents, select this task, and press x.
 Token usage so far: total=8'025 input=7'773 (+ 70'144 cached) output=252
-[0m[1m[38;5;39m~[0m[38;5;31m/Code/floor/briefs/teamcli-notes/briefs-0.5.18/codex-0167-b1/[0m[1m[38;5;39mworkspace[0m[38;5;31m [0m[38;5;76mmain[0m                           [0m[38;5;101m3m 25s[0m[38;5;66m 23:35:25[0m
+[0m[1m[38;5;39m<[0m[38;5;31mworkspace>                                                   [0m[1m[38;5;39m         [0m[38;5;31m [0m[38;5;76mmain[0m                           [0m[38;5;101m3m 25s[0m[38;5;66m 23:35:25[0m
 [0m[38;5;76m❯[0m 
