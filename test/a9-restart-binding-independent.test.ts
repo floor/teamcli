@@ -667,7 +667,8 @@ describe('A9 round 2: a refresh needs proof before it rebinds', () => {
 
 describe('A9 round 2: a restart reports a route it could not bind', () => {
   test('a failed registry write is not presented as a plain ready', async () => {
-    const fixture = makeFixture();
+    // A deliberately unwritable registry cannot supply the unrelated channel registration.
+    const fixture = makeFixture((f) => teamYaml(f).replace('    name: worker\n', '    name: worker\n    channel: off\n'));
     readyWorker(fixture);
     const { sources } = fakeRestart(fixture);
     // The registry cannot be written: the agents folder is a regular file.

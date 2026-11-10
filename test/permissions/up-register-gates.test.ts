@@ -253,8 +253,9 @@ afterEach(() => {
   rmSync(base, { recursive: true, force: true });
 });
 
+// Authority and audit controls retain default-channel per-seat placement.
 function withCwd(plan: { label: string; cwd: string }[]): { label: string; cwd: string }[] {
-  return plan.map((one) => ({ ...one, cwd: one.label === 'worker' ? lobby : root }));
+  return plan.map((one) => ({ ...one, cwd: one.label === 'worker' ? join(lobby, 'worker') : root }));
 }
 
 describe('the up row (owner-or-leads)', () => {

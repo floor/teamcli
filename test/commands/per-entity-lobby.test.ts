@@ -278,8 +278,9 @@ describe('seatStart waits in the resolved lobby', () => {
     const lead = team.team.seats[0]!;
     const worker = { ...lead, name: 'worker', mode: 'worktree' as const, cwd: '.' };
     expect(seatStart(team.team, lead, root, home)).toEqual({ cwd: root });
+    // A default-channel worker owns a child of the resolved entity lobby.
     const start = seatStart(team.team, worker, root, home);
-    expect('cwd' in start && start.cwd).toBe(resolveLobby(home, { entity: 'floor' }));
+    expect('cwd' in start && start.cwd).toBe(join(resolveLobby(home, { entity: 'floor' }), 'worker'));
   });
 });
 

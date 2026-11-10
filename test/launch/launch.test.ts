@@ -181,7 +181,9 @@ describe('the rules of a seat', () => {
 });
 
 describe('up --dry-run', () => {
-  const seat = (name: string, overrides: Partial<UpSeat> = {}): UpSeat => ({
+  // Exact command rendering is independent of the default channel recipe.
+  const seat = (name: string, overrides: Partial<UpSeat> = {}): UpSeat & { channelOff: true } => ({
+    channelOff: true,
     name,
     cli: 'claude-code',
     launch: 'claude --model claude-opus-5-5',

@@ -76,6 +76,8 @@ seats:
     launch: claude
   - role: operator
     name: claude-operator-acme
+    # This fixture pins authority or the recorded recipe, independently of the channel.
+    channel: off
     label: operator
     cli: claude-code
     vendor: anthropic

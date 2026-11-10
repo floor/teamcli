@@ -50,7 +50,8 @@ seats:
     model: Test
     version: "1"
     launch: claude --model fixture
-`);
+    # Pair equivalence uses this lead's explicitly declared owned start.
+${inLobby ? `    cwd: ${relative(root, cwd)}\n` : ''}`);
   installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures/key.json'), 'utf8')));
   upsertTeam(home, teamIdOf(root), { root, project: 'sample', session: SESSION, ...(inLobby ? { lobby } : {}), roster: [{ agent: 'agt_000000000001', seat: 'alpha', role: 'coordinator' }] });
   setHerdrRun(() => { throw new Error('a synthetic test must not reach a live terminal host'); });
