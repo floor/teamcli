@@ -4550,6 +4550,10 @@ type Found = { ok: true; pane: string } | { ok: false; kind: 'unreachable' | 're
 
 /** The one live agent of this name, or why the send cannot use a pane. */
 function findAgent(host: SendHost, session: string, seatName: string): Found {
+  // Partial hosts cannot prove a pane usable; leave its delivery legs unavailable.
+  if (typeof host.agents !== 'function' || typeof host.processInfo !== 'function') {
+    return { ok: false, kind: 'unreachable', reason: 'the send host cannot read a pane' };
+  }
   const agents = host.agents(session);
   if (agents === null) return { ok: false, kind: 'unreachable', reason: `the session "${session}" could not be read` };
   const named = agents.filter((agent) => agent.name === seatName);
