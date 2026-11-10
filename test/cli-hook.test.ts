@@ -525,6 +525,13 @@ seats:
     const kept = readdirSync(dropsAt()).filter((name) => MESSAGE_ID.test(name));
     expect(kept).toHaveLength(1);
     expect(io.err).toContain(`(id ${kept[0] as string})`);
+    // The kept record is the drop leg's, and the history line says the same as the ending.
+    const history = readHistory('acme', project, home);
+    if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
+    const entry = history.entries.filter((one) => one.id === kept[0]).at(-1);
+    if (entry === undefined) throw new Error('the send wrote no history line');
+    expect(entry.outcome).toBe('not delivered');
+    expect(entry.via).toBe('drop');
   });
 
   test('a waiting record is handed to the turn once, and its receipt is written beside it at 0600', () => {
