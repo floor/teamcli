@@ -85,11 +85,14 @@ test('a busy pane is never typed into', async () => {
   const made = seat();
   const pane = capture(() => WORKING);
   const { io, done } = send(made, pane, 'leave the busy pane');
-  expect(await done).toBe(0);
+  // 1345 never-drop: a busy pane is terminal — nothing is typed, the record is kept in the
+  // inbox, and the sender is told `not delivered: wake not taken` on stderr, exit 1.
+  expect(await done).toBe(1);
   expect(pane.prompts).toEqual([]);
   expect(pane.typed).toEqual([]);
   expect(pane.enters()).toBe(0);
-  expect(io.out).toContain('nothing was typed');
+  expect(io.err).toContain('not delivered: wake not taken');
+  expect(io.err).toContain('kept in grok\'s inbox');
   expect(io.out).not.toContain('delivered (typed wake)');
   expect(dropNames(made.dir)).toHaveLength(1);
 });

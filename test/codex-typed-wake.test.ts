@@ -136,7 +136,8 @@ describe('the Codex typed wake: the profile’s own screens gate the keys', () =
   test('a working pane is never typed into', async () => {
     const pane = wakeFake(() => WORKING);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'codex', FAST);
-    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+    // 1345 never-drop: the busy screen waits to the bound, and the refusal reason says so.
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
@@ -144,7 +145,7 @@ describe('the Codex typed wake: the profile’s own screens gate the keys', () =
   test('text already in the box refuses before a key', async () => {
     const pane = wakeFake(() => UNSENT);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'codex', FAST);
-    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
@@ -203,7 +204,7 @@ describe('the Codex typed wake: the profile’s own screens gate the keys', () =
 
       const firstRead = wakeFake(() => draft);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'codex', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -260,7 +261,7 @@ describe('the Codex typed wake: the profile’s own screens gate the keys', () =
 
       const firstRead = wakeFake(() => workingFrame);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'codex', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -366,8 +367,10 @@ describe('team send: the Codex typed wake', () => {
       typedWake: () => pane.host,
     });
     const io = owner(made.root);
-    expect(await runSend(['native', 'check held'], io, host)).toBe(0);
-    expect(io.out).toContain('native: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after 1 Enter; the line was not submitted)');
+    // 1345 never-drop: a typed wake that stays working through the bound is terminal — the
+    // record is kept in the inbox, the sender is told `not delivered: wake not taken`, exit 1.
+    expect(await runSend(['native', 'check held'], io, host)).toBe(1);
+    expect(io.err).toContain('team send: native: not delivered: wake not taken; kept in native\'s inbox');
     expect(pane.typed).toHaveLength(1);
     expect(pane.enters).toBe(1);
     const drops = join(made.dir, 'send-drops', 'acme', 'native');

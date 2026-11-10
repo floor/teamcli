@@ -217,8 +217,13 @@ describe('what the flag never touches', () => {
 
   test('a pane back at its shell is the generic line, never the launcher\'s', () => {
     const state = recorded('deepseek-acme', 'w3', 400, 401);
+    // 1345: a shell-only pane is the detector's `no CLI`, so the can't-work line with the
+    // from-record restart stands beside the generic line; the launcher's own line never does.
     expect(texts(teamOf(withOperator), state, live(), newMemory(), { 'w3:p1': { shell: 400, foreground: [400] } }))
-      .toEqual([`deepseek-acme ${GENERIC}`]);
+      .toEqual([
+        `deepseek-acme ${GENERIC}`,
+        "deepseek-acme: can't work: no CLI — restart deepseek-acme from its record, resumed",
+      ]);
   });
 });
 

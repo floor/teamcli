@@ -148,11 +148,11 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
       inboxGraceMs: 0,
     });
     const io = owner(one.root);
-    expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
-    // The typed leg cannot wake a working pane, and the drop behind it takes the send; the
-    // listener beside the seat is not walked, so the old inbox ending is not reachable.
-    expect(io.out).toContain('cursor: queued, not woken (drop, 0 ms)');
-    expect(io.out).toContain('the typed wake failed');
+    // 1345 never-drop: the typed leg cannot wake a working pane, and that ending is now
+    // terminal — the drop keeps the record, the sender is told on stderr, exit 1. The
+    // listener beside the seat is still not walked, so the old inbox ending is not reachable.
+    expect(await runSend(['cursor', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain('team send: cursor: not delivered: wake not taken; kept in cursor\'s inbox');
     expect(io.out).not.toContain('(mcp-inbox');
     // The splice line the old walk printed when a listener stood beside the seat is gone.
     expect(io.err).not.toContain('inbox server is listening');
@@ -378,11 +378,13 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
       typedWake: () => workingPane.host,
       inboxGraceMs: 0,
     });
-    expect(await runSend(['cursor', 'second'], io2, host2)).toBe(0);
+    // 1345 never-drop: the working pane ends the walk terminally — the drop keeps the record
+    // and the sender is told `not delivered: wake not taken` on stderr, exit 1.
+    expect(await runSend(['cursor', 'second'], io2, host2)).toBe(1);
     expect(hits).toBe(2);
     expect(workingPane.typed).toEqual([]);
-    expect(io2.out).toContain('cursor: queued, not woken (drop, ');
-    expect(io2.out).toContain('webhook not delivered: HTTP 502');
+    expect(io2.err).toContain('team send: cursor: not delivered: wake not taken; kept in cursor\'s inbox');
+    // The 502 line no longer prints on stdout; the history's failed row below carries it.
     const history = readHistory('acme', one.root, host2.home);
     expect(history.ok).toBe(true);
     if (history.ok) {

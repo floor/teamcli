@@ -400,8 +400,8 @@ Switch to gpt-6-luna for lower credit usage?
   test('is reported once to the operator and the owner, and is not called idle', () => {
     const memory = newMemory();
     const first = run(memory, 0, lost);
+    // 1345: a provider error is one report, addressed to the owner — no operator twin line.
     expect(first.filter((line) => line.includes('provider error'))).toEqual([
-      'deepseek-acme shows a provider error: connection lost, and no capture names a retry',
       'deepseek-acme shows a provider error: connection lost, and no capture names a retry',
     ]);
     expect(first.some((line) => line.includes('has been idle'))).toBe(false);

@@ -51,8 +51,8 @@ describe('provider-error check', () => {
     const { ctx, finish } = harness();
     const lost = seat('claude-a', { kind: 'provider error' });
     const first = providerError.run(lost, ctx);
+    // 1345: a provider error is one report, addressed to the owner; the operator twin is gone.
     expect(texts(first)).toEqual([
-      'operator: claude-a shows a provider error: connection lost, and no capture names a retry',
       'owner: claude-a shows a provider error: connection lost, and no capture names a retry',
     ]);
     finish();
@@ -107,8 +107,8 @@ describe('provider-error check', () => {
   test('a seat working on a provider-error screen is not reported, and is reported when it stops', () => {
     const { ctx, finish } = harness();
     const screen = { kind: 'provider error' };
+    // 1345: a provider error is one report, addressed to the owner; the operator twin is gone.
     const told = [
-      'operator: claude-a shows a provider error: connection lost, and no capture names a retry',
       'owner: claude-a shows a provider error: connection lost, and no capture names a retry',
     ];
     expect(providerError.run(seat('claude-a', screen, true, true), ctx)).toEqual([]);
@@ -128,7 +128,8 @@ describe('provider-error check', () => {
     const lost = harness();
     expect(
       providerError.run(seat('claude-b', { kind: 'provider error' }), lost.ctx).map((report) => report.key),
-    ).toEqual(['provider-error:claude-b', 'provider-error:claude-b:owner']);
+    // 1345: a provider error is one report with one key; only the rate limit keeps its twin.
+    ).toEqual(['provider-error:claude-b']);
   });
 
   test('a seat that is not running, and any other screen, is not this state', () => {

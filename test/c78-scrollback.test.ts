@@ -460,7 +460,8 @@ describe('the typed wake returns to the prompt, then keeps every guard', () => {
       delivered: false,
       typed: false,
       tries: 0,
-      reason: 'the first read showed working, not an empty idle prompt; nothing was typed',
+      // 1345 never-drop: the busy screen waits to the bound, and the refusal reason says so.
+      reason: 'the screen stayed working until the bound; nothing was typed',
     });
     expect(wake.keys).toEqual([]);
     expect(wake.typed).toEqual([]);
