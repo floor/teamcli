@@ -18,6 +18,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import { cliWordListOf, provenScriptWord, shellScriptWordOf } from '../launch/cli-scope.ts';
+import { shellWords } from '../launch/shell-words.ts';
 
 /** The launch flag that loads a development channel, and the value that names this server. */
 export const CHANNEL_FLAG = '--dangerously-load-development-channels';
@@ -78,28 +80,121 @@ export const CHANNEL_READ_BY = 'channel';
 export const CHANNEL_INSTRUCTIONS =
   'When a channel notification arrives, call the ack tool with the id from its meta in the same handling turn, before you read the message or act on it.';
 
-/** The same launch line with this team's channel server taken off it. A list that named only
- *  that server loses the flag; a list that named others keeps those. */
+type ChannelSpan = { start: number; end: number };
+
+/** Remove this team's channel option by its shell-word spans. Every byte outside the
+ *  option stays as written, including quoted rules, newlines and unrelated spacing. */
 export function withoutChannel(launch: string, server: string = CHANNEL_SERVER): string {
-  const words = launch.split(/\s+/).filter((word) => word !== '');
-  const chosen = `server:${server}`;
-  const kept: string[] = [];
+  // The same scope proof as option placement: prompt text, shell syntax and unproved scripts
+  // cannot lend a substring the meaning of a CLI option.
+  if (cliWordListOf('claude', launch) === null) return launch;
+  return eraseChannelSpans(launch, channelSpans(launch, `server:${server}`));
+}
+
+function channelSpans(command: string, chosen: string): ChannelSpan[] {
+  const script = shellScriptWordOf(command);
+  if (script !== null) {
+    const proof = provenScriptWord(command, script.word);
+    if (proof === null) return [];
+    const spans = literalWordSpans(command.slice(script.word.start, script.word.end));
+    if (spans === null || spans.length !== proof.body.length) return [];
+    // Project deletions through the original quoted word, including quote splices. Re-encoding
+    // the whole script would change unrelated source bytes; erasing its emitted characters
+    // leaves those bytes and all surrounding quote delimiters in place.
+    return channelSpans(proof.body, chosen).flatMap((span) => spans.slice(span.start, span.end).map((source) => ({
+      start: script.word.start + source.start, end: script.word.start + source.end,
+    })));
+  }
+  const words = shellWords(command);
+  if (words === null) return [];
+  const removals: ChannelSpan[] = [];
   for (let at = 0; at < words.length; at += 1) {
     const word = words[at]!;
-    if (word === CHANNEL_FLAG) {
-      const names = (words[at + 1] ?? '').split(',').filter((name) => name !== '' && name !== chosen);
-      if (names.length > 0) kept.push(word, names.join(','));
+    if (word.text === '--') break;
+    // These options carry prompt text, even when that text is exactly a flag-shaped word.
+    if (word.text === '--append-system-prompt' || word.text === '--system-prompt') {
       at += 1;
       continue;
     }
-    if (word.startsWith(`${CHANNEL_FLAG}=`)) {
-      const names = word.slice(CHANNEL_FLAG.length + 1).split(',').filter((name) => name !== '' && name !== chosen);
-      if (names.length > 0) kept.push(`${CHANNEL_FLAG}=${names.join(',')}`);
-      continue;
+    if (word.expands) continue;
+    const attached = word.text.startsWith(`${CHANNEL_FLAG}=`);
+    if (word.text !== CHANNEL_FLAG && !attached) continue;
+    const value = attached ? word : words[at + 1];
+    if (value === undefined || value.expands) continue;
+    const names = (attached ? word.text.slice(CHANNEL_FLAG.length + 1) : value.text).split(',');
+    if (!names.includes(chosen)) continue;
+    if (names.every((name) => name === chosen || name === '')) {
+      removals.push({ start: word.start, end: value.end });
+    } else {
+      const raw = command.slice(value.start, value.end);
+      const spans = channelNameSpans(raw, names, chosen, attached);
+      const wanted = (attached ? `${CHANNEL_FLAG}=` : '') + names.filter((name) => name !== chosen && name !== '').join(',');
+      const read = shellWords(eraseChannelSpans(raw, spans));
+      if (read?.length !== 1 || read[0]!.expands || read[0]!.text !== wanted) continue;
+      removals.push(...spans.map((span) => ({ start: value.start + span.start, end: value.start + span.end })));
     }
-    kept.push(word);
+    if (!attached) at += 1;
   }
-  return kept.join(' ');
+  return removals;
+}
+
+/** Preserve every other identifier's spelling and quoting; discard only this server and
+ *  adjacent commas, retaining one existing comma between each pair of remaining names. */
+function channelNameSpans(raw: string, names: readonly string[], chosen: string, attached: boolean): ChannelSpan[] {
+  const keep: boolean[] = Array(attached ? CHANNEL_FLAG.length + 1 : 0).fill(true);
+  let kept = false;
+  for (const [index, name] of names.entries()) {
+    const retain = name !== chosen && name !== '';
+    if (index > 0) keep.push(retain && kept);
+    keep.push(...Array(name.length).fill(retain));
+    if (retain) kept = true;
+  }
+  const spans = literalWordSpans(raw);
+  return spans === null || spans.length !== keep.length ? [] : spans.filter((_span, index) => !keep[index]);
+}
+
+/** Source spans of a proved literal word's decoded characters. Quotes emit no character;
+ *  escapes emit their literal character, and line continuations emit nothing. The caller
+ *  checks this projection against the shared shell-word reader before accepting an edit. */
+function literalWordSpans(raw: string): ChannelSpan[] | null {
+  const spans: ChannelSpan[] = [];
+  let quote: "'" | '"' | null = null;
+  for (let at = 0; at < raw.length;) {
+    const char = raw[at]!;
+    if (quote === null && char === '$' && raw[at + 1] === "'") {
+      quote = "'";
+      at += 2;
+    } else if (char === quote) {
+      quote = null;
+      at += 1;
+    } else if (quote === null && (char === "'" || char === '"')) {
+      quote = char;
+      at += 1;
+    } else if (char === '\\' && quote !== "'") {
+      const next = raw[at + 1];
+      if (next === undefined) return null;
+      if (next === '\n') at += 2;
+      else if (quote === null || '$`"\\'.includes(next)) {
+        spans.push({ start: at, end: at + 2 });
+        at += 2;
+      } else {
+        spans.push({ start: at, end: at + 1 });
+        at += 1;
+      }
+    } else {
+      spans.push({ start: at, end: at + 1 });
+      at += 1;
+    }
+  }
+  return spans;
+}
+
+function eraseChannelSpans(command: string, spans: readonly ChannelSpan[]): string {
+  let result = command;
+  for (const span of [...spans].sort((left, right) => right.start - left.start)) {
+    result = result.slice(0, span.start) + result.slice(span.end);
+  }
+  return result;
 }
 
 /**

@@ -645,10 +645,10 @@ export async function executePlan(
   // A seat whose channel could not be prepared still launches. The reason is said and logged
   // once, and the command that runs does not carry the channel.
   const channelAside = new Map<string, string>();
-  const noteChannelAside = (seat: string, reason: string) => {
+  const noteChannelAside = (seat: string, reason: string, notice?: string) => {
     if (channelAside.has(seat)) return;
     channelAside.set(seat, reason);
-    const line = `its channel was not prepared (${reason}). Launching without the channel. Make the folder owned by you with no group or other write, or set channel: off.`;
+    const line = notice ?? `its channel was not prepared (${reason}). Launching without the channel. Make the folder owned by you with no group or other write, or set channel: off.`;
     host.say(`${seat}: ${line}\n`);
     host.log(seat, line);
   };
@@ -1494,6 +1494,7 @@ export async function executePlan(
           break;
         }
         if (!guardStart(op)) break;
+        if (op.channelNotice !== undefined) noteChannelAside(op.seat, op.channelNotice, op.channelNotice);
         const heldChannel = preparedChannels.get(op.seat);
         let channel: { ok: true; lease: { check(): void; release(): void } } | undefined;
         if (op.channel !== undefined && !channelAside.has(op.seat)) {
@@ -2595,20 +2596,15 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'its CLI has no profile to exit with; left as it is' });
           break;
         }
-        // The launch that follows is proven able to start before any exit is typed. A channel
-        // seat's pair is prepared here; a refusal leaves the CLI running.
+        // Prepare the optional channel before exiting. A preparation failure takes the same
+        // warn-once runtime fallback as a fresh launch; the restore proof above still governs input.
         const launchAfter = launches.get(op.seat);
         if (launchAfter?.channel !== undefined) {
           const prepared = launchAfter.cwd === undefined
             ? { ok: false as const, reason: 'a Claude channel requires a fresh scoped workspace; restart the seat' }
             : prepareChannelConfig({ ...launchAfter.channel, seat: op.seat, session, cwd: launchAfter.cwd });
-          if (!prepared.ok) {
-            held = true;
-            dropped.add(op.seat);
-            final(op.seat, { kind: 'left out', reason: `the channel config was not prepared: ${prepared.reason}` });
-            break;
-          }
-          preparedChannels.set(op.seat, prepared);
+          if (!prepared.ok) noteChannelAside(op.seat, prepared.reason);
+          else preparedChannels.set(op.seat, prepared);
         }
         const releasePrepared = (): void => {
           const ready = preparedChannels.get(op.seat);

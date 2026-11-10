@@ -91,6 +91,8 @@ export type Op =
        */
       workspace?: string;
       notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher; channel?: ChannelLaunchScope;
+      /** Optional-channel repair, said and logged separately from the restore result. */
+      channelNotice?: string;
       /**
        * The base recipe the seat's record keeps when this run records it: `seat.launch` with the
        * profile's pinned feature words appended, never the expanded command the pane runs (the
@@ -1479,7 +1481,7 @@ export function upPlan(input: UpInput): Step[] {
     // The line is built before the steps that create or close a workspace: a refusal must come
     // before any of them, and the warnings it produces are said on the launch step where they
     // have always been said.
-    const launchWarnings: string[] = channelFallback === undefined ? [] : [channelFallback];
+    const launchWarnings: string[] = [];
     let command: string;
     let fromResolver = false;
     let baseLine = recordedLine;
@@ -1696,14 +1698,14 @@ export function upPlan(input: UpInput): Step[] {
       const said = takeNotice();
       const watched = watcherNote(watcher);
       // `would launch` joins a notice or a resume gap; a plain watcher note stands alone.
-      const launchNote = [said, resumeGap, said === undefined && resumeGap === undefined ? undefined : 'would launch', watched]
+      const launchNote = [said, channelFallback, resumeGap, said === undefined && channelFallback === undefined && resumeGap === undefined ? undefined : 'would launch', watched]
         .filter((part): part is string => part !== undefined)
         .join('; ');
       steps.push({
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...(fromResolver || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...(fromResolver || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }), ...(profile.cli === 'cursor' && commandDeny !== 'off' ? { cursorCommandDeny: commandDeny } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), ...(channelFallback === undefined ? {} : { channelNotice: channelFallback }), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...(fromResolver || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...(fromResolver || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }), ...(profile.cli === 'cursor' && commandDeny !== 'off' ? { cursorCommandDeny: commandDeny } : {}) },
       });
     }
     const rules = profile.rulesMode;
