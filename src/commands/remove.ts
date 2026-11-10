@@ -230,8 +230,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const fileFlagRefusal = fileOwnerRefusal(io, args.values.file);
   const flagRefusal = fileFlagRefusal
     ?? (args.values.session !== undefined && walked !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
-  const refuseOwnerFlag = (): number | null => {
-    if (flagRefusal === undefined) return null;
+  // Guard both calls, then return the covered helper so the existing exit rows stay reachable.
+  const refuseOwnerFlag = (message: string): number => {
     const named = readTeamConfig(io.cwd, { ...(sources.home ? { home: sources.home } : {}) });
     if (named.ok && named.team.delegates) {
       const flagged = (sources.delegateGate ?? delegateGate)({
@@ -246,17 +246,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     }
     refuse(io, json, 'remove', {
       id: fileFlagRefusal !== undefined ? 'remove.file-owner' : 'remove.session-owner',
-      message: flagRefusal,
+      message,
       repair: null,
     });
     // exit: remove.file-owner
     // exit: remove.session-owner
     return 1;
   };
-  if (!flagIsDetached) {
-    const refused = refuseOwnerFlag();
-    if (refused !== null) return refused;
-  }
+  if (!flagIsDetached && flagRefusal !== undefined) return refuseOwnerFlag(flagRefusal);
   // The team this remove will change, before the charter. A pane that records this caller is
   // that root. A `--file` or a client grant names its own folder. None leaves the launched
   // pointer, then this checkout. The charter is asked for that root only.
@@ -310,10 +307,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const name = seatName;
-  if (flagIsDetached) {
-    const refused = refuseOwnerFlag();
-    if (refused !== null) return refused;
-  }
+  if (flagIsDetached && flagRefusal !== undefined) return refuseOwnerFlag(flagRefusal);
   const binding = targetBinding;
   const launched = launchedForTarget;
   const readOptions = { ...(sources.home ? { home: sources.home } : {}) };
