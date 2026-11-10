@@ -96,6 +96,12 @@ re-wake, the read receipt and the `queued, not woken` flag — and a send to a s
 entity or the project may loosen the word toward `none`; the team and the seat may always tighten
 it back toward `first`, and `team check` notes every seat whose chain declares `none`.
 
+Generated Claude launch settings default to `crossSessionInbound: accept` for every role and
+model. An explicit seat `inbound: hold` or `inbound: refuse` wins, and a launch script's explicit
+hold or refusal is retained. A normal restart regenerates a missing declaration through the
+same hook-settings writer; an already-running session must load the new settings before its
+socket becomes eligible. Sender admission is unchanged.
+
 A receiving Claude session's `socket` leg is the one implied default outside a declared word:
 with no level of its chain declaring an order, a seat whose own launch declares
 `crossSessionInbound: accept` is walked `socket` first, then the default order. For a seat
