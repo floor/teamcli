@@ -3314,14 +3314,12 @@ function dryDeliveryPlan(input: {
   if (input.channelReason !== null) {
     entries.push({ leg: 'channel', state: 'skipped', eligible: false, reason: input.channelReason });
   }
-  // The implied socket default: a Claude receiver whose chain declares no order walks socket
-  // first when it may be dialed. When it may not, the walk leaves it out entirely, and this is
-  // the entry that says why — the omission the report used to leave unexplained.
+  // An unavailable Claude socket stays visible in the dry run, including a declared order
+  // whose retired typed wake could not be replaced. This row explains a skip, never adds a leg.
   if (
     !input.human
     && input.cli === 'claude-code'
-    && !input.declaredOrder
-    && !input.order.includes('socket')
+    && !input.walk.includes('socket')
     && input.socketReason !== null
   ) {
     entries.push(candidate('socket'));

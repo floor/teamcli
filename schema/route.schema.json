@@ -139,7 +139,8 @@
         "stale",
         "pane",
         "none",
-        "unread"
+        "unread",
+        "ineligible"
       ]
     },
     "native": {
