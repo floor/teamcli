@@ -10,6 +10,7 @@
 //    as `policy drift` under dev mode, while ignoring general-grant, security-policy, expired,
 //    answered, or other-root cards, and reading no cards when dev mode is off.
 // All fixtures, keys, signers, processes, and launches are synthetic in-memory fakes.
+import { cwdTargetForReach } from './helpers/cwd-reach.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -339,6 +340,8 @@ describe('1. config set and add admitted for target lead and same-entity main or
     // 1c. `team config set` on child `acme` by `atlas` (main orchestrator of entity `floor`)
     const cfgIo = testIo(fx.acmeRoot, fx.callers.atlas);
     cfgIo.env = {};
+    // Reach is the subject; ambiguous pane placement leaves this child as the explicit cwd target.
+    cwdTargetForReach(fx.home, fx.acmeRoot, cfgIo, 'main');
     const cfgCode = await runConfig(
       ['set', 'seats.worker.model', 'Claude Haiku'],
       cfgIo,
@@ -356,6 +359,7 @@ describe('1. config set and add admitted for target lead and same-entity main or
     const launched = fakeLaunch();
     const addIo = testIo(fx.acmeRoot, fx.callers.atlas);
     addIo.env = {};
+    cwdTargetForReach(fx.home, fx.acmeRoot, addIo, 'main');
     const addCode = await runAdd(['scout', '--like', 'builder'], addIo, makeAddSources(fx.home, launched));
     expect(addCode, addIo.out + addIo.err).toBe(0);
     expect(addIo.err).toBe(
@@ -387,6 +391,8 @@ describe('2. config set and add refused (never carded, never audited) for unauth
       // `team config set` refused
       const cfgIo = testIo(c.root, c.caller);
       cfgIo.env = { TEAMCLI_DEV_MODE: '1' };
+      // Keep each refusal aimed at its original target, including sibling and foreign-entity callers.
+      if (c.caller.kind === 'seat' && c.caller.session !== 'acme') cwdTargetForReach(fx.home, c.root, cfgIo, c.caller.session!);
       const cfgCode = await runConfig(
         ['set', 'seats.worker.model', 'Claude Sonnet'],
         cfgIo,
@@ -402,6 +408,7 @@ describe('2. config set and add refused (never carded, never audited) for unauth
       const launched = fakeLaunch();
       const addIo = testIo(c.root, c.caller);
       addIo.env = { TEAMCLI_DEV_MODE: '1' };
+      if (c.caller.kind === 'seat' && c.caller.session !== 'acme') cwdTargetForReach(fx.home, c.root, addIo, c.caller.session!);
       const addCode = await runAdd(['intruder', '--like', 'builder'], addIo, makeAddSources(fx.home, launched));
       expect(addCode, `add for ${c.label}`).toBe(1);
       expect(addIo.err).toBe(`team add: ${ADD_REFUSAL_PREFIX} ${c.expectedName}\n`);

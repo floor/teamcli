@@ -7332,8 +7332,14 @@ scene('reload.grant-omitted', async (place) => {
   return show(await reloaded(place, ['lead'], other), 'the file grants nothing');
 });
 scene('reload.grant-file', async (place) => {
-  write(place, 'format: [\n');
-  return show(await reloaded(place, ['lead'], leadSeat), 'line');
+  write(place, TEAM);
+  // Target-first validates before the grant: make only the later grant reread see the bad file.
+  return show(await reloaded(place, ['lead'], leadSeat, { grantGate: (input) => {
+    write(place, 'format: [\n');
+    const verdict = grantGate(input);
+    expect(verdict).toMatchObject({ kind: 'refused', id: 'grant.file' });
+    return verdict;
+  } }), 'line');
 });
 
 // Outcomes that are listed and kept, and that no scene can produce. An edit the earlier checks
