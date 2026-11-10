@@ -1,3 +1,4 @@
+import { registerDefaultChannelFixture } from '../helpers/default-channel.ts';
 // Standing entity create-grants in `~/.config/team/grants/`: `init` and `up` admit the agent or
 // team whose registry id a record names, under a covered path before expiry with no team-file
 // grant, and refuse path escapes, other agents, expired records, and paths outside the roots the
@@ -245,6 +246,11 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
 
       // Write the 5-seat team file (1 orchestrator, 2 builders, 2 testers) with no grant or delegates.
       writeFileSync(join(v4, '.agents', 'team.yaml'), fiveSeatTeam('acme-v4', v4, sb.home));
+      // A default launch uses its registered roster, lead pair and existing private worker starts.
+      registerDefaultChannelFixture(v4, sb.home, 'orchestrator');
+      for (const name of ['builder-1', 'builder-2', 'tester-1', 'tester-2']) {
+        mkdirSync(join(sb.home, '.config', 'team', 'lobbies', 'acme', name), { mode: 0o700 });
+      }
 
       let launches = 0;
       let idleAt: number | null = null;
@@ -307,9 +313,9 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       mkdirSync(sendHost.socketsDir, { recursive: true });
       expect(await runSend(['builder-1', 'first brief'], sendIo, sendHost)).toBe(0);
       // No socket file under the host's sockets folder: a plain send is the drop, and the
-      // outcome names the seat queued, not woken, never a read.
+      // Its enabled channel is wakeable; this drop still queues it without a wake or read.
       expect(withoutSendId(sendIo.out)).toBe(
-        'team acme-v4, session "acme-v4"\nbuilder-1: queued, not woken (drop, 0 ms); queued; builder-1 reads it at its next turn, and nothing here gives it one (pull-only)\n',
+        'team acme-v4, session "acme-v4"\nbuilder-1: queued, not woken (drop, 0 ms)\n',
       );
 
       // 2. Under ~/Code/acme-lab/archive: also admitted by the same record.

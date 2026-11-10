@@ -98,6 +98,8 @@ seats:
     human: true
   - role: implementer
     name: ${SEAT}
+    # This fixture pins authority or the recorded recipe, independently of the channel.
+    channel: off
     label: ${SEAT}
     cli: claude-code
     vendor: ${spec.vendor}

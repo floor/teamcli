@@ -1,3 +1,4 @@
+import { registerDefaultChannelFixture } from '../helpers/default-channel.ts';
 // `team up` with no approval record: the owner and a seat the live file names may launch,
 // anyone else is told `deny`, and five seats come up together without a prompt.
 import { describe, expect, test } from 'bun:test';
@@ -183,6 +184,8 @@ describe('team up without an approval record', () => {
     try {
       write(here, trusted(FIVE, here.root, here.home));
       recordLead(here.root);
+      // The default launch needs registered worker starts and the lead's own project pair.
+      registerDefaultChannelFixture(here.root, here.home, 'lead');
       const io = testIo(here.root, lead);
       const code = await runUp(['--dry-run'], io, sources(here.home, launching(() => {}), terminal()));
       expect(io.err, io.out).toBe('');
@@ -294,9 +297,9 @@ describe('team up without an approval record', () => {
       const sent = await runSend(['builder-1', 'first brief'], sendIo, sendHost);
       expect(sent, `${sendIo.err}${sendIo.out}`).toBe(0);
       // No socket file under the host's sockets folder: a plain send is the drop, and the
-      // outcome names the seat queued, not woken, never a read.
+      // The enabled channel makes the seat wakeable; this drop still queues it without a wake or read.
       expect(withoutSendId(sendIo.out)).toBe(
-        'team acme, session "acme"\nbuilder-1: queued, not woken (drop, 0 ms); queued; builder-1 reads it at its next turn, and nothing here gives it one (pull-only)\n',
+        'team acme, session "acme"\nbuilder-1: queued, not woken (drop, 0 ms)\n',
       );
       expect(existsSync(approval(here.root, here.home))).toBe(false);
     } finally {

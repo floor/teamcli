@@ -701,6 +701,9 @@ describe('team up', () => {
   });
 
   test("--dry-run prints the plan for the approved file, with each seat's rules and signature", async () => {
+    // This scene pins rules/profile bytes, not the default channel insertion.
+    edit((text) => text.replace('    name: claude-coordinator-acme\n', '    name: claude-coordinator-acme\n    channel: off\n')
+      .replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    channel: off\n'));
     await approve([], OWNER);
     const run = await up(['--dry-run'], OWNER);
     expect(run.out).not.toContain('the file is legacy');

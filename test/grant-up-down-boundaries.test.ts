@@ -1,3 +1,4 @@
+// Default-channel placement is per seat, while authority and session assertions stay intact.
 // Adversarial coverage for the granted orchestrator seat's `up` and `down`: the placement is
 // the real walk — the agent list a session answers with, the pane roots the caller's process
 // chain descends from, and the pane the state records — never a caller built by hand, because
@@ -462,7 +463,7 @@ describe('the scope the approval signed', () => {
     expect(trace.workspaces).toEqual([
       { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
-      { label: 'worker', cwd: lobby },
+      { label: 'worker', cwd: join(lobby, 'worker') },
     ]);
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -502,7 +503,7 @@ describe('the approval the grant rides on', () => {
     expect(trace.workspaces).toEqual([
       { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
-      { label: 'worker', cwd: lobby },
+      { label: 'worker', cwd: join(lobby, 'worker') },
     ]);
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -522,7 +523,7 @@ describe('the approval the grant rides on', () => {
     expect(io.err).not.toContain('deny');
     expect(trace.workspaces).toEqual([
       { label: 'pilot', cwd: root },
-      { label: 'worker', cwd: lobby },
+      { label: 'worker', cwd: join(lobby, 'worker') },
     ]);
     expect(trace.audits).toEqual([{ seat: 'lead', act: 'up' }]);
     const doctorIo = testIo(root);
@@ -715,7 +716,8 @@ describe('the audit line', () => {
     expect(code).toBe(0);
     expect(io.err).toContain("skip lead: left as it is; a granted up does not relaunch or close the orchestrator's seat\n");
     expect(trace.closed).toEqual([]);
-    const workerAt = canonicalLanding(lobby).landing;
+    // Default-channel workers start in their own lobby folder.
+    const workerAt = canonicalLanding(join(lobby, 'worker')).landing;
     expect(trace.workspaces).toContainEqual({ label: 'worker', cwd: workerAt });
     // The operator starts in the project; the orchestrator's own seat does not: one workspace
     // at the root, never two.

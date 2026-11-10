@@ -112,6 +112,11 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function approve(text: string = FILE): void {
+  // Apply the local opt-out after each scene has selected its CLI/recipe.
+  text = text.split('\n  - role:').map((block) =>
+    /\n    name: worker\n/.test(block) && !/\n    channel:/.test(block)
+      ? block.replace('    label: worker\n', '    label: worker\n    channel: off\n') : block,
+  ).join('\n  - role:');
   const trustPath = project.startsWith(home) ? project.replace(home, '~') : project;
   const yaml = text.includes('trust:')
     ? text

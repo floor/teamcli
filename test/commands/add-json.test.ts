@@ -46,6 +46,8 @@ seats:
     launch: claude --model claude-opus-5-5
   - role: implementer
     name: worker
+    # This fixture pins authority or the recorded recipe, independently of the channel.
+    channel: off
     label: worker
     cli: claude-code
     vendor: anthropic

@@ -1,3 +1,4 @@
+import { placedCallerTeam } from '../src/registry/binding.ts';
 // Independent verification of fix/c75-restart-declared-seat (436b41955).
 //
 // Behaviour covered:
@@ -25,7 +26,7 @@ import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { emptySession, updateState } from '../src/state.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
 
@@ -68,6 +69,8 @@ seats:
 
   - role: implementer
     name: worker
+    # Declaration fallback is independent of channel preparation.
+    channel: off
     label: worker
     cli: claude-code
     vendor: anthropic
@@ -340,6 +343,24 @@ function lobbyCallerSourcesIo(fixture: Fixture, sessionName = 'acme'): ReturnTyp
   return baseIo;
 }
 
+/** Two recorded placements make pane-first unproven; only the target rosters worker. */
+function requireRegistryFallback(fixture: Fixture, io: ReturnType<typeof testIo>): void {
+  const shadow = join(fixture.base, 'caller-placement-only');
+  mkdirSync(join(shadow, '.agents'), { recursive: true });
+  writeFileSync(join(shadow, '.agents', 'team.yaml'), olderTeamYaml(fixture.yaml).replace('project: acme', 'project: shadow'));
+  upsertTeam(fixture.home, teamIdOf(shadow), {
+    root: shadow, project: 'shadow', session: 'acme', lobby: join(shadow, 'lobby'),
+    roster: [{ agent: 'agt_999999999999', seat: 'lead', role: 'coordinator', leads: true }],
+  });
+  updateState(join(shadow, '.agents'), (state) => {
+    state.sessions.acme = { ...emptySession(), seats: { lead: { stage: 'ready', pane: 'pane-lead', workspace: 'ws-shadow' } } };
+  });
+  const outside = join(fixture.base, 'unbound-caller');
+  mkdirSync(outside);
+  io.cwd = outside;
+  expect(placedCallerTeam(fixture.home, io)).toBeNull();
+}
+
 describe('1. a stale launched pointer to an older team file no longer refuses a seat the current team declares', () => {
   test('a seat added after the session was launched restarts cleanly when declared by the current team', async () => {
     const fixture = makeFixture();
@@ -365,9 +386,12 @@ describe('1. a stale launched pointer to an older team file no longer refuses a 
     const { sources, did } = makeHarness(fixture, false);
     const io = lobbyCallerSourcesIo(fixture, 'acme');
 
+    // Neither the pane nor cwd uniquely places this caller, so registry fallback is deliberate.
+    requireRegistryFallback(fixture, io);
     const code = await runRestart(['worker'], io, sources);
     expect(code).toBe(0);
     expect(did.created).toBe(1);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
     expect(io.err).toContain(
       `note: worker is not in the team this session was launched from; reading the team registered for session acme (${fixture.root})\n`,
@@ -387,9 +411,12 @@ describe('1. a stale launched pointer to an older team file no longer refuses a 
     const { sources, did } = makeHarness(fixture, false);
     const io = lobbyCallerSourcesIo(fixture, 'acme');
 
+    // Neither the pane nor cwd uniquely places this caller, so registry fallback is deliberate.
+    requireRegistryFallback(fixture, io);
     const code = await runRestart(['worker'], io, sources);
     expect(code).toBe(0);
     expect(did.created).toBe(1);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
     expect(io.err).toContain(
       `note: worker is not in the team this session was launched from; reading the team registered for session acme (${fixture.root})\n`,
@@ -451,9 +478,12 @@ describe('2. each fallback step in order', () => {
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
     const io = testIo(fixture.lobby, leadCaller);
 
+    // Neither the pane nor cwd uniquely places this caller, so registry fallback is deliberate.
+    requireRegistryFallback(fixture, io);
     const code = await runRestart(['worker'], io, sources);
     expect(code).toBe(0);
     expect(did.created).toBe(1);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
     expect(io.err).toContain(
       `note: worker is not in the team this session was launched from; reading the team registered for session acme (${fixture.root})\n`,
     );
@@ -506,6 +536,8 @@ describe('3. a registry team whose record lacks the run session is refused', () 
     const { sources, did } = makeHarness(fixture, false);
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
     const io = testIo(fixture.lobby, leadCaller);
+    // Keep this pointer/ambiguity refusal reachable instead of a pane-proven direct read.
+    requireRegistryFallback(fixture, io);
 
     const code = await runRestart(['worker'], io, sources);
     expect(code).toBe(1);
@@ -526,6 +558,8 @@ describe('3. a registry team whose record lacks the run session is refused', () 
     const { sources, did } = makeHarness(fixture, false);
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
     const io = testIo(fixture.lobby, leadCaller);
+    // Keep this pointer/ambiguity refusal reachable instead of a pane-proven direct read.
+    requireRegistryFallback(fixture, io);
 
     const code = await runRestart(['worker'], io, sources);
     expect(code).toBe(1);
@@ -545,6 +579,8 @@ describe('4. a team file failing validation refuses with the configuration exit'
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
     // The cwd folder binds the team, so this proof runs from the lobby, where that binding does not supersede the launched pointer.
     const io = testIo(fixture.lobby, leadCaller);
+    // Keep this pointer/ambiguity refusal reachable instead of a pane-proven direct read.
+    requireRegistryFallback(fixture, io);
 
     const code = await runRestart(['worker', '--json'], io, sources);
     expect(code).toBe(2);

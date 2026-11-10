@@ -1,3 +1,4 @@
+import { registerDefaultChannelFixture } from './helpers/default-channel.ts';
 // Independent coverage of context-reset slices 2 and 4 at 343efa451.
 // Slice 2: only the owner or a placed leads seat records a checkpoint ask; the entity's main
 // orchestrator may, from its own placed session; a non-orchestrator seat of the other team may
@@ -459,6 +460,8 @@ function restartWorld() {
     lifecycle: 'running',
     by: 'test',
   });
+  // Earlier-conversation restore retains the enabled channel in one registered world.
+  registerDefaultChannelFixture(root, home);
   return { base, root, home, dir, team, worker };
 }
 

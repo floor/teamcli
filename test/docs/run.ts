@@ -1,3 +1,4 @@
+import { registerDefaultChannelFixture } from '../helpers/default-channel.ts';
 // Runs one command reference page's examples. The commands are the real ones, in process: the
 // world, the home and the caller are handed in, so no example reaches herdr, a CLI, or the owner's
 // home. A `$ ` line is run, the lines under it must match byte for byte — so a fixture value
@@ -329,6 +330,14 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
   const spec = page.spec;
   const world = page.world as World;
   const fixture = page.fixture;
+  if (['add.md', 'order.md', 'swap.md'].includes(page.name) && ['add', 'order', 'restart', 'swap'].includes(name ?? '')) {
+    // These default-launch transcripts need the registered roster and the lead's own project pair.
+    const loaded = loadTeamFile(fixture.root, { home: fixture.home });
+    if (loaded.ok) {
+      const lead = loaded.team.seats.find((seat) => seat.name === loaded.team.orchestrator);
+      registerDefaultChannelFixture(fixture.root, fixture.home, lead?.cli === 'claude-code' ? lead.name : undefined);
+    }
+  }
   switch (name) {
     case 'ack':
       // The page's clock is pinned, so the receipt's `at` is the page's instant.

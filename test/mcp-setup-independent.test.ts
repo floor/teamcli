@@ -89,7 +89,8 @@ seats:
     model: Test
     version: "1"
     launch: claude --model fixture
-`);
+    # Pair equivalence uses this lead's explicitly declared owned start.
+${inLobby ? `    cwd: ${relative(root, cwd)}\n` : ''}`);
   installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures/key.json'), 'utf8')));
   upsertTeam(home, teamIdOf(root), {
     root, project: 'harbor', session: SESSION, ...(inLobby ? { lobby } : {}),

@@ -40,7 +40,8 @@ const PREVIEW = '("format: 1"; "project: acme"; "coordinator: lead")';
 function seatBlock(role: string, name: string): string {
   return `  - role: ${role}
     name: ${name}
-    label: ${name}
+    # Legacy approval output is tested independently of channel preparation.
+${name === 'worker' ? '    channel: off\n' : ''}    label: ${name}
     cli: claude-code
     vendor: anthropic
     model: Claude Opus

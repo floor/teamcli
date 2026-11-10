@@ -34,6 +34,8 @@ afterEach(() => {
 const SEATS = `seats:
   - role: implementer
     name: worker
+    # Own-team admission is independent of channel preparation.
+    channel: off
     cli: claude-code
     vendor: anthropic
     model: Claude Opus
@@ -145,7 +147,8 @@ test('the suite and all module defaults use the internally created HOME', () => 
 
 test('a signed approval does not hand a no-terminal caller the owner-only file flag', async () => {
   const w = world();
-  const flagged = join(w.base, 'nowhere', 'brief.md');
+  // Keep the signed target in this repository so the owner-only flag gate is the subject.
+  const flagged = join(w.dir, 'nowhere.yaml');
   const id = w.approved(['newcomer', '--file', flagged]);
   const io = detachedIo(w);
   const code = await runAdd(['newcomer', '--file', flagged, '--approval', id], io, w.sources());

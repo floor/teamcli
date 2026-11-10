@@ -87,6 +87,8 @@ seats:
     launch: claude --model claude-opus-5-5
   - role: implementer
     name: builder
+    # New-seat authority and audit controls are independent of channel preparation.
+    channel: off
     label: builder
     cli: claude-code
     vendor: anthropic

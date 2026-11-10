@@ -83,6 +83,8 @@ seats:
     human: true
   - role: ${workerRole}
     name: ${WORKER}
+    # This fixture pins authority or the recorded recipe, independently of the channel.
+    channel: off
     label: ${WORKER}
     cli: claude-code
     vendor: anthropic
@@ -587,10 +589,12 @@ test('a pull-on-turn reviewer is warned about, not only a CLI whose profile has 
 });
 
 test('a Claude reviewer whose launch has no push adapter is warned about', async () => {
+  // A bare Claude recipe now has a channel by default; this negative control is explicitly pull-only.
   // The profile declares push, but this launch line carries no development channel and the seat
   // has no record yet: the effective class is pull-on-turn, and a time-bound record would wait.
   const reviewer = `  - role: reviewer
     name: checker
+    channel: off
     label: checker
     cli: claude-code
     vendor: anthropic

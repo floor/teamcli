@@ -2,7 +2,7 @@
 // by retention, and a flock-less reclaim tries a live holder once.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { CHANNEL_FLAG, CHANNEL_SERVER, withChannelCommit } from '../src/mcp/channel.ts';
@@ -40,6 +40,7 @@ function channelWorld() {
   mkdirSync(home, { mode: 0o700 });
   mkdirSync(lobby, { mode: 0o700 });
   mkdirSync(join(root, '.agents'), { mode: 0o700, recursive: true });
+  mkdirSync(join(lobby, 'alpha'), { mode: 0o700 });
   writeFileSync(join(root, '.agents/team.yaml'), `format: 1
 project: synthetic-project
 session: ${SESSION}
@@ -59,6 +60,8 @@ seats:
     model: Test
     version: "1"
     launch: ${launch}
+    # Reach the leftover-lock guard in the owned folder this lead declares.
+    cwd: ${relative(root, join(lobby, 'alpha'))}
 `, { mode: 0o600 });
   upsertTeam(home, teamIdOf(root), {
     root,
@@ -96,7 +99,6 @@ describe('channel follow-ups', () => {
     const world = channelWorld();
     const folder = join(world.lobby, 'alpha');
     const lock = join(folder, '.team-channel.lock');
-    mkdirSync(folder, { mode: 0o700 });
     mkdirSync(lock, { mode: 0o700 });
     writeFileSync(join(lock, 'marker'), 'left\n', { mode: 0o600 });
     const read = prepareChannelConfig({

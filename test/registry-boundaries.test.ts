@@ -27,6 +27,7 @@ const OWNER = { kind: 'owner' as const };
 const LEAD_ID = 'seat_0123456789ab';
 const WORKER_ID = 'seat_0fedcba98765';
 
+// Handle/model scenes retain the exact recorded recipe without channel augmentation.
 function seatBlock(name: string, role: string, extra: string[] = []): string {
   return [
     `  - role: ${role}`,
@@ -232,7 +233,7 @@ workspace:
   protected: [.]
 seats:
 ${seatBlock('lead', 'coordinator', ['    mode: shared', '    cwd: .'])}
-${seatBlock('worker', 'implementer', ['    count: 1'])}
+${seatBlock('worker', 'implementer', ['    count: 1', '    channel: off'])}
 `;
   }
 

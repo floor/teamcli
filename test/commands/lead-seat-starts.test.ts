@@ -1,3 +1,4 @@
+// Default-channel placement is per seat, while authority and session assertions stay intact.
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -383,18 +384,18 @@ ${seat('worker2', 'implementer')}
     const runA = await runUpCmd(['--file', fileA], worldA);
     expect(runA.code).toBe(0);
     expect(worldA.workspaces).toContainEqual({ label: 'lead', cwd: root });
-    expect(worldA.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(worldA.workspaces).toContainEqual({ label: 'worker', cwd: join(lobby, 'worker') });
     expect(readState(dir).sessions['alpha']?.seats.lead?.start_cwd).toBe(root);
-    expect(readState(dir).sessions['alpha']?.seats.worker?.start_cwd).toBe(canonicalLanding(lobby).landing);
+    expect(readState(dir).sessions['alpha']?.seats.worker?.start_cwd).toBe(canonicalLanding(join(lobby, 'worker')).landing);
 
     const fileB = approveYaml(secondTeamYaml(), 'team-b.yaml');
     const worldB = world(10);
     const runB = await runUpCmd(['--file', fileB], worldB);
     expect(runB.code).toBe(0);
     expect(worldB.workspaces).toContainEqual({ label: 'lead2', cwd: root });
-    expect(worldB.workspaces).toContainEqual({ label: 'worker2', cwd: lobbyZeta });
+    expect(worldB.workspaces).toContainEqual({ label: 'worker2', cwd: join(lobbyZeta, 'worker2') });
     expect(readState(dir).sessions['beta']?.seats.lead2?.start_cwd).toBe(root);
-    expect(readState(dir).sessions['beta']?.seats.worker2?.start_cwd).toBe(canonicalLanding(lobbyZeta).landing);
+    expect(readState(dir).sessions['beta']?.seats.worker2?.start_cwd).toBe(canonicalLanding(join(lobbyZeta, 'worker2')).landing);
 
     // The one state file beside the two files vouches each session's own launched file.
     expect(readState(dir).sessions['alpha']?.launched_file).toBe(fileA);

@@ -1,3 +1,4 @@
+import { registerDefaultChannelFixture } from './helpers/default-channel.ts';
 // The R4 resume pin (`team restart <seat> --resume <cli-session-id>`): pins which recorded
 // conversation of the seat to resume instead of the latest, verified against the seat's own
 // team-owned records (`recordedSeatSession` and the session registry), refused for a foreign or
@@ -173,6 +174,8 @@ function seedSeatWithSessions(fixture: Fixture): void {
     lifecycle: 'running',
     by: 'test',
   });
+  // Resume coverage keeps the default channel and its unique registered team/session.
+  registerDefaultChannelFixture(fixture.root, fixture.home);
 }
 
 type Harness = {

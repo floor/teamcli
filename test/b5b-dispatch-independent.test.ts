@@ -1,3 +1,4 @@
+import { registerDefaultChannelFixture } from './helpers/default-channel.ts';
 // Independent scenes for B5b: the delivery class a send reports, the idleness gate in `next`,
 // `plan` and the watch dispatch, the `up` warning for a lead nothing can wake, the pull seat's
 // rules and the restart line, and a stale recorded socket that is never dialed.
@@ -785,7 +786,7 @@ function upTeam(leadCli: string, leadLaunch: string, reviewer: { cli: string; la
     launch: ${reviewer.launch}${own ? '\n    cwd: ../own-checker' : ''}
 `;
   const trust = own
-    ? `  - .\n  - ../own-checker`
+    ? `  - ${lobbyDir(upHome)}\n  - ${upRoot}\n  - ${join(dirname(upRoot), 'own-checker')}`
     : `  - ${lobbyDir(upHome)}\n  - ${upRoot}`;
   return `format: 1
 project: acme
@@ -838,6 +839,8 @@ function upApprove(text: string): void {
 async function upDry(leadCli: string, leadLaunch: string, reviewer: { cli: string; launch: string } | null = null): Promise<string> {
   upDirs();
   upApprove(upTeam(leadCli, leadLaunch, reviewer));
+  // Positive push leads keep the channel enabled in a coherent registered project.
+  if (leadLaunch === PUSH_LAUNCH) registerDefaultChannelFixture(upRoot, upHome, 'lead');
   const sources: UpSources = { sessionRunning: () => true, agents: () => [], home: upHome, now: () => UP_NOW };
   const io = testIo(upRoot, { kind: 'owner' });
   const code = await runUp(['--dry-run'], io, sources);
