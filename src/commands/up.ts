@@ -792,6 +792,7 @@ function seatPlan(
     name: seat.name,
     cli: seat.cli,
     launch: registry?.launch ?? seat.launch,
+    ...(seat.channelOff === true ? { channelOff: true as const } : {}),
     ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
     cwd: seat.cwd,
     label: workspaceLabel(seat),
