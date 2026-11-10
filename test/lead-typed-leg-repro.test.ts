@@ -1,15 +1,17 @@
-// A lead whose order names typed is woken when no event adapter is live.
+// A receiver profile decides whether an order may use typed wake; a Claude lead
+// keeps its durable drop when no event adapter is live.
 // A wrapper beside the shell is not a bare shell. A working screen is waited
 // out, and that wait does not end pull-only. Screens and pane names are synthetic.
 import { afterEach, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
+import { readHistory } from '../src/send/history.ts';
 import type { TypedWakeHost } from '../src/send/typed-wake.ts';
 import { liveOrderWords } from '../src/settings/inherit.ts';
-import { claudeBox } from './helpers.ts';
+import { claudeBox, recordBody } from './helpers.ts';
 import { withoutSendId } from './helpers/output.ts';
-import { fake, owner, world, type World } from './send-native-fixtures.ts';
+import { dropDir, fake, filed, owner, world, type World } from './send-native-fixtures.ts';
 
 const CURSOR = join(import.meta.dir, 'fixtures', 'cursor', '2026.10.22');
 const IDLE = readFileSync(join(CURSOR, 'idle.txt'), 'utf8');
@@ -65,7 +67,7 @@ function wakeFake(screen: (read: number, enters: number, typed: readonly string[
   };
 }
 
-test('a claude lead whose order names typed is woken, and the retired name stays out of the walk', async () => {
+test('a Claude lead whose profile refuses typed keeps the unread drop, and the retired name stays out of the walk', async () => {
   expect(liveOrderWords(['mcp-inbox', 'typed'])).toEqual(['typed']);
   const made = open();
   const pane = wakeFake((read, enters, typed) => {
@@ -80,10 +82,28 @@ test('a claude lead whose order names typed is woken, and the retired name stays
   });
   const io = owner(made.root);
   expect(await runSend(['lead', 'hello'], io, host), io.err + io.out).toBe(0);
-  expect(withoutSendId(io.out)).toContain('lead: delivered (typed wake)');
-  expect(io.err + io.out).not.toContain('pull-only');
-  expect(pane.typed.length).toBe(1);
-  expect(pane.enters).toBe(1);
+  const text = io.err + io.out;
+  expect(withoutSendId(io.out)).toContain('lead: queued, not woken (drop,');
+  expect(text).not.toContain('delivered (typed wake)');
+  expect(text).not.toContain('mcp-inbox');
+  // A fully capable host does not override the receiver profile's refusal.
+  expect(pane.reads).toBe(0);
+  expect(pane.typed).toEqual([]);
+  expect(pane.enters).toBe(0);
+  expect(host.frames).toEqual([]);
+
+  const drops = dropDir(made.dir, 'lead');
+  const ids = readdirSync(drops).filter((name) => !name.includes('.'));
+  expect(ids).toHaveLength(1);
+  const id = ids[0] as string;
+  expect(recordBody(join(drops, id))).toBe(filed('hello'));
+  expect(existsSync(join(drops, `${id}.read.json`))).toBe(false);
+  expect(existsSync(join(drops, `${id}.replied.json`))).toBe(false);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) throw new Error(history.reason);
+  expect(history.entries).toHaveLength(1);
+  expect(history.entries[0]).toMatchObject({ id, from: 'owner', to: 'lead', body: filed('hello'), outcome: 'queued, not woken', via: 'drop' });
 });
 
 test('a launcher pane that holds a program beside the shell still takes the typed wake', async () => {
