@@ -385,6 +385,8 @@ export interface UpSeat {
   name: string;
   cli: string;
   launch: string;
+  /** Preserve the declaration while the verified lobby path is canonicalized. */
+  channelOff?: true;
   /** The declarative launcher name, when the seat names one. */
   launcher?: string;
   /** The session the resolver is given, including a blank one it refuses. Absent when this
