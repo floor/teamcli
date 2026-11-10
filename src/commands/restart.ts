@@ -1937,6 +1937,8 @@ function buildUpSeat(
     name: seat.name,
     cli: seat.cli,
     launch: seat.launch,
+    // Every launch-seat builder carries the declaration's opt-out.
+    ...(seat.channelOff === true ? { channelOff: true as const } : {}),
     ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
     cwd: start.cwd,
     label: workspaceLabel(seat),
