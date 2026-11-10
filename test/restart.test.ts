@@ -24,6 +24,7 @@ import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { agentsDir, findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { recordedSeatSession } from '../src/registry/resume.ts';
+import { CHANNEL_FLAG } from '../src/mcp/channel.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalOf } from '../src/approve/approval.ts';
@@ -282,6 +283,33 @@ function makeFixture(rawYaml = TEAM_YAML): Fixture {
   const file = join(dir, 'team.yaml');
   writeFileSync(file, yaml);
   return { base, root, home, file, dir, yaml };
+}
+
+/** Admission, sign-off and output scenes opt out explicitly so channel setup adds no unrelated notice. */
+function withoutChannel(seat: string, rawYaml = TEAM_YAML): string {
+  const block = `    name: ${seat}\n`;
+  if (rawYaml.includes(block)) return rawYaml.replace(block, `${block}    channel: off\n`);
+  const flow = `name: ${seat},`;
+  if (rawYaml.includes(flow)) return rawYaml.replace(flow, `${flow} channel: off,`);
+  throw new Error(`the fixture declares no seat ${seat}`);
+}
+
+/** Resume and fresh-launch scenes keep the default channel with one registered root and roster. */
+function registerDefaultChannel(fixture: Fixture): void {
+  const loaded = loadTeamFile(fixture.root, { home: fixture.home });
+  if (!loaded.ok) throw new Error('fixture team does not validate');
+  const agent = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+  if (agent === null || agent === undefined) throw new Error('the fixture has no worker record');
+  const lobby = join(fixture.home, '.config', 'team', 'lobby');
+  mkdirSync(lobby, { recursive: true, mode: 0o700 });
+  upsertTeam(fixture.home, teamIdOf(fixture.root), {
+    project: loaded.team.project,
+    session: loaded.team.session,
+    root: fixture.root,
+    lobby,
+    lobbies: { [loaded.team.session]: lobby },
+    roster: [{ agent: agent.id, seat: 'worker', role: 'implementer', leads: false }],
+  });
 }
 
 /** The team before its implementer seats were added: the file a session launched earlier still
@@ -661,7 +689,7 @@ describe('team restart <seat>', () => {
   // whose native delivery was never written.
   test('a ready restart says pull-only when the final binding could not be written', async () => {
     function blocked(): { fixture: Fixture; io: ReturnType<typeof testIo> } {
-      const fixture = makeFixture();
+      const fixture = makeFixture(withoutChannel('worker'));
       updateState(fixture.dir, (state) => {
         const session = (state.sessions.acme ??= emptySession());
         session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
@@ -770,7 +798,7 @@ describe('team restart <seat>', () => {
   });
 
   test('a dev-mode restart records the mark and the caller it admitted', async () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture(withoutChannel('worker'));
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
       session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
@@ -1398,7 +1426,7 @@ describe('team restart <seat>', () => {
   // clears is the registry's own — in the same write that records the launch — and the stale
   // file beside it is left exactly as it was launched.
   test('a team\'s lead revives a registry team\'s stopped seat, clearing the registry mark the pointer leads to', async () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture(withoutChannel('worker'));
     intoRegistry(fixture.root, fixture.home);
     const stored = storedTeam(fixture.root, fixture.home);
     if (stored === null) throw new Error('the fixture team is not in the registry');
@@ -1461,7 +1489,7 @@ describe('team restart <seat>', () => {
   // then relaunches; a launch that does not reach ready puts the mark back. Every scene below
   // runs with dev mode off, except where it says otherwise.
   test('a team\'s lead restarts its own team\'s stopped seat: the mark is cleared in the run that launches it', async () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture(withoutChannel('parked-seat'));
     updateState(fixture.dir, (state) => {
       (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
     });
@@ -1492,7 +1520,7 @@ describe('team restart <seat>', () => {
     name: parked-seat`,
     );
     expect(validateTeamFile(yaml).ok).toBe(true);
-    const fixture = makeFixture(yaml);
+    const fixture = makeFixture(withoutChannel('parked-seat', yaml));
     updateState(fixture.dir, (state) => {
       (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
     });
@@ -1536,7 +1564,7 @@ describe('team restart <seat>', () => {
 `,
     );
     expect(validateTeamFile(yaml).ok).toBe(true);
-    const fixture = makeFixture(yaml);
+    const fixture = makeFixture(withoutChannel('parked-seat', yaml));
     updateState(fixture.dir, (state) => {
       (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
     });
@@ -2329,10 +2357,12 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
   test('both records agreeing on one id resume it on the new declaration', async () => {
     const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    registerDefaultChannel(fixture);
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.runs.join('\n')).toContain('claude --model claude-opus-5-5 --resume ses_keep');
+    expect(run.did.runs.join('\n')).toContain(CHANNEL_FLAG);
     expect(io.err).toBe('');
     const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
     expect(log).toContain('worker: resuming session ses_keep on the new declaration');
@@ -2600,12 +2630,14 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
   test('a host-restored process on the recorded pane can be replaced when its registry session agrees', async () => {
     const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', workerSession: 'ses_keep', launched: true });
+    registerDefaultChannel(fixture);
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.runs.join('\n')).toContain('claude --model claude-opus-5-5 --resume ses_keep');
+    expect(run.did.runs.join('\n')).toContain(CHANNEL_FLAG);
     expect(io.err).toBe('');
   });
 
@@ -3689,6 +3721,7 @@ describe('independent checks: restart --fresh', () => {
       lifecycle: 'running',
       by: 'team up',
     });
+    registerDefaultChannel(fixture);
     // The old conversation's own file, where a CLI keeps it: the run may start a new
     // conversation, and nothing it does may touch this file's bytes.
     const sessionsDir = join(fixture.home, '.claude', 'sessions');
@@ -3708,6 +3741,7 @@ describe('independent checks: restart --fresh', () => {
     expect(io.err).toBe('');
     expect(readFileSync(transcript, 'utf8')).toBe(bytes);
     expect(did.runs.join('\n')).toContain('claude --model claude-opus-5-5');
+    expect(did.runs.join('\n')).toContain(CHANNEL_FLAG);
     expect(did.runs.join('\n')).not.toMatch(/(?:^|\s)resume(?=\s|$)/);
     // The new conversation's id is whatever the new pane reported — not the recorded one — and
     // both records carry the SAME new id.
@@ -3942,7 +3976,7 @@ describe('a stored approval that does not verify', () => {
   }
 
   test('dev mode says the record and the re-sign command, and continues without signing', async () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture(withoutChannel('worker'));
     const planted = plantUnverifiedApproval(fixture);
     const sources = ready(fixture);
     const io = testIo(fixture.root, { kind: 'owner' });
