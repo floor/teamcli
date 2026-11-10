@@ -113,6 +113,7 @@ type Made = { launch: Launch; creates: string[]; renames: string[]; commands: st
  *  recorded in `commands`. */
 function world(): Made {
   const panes = new Map<string, { text: string; agent: boolean }>();
+  const paneOf = new Map<string, string>();
   let n = 0;
   let clock = NOW.getTime();
   const made: Made = { launch: {} as Launch, creates: [], renames: [], commands: [], session: 'absent' };
@@ -125,9 +126,10 @@ function world(): Made {
     sessionUp: () => made.session === 'running',
     createWorkspace(_session, _cwd, label) {
       n += 1;
-      panes.set(`w${n}:p1`, { text: IDLE, agent: false });
+      panes.set(`pane-${n}`, { text: IDLE, agent: false });
+      paneOf.set(`ws-${n}`, `pane-${n}`);
       made.creates.push(label);
-      return { pane: `w${n}:p1`, workspace: `w${n}` };
+      return { pane: `pane-${n}`, workspace: `ws-${n}` };
     },
     paneRun(_session, pane, command) {
       made.commands.push(command);
@@ -143,8 +145,8 @@ function world(): Made {
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
     agents: () => [],
     workspacePanes: (_session, workspace) => {
-      const found = [...panes.keys()].filter((pane) => pane.startsWith(`${workspace}:`));
-      return found.length > 0 ? found : [`${workspace}:p1`];
+      const pane = paneOf.get(workspace);
+      return pane ? [pane] : [`${workspace}-pane1`];
     },
     paneText: (_session, pane) => panes.get(pane)?.text ?? '',
     foreground: () => ['claude', 'codex'],
