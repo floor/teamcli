@@ -79,6 +79,7 @@ import { readScreen } from '../watch/screen.ts';
 import { placedStartFolders, seatCwdRefusal, seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { channelLaunchFallback, channelLobbyFolder } from '../mcp/launch-config.ts';
+import { withoutChannel } from '../mcp/channel.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
@@ -1613,7 +1614,12 @@ function temporarySeat(
   return {
     name,
     edited: current,
-    seat: { ...like, name, label: name, cwd: worktree?.path ?? like.cwd, stopped: false },
+    // A temporary seat is not declared and starts without this team's channel.
+    seat: {
+      ...like, name, label: name, cwd: worktree?.path ?? like.cwd, stopped: false,
+      channelOff: true,
+      launch: like.cli === 'claude-code' ? withoutChannel(like.launch) : like.launch,
+    },
     temporary: {
       like: like.name,
       until: values.until ?? '',
