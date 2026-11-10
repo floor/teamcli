@@ -547,11 +547,17 @@ describe('seats the refresh must not touch', () => {
 describe("the post-launch refresh and its CAS write", () => {
   test('a seat this run launches is written after the launch pass', async () => {
     stand([{ name: WORKER }]);
-    const live = sock(800);
+    // A real launch writes the seat's settings file first and its process opens the socket
+    // afterwards, so the socket postdates the declaration. The fixture writes it at workspace
+    // creation, after this run's settings install, the same way round.
+    let live = '';
     const made = makeWorld({
       agents: (_session, worlds) => worlds.map((one) => liveAgent(one.label, one.pane, one.workspace)),
       processInfo: (_session, pane, worlds) => (worlds.some((one) => one.pane === pane) ? MADE_PROCESSES : null),
       workspaces: () => [],
+      onCreate: () => {
+        live = sock(800);
+      },
     });
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp([], io, made.sources, { nonInteractive: true }), `up said:\n${said(io)}`).toBe(0);
@@ -562,11 +568,13 @@ describe("the post-launch refresh and its CAS write", () => {
 
   test('a record another writer changed between the read and the write is refused', async () => {
     stand([{ name: WORKER }]);
-    sock(800);
-    const concurrent = sock(900);
+    // The launched seat's socket is written at workspace creation, after this run's settings
+    // install, as a real launch's process opens it after its settings file is written.
+    let concurrent = '';
     // The concurrent writer lands between the helper's registry read and its write: the pane
     // reading is the seam in between. A plain update bumps the record's provenance sequence, so
-    // the conditional write must refuse and leave the other writer's address in place.
+    // the conditional write must refuse and leave the other writer's address in place. Its own
+    // socket is written as it lands, so it too postdates the launched settings.
     let raced = false;
     const made = makeWorld({
       agents: (_session, worlds) => worlds.map((one) => liveAgent(one.label, one.pane, one.workspace)),
@@ -574,12 +582,16 @@ describe("the post-launch refresh and its CAS write", () => {
         if (worlds.some((one) => one.pane === pane) && !raced
           && (new Error().stack ?? '').includes('refreshAddresses')) {
           raced = true;
+          concurrent = sock(900);
           const agent = findAgent(home, { team: teamIdOf(root), seat: WORKER });
           if (agent) updateAgent(home, agent.id, { reach: { address: concurrent } });
         }
         return worlds.some((one) => one.pane === pane) ? MADE_PROCESSES : null;
       },
       workspaces: () => [],
+      onCreate: () => {
+        sock(800);
+      },
     });
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp([], io, made.sources, { nonInteractive: true }), `up said:\n${said(io)}`).toBe(0);
