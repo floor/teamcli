@@ -38,8 +38,8 @@ describe('Codex launch and captured screens', () => {
     expect(codex.exit).toBe('/exit');
     expect(versionVerdict('codex-cli 0.157.0', codex.tested)).toBe('tested');
     expect(versionVerdict('codex-cli 0.160.0', codex.tested)).toBe('tested');
-    expect(versionVerdict('codex-cli 0.161.0', codex.tested)).toBe('tested');
-    expect(versionVerdict('codex-cli 0.162.0', codex.tested)).toBe('newer');
+    expect(versionVerdict('codex-cli 0.167.0', codex.tested)).toBe('tested');
+    expect(versionVerdict('codex-cli 0.167.1', codex.tested)).toBe('newer');
   });
   test('the team inbox rides the launch as two -c values, and no file is written', () => {
     expect(codex.mcpInbox).toEqual({

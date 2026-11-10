@@ -184,17 +184,17 @@
     },
     "codex": {
       "idle": {
-        "real": 6,
+        "real": 8,
         "constructed": 7,
         "undocumented": 0
       },
       "working": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
       "unsent": {
-        "real": 18,
+        "real": 19,
         "constructed": 2,
         "undocumented": 0
       },
@@ -204,12 +204,12 @@
         "undocumented": 0
       },
       "permission": {
-        "real": 2,
+        "real": 3,
         "constructed": 1,
         "undocumented": 0
       },
       "question": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
@@ -219,7 +219,7 @@
         "undocumented": 0
       },
       "trust": {
-        "real": 4,
+        "real": 5,
         "constructed": 0,
         "undocumented": 0
       },
@@ -239,7 +239,7 @@
         "undocumented": 0
       },
       "plan approval": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
@@ -249,7 +249,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 10,
+        "real": 11,
         "constructed": 4,
         "undocumented": 0
       },
@@ -1512,7 +1512,7 @@
     "codex": {
       "tested": {
         "from": "0.157.0",
-        "to": "0.161.0"
+        "to": "0.167.0"
       },
       "byVersion": {
         "0.157.0": {
@@ -1738,6 +1738,83 @@
           "unknown": {
             "real": 1,
             "constructed": 2,
+            "undocumented": 0
+          },
+          "feedback survey": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        },
+        "0.167.0": {
+          "idle": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 0,
             "undocumented": 0
           },
           "feedback survey": {
@@ -3861,6 +3938,60 @@
     },
     {
       "file": "codex/0.161.0/working.txt",
+      "cli": "codex",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.167.0/exit.txt",
+      "cli": "codex",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.167.0/idle-unattended.txt",
+      "cli": "codex",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.167.0/idle.txt",
+      "cli": "codex",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.167.0/permission.txt",
+      "cli": "codex",
+      "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.167.0/plan-approval.txt",
+      "cli": "codex",
+      "kind": "plan approval",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.167.0/question.txt",
+      "cli": "codex",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.167.0/trust.txt",
+      "cli": "codex",
+      "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.167.0/unsent.txt",
+      "cli": "codex",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.167.0/working.txt",
       "cli": "codex",
       "kind": "working",
       "provenance": "capture"

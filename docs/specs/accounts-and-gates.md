@@ -279,7 +279,7 @@ team gate --reclaim-wedged <slot>
 | `grok` (`1.0.50`–`1.0.52`) | `--session-id <uuid>`, `--resume <id\|title>` | Supported (UUID only, never title, never `--restore-code`). |
 | `claude-code` (`2.1.288`–`2.1.302`) | `--session-id <uuid>`, `--resume <id>` | Resume of existing/imported UUID supported (transcript at `<home>/.claude/projects/<cwd-slug>/<id>.jsonl`); fresh pre-assignment refused fail-closed until evidenced by a measured run. |
 | `gemini` (`0.64.0`) | `--session-id <uuid>`, `--resume` (latest/index) | Refused (`--resume` does not accept a deterministic UUID). |
-| `codex` (`0.157.0`–`0.161.0`) | `codex resume [SESSION_ID]` | Refused (no pre-assignment flag at initial launch). |
+| `codex` (`0.157.0`–`0.167.0`) | `codex resume [SESSION_ID]` | Refused (no pre-assignment flag at initial launch). |
 | `cursor` (`2026.10.01`–`2026.10.14` at `v0.5.0`; `2026.10.01`–`2026.10.16` at `int/0.5.1`) | `--resume [chatId]` | Refused (no pre-assignment flag at initial launch). |
 | `antigravity` (`1.2.16`–`1.4.1` at `v0.5.0`; `1.2.16`–`1.4.2` at `int/0.5.1`) | `--conversation <id>` | Refused (no pre-assignment flag at initial launch). |
 | `muse` (`1.4.9`) | `muse resume (--last\|<session-ref>)` | Refused (no `--session-id <uuid>` pre-assignment flag at initial launch). |
@@ -321,7 +321,7 @@ team gate --reclaim-wedged <slot>
 |---|---|---|---|---|
 | `antigravity` | tested range `1.2.16`–`1.4.1` (`1.2.16`–`1.4.2` at `int/0.5.1`) | 0.5.0 | `src/profiles/antigravity.yaml` | `resume: true` refused in 0.5.1 (no pre-assignment flag at initial launch) |
 | `claude-code` | tested range `2.1.288`–`2.1.302` | 0.5.0 | `src/profiles/claude-code.yaml` | `resume: true` resumes existing/imported UUID (`--resume <id>`); fresh `--session-id <uuid>` refused until measured |
-| `codex` | tested range `0.157.0`–`0.161.0` | 0.5.0 | `src/profiles/codex.yaml` | `resume: true` refused in 0.5.1 (no pre-assignment flag at initial launch) |
+| `codex` | tested range `0.157.0`–`0.167.0` | 0.5.0 | `src/profiles/codex.yaml` | `resume: true` refused in 0.5.1 (no pre-assignment flag at initial launch) |
 | `cursor` | tested range `2026.10.01`–`2026.10.14` (`2026.10.01`–`2026.10.16` at `int/0.5.1`) | 0.5.0 | `src/profiles/cursor.yaml` | `resume: true` refused in 0.5.1 (no pre-assignment flag at initial launch) |
 | `gemini` | tested range `0.64.0` | 0.5.0 | `src/profiles/gemini.yaml` | `resume: true` refused in 0.5.1 (`--resume` does not accept a deterministic UUID) |
 | `grok` | tested range `1.0.50`–`1.0.52` | 0.5.0 | `src/profiles/grok.yaml` | `resume: true` supported in 0.5.1 (`--session-id <uuid>`, `--resume <uuid>`, UUID only) |

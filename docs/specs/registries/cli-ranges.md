@@ -19,7 +19,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 |---|---|---|---|---|
 | `antigravity` | Tested from `1.2.16` through `1.4.1` inclusive. | present at 0.5.0 | `src/profiles/antigravity.yaml`: tested | binary agy; rules as a first message; range does not promise untested releases or resume support. |
 | `claude-code` | Tested from `2.1.288` through `2.1.302` inclusive. | present at 0.5.0 | `src/profiles/claude-code.yaml`: tested | binary claude; rules as an option; range does not promise untested releases or resume support. |
-| `codex` | Tested from `0.157.0` through `0.161.0` inclusive. | present at 0.5.0 | `src/profiles/codex.yaml`: tested | binary codex; rules as a first message; range does not promise untested releases or resume support. |
+| `codex` | Tested from `0.157.0` through `0.167.0` inclusive. | present at 0.5.0 | `src/profiles/codex.yaml`: tested | binary codex; rules as a first message; range does not promise untested releases or resume support. |
 | `cursor` | Tested from `2026.10.01` through `2026.10.14` inclusive. | present at 0.5.0 | `src/profiles/cursor.yaml`: tested | binary cursor-agent; rules as a first message; range does not promise untested releases or resume support. |
 | `gemini` | Tested from `0.64.0` through `0.64.0` inclusive. | present at 0.5.0 | `src/profiles/gemini.yaml`: tested | binary gemini; rules as a first message; range does not promise untested releases or resume support. |
 | `grok` | Tested from `1.0.50` through `1.0.52` inclusive. | present at 0.5.0 | `src/profiles/grok.yaml`: tested | binary grok; rules as an option; range does not promise untested releases or resume support. |
