@@ -331,9 +331,13 @@ export function launchLineFinding(
   const words = launch.trim().split(/\s+/).filter((word) => word !== '');
   const program = launchBinary(launch);
   if (program === null) return note('its launch line names no command');
-  const folder = start?.folder ?? (claudeChannelSeat(seat) && !isLegacyTrust(team.trust)
-    ? channelStart(seat, root, lobbyOf(sources.home, root, team), isLeadSeat(team, seat.name))?.cwd ?? startFolder(team, seat)
-    : startFolder(team, seat));
+  const declaredFolder = startFolder(team, seat);
+  const channelCwd = claudeChannelSeat(seat) && !isLegacyTrust(team.trust)
+    ? channelStart(seat, root, lobbyOf(sources.home, root, team), isLeadSeat(team, seat.name))?.cwd
+    : undefined;
+  // A channel placement that keeps the declared folder also keeps its relative display form.
+  const folder = start?.folder ?? (channelCwd === undefined || resolve(root, declaredFolder) === resolve(channelCwd)
+    ? declaredFolder : channelCwd);
   const cwd = start?.cwd ?? resolve(root, folder);
   const naked = nakedWord(program);
   const missing = programFinding(naked, program, profileFor(seat.cli)?.binary ?? null, cwd, folder, sources);
