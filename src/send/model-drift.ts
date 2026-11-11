@@ -1,6 +1,6 @@
 // Source: lead decision 2026-11-11 02:30Z, following the cross-lab model-follows-cli read:
 // model-only drift delivers and flags; an observation never relaxes the entity model rule.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { readStateFile, writeStateFile } from '../file-write.ts';
@@ -13,14 +13,14 @@ import { paneHoldsOnlyShell } from '../launch/identity.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { pidAlive, withLock } from '../state.ts';
 import type { Live } from '../status/compare.ts';
-import { modelDiffers, signedSeatModel, type Running } from '../status/statusline.ts';
+import { modelDiffers, positiveModelObservation, signedSeatModelObservation, type Running, type SeatModelObservation } from '../status/statusline.ts';
 import { ensureFoldersBelow } from './history.ts';
 import { PENDING_ID } from './pending.ts';
 import { recordNameOk } from './record.ts';
 
 export type ModelDrift = { recipient: string; recorded: Running; observed: Running };
 type Scope = { dir: string; root: string; session: string; seat: string };
-type Episode = ModelDrift & { id: string; at: string; lead: string; leadId: string | null; state: 'sending' | 'recorded' | 'failed' | 'uncertain'; pid: number; detail: string };
+type Episode = ModelDrift & { id: string; generation: string; at: string; lead: string; leadId: string | null; state: 'sending' | 'recorded' | 'failed' | 'uncertain'; pid: number; detail: string };
 
 /** The proposed observation is judged as a model, never as the file's old vendor word. */
 export function observedModelRefusal(seat: { name: string; role: string }, observed: Running, rule: EntityModelRule): string | null {
@@ -53,7 +53,7 @@ function readEpisode(file: string, root: string): Episode | null {
   const text = readStateFile(file, undefined, root);
   if (text === null) return null;
   const value = JSON.parse(text) as Episode;
-  if (!value || typeof value.id !== 'string' || !PENDING_ID.test(value.id) || typeof value.at !== 'string'
+  if (!value || typeof value.id !== 'string' || !PENDING_ID.test(value.id) || typeof value.generation !== 'string' || !PENDING_ID.test(value.generation) || typeof value.at !== 'string'
     || !Number.isFinite(Date.parse(value.at)) || typeof value.lead !== 'string' || (value.leadId !== null && typeof value.leadId !== 'string') || typeof value.recipient !== 'string'
     || !pair(value.recorded) || !pair(value.observed) || !Number.isSafeInteger(value.pid) || value.pid <= 0
     || !['sending', 'recorded', 'failed', 'uncertain'].includes(value.state) || typeof value.detail !== 'string') {
@@ -81,9 +81,13 @@ export async function reportModelDrift(input: Scope & {
     if (problem !== null) return `lead notice not recorded (${problem})`;
     // The existing metadata lock is released before the ordinary notice send is awaited.
     claim = withLock(folder.dir, (): { episode: Episode; folder: typeof folder } | { current: string } => {
-      const previous = readEpisode(folder.file, input.root);
+      let previous = readEpisode(folder.file, input.root);
       let episode: Episode;
       if (previous !== null && sameEpisode(previous, input.drift, input.lead, input.leadId)) {
+        // Each fresh drift observation invalidates any older matching watch snapshot, even
+        // when the drift tuple and the notice id stay the same. No clock ordering is assumed.
+        previous = { ...previous, generation: randomUUID() };
+        writeStateFile(folder.file, `${JSON.stringify(previous)}\n`, { root: input.root });
         if (previous.state === 'recorded' || previous.state === 'uncertain') return { current: previous.detail };
         if (previous.state === 'sending') {
           if (pidAlive(previous.pid)) return { current: 'lead notice in progress' };
@@ -93,7 +97,7 @@ export async function reportModelDrift(input: Scope & {
         }
         episode = { ...previous, state: 'sending', pid: process.pid };
       } else {
-        episode = { ...input.drift, id: randomUUID(), at: input.now.toISOString(), lead: input.lead, leadId: input.leadId,
+        episode = { ...input.drift, id: randomUUID(), generation: randomUUID(), at: input.now.toISOString(), lead: input.lead, leadId: input.leadId,
           state: 'sending', pid: process.pid, detail: 'lead notice pending' };
       }
       writeStateFile(folder.file, `${JSON.stringify(episode)}\n`, { root: input.root });
@@ -125,21 +129,62 @@ export async function reportModelDrift(input: Scope & {
   return result.detail;
 }
 
-/** A positive repaired observation ends an episode; an unread screen does not. */
-export function clearModelDrift(input: Scope & { recipient: string }): void {
+/** A clear is bound to the episode and registry binding captured BEFORE the observation. */
+export type ModelDriftFence = { episodeId: string; generation: string; recipient: string; binding: string };
+
+function recipientBinding(record: Agent): string {
+  return JSON.stringify({ id: record.id, reach: record.reach, cli: record.cli, signing: record.signing,
+    launch: createHash('sha256').update(record.launch).digest('hex'),
+    updatedAt: record.provenance.updated_at, seq: record.provenance.seq ?? null });
+}
+
+export function captureModelDriftFence(input: Scope & { home: string }, supplied?: Agent): ModelDriftFence | null {
+  try {
+    const held = readEpisode(paths(input).file, input.root);
+    const record = supplied ?? findAgent(input.home, { team: teamIdOf(input.root), seat: input.seat });
+    if (held === null || record === null || held.recipient !== record.id
+      || record.reach.team !== teamIdOf(input.root) || record.reach.seat !== input.seat
+      || record.reach.session !== input.session) return null;
+    return { episodeId: held.id, generation: held.generation, recipient: record.id, binding: recipientBinding(record) };
+  } catch { return null; }
+}
+
+export function captureModelDriftFences(input: { dir: string; root: string; home: string; session: string; team: TeamFile }): ReadonlyMap<string, ModelDriftFence> {
+  const captured = new Map<string, ModelDriftFence>();
+  for (const seat of input.team.seats) {
+    const fence = captureModelDriftFence({ ...input, seat: seat.name });
+    if (fence !== null) captured.set(seat.name, fence);
+  }
+  return captured;
+}
+
+/** Declaration-only and unread readings cannot clear. The locked compare prevents a stale
+ * observation from removing a newer episode, newer drift observation, or changed binding. */
+export function clearModelDrift(input: Scope & {
+  home: string; recipient: string; observation: SeatModelObservation; fence: ModelDriftFence | null;
+}): void {
+  if (input.fence === null || !positiveModelObservation(input.observation)) return;
+  const fence = input.fence;
+  const observed = input.observation.model;
   try {
     const folder = paths(input);
-    if (readEpisode(folder.file, input.root)?.recipient !== input.recipient) return;
     withLock(folder.dir, () => {
-      if (readEpisode(folder.file, input.root)?.recipient === input.recipient) unlinkSync(folder.file);
+      const held = readEpisode(folder.file, input.root);
+      const record = findAgent(input.home, { team: teamIdOf(input.root), seat: input.seat });
+      if (held === null || record === null || record.lifecycle !== 'running'
+        || held.id !== fence.episodeId || held.generation !== fence.generation
+        || held.recipient !== input.recipient || record.id !== fence.recipient
+        || record.id !== input.recipient || recipientBinding(record) !== fence.binding
+        || modelDiffers(observed, record.signing)) return;
+      unlinkSync(folder.file);
     });
   } catch { /* An unreadable or busy report stays visible; never guess that repair occurred. */ }
 }
 
 type ModelContext = { home: string; root: string; session: string; team: TeamFile; live: Live };
 
-function liveModels(input: ModelContext): Array<{ seat: Seat; record: Agent; observed: Running }> {
-  const models: Array<{ seat: Seat; record: Agent; observed: Running }> = [];
+function liveModels(input: ModelContext): Array<{ seat: Seat; record: Agent; observed: Running; observation: SeatModelObservation }> {
+  const models: Array<{ seat: Seat; record: Agent; observed: Running; observation: SeatModelObservation }> = [];
   if (!input.live.running) return models;
   for (const seat of input.team.seats) {
     const record = findAgent(input.home, { team: teamIdOf(input.root), seat: seat.name });
@@ -148,16 +193,17 @@ function liveModels(input: ModelContext): Array<{ seat: Seat; record: Agent; obs
     if (record === null || record.lifecycle !== 'running' || pane === undefined
       || record.reach.session !== input.session || record.reach.pane !== pane
       || paneHoldsOnlyShell(input.live.processes?.[pane])) continue;
-    const observed = signedSeatModel({ cli: record.cli, model: record.signing.model, version: record.signing.version, launch: record.launch }, input.live.screens[pane]);
-    if (observed !== null) models.push({ seat, record, observed });
+    const observation = signedSeatModelObservation({ cli: record.cli, model: record.signing.model, version: record.signing.version, launch: record.launch }, input.live.screens[pane]);
+    if (observation.model !== null) models.push({ seat, record, observed: observation.model, observation });
   }
   return models;
 }
 
 /** A normal watch pass ends episodes on positive repair even when nobody sends meanwhile. */
-export function clearRepairedModelDrifts(input: ModelContext & { dir: string }): void {
-  for (const { seat, record, observed } of liveModels(input)) {
-    if (!modelDiffers(observed, record.signing)) clearModelDrift({ ...input, seat: seat.name, recipient: record.id });
+export function clearRepairedModelDrifts(input: ModelContext & { dir: string; fences: ReadonlyMap<string, ModelDriftFence> }): void {
+  for (const { seat, record, observation } of liveModels(input)) {
+    clearModelDrift({ ...input, seat: seat.name, recipient: record.id, observation,
+      fence: input.fences.get(seat.name) ?? null });
   }
 }
 

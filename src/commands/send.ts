@@ -1,4 +1,4 @@
-import { clearModelDrift, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
+import { captureModelDriftFence, clearModelDrift, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
 import { inlineWake, oversizedWake, recordDeliveredBody, TYPED_WAKE_MAX, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
@@ -100,7 +100,7 @@ import { deliveryTimeoutInForce } from '../policy/delivery.ts';
 import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
-import { modelDiffers, signedSeatModel } from '../status/statusline.ts';
+import { modelDiffers, positiveModelObservation, signedSeatModel, signedSeatModelObservation, type SeatModelObservation } from '../status/statusline.ts';
 import { clearPreflightReports, reportHeldSend } from '../send/held-reports.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -1705,23 +1705,25 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // setting from it. The existing public-body/repository route guards remain in force.
   let recipientDrift: ModelDrift | undefined;
   let repairedRecipient: string | undefined;
+  let repairedObservation: SeatModelObservation | undefined;
   const registeredTarget = readAgents(host.home).find((agent) =>
     agent.reach.team === teamIdOf(to.root) && agent.reach.seat === to.seat &&
     agent.reach.session === to.session && agent.lifecycle !== 'retired'
   );
   const preflightLive = findAgent(host, to.session, to.seat);
+  const driftFence = captureModelDriftFence({ dir: to.dir, root: to.root, home: host.home, session: to.session, seat: to.seat }, registeredTarget);
   const preflightScreen = preflightLive.ok ? host.native.paneText?.(to.session, preflightLive.pane) : undefined;
   if (registeredTarget !== undefined && preflightLive.ok) {
     const screen = preflightScreen ?? null;
-    // The target's own model, read as its launch makes it readable: for a provider wrapper the
-    // screen shows the wrapper CLI's default family whatever the launcher selected, so the
-    // reading is the record's signed declaration — the same like-for-like the drift test needs.
-    const running = screen === null ? null : signedSeatModel({
+    // Preserve the existing model value, but distinguish an observed provider from the
+    // declaration-only wrapper fallback. Only the former can positively prove repair.
+    const observation = signedSeatModelObservation({
       cli: registeredTarget.cli,
       model: registeredTarget.signing.model,
       version: registeredTarget.signing.version,
       launch: registeredTarget.launch,
-    }, screen);
+    }, screen ?? undefined);
+    const running = observation.model;
     if (running !== null) {
       if (!receiving.ok) return configuration(io, 'the receiving team cannot be read, so the observed model policy cannot be judged', report);
       const rule = readEntityModelRule(host.home, receiving.team);
@@ -1731,8 +1733,9 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       if (modelDiffers(running, registeredTarget.signing)) {
         recipientDrift = { recipient: registeredTarget.id, recorded: registeredTarget.signing, observed: running };
         report.recipientDrift = modelDriftText(recipientDrift);
-      } else {
+      } else if (positiveModelObservation(observation)) {
         repairedRecipient = registeredTarget.id;
+        repairedObservation = observation;
       }
     }
   }
@@ -2062,10 +2065,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // daemon principal is composed the same way. It is composed once here, before the walk, so no
   // route can transport without it and no caller has to remember to pass one.
   const directGuard = composedGuard(host);
-  if (repairedRecipient !== undefined && host.modelDriftNotice === undefined) {
+  if (repairedRecipient !== undefined && repairedObservation !== undefined && host.modelDriftNotice === undefined) {
     const refusal = guardRefusal(directGuard);
     if (refusal !== null) return refuse(io, dir, who, refusal.why, host, report);
-    clearModelDrift({ dir: to.dir, root: to.root, session: to.session, seat: to.seat, recipient: repairedRecipient });
+    clearModelDrift({ dir: to.dir, root: to.root, home: host.home, session: to.session, seat: to.seat, recipient: repairedRecipient, observation: repairedObservation, fence: driftFence });
   }
   if (recipientDrift !== undefined && host.modelDriftNotice === undefined) {
     const refusal = guardRefusal(directGuard);

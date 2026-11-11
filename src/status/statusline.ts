@@ -320,6 +320,25 @@ export function signedSeatModel(
   return null;
 }
 
+/** A display fallback is not evidence that a provider was observed or that drift was repaired. */
+export type SeatModelObservation =
+  | { source: 'unread'; model: null }
+  | { source: 'screen' | 'provider' | 'declaration'; model: Running };
+
+export function signedSeatModelObservation(
+  seat: { cli: string; model: string; version: string; launch?: string; modelFrom?: 'launcher' },
+  screen: string | undefined,
+): SeatModelObservation {
+  const model = signedSeatModel(seat, screen);
+  if (model === null) return { source: 'unread', model: null };
+  if (wrapperSeat(seat)) return { source: bannerModel(screen) === null ? 'declaration' : 'provider', model };
+  return { source: 'screen', model };
+}
+
+export function positiveModelObservation(reading: SeatModelObservation): reading is { source: 'screen' | 'provider'; model: Running } {
+  return reading.source === 'screen' || reading.source === 'provider';
+}
+
 /** The model a seat runs, read with a registry record's own provenance: the record's cli and
  *  launch are the ones the running process was started from, and a team file edited after the
  *  launch cannot prove what it started. The file's `model_from` stands only where the recorded

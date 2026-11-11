@@ -1,5 +1,5 @@
 import { traceChildStep } from '../diagnostics/child-steps.ts';
-import { clearRepairedModelDrifts } from '../send/model-drift.ts';
+import { captureModelDriftFences, clearRepairedModelDrifts } from '../send/model-drift.ts';
 import { beginBeatWork } from '../diagnostics/beat-work.ts';
 import { refuseTyping } from '../send/no-pane-messaging.ts';
 import { machineAccountsOf } from '../information/machine-accounts.ts';
@@ -1175,6 +1175,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // Before the one whole-session read: a beat overdue from the last pass lands here, so the
       // other hosted routes are renewed going into a call that can hold the loop for seconds.
       await yieldBeat();
+      // Capture the episode generations before the live read can suspend. A later positive
+      // snapshot may clear only those generations, never a newer concurrent observation.
+      const driftFences = !foreign && sources.home !== undefined && current.ok && current.notice === undefined
+        ? captureModelDriftFences({ dir, root, home: sources.home, session, team })
+        : new Map();
       const liveCall = gate.take();
       let live: Live | null = null;
       let liveSkipped = false;
@@ -1851,7 +1856,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           );
         }
         if (!foreign && sources.home !== undefined && current.ok && current.notice === undefined) {
-          clearRepairedModelDrifts({ dir, root, home: sources.home, session, team, live });
+          clearRepairedModelDrifts({ dir, root, home: sources.home, session, team, live, fences: driftFences });
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);
         await yieldBeat();
