@@ -1,3 +1,4 @@
+import { createChildSteps, childStepsAt, traceChildStep } from '../src/diagnostics/child-steps.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -665,5 +666,56 @@ describe('createSidebarPass — chores metadata refresh', () => {
     });
     expect(second).toEqual([]);
     expect(reports).toEqual([{ pane: 'pane-b1', text: 'Codex 5.3 high' }]);
+  });
+});
+
+
+describe('first-cycle step diagnostics', () => {
+  test('records pending work before a block and preserves outcomes, counts and throws', () => {
+    let clock = NOW;
+    const notes: string[] = [];
+    const work = createChildSteps((text) => notes.push(text), () => clock);
+    try {
+      const returned = traceChildStep('sidebar pane-list', () => {
+        // Existing watch_start_limit default (src/file/sections/watch.ts); virtual time only.
+        const pending = childStepsAt(notes.at(-1)!, clock + 120_000);
+        expect(pending).toContain('sidebar pane-list=120000.0ms pending');
+        // Existing synchronous read bound in src/herdr.ts: run(), not a new wait.
+        clock += 10_000;
+        return ['pane-1', 'pane-2'];
+      });
+      expect(returned).toEqual(['pane-1', 'pane-2']);
+      expect(traceChildStep('sidebar metadata-report', () => false)).toBe(false);
+      const failure = new Error('synthetic host failure');
+      expect(() => traceChildStep('terminal-host pane list', () => { throw failure; })).toThrow(failure);
+      const summary = childStepsAt(notes.at(-1)!, clock)!;
+      expect(summary).toContain('sidebar pane-list=10000.0ms/1calls/2items');
+      expect(summary).toContain('"false":1');
+      expect(summary).toContain('"threw":1');
+      expect(summary).not.toContain('pending');
+    } finally { work.stop(); }
+    const count = notes.length;
+    traceChildStep('after first cycle', () => true);
+    expect(notes.length).toBe(count);
+  });
+
+  test('preserves promise identity and reports rejection without changing it', async () => {
+    const notes: string[] = [];
+    const work = createChildSteps((text) => notes.push(text), () => NOW);
+    try {
+      const failure = new Error('synthetic async failure');
+      const promise = Promise.reject(failure);
+      expect(traceChildStep('readings async', () => promise)).toBe(promise);
+      await expect(promise).rejects.toBe(failure);
+      expect(childStepsAt(notes.at(-1)!, NOW)).toContain('"rejected":1');
+    } finally { work.stop(); }
+  });
+
+  test('a diagnostic sink failure cannot change a measured result', () => {
+    const work = createChildSteps(() => { throw new Error('closed pipe'); });
+    try { expect(traceChildStep('readings', () => 42)).toBe(42); }
+    finally { work.stop(); }
+    expect(childStepsAt('ordinary note', NOW)).toBeNull();
+    expect(childStepsAt('first-cycle steps: broken json', NOW)).toBeNull();
   });
 });

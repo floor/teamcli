@@ -342,6 +342,7 @@ export function listUnackedMessages(
   home: string,
   records?: RecordReader,
   lead?: string,
+  measure?: (source: 'drops' | 'messages', ms: number, count: number) => void,
 ): UnackedMessage[] {
   const state = messageKeyState(home);
   if (state.kind !== 'key') return [];
@@ -354,7 +355,15 @@ export function listUnackedMessages(
     realRoot = root;
   }
   const out: UnackedMessage[] = [];
-  for (const candidate of [...recordNames(root, session), ...legacyCandidates(root)]) {
+  let began = performance.now();
+  const drops = recordNames(root, session);
+  measure?.('drops', performance.now() - began, 0);
+  began = performance.now();
+  const messages = legacyCandidates(root);
+  measure?.('messages', performance.now() - began, 0);
+  for (const candidate of [...drops, ...messages]) {
+    const started = performance.now();
+    try {
     if (candidate.store === 'legacy') {
       if (legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key)) continue;
       const stamp = fileStatStamp(candidate.path);
@@ -415,6 +424,9 @@ export function listUnackedMessages(
       unackedStampCache.set(candidate.path, { stamp, scope, value: entry });
     }
     if (entry !== null) out.push(entry);
+    } finally {
+      measure?.(candidate.store === 'record' ? 'drops' : 'messages', performance.now() - started, 1);
+    }
   }
   return out;
 }

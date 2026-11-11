@@ -1,3 +1,4 @@
+import { traceChildStep } from '../../diagnostics/child-steps.ts';
 // The sidebar display-agent refresh as one of the chores child's passes.
 //
 // Since the terminal host's metadata carries a TTL, a seat's display line (model and effort)
@@ -134,7 +135,7 @@ export function createSidebarPass(
     ): string | undefined | null => {
       const readOne = (ws: string): WorkspacePaneDisplay[] | null => {
         if (workspaceCache.has(ws)) return workspaceCache.get(ws) ?? null;
-        const listed = readWorkspacePanes(ws, session);
+        const listed = traceChildStep('sidebar pane-list', () => readWorkspacePanes(ws, session));
         workspaceCache.set(ws, listed);
         return listed;
       };
@@ -149,7 +150,7 @@ export function createSidebarPass(
         if (found !== undefined) return found.displayAgent;
       }
       if (listedWorkspaces === undefined) {
-        listedWorkspaces = readWorkspaces(session);
+        listedWorkspaces = traceChildStep('sidebar workspace-list', () => readWorkspaces(session));
       }
       if (listedWorkspaces === null) return null;
       for (const ws of listedWorkspaces) {
@@ -193,7 +194,7 @@ export function createSidebarPass(
         let reported = false;
         let reportError: string | null = null;
         try {
-          reported = report(pane, expected, route.session, policy.ttlMs);
+          reported = traceChildStep('sidebar metadata-report', () => report(pane, expected, route.session, policy.ttlMs));
         } catch (error) {
           reportError = error instanceof Error ? error.message : String(error);
           reported = false;

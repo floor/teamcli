@@ -1,3 +1,4 @@
+import { traceChildStep } from '../diagnostics/child-steps.ts';
 import { beginBeatWork } from '../diagnostics/beat-work.ts';
 import { refuseTyping } from '../send/no-pane-messaging.ts';
 import { machineAccountsOf } from '../information/machine-accounts.ts';
@@ -1394,39 +1395,39 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const machine = machineCall === null
           ? unreadMachine()
           : sources.machineAsync !== undefined
-            ? await sources.machineAsync(root, machineCall)
-            : sources.machine(root);
+            ? await traceChildStep('readings machine', () => sources.machineAsync!(root, machineCall))
+            : traceChildStep('readings machine', () => sources.machine(root));
         await yieldBeat();
         if (stopped()) break;
         if (readingsAt === null || now - readingsAt >= READINGS_EVERY * 1000) {
           readingsAt = now;
           logLine(dir, 'watch', 'watch', `readings: ${readingsText(machine)}`, sources.now());
         }
-        const machineAccounts = sources.home === undefined ? [] : machineAccountsOf(sources.home);
+        const machineAccounts = sources.home === undefined ? [] : traceChildStep('readings machine accounts', () => machineAccountsOf(sources.home!));
         // The queue reading for the idle summary: reported to the log and the bus like any other
         // report, never typed into the orchestrator's pane.
-        const queueDepths = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
+        const queueDepths = traceChildStep('readings queue depths', () => readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary)));
         const queueBacklog = queueDepths ? readBacklogDepth(team, root, sources.home) : null;
         // The entity's model rule, read once for this pass: the breach list `team check` prints,
         // narrowed to this team by name. The pass never reads the entity's files itself.
-        const modelRule = modelRuleOfPass(team, root, sources.home);
+        const modelRule = traceChildStep('registry model rule', () => modelRuleOfPass(team, root, sources.home));
         // The pass's record reads happen before its fold, never inside it: the fold holds the
         // state lock, and an unbounded scan (the mailbox, the agent registry, the liveness
         // files) must not keep another command out of the state while it runs. Each reads this
         // pass's own snapshot, so moving them changes no figure the pass computes.
-        const signing = sources.home === undefined ? undefined : new Map(team.seats.map((seat) => {
+        const signing = sources.home === undefined ? undefined : traceChildStep('registry signing', () => new Map(team.seats.map((seat) => {
           const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
           return [seat.name, agent ? { ...agent.signing, cli: agent.cli, launch: agent.launch } : null] as const;
-        }));
+        })));
         // The same records, read for continuity: a pane restored from outside the launch line
         // is the seat while the record's session is the one the pane runs.
-        const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
-          home: sources.home,
+        const continuityIds = sources.home === undefined ? undefined : traceChildStep('registry continuity', () => continuityIdsOf({
+          home: sources.home!,
           root,
           herdrSession: session,
           seats: team.seats,
           states: state.seats,
-        });
+        }));
         const liveness = {
           machine: machineLiveness(sources.home),
           entity: entityLiveness(sources.home, team.entity),
@@ -1489,9 +1490,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // reading another writer landed while the pass ran is kept; an unchanged result skips
         // the write. A watch on a foreign session still folds, for its reports, and saves
         // nothing.
-        const snapshot = loadReadings(dir);
+        const snapshot = traceChildStep('readings stored snapshot', () => loadReadings(dir));
         await yieldBeat();
-        const computed = run(snapshot);
+        const computed = traceChildStep('watch fold', () => run(snapshot));
         if (!foreign && unsentNotes.size > 0) {
           updateState(dir, (file) => {
             let changed = false;

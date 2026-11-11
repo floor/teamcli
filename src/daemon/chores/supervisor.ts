@@ -1,3 +1,4 @@
+import { CHILD_STEPS_PREFIX, childStepsAt } from '../../diagnostics/child-steps.ts';
 import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // The daemon's half of the chores isolation: one supervised child per group of roots, on the
 // daemon's existing heartbeat.
@@ -790,6 +791,8 @@ function recordChildLiveness(input: ChoresFleetInput, group: Group, frameAt: str
   return readAt;
 }
 
+const childStepSnapshots = new WeakMap<ChoresChild, string>();
+
 function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild, event: ChoresChildEvent): void {
   traceBeatWork('chores child handling (sync)', () => handleChildEvent(input, group, child, event));
 }
@@ -877,6 +880,15 @@ function handleChildEvent(input: ChoresFleetInput, group: Group, child: ChoresCh
       return;
     }
     case 'note':
+      if (message.text.startsWith(CHILD_STEPS_PREFIX)) {
+        childStepSnapshots.set(child, message.text);
+        return;
+      }
+      if (message.text.startsWith('first-cycle completed:') || message.text.startsWith('first chores pass completed:')) {
+        const steps = childStepsAt(childStepSnapshots.get(child) ?? '', input.now().getTime());
+        input.log(`chores ${rootList(group)}: ${message.text}; ${steps ?? 'no step reading'}`);
+        return;
+      }
       input.log(`chores ${rootList(group)}: ${message.text}`);
       return;
     case 'reminder-note':
@@ -1216,6 +1228,8 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
       group.spareWhy = null;
       group.rowWhy = why;
       group.why = why;
+      const steps = childStepsAt(childStepSnapshots.get(child) ?? '', input.now().getTime());
+      if (steps !== null) input.log(`chores ${rootList(group)}: ${why}; first-cycle steps at stop: ${steps}`);
       child.kill(why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS, { evenIfWorking: true });
       return true;
     },
