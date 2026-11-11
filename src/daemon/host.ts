@@ -808,7 +808,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     });
   };
 
-  const health = (options?: { roots?: boolean }): DaemonHealthSnapshot => {
+  const readHealthSnapshot = (options?: { roots?: boolean }): DaemonHealthSnapshot => {
     const at = now();
     // Roots are the per-seat state read. Only an answer that returns them builds the snapshot.
     const withRoots = options?.roots !== false;
@@ -826,6 +826,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       ...(withRoots && routes.length > 0 ? { roots: rootsSnapshot(at) } : {}),
     });
   };
+
+  const health = (options?: { roots?: boolean }): DaemonHealthSnapshot =>
+    traceBeatWork('health snapshot (sync)', () => readHealthSnapshot(options));
 
   // The state record's writes, serialized off this loop: at most one physical write in
   // flight, a newer text replacing a queued one, and no write at all when the text is the
@@ -865,7 +868,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     while (stateWriteDrain !== null) await stateWriteDrain;
   };
 
-  const writeState = (afterClose = false): Promise<void> => {
+  const writeState = (afterClose = false): Promise<void> => traceBeatWork('state snapshot (sync)', () => {
     if (closed && !afterClose) return Promise.resolve();
     for (const one of hostedWatches) one.status.watch = one.watch.state();
     for (const refresh of passRefreshers) refresh();
@@ -894,7 +897,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
       ...(mailboxRouter === null ? {} : { mailbox: { heartbeatAt: mailboxRouter.state().heartbeatAt } }),
     }));
-  };
+  }, 'sync');
 
   /**
    * One v2 `op=next` frame, from the frame to the handler's answer. The route is resolved and its
@@ -1591,7 +1594,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (source === undefined) return null;
     let reading: PresenceSourceStatus;
     try {
-      reading = source.status(at);
+      reading = traceBeatWork(`presence source status (sync):${one.route.root}`, () => source.status(at));
     } catch (error) {
       return `the runtime source status failed: ${messageOf(error)}`;
     }
@@ -1829,14 +1832,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (source === undefined || one.sourceRuns[index] !== null) return;
     const run = (async () => {
       try {
-        await source.step(now());
+        await traceBeatWork(`presence source step (wall):${one.route.root}`, () => source.step(now()));
       } catch (error) {
         sampleSource(one, source, failedReading(source, `the runtime source step failed: ${messageOf(error)}`), now());
         return;
       }
       let reading: PresenceSourceStatus;
       try {
-        reading = source.status(now());
+        reading = traceBeatWork(`presence source status (sync):${one.route.root}`, () => source.status(now()));
       } catch (error) {
         sampleSource(one, source, failedReading(source, `the runtime source status failed: ${messageOf(error)}`), now());
         return;
@@ -1859,7 +1862,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       if (closed) return;
       let reading: PresenceSourceStatus;
       try {
-        reading = source.status(at);
+        reading = traceBeatWork(`presence source status (sync):${one.route.root}`, () => source.status(at));
       } catch (error) {
         one.proofs.delete(source.seat);
         one.proofMiss.set(source.seat, `the runtime source status failed: ${messageOf(error)}`);
@@ -1991,7 +1994,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const readings: ChoresPresenceReading[] = [];
       for (const source of one.sources) {
         try {
-          const reading = source.status(at);
+          const reading = traceBeatWork(`presence source status (sync):${one.route.root}`, () => source.status(at));
           readings.push(reading.seat === source.seat
             ? { seat: source.seat, status: presenceStatusOf(reading) }
             : { seat: source.seat, failed: 'the runtime source answered for another seat' });
@@ -2027,7 +2030,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
       // Only after the activity step may a source's staged identity be proven applied: the
       // ingester wrote the projection and the activity reconciler fenced it in this pass.
-      reconcileSeats(one);
+      traceBeatWork(`presence proof reconciliation (sync):${one.route.root}`, () => reconcileSeats(one));
       try {
         // Publication is a separate concern from the native channel's health: a bus append that
         // fails is reported and retried by a later pass, and never marks presence unhealthy.

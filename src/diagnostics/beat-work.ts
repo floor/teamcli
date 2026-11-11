@@ -6,7 +6,8 @@ type Row = { ms: number; calls: number; pending: number };
 type Span = { name: string; at: number };
 export type BeatWork = { begin(name: string): () => void; take(): string };
 const observers = new Set<BeatWork>();
-const scope = new AsyncLocalStorage<string>();
+type Scope = { label: string; active: boolean };
+const scope = new AsyncLocalStorage<Scope>();
 
 export function createBeatWork(clock: () => number = () => performance.now()): BeatWork {
   const rows = new Map<string, Row>();
@@ -50,25 +51,30 @@ export function observeBeatWork(work: BeatWork): () => void {
 
 export function beginBeatWork(name: string): () => void {
   const parent = scope.getStore();
-  const label = parent === undefined ? name : `${parent} > ${name}`;
+  const label = parent?.active === true ? `${parent.label} > ${name}` : name;
   const ends = [...observers].map((observer) => observer.begin(label));
   return () => { for (const end of ends) end(); };
 }
 
 /** Return the exact value/promise and preserve throws/rejections. Wall spans include await;
- * sync subspans are named separately, and nested spans overlap rather than adding to CPU time. */
-export function traceBeatWork<T>(name: string, operation: () => T): T {
+ * sync subspans are named separately, and nested spans overlap rather than adding to CPU time.
+ * Sync mode measures the call until it returns, even when its result is a pending promise. */
+export function traceBeatWork<T>(name: string, operation: () => T, mode: 'wall' | 'sync' = 'wall'): T {
   if (observers.size === 0) return operation();
   const parent = scope.getStore();
-  const label = parent === undefined ? name : `${parent} > ${name}`;
+  const label = parent?.active === true ? `${parent.label} > ${name}` : name;
   const end = beginBeatWork(name);
+  // Async resources keep their creation context. A later frame/timer must not inherit a
+  // completed tick's label; only a still-running parent span supplies caller attribution.
+  const context: Scope = { label, active: true };
+  const finish = () => { context.active = false; end(); };
   try {
-    const result = scope.run(label, operation);
-    if (result instanceof Promise) void result.then(end, end);
-    else end();
+    const result = scope.run(context, operation);
+    if (mode === 'wall' && result instanceof Promise) void result.then(finish, finish);
+    else finish();
     return result;
   } catch (error) {
-    end();
+    finish();
     throw error;
   }
 }
