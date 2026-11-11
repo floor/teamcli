@@ -55,7 +55,7 @@ afterEach(async () => {
   while (dirs.length > 0) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
 
-type Phase = 'starting' | 'running' | 'silent';
+type Phase = 'starting' | 'running' | 'silent' | 'progressing' | 'foreign-progress';
 
 type Fake = {
   root: string;
@@ -133,7 +133,7 @@ function watchState(root: string, phase: 'starting' | 'running', startedAtMs: nu
   return { type: 'watch-state', root, state };
 }
 
-function fakeChild(pid: number, root: string, bornAt: number, scene: { clock: { at: number }; phase: { stuck: Phase }; stuck: string }): Fake {
+function fakeChild(pid: number, root: string, bornAt: number, scene: { clock: { at: number }; phase: { stuck: Phase }; stuck: string; other: string }): Fake {
   const listeners = new Set<(event: ChoresChildEvent) => void>();
   let settle: () => void = () => {};
   const exited = new Promise<void>((resolve) => {
@@ -175,7 +175,10 @@ function fakeChild(pid: number, root: string, bornAt: number, scene: { clock: { 
         fake.heard += 1;
         fake.lastHeard = scene.clock.at;
         emit(heartbeat(scene.clock.at, cpuMs));
-        emit(watchState(root, answer, bornAt));
+        emit(watchState(root, answer === 'progressing' || answer === 'foreign-progress' ? 'starting' : answer, bornAt));
+        if (answer === 'progressing' || answer === 'foreign-progress') {
+          emit({ type: 'watch-pulse', root: answer === 'progressing' ? root : scene.other, at: new Date(scene.clock.at).toISOString() });
+        }
         return true;
       },
       subscribe(listener) {
@@ -467,4 +470,34 @@ describe('a stuck watch or a late chores child is restarted for its own root', (
       await scene.close();
     }
   }, 15_000);
+});
+
+
+test('real startup progress can exceed the startup age, but a first pass that stops progressing still expires', async () => {
+  const scene = await open('progressing');
+  try {
+    // Four half-limits exceed total startup age using the existing START_JUMP_MS fixture bound.
+    const halfLimit = Math.floor((START_JUMP_MS - 1000) / 2);
+    for (let turn = 0; turn < 4; turn++) {
+      scene.clock.at += halfLimit;
+      await until(() => latest(scene, scene.stuck).lastHeard === scene.clock.at, 'the progressing child was not heard');
+      expect(kills(scene, scene.stuck)).toBe(0);
+    }
+    const read = readDaemonState(scene.home);
+    expect(read.kind).toBe('ok');
+    if (read.kind === 'ok') expect(read.state.roots.find((row) => row.root === scene.stuck)?.watch?.cycles).toBe(0);
+    scene.phase.stuck = 'starting';
+    scene.clock.at += START_JUMP_MS;
+    await until(() => kills(scene, scene.stuck) === 1, 'a first pass without progress did not expire');
+    expectUntouched(scene);
+  } finally { await scene.close(); }
+});
+
+test('a pulse for another root cannot refresh this watched roots startup clock', async () => {
+  const scene = await open('foreign-progress');
+  try {
+    await scene.step(START_JUMP_MS);
+    await until(() => kills(scene, scene.stuck) === 1, 'a foreign-root pulse incorrectly refreshed startup');
+    expectUntouched(scene);
+  } finally { await scene.close(); }
 });

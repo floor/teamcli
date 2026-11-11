@@ -57,7 +57,7 @@ export const watch: Section = {
       },
       watch_start_limit: {
         ...measureSchema(DURATION),
-        description: 'how long a hosted watch may stay in starting before the daemon stops and starts the child it started for that root; 120s when omitted',
+        description: 'how long a hosted watch may stay in starting without reaching a watch work seam before the daemon stops and starts the child it started for that root; 120s when omitted',
       },
       child_late_limit: {
         type: 'integer',

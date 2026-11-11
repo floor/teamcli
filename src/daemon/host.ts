@@ -2453,6 +2453,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           watchLeftStarting.has(root) || Number.isNaN(reportedStart) ? at.getTime() : reportedStart,
         );
       }
+      // Lead decision 2026-11-11 05:55Z: a hosted child reports its latest real watch work
+      // seam as the startup clock. Preserve the existing configured silence bound and never
+      // let an older mirror move the clock backwards. Ordinary heartbeats do not change it.
+      if (hostsWatch && phase === 'starting' && Number.isFinite(reportedStart)) {
+        watchStartingAt.set(root, Math.max(watchStartingAt.get(root) ?? reportedStart, reportedStart));
+      }
       const facts: StuckFacts = {
         nowMs: at.getTime(),
         watchPhase: phase,
