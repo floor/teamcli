@@ -1,5 +1,14 @@
 # team send
 
+A held send exits 1 and names its reason and current held-send count. Model drift is checked
+before the body is read: that body is not kept, and its sender must retry after repair. The
+recipient's lead receives one notice per held send, naming the seat, reason and count. The
+notice uses the sender's ordinary admission and delivery path. A signed fallback copy is
+allowed only after an admitted transport attempt fails. A refusal or unknown admission writes
+nothing into that lead's inbox; the sender sees the failure and the sender's own lead is
+notified through ordinary admission. An automatic notice
+does not mark an unrelated message from the lead read. `team status` shows the same held count.
+
 Writes one message to one seat. A plain send writes the message whole as one signed record, mode
 0600, by renaming a temporary file into place, and walks the receiving seat's delivery order. No
 leg types into a pane in this build: a message reaches its seat through an event adapter — the

@@ -27,6 +27,7 @@ import { hostedWatchNotes, hostedWatchRunning } from '../daemon/watch_display.ts
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
 import { MailPass } from '../watch/mail-pass.ts';
+import { heldSendNotes } from '../send/held-reports.ts';
 import { busStatusNotes } from '../bus/notes.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
@@ -731,6 +732,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     swaps: Object.keys(whole.swaps ?? {}),
   });
   if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
+  comparison.notes.unshift(...heldSendNotes({ project: team.project, root, home, session, lead: team.orchestrator || team.operator }));
   comparison.notes.push(...busStatusNotes({
     root,
     alive: sources.alive ?? pidAlive,

@@ -70,7 +70,7 @@ import {
   type HeadlessResumeSpawn,
 } from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
-import { clearEndpointBlocked, endpointBlockedLine, writeEndpointBlockedNotice } from '../send/endpoint-notice.ts';
+import { clearEndpointBlocked, endpointBlockedLine, writeEndpointBlockedNotice, writeRuntimeNotice } from '../send/endpoint-notice.ts';
 import { dropMessage, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
@@ -98,6 +98,7 @@ import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 import { modelDiffers, signedSeatModel } from '../status/statusline.ts';
+import { clearPreflightReports, reportHeldSend } from '../send/held-reports.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -206,9 +207,11 @@ The outcome is one of eight, and none of them is silent:
                line says \`trigger taken, no read receipt yet\`
   answered     --wait: a reply record on the thread arrived within the window; the
                reply follows on stdout (exit 0)
-  held         the message is safe — the signed record is on disk — and nothing was typed
-               or dialed further: the reason names what held it, and the copy's path when
-               one was kept. A socket frame that lands at the receiving box's held-message
+  held         exit 1, with the reason and held-send count. A model-drift hold stops before
+               the body is read or kept; the sender must retry after repair. Other holds
+               name the retained copy. One notice names the seat, reason and count to its
+               lead, and the output says whether that notice was delivered or still waits.
+               A socket frame that lands at the receiving box's held-message
                dialog is not this run's to see: the send reports \`delivered (socket)\` at
                the frame, and the daemon's presence pass records the hold afterwards, once
                for that id, and keeps the socket out until the declaration is re-confirmed
@@ -570,6 +573,8 @@ type Report = {
   sent: string | null;
   project: string | null;
   session: string | null;
+  /** The receiving team's reporting scope; never used to admit or deliver the original send. */
+  holdScope?: { root: string; project: string; session: string; lead: string; leadSpec: string; senderLeadSpec: string; dry: boolean };
   /** The team the sender stands in, by team id: every history line this run writes carries it,
    *  so a reader in another team resolves the sender like the record does. A run that refused
    *  before a team was read names none, and writes no history line anyway. */
@@ -1391,7 +1396,7 @@ function sendCharterTargets(home: string, seatName: string | undefined, args: { 
   return [];
 }
 
-async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Promise<number> {
+async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, reportHolds = true): Promise<number> {
   const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
@@ -1643,6 +1648,13 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // make a stopped seat take a message.
   const receiving = to.cross ? readTeamConfig(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
+  if (receiving.ok) report.holdScope = {
+    root: to.root, project: to.project, session: to.session,
+    lead: receiving.team.orchestrator || receiving.team.operator,
+    leadSpec: `${receiving.team.orchestrator || receiving.team.operator}${to.cross ? `@${to.project}` : ''}`,
+    senderLeadSpec: team.orchestrator || team.operator,
+    dry: args.flags.has('dry-run') || !reportHolds,
+  };
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
   // The receiving CLI's own session call, when its profile declares one (`session_cli`): the leg
   // that hands the whole body to the CLI as one argument, in the seat's own folder. A profile
@@ -1703,6 +1715,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       const runningLabel = `${running.model} ${running.version}`;
       return held(io, dir, who, to.seat, `model drift: ${declaredModel} vs ${runningLabel}`, host, report);
     }
+  }
+  if (report.holdScope !== undefined && !report.holdScope.dry) {
+    const problem = clearPreflightReports({ ...report.holdScope, home: host.home, seat: to.seat, at: host.now().toISOString() });
+    if (problem !== null) io.stderr(`team send: held-send reporting: ${problem}\n`);
   }
   // A seat that cannot take work is not refused here. The body has not been read yet, and
   // the message has to stay in the recipient's inbox: the walk's gate, once the record
@@ -2191,7 +2207,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     // instant — the seat's signed act, never the original sender's — and only the newest, so one
     // answer never swallows the older unread work. A sweep that cannot read or write is a missing
     // annotation, never a failed send.
-    if (caller.kind === 'seat') {
+    if (reportHolds && caller.kind === 'seat') {
       try {
         const answered = markAnsweredBySend({
           seat: caller.name,
@@ -3786,8 +3802,8 @@ async function writeSendRecord(dropDir: string, payload: RecordPayload, home: st
   return written;
 }
 
-/** How long a send waits on the bus to take its nudge. A bus that is not running refuses the
- *  connection at once; one that is running answers within a few milliseconds. */
+/** Source: lead corrective instruction, 2026-11-11: reuse ARRIVAL_NUDGE_MS for
+ * held notices, retaining this existing best-effort arrival-nudge bound. */
 export const ARRIVAL_NUDGE_MS = 250;
 
 /**
@@ -4266,7 +4282,7 @@ function noteDaemonOutcome(note: WalkNote | null, res: DaemonSendResponse, at: D
   note(walkAttempt('typed', outcome, false, at, startedAt, { reason: res.detail }));
 }
 
-function finishDaemonSend(
+async function finishDaemonSend(
   io: Io,
   dir: string,
   who: string,
@@ -4278,7 +4294,7 @@ function finishDaemonSend(
   startedAt: number,
   /** How the send reached the seat, for the outcome line (the fallback's own reason). */
   note?: string,
-): number {
+): Promise<number> {
   report.sent = res.id;
   if (res.outcome === 'delivered') {
     // The daemon's own word for a trigger the seat took. It is a trigger sent, not a message
@@ -7573,9 +7589,72 @@ function timedOut(io: Io, seat: string, seconds: number, report: Report): number
 /** The message is on disk — or, on the socket's path, in the frame the session's own
  *  held-message dialog keeps — and the pane was left untouched. Exit 1, always. The note names
  *  the path, in the delivery lines' own shape (`socket`). */
-function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report, note?: string): number {
+async function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report, note?: string): Promise<number> {
   const label = note === undefined ? 'held' : `held (${note})`;
-  const message = withId(`${seat}: ${label}: ${reason}`, report);
+  let reporting = '';
+  const scope = report.holdScope;
+  if (scope !== undefined && !scope.dry) {
+    const stored = report.sent !== null;
+    const result = reportHeldSend({
+      ...scope, home: host.home, seat, reason, at: host.now().toISOString(),
+      id: report.sent ?? host.sendId?.() ?? randomUUID(), stored, prepareOnly: true,
+    });
+    if (result.ok) {
+      if (result.existing) {
+        reporting = `; ${String(result.count)} held send${result.count === 1 ? '' : 's'}; lead notice already recorded`;
+      } else {
+        // A notice uses the sender's ordinary admission and delivery walk. Reporting recursion is
+        // disabled only for that notice; the drift and admission guards still run unchanged.
+        let output = '';
+        const noticeIo = { ...io, stdout: (text: string) => { output += text; }, stderr: (_text: string) => {} };
+        let code = 1;
+        let status = 'unconfirmed';
+        let failure = 'the notice send did not confirm delivery';
+        let admittedTransportFailure = false;
+        try {
+          code = await runSendWithSnapshot([scope.leadSpec, result.notice.body, '--json'], noticeIo,
+            { ...host, sendId: () => result.notice.id }, false);
+          const noticeResult = JSON.parse(output) as { status?: string; error?: { id?: string; message?: string }; delivery?: LegReport[] };
+          status = noticeResult.status ?? 'unconfirmed';
+          failure = noticeResult.error?.message ?? failure;
+          // These delivery errors are emitted only after ordinary send admission. Require an
+          // actual attempted leg too; refused legs, holds, malformed output and unknown errors
+          // prove no admitted transport failure and cannot authorize a runtime inbox write.
+          admittedTransportFailure = (noticeResult.error?.id === 'send.unreachable' || noticeResult.error?.id === 'send.not-delivered')
+            && Array.isArray(noticeResult.delivery)
+            && noticeResult.delivery.some((leg) => leg.state === 'attempted')
+            && !noticeResult.delivery.some((leg) => leg.state === 'refused');
+        } catch {
+          failure = 'the ordinary notice send could not complete';
+        }
+        if (code !== 0 && admittedTransportFailure) {
+          const queued = writeRuntimeNotice({
+            ...scope, home: host.home, id: result.notice.id, body: result.notice.body, at: result.notice.at,
+          });
+          if (queued.ok) await announceArrival(queued.payload);
+          status = queued.ok ? `not delivered (${failure}); queued for the lead reader` : `not delivered (${failure}); ${queued.reason}`;
+        } else if (code !== 0) {
+          status = `refused or admission unknown (${failure}); no runtime fallback written`;
+          // Report back inside the sender's team through the same admission path. A refusal
+          // here also writes no runtime copy: metadata does not confer send authority.
+          if (scope.senderLeadSpec !== '' && scope.senderLeadSpec !== scope.leadSpec) {
+            let ownOutput = '';
+            const ownIo = { ...io, stdout: (text: string) => { ownOutput += text; }, stderr: (_text: string) => {} };
+            try {
+              const ownCode = await runSendWithSnapshot([scope.senderLeadSpec,
+                `Held-send notice to ${scope.leadSpec} was refused or admission was unknown: ${failure}\n${result.notice.body}`, '--json'],
+                ownIo, { ...host, sendId: () => result.notice.id }, false);
+              const ownResult = JSON.parse(ownOutput) as { status?: string; error?: { message?: string } };
+              status += `; sender lead ${ownCode === 0 ? ownResult.status ?? 'notified' : `not notified (${ownResult.error?.message ?? 'send failed'})`}`;
+            } catch { status += '; sender lead notification could not complete'; }
+          }
+        }
+        reporting = `; ${String(result.count)} held send${result.count === 1 ? '' : 's'}; lead notice ${status}`;
+      }
+    } else reporting = `; held-send reporting failed: ${result.reason}`;
+    if (!stored) reporting += '; body not read or kept; retry after repair';
+  }
+  const message = withId(`${seat}: ${label}: ${reason}${reporting}`, report);
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeSendError(io, 'send.held', message, report);
   else io.stderr(`team send: ${message}\n`);
