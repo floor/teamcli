@@ -1016,7 +1016,9 @@ exit 1
 
 `--wait` writes the record on the seat's delivery walk and waits on the thread for the first
 verified reply record when a live leg takes the send. A walk that ends in the bus inbox waits for
-nothing and reports the kept copy, exactly as a send without `--wait`:
+nothing and reports the kept copy, exactly as a send without `--wait` — unless the receiving seat
+is marked `human: true`, whose send keeps the wait: the record lands on its drop leg and the run
+awaits the reply record on the thread:
 
 ```console
 $ team send claude-keeper "is the gate green?" --wait ; echo "exit $?"
@@ -1154,7 +1156,8 @@ exit 1
 
 `--wait` on a seat a live leg reaches waits on the thread for a reply record; when the window
 closes with no reply, it exits 1 and leaves the thread open. A send that only reaches the bus
-inbox waits for nothing and reports the kept copy:
+inbox waits for nothing and reports the kept copy — unless the receiving seat is marked
+`human: true`, whose send still awaits the reply record on the thread:
 
 ```console
 $ team send gpt-reviewer "hello" --wait --timeout 5 ; echo "exit $?"
