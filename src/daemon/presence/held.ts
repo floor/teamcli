@@ -39,6 +39,7 @@ import { isReadOrCleared, readRecord, sameFolder, verifyRecord } from '../../sen
 import { messageKeyState } from '../../store/keys.ts';
 import { reportHeldSend } from '../../send/held-reports.ts';
 import { nudgeBus } from '../../bus/server.ts';
+import { ARRIVAL_NUDGE_MS } from '../../commands/send.ts';
 import type { Seat } from '../../file/types.ts';
 
 /** How far back a delivered line is watched. A line older than this has had its whole look
@@ -216,6 +217,12 @@ export function createPresenceHeld(input: PresenceHeldInput): PresenceHeldStep {
       thread: one.thread,
     });
     if (!written.ok) result.failed ??= `the held line for ${one.id} could not be written: ${written.reason}`;
+    // Publish the socket guard before the report can yield to another send.
+    recordHeldSocket(
+      heldSocketPath(input.stateDir, input.session, one.seat),
+      declaredInboundOf({ dir: input.stateDir, root: input.root, session: input.session, seat: one.seat, launch: seat.launch }),
+      at,
+    );
     if (input.lead !== undefined) {
       const report = reportHeldSend({
         project: input.project, root: input.root, home: input.home, session: input.session,
@@ -227,17 +234,12 @@ export function createPresenceHeld(input: PresenceHeldInput): PresenceHeldStep {
         try {
           await nudgeBus(report.notice.root, {
             session: report.notice.session, seat: report.notice.to, record_id: report.notice.id,
-          }, { deadlineMs: 250 });
+          }, { deadlineMs: ARRIVAL_NUDGE_MS });
         } catch {
           // The signed notice stays in the lead's inbox for its ordinary reader.
         }
       }
     }
-    recordHeldSocket(
-      heldSocketPath(input.stateDir, input.session, one.seat),
-      declaredInboundOf({ dir: input.stateDir, root: input.root, session: input.session, seat: one.seat, launch: seat.launch }),
-      at,
-    );
     result.raised.push(one.id);
   };
 

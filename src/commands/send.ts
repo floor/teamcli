@@ -3801,8 +3801,8 @@ async function writeSendRecord(dropDir: string, payload: RecordPayload, home: st
   return written;
 }
 
-/** How long a send waits on the bus to take its nudge. A bus that is not running refuses the
- *  connection at once; one that is running answers within a few milliseconds. */
+/** Source: lead corrective instruction, 2026-11-11: reuse ARRIVAL_NUDGE_MS for
+ * held notices, retaining this existing best-effort arrival-nudge bound. */
 export const ARRIVAL_NUDGE_MS = 250;
 
 /**
@@ -7612,9 +7612,9 @@ async function held(io: Io, dir: string, who: string, seat: string, reason: stri
         try {
           code = await runSendWithSnapshot([scope.leadSpec, result.notice.body, '--json'], noticeIo,
             { ...host, sendId: () => result.notice.id }, false);
-          const result = JSON.parse(output) as { status?: string; error?: { message?: string } };
-          status = result.status ?? 'unconfirmed';
-          failure = result.error?.message ?? failure;
+          const noticeResult = JSON.parse(output) as { status?: string; error?: { message?: string } };
+          status = noticeResult.status ?? 'unconfirmed';
+          failure = noticeResult.error?.message ?? failure;
         } catch {
           failure = 'the ordinary notice send could not complete';
         }
