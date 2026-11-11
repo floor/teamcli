@@ -290,7 +290,8 @@ export type StartMachineDaemonInput = {
   restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
   /**
    * The growing-gap retry schedule when a canonical route's session is not yet running in the
-   * terminal host at daemon start: `restoreRetryInitialDelayMs` (5 s default) doubles each retry
+   * terminal host at daemon start, or a restore is deferred only by its load guard:
+   * `restoreRetryInitialDelayMs` (5 s default) doubles each retry
    * up to `restoreRetryMaxDelayMs` (60 s default) over a total bound of `restoreRetryBudgetMs`
    * (315 s / 5m 15s default). A test shortens these to observe the retry schedule without
    * waiting the production window.
@@ -2919,6 +2920,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     };
     restoreSweepRun = (async (): Promise<void> => {
       let pendingRoutes: HostedRoute[] = [];
+      const loadReasons = new Map<string, string>();
+      const loadHeld = (route: HostedRoute, result: RestoreSweepResult): boolean => {
+        if ((result.kind !== 'refused' && result.kind !== 'ran') || result.retry !== 'load') return false;
+        const reason = result.detail ?? 'the load guard refused this restore';
+        if (loadReasons.get(route.root) !== reason) logLine(`restore ${route.root}: waiting for load guard: ${reason}`);
+        loadReasons.set(route.root, reason);
+        return true;
+      };
       for (const route of routes) {
         if (closed) return;
         const entry = routeTeams.get(route.root);
@@ -2935,6 +2944,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           const result = await runner(route.root, entry.file);
           if (result.kind === 'ran') {
             logLine(`restore ${route.root}: ${result.summary.line}`);
+            if (loadHeld(route, result)) pendingRoutes.push(route);
           } else if (result.kind === 'lock-held') {
             logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
           } else if (result.kind === 'not-running') {
@@ -2943,6 +2953,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           } else if (result.kind === 'unreadable') {
             logLine(`restore ${route.root}: ${result.reason}`);
           } else if (result.kind === 'refused') {
+            if (loadHeld(route, result)) { pendingRoutes.push(route); continue; }
             const detail = result.detail === undefined ? '' : `: ${result.detail}`;
             logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
           }
@@ -2952,6 +2963,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
       if (pendingRoutes.length === 0 || closed || restoreAbort.signal.aborted) return;
 
+      // Lead restore-under-load brief, 2026-11-11: reuse this existing startup retry cadence
+      // and wait budget for load-held routes too; no new timeout or threshold is introduced.
       const initialDelayMs = Math.max(1, input.restoreRetryInitialDelayMs ?? 5_000);
       const maxDelayMs = Math.max(initialDelayMs, input.restoreRetryMaxDelayMs ?? 60_000);
       const budgetMs = Math.max(0, input.restoreRetryBudgetMs ?? 315_000);
@@ -2982,8 +2995,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       while (pendingRoutes.length > 0 && elapsedMs < budgetMs && !closed && !restoreAbort.signal.aborted) {
         const delayMs = Math.min(currentDelayMs, maxDelayMs, budgetMs - elapsedMs);
         if (delayMs <= 0) break;
+        const loadCount = pendingRoutes.filter((route) => loadReasons.has(route.root)).length;
+        const prerequisite = loadCount === 0
+          ? `the terminal host to restore ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'}`
+          : `restore prerequisites for ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} (${loadCount} waiting for load guard)`;
         logLine(
-          `restore: waiting ${formatWait(delayMs)} for the terminal host to restore ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} (attempt ${attempt}, elapsed ${formatWait(elapsedMs)}/${formatWait(budgetMs)})`,
+          `restore: waiting ${formatWait(delayMs)} for ${prerequisite} (attempt ${attempt}, elapsed ${formatWait(elapsedMs)}/${formatWait(budgetMs)})`,
         );
         const waited = await waitAbortable(delayMs);
         if (!waited || closed || restoreAbort.signal.aborted) return;
@@ -3008,13 +3025,16 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             const result = await runner(route.root, entry.file);
             if (result.kind === 'ran') {
               logLine(`restore ${route.root}: ${result.summary.line}`);
+              if (loadHeld(route, result)) stillPending.push(route);
             } else if (result.kind === 'lock-held') {
               logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
             } else if (result.kind === 'not-running') {
+              loadReasons.delete(route.root);
               stillPending.push(route);
             } else if (result.kind === 'unreadable') {
               logLine(`restore ${route.root}: ${result.reason}`);
             } else if (result.kind === 'refused') {
+              if (loadHeld(route, result)) { stillPending.push(route); continue; }
               const detail = result.detail === undefined ? '' : `: ${result.detail}`;
               logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
             }
@@ -3026,8 +3046,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
 
       if (pendingRoutes.length > 0 && !closed && !restoreAbort.signal.aborted) {
+        const loadCount = pendingRoutes.filter((route) => loadReasons.has(route.root)).length;
         logLine(
-          `restore: pending (${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} still restoring in the terminal host after ${formatWait(elapsedMs)}; run "team up --all" once the terminal host finishes restoring)`,
+          loadCount === 0
+            ? `restore: pending (${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} still restoring in the terminal host after ${formatWait(elapsedMs)}; run "team up --all" once the terminal host finishes restoring)`
+            : `restore: pending (${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'}, ${loadCount} still load-held after ${formatWait(elapsedMs)}; retry wait bound reached; run "team up --all" once the load guard clears)`,
         );
       }
     })().catch((error: unknown) => {

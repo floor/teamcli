@@ -89,6 +89,14 @@ refuses the same way. A terminal host that does not answer is `team up: the term
 answer`, exit 1. A team that failed leaves the run at exit 1; a run in which every swept team came
 back is exit 0.
 
+At daemon startup, a restore held only by the load guard joins the existing startup retry
+window: five seconds initially, doubling to at most one minute, with a 315-second wait budget.
+Each attempt releases the session lock before waiting, then reads the current lifecycle and
+launch guards again. The log names the load reason, each wait, and the bound if it is reached.
+Automatic restore uses the existing serial launch window, starting one seat at a time with a
+fresh load check before each start. A load rise between starts can defer the remaining restore.
+Interactive `team up` keeps its load refusal; other restore refusals retain their normal result.
+
 `--dry-run` prints each team's plan under `=== <project> (session <session>) ===` and writes
 nothing. `--json` prints one `team.up` document with `all` `true`, the per-team entries as
 `teams`, every declared seat as `<project>/<seat>` in `seats`, and the closing line as

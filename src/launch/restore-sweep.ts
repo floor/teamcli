@@ -36,9 +36,9 @@ export type RestoreSweepResult =
   /** The run returned before it planned any seat (a file or caller refusal): no summary is
    *  honest, and the exit code is the run's own. `detail` is the last line the run said, so the
    *  daemon log names the refusal rather than only its exit. */
-  | { kind: 'refused'; exit: number; detail?: string }
+  | { kind: 'refused'; exit: number; detail?: string; retry?: 'load' }
   /** The sweep ran. `failed` is `runUp`'s exit: nonzero when the run refused a seat. */
-  | { kind: 'ran'; summary: RestoreSweepSummary; failed: boolean };
+  | { kind: 'ran'; summary: RestoreSweepSummary; failed: boolean; retry?: 'load'; detail?: string };
 
 export type RestoreSweepInput = {
   home: string;
@@ -155,6 +155,8 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
       stderr: (text) => err.push(text),
     };
     const seen: { report: Report | null } = { report: null };
+    let loadReason: string | null = null;
+    const loadSeats = new Map<string, string>();
     // The file the route was loaded from, never the path a registry read carries: a registry
     // team's `path` is the conventional filename that need not exist, and `up --file` reads only
     // the file it names. With no file, `up` resolves this root the way this pass did.
@@ -165,19 +167,25 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
       nonInteractive: true,
       restore: true,
       restoreMissingOnly: true,
+      onLoadDeferred: ({ reason, seat }) => {
+        if (seat === undefined) loadReason = reason;
+        else loadSeats.set(seat, reason);
+      },
       ...(input.isClosing ? { isClosing: input.isClosing } : {}),
       onReport: (next) => {
         seen.report = next;
       },
     });
     if (seen.report === null) {
-      const said = lastSaid(err, out);
-      return { kind: 'refused', exit, ...(said === undefined ? {} : { detail: said }) };
+      const said = loadReason ?? lastSaid(err, out);
+      return { kind: 'refused', exit, ...(said === undefined ? {} : { detail: said }), ...(loadReason === null ? {} : { retry: 'load' as const }) };
     }
     const summary = restoreSummaryOf(seen.report.restoreBuckets);
     const note = seen.report.daemonHostNote;
     if (note !== undefined && note !== '') summary.line = `${summary.line}; ${note}`;
-    return { kind: 'ran', summary, failed: exit !== 0 };
+    const loadOnly = summary.refused_seats.length > 0 && summary.refused_seats.every((seat) => loadSeats.has(seat.seat));
+    return { kind: 'ran', summary, failed: exit !== 0,
+      ...(loadOnly ? { retry: 'load' as const, detail: loadSeats.get(summary.refused_seats[0]!.seat)! } : {}) };
   } finally {
     lock.release();
   }
