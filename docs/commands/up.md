@@ -1,5 +1,12 @@
 # team up
 
+If a Claude Code conversation changes while its launched process stays on its recorded pane,
+an admitted `team up` can repair the conversation binding without restarting that CLI. It
+requires one live agent naming the seat, the same recorded pane and launched process, and a
+live socket whose inbound declaration is current. The state and registry must still agree on
+the previous conversation; a changed snapshot refuses the repair. A dry run and an automatic
+restore that protects a present pane leave these bindings untouched.
+
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
 declares and this machine can run, and the watch, in a workspace of its own labelled
 `Watch · <project>`. A fresh launch of
