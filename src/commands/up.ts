@@ -808,6 +808,7 @@ function seatPlan(
     ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
     ...(seat.launcher !== undefined && seat.role !== undefined ? { role: seat.role } : {}),
     ...(seat.launcher !== undefined && seat.vendor !== undefined ? { vendor: seat.vendor } : {}),
+    ...(seat.launcher !== undefined && seat.account !== undefined ? { account: seat.account } : {}),
     cwd: seat.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),

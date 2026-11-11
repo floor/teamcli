@@ -75,17 +75,18 @@ test('claude-code builds the Anthropic model id from the seat and skips the CLI 
   expect(shippedEnv('claude-code', { model: 'Claude Opus', version: '5.5', effort: 'high' })).toEqual(['CLAUDE_CODE_EFFORT_LEVEL=high']);
 });
 
-test('claude-code on a provider takes the profile\'s env words, the key only as a lookup', () => {
-  const words = shippedEnv('claude-code', { vendor: 'deepseek', model: 'DeepSeek Flash', version: '4.0' });
+test('claude-code on a provider takes its words from the launch account, the key only as a lookup', () => {
+  const account = { name: 'deepseek', provider: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', keychain: 'deepseek-api-key',
+    defaultModel: 'deepseek-flash', effortDefault: 'high', autoCompactWindow: 786432 };
+  const words = shippedEnv('claude-code', { vendor: 'deepseek', account });
   expect(words).toContain('ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic');
   expect(words).toContain('ANTHROPIC_MODEL=deepseek-flash');
   expect(words).toContain('CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash');
-  const token = words.find((word) => word.startsWith('ANTHROPIC_AUTH_TOKEN='));
-  // One double-quoted word, nothing nested inside it, so the line splits the same everywhere.
-  expect(token?.startsWith('ANTHROPIC_AUTH_TOKEN="$(/usr/bin/security ')).toBe(true);
-  expect(token?.endsWith(')"')).toBe(true);
-  expect(token?.slice('ANTHROPIC_AUTH_TOKEN="'.length, -1)).not.toContain('"');
+  expect(words).toContain('CLAUDE_CODE_EFFORT_LEVEL=high');
   expect(words).toContain('CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432');
-  expect(shippedEnv('grok-build', { vendor: 'deepseek' })).toEqual([]);
-  expect(shippedEnv('claude-code', { vendor: 'no-such-provider' })).toEqual([]);
+  const token = words.find((word) => word.startsWith('ANTHROPIC_AUTH_TOKEN='));
+  expect(token?.startsWith('ANTHROPIC_AUTH_TOKEN="$(/usr/bin/security ')).toBe(true);
+  expect(token?.slice('ANTHROPIC_AUTH_TOKEN="'.length, -1)).not.toContain('"');
+  expect(shippedEnv('claude-code', { vendor: 'deepseek' })).toEqual([]);
+  expect(shippedEnv('grok-build', { vendor: 'deepseek', account })).toEqual([]);
 });

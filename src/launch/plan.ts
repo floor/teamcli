@@ -22,6 +22,7 @@ import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
 import { discover } from '../launchers/resolve.ts';
 import { shippedEnv, shippedLauncher, shippedLauncherIsReadOnly } from '../launchers/shipped.ts';
+import { launchAccountFor, type LaunchAccount } from '../launchers/accounts.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
 import { getRelativeDirOps } from '../send/drop-retention.ts';
 import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
@@ -384,6 +385,8 @@ export function registryLaunches(steps: readonly Step[]): string[] {
 }
 
 export interface UpSeat {
+  /** The seat's launch account name in the team file, when it names one. */
+  account?: string;
   /** The seat's vendor in the team file. A shipped launcher reads it to choose its provider. */
   vendor?: string;
   /** The seat's role in the team file. A shipped launcher reads it to choose its permission line. */
@@ -1532,6 +1535,11 @@ export function upPlan(input: UpInput): Step[] {
         ...(seat.model === undefined ? {} : { model: seat.model }),
         ...(seat.vendor === undefined ? {} : { vendor: seat.vendor }),
       };
+      // A Claude Code seat on another provider takes its entity's launch account.
+      if (seat.launcher === 'claude-code' && input.home !== undefined && seat.vendor !== undefined && seat.vendor !== 'anthropic') {
+        const account = launchAccountFor(input.home, input.team?.entity, seat.account, seat.vendor);
+        if (account !== null) (shippedOptions as { account?: LaunchAccount }).account = account;
+      }
       const shipped = shippedLauncher(seat.launcher, shippedOptions);
       const decided = resolvedCommand({
         launcher: seat.launcher,
