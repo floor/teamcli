@@ -37,8 +37,6 @@ import { appendHistory, historyPath, readHistory, type HistoryEntry } from '../.
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../../send/inbound.ts';
 import { isReadOrCleared, readRecord, sameFolder, verifyRecord } from '../../send/record.ts';
 import { messageKeyState } from '../../store/keys.ts';
-import { reportHeldSend } from '../../send/held-reports.ts';
-import { nudgeBus } from '../../bus/server.ts';
 import type { Seat } from '../../file/types.ts';
 
 /** How far back a delivered line is watched. A line older than this has had its whole look
@@ -198,7 +196,7 @@ export function createPresenceHeld(input: PresenceHeldInput): PresenceHeldStep {
     one.nextLookAt = atMs + HELD_LOOK_EVERY_MS;
   };
 
-  const raise = async (one: Watched, at: Date, result: PresenceHeldResult): Promise<void> => {
+  const raise = (one: Watched, at: Date, result: PresenceHeldResult): void => {
     watching.delete(one.id);
     raised.set(one.id, at.getTime());
     const seat = seats.get(one.seat);
@@ -216,23 +214,6 @@ export function createPresenceHeld(input: PresenceHeldInput): PresenceHeldStep {
       thread: one.thread,
     });
     if (!written.ok) result.failed ??= `the held line for ${one.id} could not be written: ${written.reason}`;
-    if (input.lead !== undefined) {
-      const report = reportHeldSend({
-        project: input.project, root: input.root, home: input.home, session: input.session,
-        lead: input.lead, seat: one.seat, id: one.id, at: at.toISOString(), stored: true,
-        reason: 'the receiving session holds the socket frame at a message dialog',
-      });
-      if (!report.ok) result.failed ??= report.reason;
-      else {
-        try {
-          await nudgeBus(report.notice.root, {
-            session: report.notice.session, seat: report.notice.to, record_id: report.notice.id,
-          }, { deadlineMs: 250 });
-        } catch {
-          // The signed notice stays in the lead's inbox for its ordinary reader.
-        }
-      }
-    }
     recordHeldSocket(
       heldSocketPath(input.stateDir, input.session, one.seat),
       declaredInboundOf({ dir: input.stateDir, root: input.root, session: input.session, seat: one.seat, launch: seat.launch }),
@@ -261,7 +242,7 @@ export function createPresenceHeld(input: PresenceHeldInput): PresenceHeldStep {
       return;
     }
     // The dialog holds the box, so every frame this seat took and has not read is behind it.
-    for (const one of batch) await raise(one, at, result);
+    for (const one of batch) raise(one, at, result);
   };
 
   /** One look per seat with a due candidate this pass. */
