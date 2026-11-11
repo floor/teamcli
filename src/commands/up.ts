@@ -1726,6 +1726,9 @@ export type UpInternal = {
   restore?: boolean;
   /** Automatic restore may change a seat only while its original recorded pane is proven absent. */
   restoreMissingOnly?: boolean;
+  /** Restore-only observation of an unchanged load refusal. The sweep may retry it; this
+   *  never changes this run's guard or exit, and a CLI caller cannot provide this callback. */
+  onLoadDeferred?(input: { reason: string; seat?: string }): void;
 };
 
 type UpAllTeamEntry = {
@@ -2634,9 +2637,11 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   const readAt = () => (sources.now?.() ?? new Date()).getTime();
   const crossed = (machine: Machine) => launchLimit(machine, team.machine, samples, readAt());
   const machine = sources.machine?.(root);
+  let loadRefusal: string | null = null;
   if (machine) {
     const problem = crossed(machine);
     if (problem) {
+      if (machine.loadPerCore !== null && machine.loadPerCore > team.machine.loadStart) loadRefusal = problem;
       // The incident log: the refusal and the readings it was decided on, one line in the
       // project's own log, through the same sink every command logs through. It changes no
       // decision. Written only when this call is one that may run `up` — the refusals above
@@ -3487,6 +3492,12 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     }
   }
   if (refusals.length) {
+    // Lead restore-under-load brief, 2026-11-11: only the load guard is a retryable startup
+    // condition. An admission, login, root or other refusal must keep its ordinary ending.
+    const only = uniqueRefusals(refusals);
+    if (internal?.restore === true && only.length === 1 && only[0]?.id === 'up.machine' && loadRefusal !== null) {
+      internal.onLoadDeferred?.({ reason: loadRefusal });
+    }
     // Under `--json` the run's first refusal is the document's: its contract row, its sentence.
     // A dev-mode warning rides in the same sentence, so it is not lost in the envelope.
     if (json) {
@@ -3874,7 +3885,10 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       }
     }
     const now = () => sources.now?.() ?? launch.now();
-    const concurrency = launchConcurrency(machine, team.machine, args.flags.has('serial'));
+    // Lead restore-under-load brief, 2026-11-11: reuse the existing --serial one-seat window
+    // for restore batches. The existing allow guard re-reads load before each start; ordinary
+    // interactive launches retain their existing headroom-based concurrency.
+    const concurrency = launchConcurrency(machine, team.machine, args.flags.has('serial') || internal?.restore === true);
     const rawSleep = sources.sleep ?? launch.sleep;
     const sleepAt = new Map<string, Promise<void>>();
     const sharedSleep = (ms: number): Promise<void> => {
@@ -4071,6 +4085,9 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
           const machine = sources.machine(root);
           const problem = crossed(machine);
           if (problem) {
+            if (internal?.restore === true && machine.loadPerCore !== null && machine.loadPerCore > team.machine.loadStart) {
+              internal.onLoadDeferred?.({ seat: name, reason: problem });
+            }
             // The incident log, as at the gate above: this reading stops a launch, and it is
             // taken after the caller gate let the run through, so it is always the call's own.
             logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, now());
