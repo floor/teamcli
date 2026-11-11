@@ -10,7 +10,6 @@ import { boxHoldsText } from '../src/launch/deliver.ts';
 import { listUnread } from '../src/mcp/inbox.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
 import { readBox, readScreen, type Screen } from '../src/watch/screen.ts';
 import { recordBody } from './helpers.ts';
@@ -35,15 +34,17 @@ const LINE = 'Read /t/mail/abc and do that.';
 const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
 const NATIVE_MISSED = 'native: no trusted runtime session is recorded for this seat (no agent record for this seat)';
 
-/** The captured idle frame with `text` drawn in place of the grey suggestion. */
+/** The captured idle frame with `text` drawn in place of the grey suggestion. Later rows of a
+ *  multiline wake sit at the composer's continuation column, two, as the pane draws typed
+ *  newlines. */
 function holding(text: string): string {
-  return IDLE.replace('› Ask Codex to do anything', `› ${text}`);
+  return IDLE.replace('› Ask Codex to do anything', `› ${text.replaceAll('\n', '\n  ')}`);
 }
 
 /** The captured working frame with `text` still in the composer. The working row keeps the
  *  screen working; the composer read is unsent while the line sits there. */
 function workingHolding(text: string): string {
-  return WORKING.replace('› Ask Codex to do anything', `› ${text}`);
+  return WORKING.replace('› Ask Codex to do anything', `› ${text.replaceAll('\n', '\n  ')}`);
 }
 
 /** A pane scripted by how many reads and Enters it has seen, and by the lines typed into it.
@@ -310,9 +311,11 @@ describe('team send: the Codex typed wake', () => {
     const io = owner(made.root);
     expect(await runSend(['native', 'hello'], io, host)).toBe(0);
     expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: delivered (typed wake)\n');
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.typed[0]).toContain('team drops --read');
-    expect((pane.typed[0] as string).length).toBeLessThanOrEqual(80);
+    // One wake, one Enter, and the wake is the readable body itself: the sender header, then the
+    // message, drawn across the composer's rows; a short body needs no drops pointer.
+    expect(pane.typed).toEqual([
+      'owner · 2026-10-05 04:00Z · admitted: owner\n\nfrom the owner — admitted by: the owner\n\nhello',
+    ]);
     expect(pane.enters).toBe(1);
     const drops = join(made.dir, 'send-drops', 'acme', 'native');
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -327,7 +330,7 @@ describe('team send: the Codex typed wake', () => {
     }
   });
 
-  test('a permission dialog leaves the message in the bus inbox, and the sender is told so', async () => {
+  test('a permission dialog leaves the message in the bus inbox, and the sender is told it was not delivered', async () => {
     const made = codexWorld();
     const pane = wakeFake(() => PERMISSION);
     const host = fake(made, {
@@ -335,18 +338,22 @@ describe('team send: the Codex typed wake', () => {
       typedWake: () => pane.host,
     });
     const io = owner(made.root);
-    expect(await runSend(['native', 'hello'], io, host)).toBe(0);
-    // The typed wake failed and the walk ends on the drop leg, which wakes nothing: the ending is
-    // `queued, not woken`, the same word the history line carries, never `sent (unconfirmed)`.
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: queued, not woken (drop, 0 ms); queued; the typed wake failed (the first read showed permission, not an empty idle prompt; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n');
-    expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
+    // The typed wake refused before any key and no other leg takes the send: the record stays
+    // unread in the inbox and the sender is told it was not delivered, exit 1.
+    expect(await runSend(['native', 'hello'], io, host)).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain("team send: native: not delivered: no live route; kept in native's inbox (id ");
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
+    const drops = join(made.dir, 'send-drops', 'acme', 'native');
+    const records = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(records).toHaveLength(1);
+    expect(existsSync(join(drops, `${records[0]}.read.json`))).toBe(false);
     const history = readHistory('acme', made.root, host.home);
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'native', outcome: 'queued, not woken', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'native', outcome: 'not delivered', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
         NATIVE_MISSED,
         'typed: the first read showed permission, not an empty idle prompt; nothing was typed',

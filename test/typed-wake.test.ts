@@ -21,7 +21,6 @@ import {
   watchWakeTriesKey,
 } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
 import { readBox, readScreen, type Screen } from '../src/watch/screen.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
@@ -42,15 +41,17 @@ const TRUST_149 = readFileSync(join(FIXTURES_149, 'trust.txt'), 'utf8');
 const QUESTION_149 = readFileSync(join(FIXTURES_149, 'model-picker.txt'), 'utf8');
 
 /** The captured idle frame with `text` drawn in its composer: the same rules and footer, one
- *  input row. Muse wraps a long row, so the scenes keep the line short enough to read back. */
+ *  input row. Muse wraps a long row, so the scenes keep the line short enough to read back.
+ *  A multiline wake draws its later rows at the composer's continuation column, two: the box
+ *  reader strips that indent row by row, exactly as the pane draws typed newlines. */
 function holding(text: string): string {
-  return IDLE.replace('❯\n', `❯ ${text}\n`);
+  return IDLE.replace('❯\n', `❯ ${text.replaceAll('\n', '\n  ')}\n`);
 }
 
 /** The captured working frame with `text` still in the composer. The spinner row keeps the
  *  screen working; the composer read is unsent while the line sits there. */
 function workingHolding(text: string): string {
-  return WORKING.replace('❯\n', `❯ ${text}\n`);
+  return WORKING.replace('❯\n', `❯ ${text.replaceAll('\n', '\n  ')}\n`);
 }
 
 const LINE = 'Read /t/mail/abc and do that.';
@@ -951,10 +952,12 @@ describe('team send: the typed wake', () => {
     const io = owner(made.root);
     expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
     expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: delivered (typed wake)\n');
-    // One line, one Enter, and the line is the trigger that reads the drop, never the body.
-    // Muse has no MCP inbox, so its profile declares no `read_hint` and the shipped sentence
-    // stands: the drop read is this seat's fastest path.
-    expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: team drops --read.']);
+    // One wake, one Enter, and the wake is the readable body itself: the sender header, then the
+    // message, drawn across the composer's rows. Muse has no MCP inbox, so a body within the
+    // typed-wake bound is typed in full and the seat reads it without a drops call.
+    expect(pane.typed).toEqual([
+      'owner · 2026-10-05 04:00Z · admitted: owner\n\nfrom the owner — admitted by: the owner\n\nhello',
+    ]);
     expect(pane.enters).toBe(1);
     // The record was written under the seat lock before the line was typed.
     const drops = join(made.dir, 'send-drops', 'acme', 'muse');
@@ -971,7 +974,7 @@ describe('team send: the typed wake', () => {
     }
   });
 
-  test('a wake that cannot deliver leaves the message in the bus inbox, and the sender is told so', async () => {
+  test('a wake that cannot deliver leaves the message in the bus inbox, and the sender is told it was not delivered', async () => {
     const made = museWorld();
     const pane = wakeFake(() => UNSENT);
     const host = fake(made, {
@@ -979,16 +982,23 @@ describe('team send: the typed wake', () => {
       typedWake: () => pane.host,
     });
     const io = owner(made.root);
-    expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: queued, not woken (drop, 0 ms); queued; the typed wake failed (the box held a draft; it was kept in a file and no Enter was pressed); nothing wakes muse while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn\n');
-    expect(io.err).toBe(queuedLine('muse', NO_EVENT_ADAPTER_TOOK_IT));
+    // The box holds a draft, so the wake types nothing. No leg behind the typed leg takes the
+    // send either: the record stays unread in the inbox and the sender is told it was not
+    // delivered, exit 1.
+    expect(await runSend(['muse', 'hello'], io, host)).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain("team send: muse: not delivered: no live route; kept in muse's inbox (id ");
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
+    const drops = join(made.dir, 'send-drops', 'acme', 'muse');
+    const records = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(records).toHaveLength(1);
+    expect(existsSync(join(drops, `${records[0]}.read.json`))).toBe(false);
     const history = readHistory('acme', made.root, host.home);
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'queued, not woken', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'not delivered', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
         'typed: the box held a draft; it was kept in a file and no Enter was pressed',
       ]);
@@ -1006,19 +1016,24 @@ describe('team send: the typed wake', () => {
       typedWake: () => pane.host,
     });
     const io = owner(made.root);
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    // A Claude Code seat has no typed wake at all: nothing is read or typed, the record stays
+    // unread in its inbox, and the sender is told it was not delivered.
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain("team send: lead: not delivered: no live route; kept in lead's inbox (id ");
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
     const history = readHistory('acme', made.root, host.home);
     expect(history.ok).toBe(true);
     if (history.ok) {
+      expect(history.entries[0]).toMatchObject({ to: 'lead', outcome: 'not delivered', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
         "typed: typing into a seat's pane is never a delivery: messages go through the bus and an event adapter",
       ]);
     }
   });
 
-  test('a long summary and multi-line body on Muse truncates the header to fit <= 80 chars, keeps the drops hint whole, and never types the body', async () => {
+  test('a long summary and multi-line body on Muse keeps the typed line <= 80 chars, the too-long read hint whole, and never types the body', async () => {
     const made = museWorld();
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const host = fake(made, {
@@ -1031,9 +1046,12 @@ describe('team send: the typed wake', () => {
     expect(pane.typed).toHaveLength(1);
     const typedLine = pane.typed[0] as string;
     expect(typedLine.length).toBe(80);
-    expect(typedLine.endsWith(' Read it with: team drops --read.')).toBe(true);
-    expect(typedLine.startsWith('Message from owner (owner@acme): SUMMARY-')).toBe(true);
+    // A body over the typed-wake bound falls back to the sender line and the too-long sentence,
+    // which names the drops read whole: no body, and no summary excerpt either, is typed.
+    expect(typedLine.endsWith(' Body too long; read it with: team drops --read.')).toBe(true);
+    expect(typedLine.startsWith('Message from owner (owner@acme)…')).toBe(true);
     expect(typedLine).not.toContain('\n');
+    expect(typedLine).not.toContain('SUMMARY-');
     expect(typedLine).not.toContain('SECOND-LINE-BODY-SECRET');
     expect(typedLine).not.toContain('THIRD-LINE-BODY-SECRET');
     const drops = join(made.dir, 'send-drops', 'acme', 'muse');
