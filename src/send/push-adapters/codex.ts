@@ -1,3 +1,4 @@
+import { RUNTIME_WAKE_MAX } from '../readable-wake.ts';
 // The OpenAI Codex (0.161.0) runtime-push adapter: hands one pointer line to a running Codex
 // thread via `codex queue --thread <agent_session> --message <pointer>`.
 //
@@ -6,8 +7,7 @@
 //     and verified `codex-daemon` policy (`src/policy/codex-daemon.ts`). Never opens or inspects
 //     the owner's `~/.codex` and never guesses a thread id from `request.seat` or `request.session`.
 //   - Forwards `request.pointer` (including the signed-record-derived `From <seat>@<team>: …`
-//     prefix from `pushPointer`) verbatim and unchanged. Never carries or substitutes a message
-//     body.
+//     prefix from `pushPointer`) verbatim and unchanged. Carries bounded full message text, or an explicit oversized-body read hint.
 //   - Maps `codex queue` exit 0 strictly to `{ kind: 'enqueue' }` (`sent (unconfirmed)`), never
 //     `delivered (read)`.
 //   - Maps missing/unbound `agentSession`, `codex-daemon: off`, or an older binary without `queue`
@@ -20,7 +20,6 @@ import { resolveCodexDaemonPolicy, type CodexDaemonResolution } from '../../poli
 import { DELIVERY_TIMEOUT_DEFAULTS } from '../../policy/types.ts';
 import { recordedSeatSession, type RecordedSeatSessionRead } from '../../registry/resume.ts';
 import { readState, type SeatState } from '../../state.ts';
-import { TRIGGER_MAX } from '../native.ts';
 import type { RuntimePushAdapter, RuntimePushOutcome, RuntimePushRequest } from '../push.ts';
 
 /** Default bound for one `codex queue` invocation, in milliseconds (`DELIVERY_TIMEOUT_DEFAULTS.native * 1000` = 15s). */
@@ -306,14 +305,13 @@ export function codexPushAdapter(options: CodexPushAdapterOptions = {}): Runtime
       }
       if (
         request.pointer === ''
-        || request.pointer.includes('\n')
         || request.pointer.includes('\r')
         || request.pointer.includes('\0')
-        || request.pointer.length > TRIGGER_MAX
+        || Buffer.byteLength(request.pointer, 'utf8') > RUNTIME_WAKE_MAX
       ) {
         return {
           kind: 'unsupported',
-          reason: 'the runtime pointer is not a valid single line',
+          reason: 'the runtime message is empty or contains a carriage return or NUL byte',
         };
       }
 

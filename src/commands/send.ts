@@ -1,3 +1,4 @@
+import { inlineWake, oversizedWake, recordDeliveredBody, TYPED_WAKE_MAX, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
 import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -2725,7 +2726,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
             seat: to.seat,
             sender: { seat: from, team: teamIdOf(root) },
           },
-          { id: msgId, record: staged.record, sentAt: record.at },
+          { id: msgId, record: staged.record, sentAt: record.at, pointer: inlineWake(record, host.home) ?? oversizedWake(record) },
           {
             now: host.now,
             startedAt,
@@ -2741,6 +2742,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         note(attempt.walkAttempt);
         markLeg('native', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
         if (attempt.outcome === 'enqueue') {
+          const carriedBody = inlineWake(record, host.home);
+          if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: carriedBody });
           clearEndpointBlocked(to.root, to.session, to.seat);
           report.sent = msgId;
           // The leg that took the message decides the words. The queue accepted the pointer, so
@@ -2876,7 +2879,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
           sender: { seat: from, team: teamIdOf(root) },
           cwd: seatCwd,
         },
-        { id: msgId, record: staged.record },
+        { id: msgId, record: staged.record, pointer: inlineWake(record, host.home) ?? oversizedWake(record) },
         {
           now: host.now,
           startedAt,
@@ -2890,6 +2893,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       markLeg('headless-resume', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
       note(attempt.walkAttempt);
       if (attempt.outcome === 'enqueue') {
+        const carriedBody = inlineWake(record, host.home);
+        if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: carriedBody });
         report.sent = msgId;
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
         const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
@@ -3038,7 +3043,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     const compose = profileFor(to.cli)?.compose ?? null;
     // The receiving team's `message-display` policy decides the words the wake opens with; a team
     // file that did not read leaves the shipped template, never an unnamed wake.
-    const trigger = readTriggerLine(to.seat, to.session, {
+    const trigger = inlineWake(record, host.home, TYPED_WAKE_MAX) ?? readTriggerLine(to.seat, to.session, {
       seat: record.from,
       team: team.project,
       template: wakeTemplate,
@@ -3046,7 +3051,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       body: record.body,
       ageMs: 0,
       ...(record.subject === undefined ? {} : { subject: record.subject }),
-    }, to.cli);
+    }, to.cli, 'Body too long; read it with: team drops --read.');
     if (trigger === null && compose === null && typedWake === null) {
       const why = `${to.seat}: the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`;
       markLeg('typed', 'refused', `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`);
@@ -5041,6 +5046,7 @@ async function deliverTypedWakeSeat(
       draftFile: join(dropDir, `${payload.id}.draft`),
     });
     if (!wake.delivered) return { delivered: false, typed: wake.typed, reason: wake.reason };
+    recordDeliveredBody({ dropDir, id: payload.id, root, session, seat: seatName, home: host.home, wake: trigger });
     const ms = host.now().getTime() - startedAt;
     logLine(dir, 'send', who, `${seatName}: delivered (typed wake) (drop ${String(payload.body.length)} characters, typed; ${wake.reason})`, host.now());
     if (writeHistory) {
@@ -5605,14 +5611,14 @@ async function deliverClientRecord(
     }
     const compose = profileFor(cli)?.compose ?? null;
     const wakeTemplate = messageDisplayInForce({ home: host.home, root, team, now: host.now() });
-    const trigger = readTriggerLine(seatName, session, {
+    const trigger = inlineWake(record, host.home, TYPED_WAKE_MAX) ?? readTriggerLine(seatName, session, {
       seat: from,
       team: project,
       template: wakeTemplate,
       body: record.body,
       ageMs: 0,
       ...(record.subject === undefined ? {} : { subject: record.subject }),
-    }, cli);
+    }, cli, 'Body too long; read it with: team drops --read.');
     if (trigger === null && compose === null) {
       failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
       markLeg('typed', 'skipped', `the trigger would exceed ${String(TRIGGER_MAX)} characters`);
@@ -6013,14 +6019,14 @@ export async function walkReplyDelivery(input: {
         { seat: from, ...(input.payload.from_id === null ? {} : { id: input.payload.from_id }) },
         { ...input.naming, mode: 'nickname' },
       );
-      const trigger = readTriggerLine(seatName, input.session, {
+      const trigger = inlineWake(input.payload, input.host.home, TYPED_WAKE_MAX) ?? readTriggerLine(seatName, input.session, {
         seat: from,
         team: input.sender.project,
         template: wakeTemplate,
         name: wakeName,
         body: input.payload.body,
         ageMs: 0,
-      }, cli);
+      }, cli, 'Body too long; read it with: team drops --read.');
       if (trigger === null) {
         failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
         continue;
@@ -6080,7 +6086,7 @@ export async function walkReplyDelivery(input: {
             seat: seatName,
             sender: { seat: from, team: teamIdOf(input.root) },
           },
-          { id: msgId, record: staged.record, sentAt: input.payload.at },
+          { id: msgId, record: staged.record, sentAt: input.payload.at, pointer: inlineWake(input.payload, input.host.home) ?? oversizedWake(input.payload) },
           {
             now: input.host.now,
             startedAt,
@@ -6094,6 +6100,8 @@ export async function walkReplyDelivery(input: {
           },
         );
         if (attempt.outcome === 'enqueue') {
+          const carriedBody = inlineWake(input.payload, input.host.home);
+          if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: carriedBody });
           clearEndpointBlocked(input.root, input.session, seatName);
           const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
           if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
@@ -6159,7 +6167,7 @@ export async function walkReplyDelivery(input: {
           sender: { seat: from, team: teamIdOf(input.root) },
           cwd: seatCwd,
         },
-        { id: msgId, record: staged.record },
+        { id: msgId, record: staged.record, pointer: inlineWake(input.payload, input.host.home) ?? oversizedWake(input.payload) },
         {
           now: input.host.now,
           startedAt,
@@ -6171,6 +6179,8 @@ export async function walkReplyDelivery(input: {
         },
       );
       if (attempt.outcome === 'enqueue') {
+        const carriedBody = inlineWake(input.payload, input.host.home);
+        if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: carriedBody });
         const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
         if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
           return ended({ via: 'headless-resume', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, headless-resume receipt)` });
@@ -6480,13 +6490,13 @@ async function deliverSocketFrame(
       ? compactReaderLine(msgId, existingIds)
       : readerLine(msgId, existingIds);
   const normalizedDisplay = header === '' ? null : header === 'owner' ? 'the owner' : header;
-  const content = attributedBody(body, from, {
+  let content = attributedBody(body, from, {
     record: payload,
     home: host.home,
     root: to.root,
     displayName: normalizedDisplay,
     rule: payload.rule,
-    compact,
+    compact: false,
   });
   // The record's exact text is signed here for the two stores that do not write the copy first:
   // `signRecord` has no clock and no nonce, so these are the same bytes the walk's own staging
@@ -6502,7 +6512,12 @@ async function deliverSocketFrame(
       return { kind: 'fallback', reason: 'the record could not be signed' };
     }
   }
-  const frame = frameFor(content, msgId, reply, store?.mode === 'none' && carried !== null ? carried : undefined);
+  let bodyIncluded = true;
+  if (Buffer.byteLength(content, 'utf8') > RUNTIME_WAKE_MAX) {
+    content = `${content.split('\n')[0]}\n\nMessage too long for this wake. Read it with: team drops --read --id ${msgId} --seat ${to.seat}`;
+    bodyIncluded = false;
+  }
+  const frame = frameFor(content, msgId, bodyIncluded ? null : reply, store?.mode === 'none' && carried !== null ? carried : undefined);
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }
@@ -6614,15 +6629,9 @@ async function deliverSocketFrame(
       return { kind: 'delivered-unrecorded', reason: settled.reason };
     }
   }
-  // The frame was taken: that is the delivery, and only the seat writes a read receipt. The
-  // sender no longer marks its own frame read — a frame a wrapper launch took but the agent never
-  // saw must stay unread — so the record waits for the seat's own `inbox_read`,
-  // `team drops --read` or hook receipt, and the watch's unread pass re-wakes it like any other
-  // message. The sender does not wait here to see whether the receiving session held the frame
-  // at its held-message dialog either: a taken frame is reported `delivered (socket)` at once,
-  // and the daemon's held step reads the pane on its own beat and raises `held` if it finds the
-  // dialog. Waiting on another seat's screen is what made this path slow, and the dialog's own
-  // arrival is never part of what this process can prove.
+  if (bodyIncluded) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home });
+  // Under the readable-wake policy, accepted full bodies settle their durable copies.
+  // An oversized-body pointer stays unread until the receiver follows its explicit read hint.
   if (!wait && writeHistory) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
   }

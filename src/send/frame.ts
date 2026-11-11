@@ -96,8 +96,7 @@ export type SocketMessageFrameOptions = {
 };
 
 /**
- * Builds a rendered socket message frame with the compact sender header, the body (or first
- * content line when `compact: true`), and the appropriate reader footer (`compactReaderLine` when
+ * Builds a rendered socket message frame with the compact sender header, the full body, and the appropriate reader footer (`compactReaderLine` when
  * `compact: true`, `readerLine` otherwise, or `null` for a human pane).
  */
 export function socketMessageFrame(
@@ -113,7 +112,7 @@ export function socketMessageFrame(
     displayName: options.displayName,
     senderLabel: options.senderLabel,
     rule: options.rule,
-    compact: options.compact,
+    compact: false,
     home: options.home,
     root: options.root,
     at: options.at,

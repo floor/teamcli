@@ -111,8 +111,8 @@ function continues(text: string, pos: number, row: string, kind: 'word' | 'hard'
  *  `holdsBox` has always made: the first line after the prompt and every continuation row at the
  *  box's own column — no more rows, no fewer, none changed. A continuation row that does not
  *  start at that column is not the text's own row, and a blank row never is: the delivery is
- *  one line, and a row break may stand for at most one space, never a newline — a blank row
- *  belongs to no text this version types.
+ *  one line, and a row break may stand for at most one space, an explicit newline matches exactly one row boundary; a blank row
+ *  is accepted only when the expected text contains that newline.
  *  Only the one space a row break itself may stand for is normalised, and inside a row every
  *  character must match, runs of spaces included. Trailing spaces and tabs after the text's last
  *  row are not observable in a box — a pane may not paint the end of a row — so they are not
@@ -121,7 +121,7 @@ function readsBack(text: string, box: Box): { row: string | null; short: boolean
   const pad = ' '.repeat(box.indent);
   const rows: string[] = [];
   for (const row of box.rows) {
-    if (row === '') return { row, short: false };
+    if (row === '') { rows.push(''); continue; }
     if (!row.startsWith(pad)) return { row, short: false };
     rows.push(row.slice(pad.length));
   }
@@ -133,6 +133,12 @@ function readsBack(text: string, box: Box): { row: string | null; short: boolean
     if (i === 0) {
       if (!text.startsWith(row)) return { row, short: false };
       at = row.length;
+      continue;
+    }
+    if (text[at] === '\n') {
+      at += 1;
+      if (!text.startsWith(row, at)) return { row, short: false };
+      at += row.length;
       continue;
     }
     if (row === '') return { row, short: false };
@@ -155,7 +161,7 @@ function withoutListedPlaceholders(cli: string, box: Box): Box {
 }
 
 function holdsBox(text: string, box: Box, cli?: string): boolean {
-  const read = readsBack(text, cli === undefined ? box : withoutListedPlaceholders(cli, box));
+  const read = readsBack(text, cli === undefined || text.includes('\n') ? box : withoutListedPlaceholders(cli, box));
   return read.row === null && !read.short;
 }
 
