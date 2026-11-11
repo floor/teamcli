@@ -288,7 +288,9 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
     let notes: string[];
     try {
       notes = [...(await traceChildStep('fallback pass', () => pass({ route, at: instant, slices })))];
-      if (sidebar !== null && !slices.stopping()) {
+      // Lead decision 2026-11-11 05:53Z: display labels are optional and must not spend the
+      // hosted watch's first-cycle/start budget. The display pass itself is awaited/bounded.
+      if (sidebar !== null && !slices.stopping() && !firstCycles.has(route.root)) {
         notes.push(...(await traceChildStep('sidebar pass', () => sidebar!({ route, at: instant, slices }))));
       }
     } catch (error) {

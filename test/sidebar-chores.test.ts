@@ -1,3 +1,4 @@
+import { execText, DEFAULT_CHILD_TIMEOUT_MS } from '../src/child.ts';
 import { createChildSteps, childStepsAt, traceChildStep } from '../src/diagnostics/child-steps.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -21,6 +22,9 @@ import {
   SIDEBAR_TTL_CAP_MS,
   setHerdrRun,
   workspacePaneDisplays,
+  sessionPaneDisplaysAsync,
+  reportDisplayAgentAsync,
+  setHerdrCapture,
 } from '../src/herdr.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
@@ -76,6 +80,7 @@ const dirs: string[] = [];
 
 afterEach(() => {
   setHerdrRun(null);
+  setHerdrCapture(null);
   while (dirs.length > 0) {
     const dir = dirs.pop();
     if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
@@ -718,4 +723,134 @@ describe('first-cycle step diagnostics', () => {
     expect(childStepsAt('ordinary note', NOW)).toBeNull();
     expect(childStepsAt('first-cycle steps: broken json', NOW)).toBeNull();
   });
+});
+
+
+describe('bounded sidebar after the first watch cycle', () => {
+  test('reads all workspaces through one named session call', async () => {
+    const calls: { args: string[]; session?: string }[] = [];
+    setHerdrRun((args, session) => {
+      calls.push({ args, session });
+      return { panes: [
+        { pane_id: 'pane-a', workspace_id: 'space-a', display_agent: 'live' },
+        { pane_id: 'pane-b', workspace_id: 'space-b' },
+      ] };
+    });
+    expect(await sessionPaneDisplaysAsync('synthetic-session')).toEqual([
+      { pane: 'pane-a', workspace: 'space-a', displayAgent: 'live' },
+      { pane: 'pane-b', workspace: 'space-b' },
+    ]);
+    expect(calls).toEqual([{ args: ['pane', 'list'], session: 'synthetic-session' }]);
+    setHerdrRun(() => ({ panes: [{ pane_id: 'bad', workspace_id: '' }] }));
+    expect(await sessionPaneDisplaysAsync('synthetic-session')).toBeNull();
+  });
+
+  test('the async display adapter keeps the same TTL and host-refusal checks', async () => {
+    const calls: { args: string[]; session?: string }[] = [];
+    setHerdrCapture((args, session) => { calls.push({ args, session }); return '{"result":{"type":"ok"}}'; });
+    expect(await reportDisplayAgentAsync('p1', 'label', 'synthetic-session', DEFAULT_SIDEBAR_TTL_MS)).toBe(true);
+    expect(calls).toEqual([{ args: ['pane', 'report-metadata', 'p1', '--source', 'team', '--display-agent', 'label', '--ttl-ms', String(DEFAULT_SIDEBAR_TTL_MS)], session: 'synthetic-session' }]);
+    expect(await reportDisplayAgentAsync('p1', 'label', 'synthetic-session', SIDEBAR_TTL_CAP_MS + 1)).toBe(false);
+    expect(calls).toHaveLength(1);
+    setHerdrCapture(() => '{"error":{"code":"pane_not_found"}}');
+    expect(await reportDisplayAgentAsync('p1', 'label', 'synthetic-session', DEFAULT_SIDEBAR_TTL_MS)).toBe(false);
+    setHerdrCapture(() => null);
+    expect(await reportDisplayAgentAsync('p1', 'label', 'synthetic-session', DEFAULT_SIDEBAR_TTL_MS)).toBe(false);
+  });
+
+  test('uses one session snapshot across seats and preserves the different-live-display guard', async () => {
+    const { home, root } = makeWorld();
+    const route: ChoresChildRoute = { root, team: 'acme-app', session: 'acme-dev', teamFile: makeTeam() };
+    let lists = 0;
+    const reports: string[] = [];
+    const pass = createSidebarPass(makeConfig(home, route), {
+      readSeats: () => ({ lead: { stage: 'ready', pane: 'p1', workspace: 'w1' },
+        'builder-1': { stage: 'ready', pane: 'p2', workspace: 'w2' } }),
+      sessionPanes: async (session, options) => {
+        expect(session).toBe('acme-dev'); expect(options.signal).toBeDefined(); expect(Number.isInteger(options.timeoutMs)).toBe(true); lists++;
+        return [{ pane: 'p1', workspace: 'w1' }, { pane: 'p2', workspace: 'w2', displayAgent: 'other live value' }];
+      },
+      reportDisplayAsync: async (pane, _text, _session, _ttl, options) => {
+        expect(options.timeoutMs).toBeLessThanOrEqual(openSlices.sliceMs); reports.push(pane); return true;
+      },
+    });
+    const notes = await pass({ route, at: new Date(NOW), slices: openSlices });
+    expect(lists).toBe(1); expect(reports).toEqual(['p1']);
+    expect(notes[0]).toContain('differs from declared');
+  });
+
+  test('skips an unresponsive session at the existing slice deadline and aborts its read', async () => {
+    const { home, root } = makeWorld();
+    const route: ChoresChildRoute = { root, team: 'acme-app', session: 'acme-dev', teamFile: makeTeam() };
+    let signal: AbortSignal | undefined;
+    let reports = 0;
+    const config = makeConfig(home, route);
+    // Use this fixture's existing heartbeat interval as its display slice; no new timeout policy.
+    const slices = { ...openSlices, sliceMs: config.beatMs };
+    const pass = createSidebarPass(config, {
+      readSeats: () => ({ lead: { stage: 'ready', pane: 'p1', workspace: 'w1' } }),
+      sessionPanes: async (_session, options) => { signal = options.signal; return await new Promise(() => {}); },
+      reportDisplayAsync: async () => { reports++; return true; },
+    });
+    const notes = await pass({ route, at: new Date(NOW), slices });
+    expect(signal?.aborted).toBe(true); expect(reports).toBe(0);
+    expect(notes).toEqual(['sidebar refresh: skipped; the terminal host did not answer within the display slice']);
+  });
+
+  test('skips remaining reports when the existing display slice is spent', async () => {
+    const { home, root } = makeWorld();
+    const route: ChoresChildRoute = { root, team: 'acme-app', session: 'acme-dev', teamFile: makeTeam() };
+    let clock = NOW;
+    const reported: string[] = [];
+    const pass = createSidebarPass(makeConfig(home, route), {
+      clock: () => clock,
+      readSeats: () => ({ lead: { stage: 'ready', pane: 'p1' }, 'builder-1': { stage: 'ready', pane: 'p2' } }),
+      sessionPanes: async () => [{ pane: 'p1', workspace: 'w1' }, { pane: 'p2', workspace: 'w2' }],
+      reportDisplayAsync: async (pane) => { reported.push(pane); clock += openSlices.sliceMs; return true; },
+    });
+    await pass({ route, at: new Date(NOW), slices: openSlices });
+    expect(reported).toEqual(['p1']);
+  });
+
+  test('defers labels until the first watch cycle and a slow display cannot hold later cycles', async () => {
+    const { home, root } = makeWorld();
+    const route: ChoresChildRoute = { root, team: 'acme-app', session: 'acme-dev', teamFile: makeTeam(),
+      watch: { teamFile: join(root, '.agents', 'team.yaml'), presence: false } };
+    const stdin = new PassThrough(); const stdout = new PassThrough();
+    const messages: ChoresChildMessage[] = [];
+    stdout.setEncoding('utf8'); stdout.on('data', (chunk: string) => {
+      for (const line of chunk.trim().split('\n')) if (line) messages.push(JSON.parse(line));
+    });
+    let cycles!: () => void; let displays = 0; let release!: () => void;
+    const pending = new Promise<string[]>((resolve) => { release = () => resolve([]); });
+    const served = serveChoresChild({ config: makeConfig(home, route), stdin, stdout,
+      pass: async () => [], sidebar: async () => { displays++; return pending; },
+      watchFactory: (input) => {
+        cycles = () => input.cycle?.(root, new Date(NOW));
+        return { beat() {}, fault() {}, stop: async () => {} };
+      },
+    });
+    const until = async (predicate: () => boolean) => {
+      // Existing sidebar fixture wait bound and polling seam (the child-frame scene above).
+      const deadline = Date.now() + 5_000;
+      while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(predicate()).toBe(true);
+    };
+    try {
+      stdin.write(JSON.stringify({ type: 'tick', id: 'first', at: AT }) + '\n');
+      await until(() => messages.some((m) => m.type === 'pass'));
+      expect(displays).toBe(0);
+      cycles();
+      stdin.write(JSON.stringify({ type: 'tick', id: 'second', at: AT }) + '\n');
+      await until(() => displays === 1);
+      cycles();
+      expect(messages.filter((m) => m.type === 'watch-cycle')).toHaveLength(2);
+    } finally { release(); stdin.write(JSON.stringify({ type: 'stop', why: 'done' }) + '\n'); await served; }
+  });
+
+  test('the awaited process helper force-ends a process that handles the default termination signal', async () => {
+    // Existing production child-read bound, exercised with a synthetic process (no host/pane).
+    await expect(execText(process.execPath, ['-e',
+      'process.on("SIGTERM",()=>{});setInterval(()=>{},' + DEFAULT_CHILD_TIMEOUT_MS + ')'], { timeoutMs: DEFAULT_CHILD_TIMEOUT_MS })).rejects.toMatchObject({ killed: true, signal: 'SIGKILL' });
+  }, DEFAULT_CHILD_TIMEOUT_MS + DEFAULT_CHILD_TIMEOUT_MS);
 });

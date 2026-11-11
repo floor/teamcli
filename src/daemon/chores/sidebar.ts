@@ -6,8 +6,8 @@ import { traceChildStep } from '../../diagnostics/child-steps.ts';
 // watch repaints on model or effort change, and its ~5 s sweep refreshes while it runs, but a
 // quiet seat or a root without a watch needs a periodic backstop.
 //
-// Each report shells out synchronously to the terminal host, so this pass runs only inside the
-// supervised chores child — never on the daemon's main loop. A root configured with
+// Reads and reports are awaited, bounded display work. The child defers this pass until its
+// hosted watch completes its first cycle; a slow host skips the remaining display work. A root configured with
 // `daemon.chores: inline` is skipped here with a note naming it.
 //
 // Before reporting a seat's declared `displayAgent(seat)`, the pass reads the pane's current
@@ -16,11 +16,14 @@ import { traceChildStep } from '../../diagnostics/child-steps.ts';
 // - Present and equal -> re-report `displayAgent(seat)` with `--ttl-ms`, extending the window.
 // - Present and different -> a live observation from the screen stands; skip the seat and note it.
 import { join } from 'node:path';
+import { DEFAULT_CHILD_TIMEOUT_MS } from '../../child.ts';
 import { displayAgent } from '../../file/sections/seats.ts';
 import { readTeamConfig } from '../../file/team-config.ts';
 import type { TeamFile } from '../../file/types.ts';
 import {
-  reportDisplayAgent,
+  reportDisplayAgentAsync,
+  sessionPaneDisplaysAsync,
+  type HerdrReadOptions,
   workspaceList,
   workspacePaneDisplays,
   type WorkspacePaneDisplay,
@@ -32,6 +35,12 @@ import { choresPolicyFor } from './policy.ts';
 import type { ChoresChildConfig } from './protocol.ts';
 
 export type SidebarPassSources = {
+  /** The production read: all pane displays in the named session, once per refresh pass. */
+  sessionPanes?: (session: string, options: HerdrReadOptions) => Promise<WorkspacePaneDisplay[] | null>;
+  /** Awaited metadata report; the production adapter force-ends the read child at its deadline. */
+  reportDisplayAsync?: (pane: string, text: string, session: string, ttlMs: number, options: HerdrReadOptions) => Promise<boolean>;
+  /** Monotonic clock seam for budget scenes. */
+  clock?: () => number;
   /** Reads the current display line for a pane: `undefined` when absent or expired, `null` when
    *  the terminal host refused or could not be reached. When omitted, reads `workspacePanes`. */
   paneDisplay?: (session: string, pane: string, workspace?: string) => string | undefined | null;
@@ -73,15 +82,34 @@ export function createSidebarPass(
   const lastRefreshedAt = new Map<string, number>();
   const readWorkspacePanes = sources.workspacePanes ?? workspacePaneDisplays;
   const readWorkspaces = sources.workspaces ?? workspaceList;
-  const report =
-    sources.reportDisplay
-    ?? ((pane: string, text: string, session: string, ttlMs: number) =>
-      reportDisplayAgent(pane, text, session, ttlMs));
+  const report = sources.reportDisplayAsync ?? sources.reportDisplay ?? reportDisplayAgentAsync;
+  const sessionPanes = sources.sessionPanes ?? sessionPaneDisplaysAsync;
+  // The old injected read seams keep their synthetic scenes; production uses only the session read.
+  const injectedWorkspaceReader = sources.paneDisplay !== undefined || sources.workspacePanes !== undefined || sources.workspaces !== undefined;
+  const clock = sources.clock ?? (() => performance.now());
   const readSeats = sources.readSeats ?? defaultReadSeats;
   const readTeam = sources.readTeam ?? defaultReadTeam;
 
   return async ({ route, at, slices }) => {
     if (slices.stopping()) return [];
+    // Lead decision 2026-11-11 05:53Z: optional display work gets the existing chores slice,
+    // and each call is also bounded by DEFAULT_CHILD_TIMEOUT_MS, never a new policy limit.
+    const deadline = clock() + slices.sliceMs;
+    const bounded = async <T>(operation: (options: HerdrReadOptions) => T | Promise<T>): Promise<T | null> => {
+      const remaining = Math.floor(Math.min(DEFAULT_CHILD_TIMEOUT_MS, deadline - clock()));
+      if (slices.stopping() || remaining <= 0) return null;
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expired = new Promise<null>((resolve) => {
+        timer = setTimeout(() => { controller.abort(); resolve(null); }, remaining);
+      });
+      try {
+        return await Promise.race([
+          Promise.resolve().then(() => operation({ timeoutMs: remaining, signal: controller.signal })), expired,
+        ]);
+      } catch { return null; }
+      finally { if (timer !== undefined) clearTimeout(timer); }
+    };
 
     let team: TeamFile;
     if (route.teamFile !== undefined) {
@@ -126,6 +154,11 @@ export function createSidebarPass(
     });
     if (due.length === 0) return [];
 
+    const allPanes = injectedWorkspaceReader ? undefined : await traceChildStep(
+      'sidebar session pane-list', () => bounded((options) => sessionPanes(route.session, options)),
+    );
+    if (allPanes === null) return ['sidebar refresh: skipped; the terminal host did not answer within the display slice'];
+
     const workspaceCache = new Map<string, WorkspacePaneDisplay[] | null>();
     let listedWorkspaces: readonly { id: string }[] | null | undefined;
     const readFromWorkspaces = (
@@ -162,11 +195,13 @@ export function createSidebarPass(
       return undefined;
     };
 
-    const readPaneDisplay = sources.paneDisplay ?? readFromWorkspaces;
+    const readPaneDisplay = sources.paneDisplay ?? (allPanes !== undefined
+      ? (_session: string, pane: string) => allPanes.find((entry) => entry.pane === pane)?.displayAgent
+      : readFromWorkspaces);
     const notes: string[] = [];
 
     for (let index = 0; index < due.length; index += 1) {
-      if (slices.stopping()) return notes;
+      if (slices.stopping() || clock() >= deadline) return notes;
       const item = due[index];
       if (item === undefined) continue;
       const { seat, pane, workspace, key } = item;
@@ -194,7 +229,7 @@ export function createSidebarPass(
         let reported = false;
         let reportError: string | null = null;
         try {
-          reported = traceChildStep('sidebar metadata-report', () => report(pane, expected, route.session, policy.ttlMs));
+          reported = (await traceChildStep('sidebar metadata-report', () => bounded((options) => report(pane, expected, route.session, policy.ttlMs, options)))) ?? false;
         } catch (error) {
           reportError = error instanceof Error ? error.message : String(error);
           reported = false;
