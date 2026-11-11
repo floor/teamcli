@@ -117,6 +117,7 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent, recordProvenAgentAddress, recordProvenSeatConversation } from '../registry/agents.ts';
+import { proveSeatRebind, runSeatRebind } from './up-rebind.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
@@ -444,7 +445,7 @@ export const realSources: UpSources = {
 /** The reason the hold `up --no-launch` places carries. */
 export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\n--resolve-launch takes the named launcher argv as the base line and still places the profile launch words on it. It is off unless named, and a launch without it runs the launch line the file already has. A resolution that cannot be placed refuses that seat and starts it nowhere.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]\n       team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\n--resolve-launch takes the named launcher argv as the base line and still places the profile launch words on it. It is off unless named, and a launch without it runs the launch line the file already has. A resolution that cannot be placed refuses that seat and starts it nowhere.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -453,6 +454,10 @@ export default up;
  *  its key together, never the owner's `--file` or `--session`, `--team` only names the team the
  *  grant is for, and `--all` takes no single-team flag. */
 function clientInvocationProblem(args: Args): string | null {
+  if (args.values.rebind !== undefined && (args.flags.has('all') || args.flags.has('no-launch') || args.flags.has('resolve-launch')
+    || args.flags.has('request') || ['client', 'key', 'general', 'team', 'approval', 'reason'].some((name) => args.values[name] !== undefined))) {
+    return '--rebind names one seat and uses ordinary owner or lead admission; it takes no launch, sweep, client or owner-request flags';
+  }
   if (args.flags.has('all')) {
     if (args.values.file !== undefined) return '--all and --file can\'t be used together: --all reads every registered team';
     if (args.values.session !== undefined) return '--all and --session can\'t be used together: each registered team uses its own session';
@@ -2167,7 +2172,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch', 'all', 'resolve-launch']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason', 'rebind'], ['dry-run', 'serial', 'json', 'request', 'no-launch', 'all', 'resolve-launch']);
   const resolveLaunch = args.flags.has('resolve-launch');
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
@@ -2298,7 +2303,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   const importAdmitted = (): void => {
     // The owner's run on a team still only in its file imports it first, with a notice
     // (docs/commands/up.md): moving to the registry never stands between the owner and a launch.
-    imported = clientUp === null && detached === undefined && (walked.kind === 'owner' || seatApproved) && !args.values.file
+    imported = args.values.rebind === undefined && clientUp === null && detached === undefined && (walked.kind === 'owner' || seatApproved) && !args.values.file
       ? importForUp(io.cwd, sources.home, dry, sources.now?.() ?? new Date())
       : null;
     if (imported !== null) {
@@ -2603,6 +2608,28 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   const noApprovalNotice = dev.on && standing.kind === 'none' ? NO_APPROVAL_NOTICE : null;
   if (standing.kind !== 'none' && standing.kind !== 'verified') {
     refusals.push({ id: 'up.never-approved', message: notInForce(standing, approvalSource) });
+  }
+  if (args.values.rebind !== undefined) {
+    // This narrower operation uses the ordinary owner/lead map only. It consumes no client
+    // grant or one-use owner token, and changes no caller-placement or send admission rule.
+    if (!ordinaryAdmitted) return denyUp(out, io, json);
+    const warning = dev.on ? devWarningLine(refusals, standing, caller) : '';
+    if (refusals.length > 0) {
+      const first = refusals[0]!;
+      refuse(io, json, 'up', { id: first.id, message: first.message, repair: first.repair ?? null });
+      return 1;
+    }
+    if (warning) stderrLine(`${devModeCallerGate(dev, warning) ?? warning}\n`);
+    if (state !== 'running') {
+      refuse(io, json, 'up', { id: 'up.rebind-session', message: `session ${session} is not running; nothing was rebound`, repair: null });
+      return 1;
+    }
+    const seat = team.seats.find((one) => one.name === args.values.rebind);
+    if (seat === undefined) {
+      refuse(io, json, 'up', { id: 'up.rebind-seat', message: `no declared seat ${plainText(args.values.rebind)}`, repair: null });
+      return 2;
+    }
+    return runSeatRebind({ root, dir, session, team, seat, sources, dry, json, io: out, actor: callerLabel(caller) });
   }
   // The budget readings the gate refuses on are the live file's own: a standing that is not
   // verified names no account at all, not even for a dry run's plan.
@@ -3463,6 +3490,14 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
 
   if (dry) {
     stampLobbyTrust(false);
+    for (const seat of team.seats) {
+      const proof = proveSeatRebind({ root, dir, session, seat, sources });
+      if (proof.ok && proof.conversation !== proof.agent.reach.agent_session) {
+        const line = `${seat.name}: would rebind the live conversation on its recorded pane, including while its CLI is working`;
+        if (json) collect(line);
+        else out.stdout(`+ ${line}\n`);
+      }
+    }
     if (!json) {
       for (const line of [...warnings, ...deliveryWarnings()]) out.stdout(`! ${plainText(line)}\n`);
       // The same cause can reach the list twice — the gate and `doctor` both read the

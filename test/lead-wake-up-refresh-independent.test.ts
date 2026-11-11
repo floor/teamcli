@@ -10,7 +10,7 @@
 // terminal host, no socket of the machine's own, no provider.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
@@ -74,7 +74,7 @@ function git(cwd: string, ...args: string[]): void {
 type Extra = { name: string; launch?: string; human?: boolean; stopped?: boolean };
 
 /** A human lead and the seats a scene declares. The lead is never the refresh target. */
-function teamText(extras: Extra[]): string {
+function teamText(extras: Extra[], humanLead = true): string {
   const seat = (one: Extra): string => `  - role: implementer
     name: ${one.name}
     label: ${one.name}
@@ -103,12 +103,12 @@ seats:
     model: ${MODEL}
     version: "${VERSION}"
     launch: ${LAUNCH}
-    human: true
+${humanLead ? '    human: true\n' : ''}
 ${extras.map(seat).join('')}`;
 }
 
-function stand(extras: Extra[]): void {
-  const text = teamText(extras);
+function stand(extras: Extra[], humanLead = true): void {
+  const text = teamText(extras, humanLead);
   writeFileSync(join(dir, 'team.yaml'), text);
   const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
@@ -154,7 +154,7 @@ function registerSeat(
 ): void {
   registerAgent(home, {
     name,
-    signing: { model: MODEL, version: VERSION, role: 'implementer' },
+    signing: { model: MODEL, version: VERSION, role: name === LEAD ? 'coordinator' : 'implementer' },
     lab: 'anthropic',
     cli: 'claude-code',
     launcher: null,
@@ -464,6 +464,133 @@ describe('explicit conversation repair on the recorded live pane', () => {
     expect(recordProvenSeatConversation(home, old, dir, held, next, socket)).toBe(false);
     expect(binding()).toBe(SES);
     expect(seatOf(WORKER)?.agent_session).toBe('successor');
+  });
+});
+
+describe('one-seat rebind while the recorded CLI is working', () => {
+  const next = 'conversation-during-working-turn';
+  function ready(name = WORKER) {
+    stand(name === LEAD ? [] : [{ name: WORKER }, { name: SPARE }], name !== LEAD);
+    recordSeat(name, { stage: 'ready', pane: PANE, workspace: SPACE, launched: RECORDED });
+    registerSeat(name, { pane: PANE, address: null });
+    sock(200);
+    return makeWorld({
+      agents: () => [{ ...liveAgent(name, PANE, SPACE), session: next, status: 'working' }],
+      processInfo: () => PANE_PROCESSES,
+      paneText: () => 'Working…\nesc to interrupt',
+      workspacePanes: () => [PANE],
+    });
+  }
+
+  test('the calling lead can rebind its own working CLI without starting or closing anything', async () => {
+    const made = ready(LEAD);
+    const io = testIo(root, { kind: 'seat', name: LEAD, pane: PANE, session: SESSION });
+    expect(await runUp(['--rebind', LEAD], io, made.sources), said(io)).toBe(0);
+    expect(seatOf(LEAD)?.agent_session).toBe(next);
+    const agent = findAgent(home, { team: teamIdOf(root), seat: LEAD })!;
+    expect(agent.reach.agent_session).toBe(next);
+    expect(reportedConversationProblem(agent, PANE, { agents: () => [{ name: LEAD, pane: PANE, cli: 'claude', session: next }] })).toBeNull();
+    expect(made.trace.created).toEqual([]);
+    expect(made.trace.closed).toEqual([]);
+    expect(made.trace.runs).toEqual([]);
+    expect(made.trace.typed).toEqual([]);
+  });
+
+  test('one-seat repair does not plan a missing sibling or read launch doctor and load checks', async () => {
+    const made = ready();
+    made.sources.doctor!.version = () => { throw new Error('launch doctor must not run'); };
+    made.sources.machine = () => { throw new Error('launch load guard must not run'); };
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(0);
+    expect(seatOf(WORKER)?.agent_session).toBe(next);
+    expect(seatOf(SPARE)).toBeUndefined();
+    expect(findAgent(home, { team: teamIdOf(root), seat: SPARE })).toBeNull();
+    expect(made.trace.created).toEqual([]);
+    expect(made.trace.closed).toEqual([]);
+  });
+
+  test('a working dry run reports the rebind and leaves the old binding intact', async () => {
+    const made = ready();
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER, '--dry-run'], io, made.sources), said(io)).toBe(0);
+    expect(io.out).toContain('would rebind');
+    expect(io.out).not.toContain('skip');
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+    expect(findAgent(home, { team: teamIdOf(root), seat: WORKER })?.reach.agent_session).toBe(SES);
+    expect(made.trace.created).toEqual([]);
+  });
+
+  test('a replaced process refuses the one-seat repair', async () => {
+    const made = ready();
+    made.sources.launch!.processInfo = () => ({ shell: 100, foreground: [999] });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+    expect(made.trace.runs).toEqual([]);
+  });
+
+  test('an unadmitted worker cannot use the repair path', async () => {
+    const made = ready();
+    const io = testIo(root, { kind: 'seat', name: WORKER, pane: PANE, session: SESSION });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+    expect(made.trace.created).toEqual([]);
+  });
+
+  test('the lead in another pane cannot use its recorded seat as the caller', async () => {
+    const made = ready(LEAD);
+    const io = testIo(root, { kind: 'seat', name: LEAD, pane: OTHER_PANE, session: SESSION });
+    expect(await runUp(['--rebind', LEAD], io, made.sources), said(io)).toBe(1);
+    expect(seatOf(LEAD)?.agent_session).toBe(SES);
+    expect(findAgent(home, { team: teamIdOf(root), seat: LEAD })?.reach.agent_session).toBe(SES);
+  });
+
+  test('a reused pane reporting another CLI cannot rebind the seat', async () => {
+    const made = ready();
+    made.sources.launch!.agents = () => [{ ...liveAgent(WORKER, PANE, SPACE, 'codex'), session: next, status: 'working' }];
+    expect(await runUp(['--rebind', WORKER], testIo(root, { kind: 'owner' }), made.sources)).toBe(1);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+  });
+
+  test('an unproved socket cannot rebind the seat', async () => {
+    const made = ready();
+    unlinkSync(join(sockets, '200.sock'));
+    expect(await runUp(['--rebind', WORKER], testIo(root, { kind: 'owner' }), made.sources)).toBe(1);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+  });
+
+  test('a registry change during the proof refuses the state write', async () => {
+    const made = ready();
+    const concurrent = sock(900);
+    made.sources.launch!.processInfo = () => {
+      const agent = findAgent(home, { team: teamIdOf(root), seat: WORKER })!;
+      updateAgent(home, agent.id, { reach: { address: concurrent } });
+      return PANE_PROCESSES;
+    };
+    expect(await runUp(['--rebind', WORKER], testIo(root, { kind: 'owner' }), made.sources)).toBe(1);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+    expect(addressOf(WORKER)).toBe(concurrent);
+  });
+
+  test('a state change during the proof refuses the registry write', async () => {
+    const made = ready();
+    made.sources.launch!.processInfo = () => {
+      updateState(dir, (file) => { file.sessions[SESSION]!.seats[WORKER]!.agent_session = 'successor'; });
+      return PANE_PROCESSES;
+    };
+    expect(await runUp(['--rebind', WORKER], testIo(root, { kind: 'owner' }), made.sources)).toBe(1);
+    expect(seatOf(WORKER)?.agent_session).toBe('successor');
+    expect(findAgent(home, { team: teamIdOf(root), seat: WORKER })?.reach.agent_session).toBe(SES);
+  });
+
+  test('the JSON repair plan names only the requested seat', async () => {
+    const made = ready();
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER, '--dry-run', '--json'], io, made.sources), said(io)).toBe(0);
+    const result = JSON.parse(io.out);
+    expect(result.seats).toEqual([WORKER]);
+    expect(result.rebind).toEqual({ seat: WORKER, changed: true, applied: false });
+    expect(result.plan).toEqual([]);
   });
 });
 

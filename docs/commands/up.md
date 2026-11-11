@@ -7,6 +7,18 @@ live socket whose inbound declaration is current. The state and registry must st
 the previous conversation; a changed snapshot refuses the repair. A dry run and an automatic
 restore that protects a present pane leave these bindings untouched.
 
+To repair one seat alone, including your own working CLI, run:
+
+    team up --rebind <seat>
+
+Add `--dry-run` to verify the proof and show the proposed rebind without writing either record.
+This mode uses ordinary owner or lead admission. It reads the recorded pane, launched process,
+live conversation and current socket declaration, and updates only that seat's state and registry
+binding. It plans no launches or closures, so unrelated seats and launch-only doctor, load and
+lobby checks do not prevent this repair. A working process is eligible when it is the recorded
+CLI; a replaced process, ambiguous pane or changed snapshot is refused. Client grants and
+owner-request forms are not accepted by this narrower mode.
+
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
 declares and this machine can run, and the watch, in a workspace of its own labelled
 `Watch · <project>`. A fresh launch of
