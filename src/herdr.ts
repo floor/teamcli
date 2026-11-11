@@ -378,6 +378,28 @@ export function workspacePaneDisplays(workspace: string, session?: string): Work
   }
 }
 
+/** One session's pane displays in one awaited read. The terminal host's PaneListParams has
+ * optional workspace_id; absent, collect_panes_for_workspace(None) walks all workspaces
+ * (adapter source read 2026-11-11, schema/panes.rs and app/creation.rs). */
+export async function sessionPaneDisplaysAsync(
+  session: string,
+  options: HerdrReadOptions = {},
+): Promise<WorkspacePaneDisplay[] | null> {
+  try {
+    const result = await runAsync(['pane', 'list'], session, options) as { panes?: unknown } | undefined;
+    if (!result || !Array.isArray(result.panes)) return null;
+    const panes: WorkspacePaneDisplay[] = [];
+    for (const entry of result.panes) {
+      if (!entry || typeof entry !== 'object') return null;
+      const p = entry as Record<string, unknown>;
+      if (typeof p.pane_id !== 'string' || p.pane_id === '' || typeof p.workspace_id !== 'string' || p.workspace_id === '') return null;
+      panes.push({ pane: p.pane_id, workspace: p.workspace_id,
+        ...(typeof p.display_agent === 'string' && p.display_agent !== '' ? { displayAgent: p.display_agent } : {}) });
+    }
+    return panes;
+  } catch { return null; }
+}
+
 // The pane ids in a workspace, or null when herdr can't be reached or the workspace does not exist.
 // Every entry must be an object with a string pane_id and a workspace_id equal to the workspace asked for;
 // anything else makes the whole reading unreadable (null).
@@ -786,6 +808,24 @@ export function reportDisplayAgent(pane: string, text: string, session?: string,
   if (out === null) return false;
   const body = parsed(out);
   return body === null || !isHerdrError(body);
+}
+
+/** Display-only report with the same TTL and response checks as the synchronous adapter.
+ * execText uses SIGKILL at the existing child-read deadline; no synchronous exit wait. */
+export async function reportDisplayAgentAsync(
+  pane: string, text: string, session: string, ttlMs: number,
+  options: HerdrReadOptions = {},
+): Promise<boolean> {
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > SIDEBAR_TTL_CAP_MS) return false;
+  const args = ['pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', text, '--ttl-ms', String(ttlMs)];
+  try {
+    const out = await traceChildStep('terminal-host pane report-metadata', () => customCapture !== null
+      ? customCapture(args, session)
+      : execText('herdr', ['--session', session, ...args], options));
+    if (out === null) return false;
+    const body = parsed(out);
+    return body === null || !isHerdrError(body);
+  } catch { return false; }
 }
 
 // ── The sidebar layout keys team owns in the host's config ──────────────────────────────────
