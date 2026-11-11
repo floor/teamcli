@@ -2611,6 +2611,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // A file a CLI reads at start refuses only a launch into the lobby. `doctor` reports it
   // as a miss, and that miss is applied once `launchingIntoLobby` is known, below.
   const startupReadRefusals: string[] = [];
+  const cliLookupWarnings: string[] = [];
   if (sources.doctor) {
     const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing, team, [], [], rulesOriginOf(loaded.source));
     for (const finding of findings) {
@@ -2618,9 +2619,9 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       // can launch. Run each eligible seat's planned command through the normal terminal-host
       // launch path; its own launch result reports a failure without holding sibling seats.
       // This exception is only the typed version-probe failure, never another doctor refusal.
-      if (internal?.restoreMissingOnly === true && finding.cliVersionUnavailable !== undefined) {
+      if (internal?.restore === true && finding.cliVersionUnavailable !== undefined) {
         const { binary, seats } = finding.cliVersionUnavailable;
-        warnings.push(`${seats.join(', ')}: the restore process could not read ${binary}'s version; the terminal host will resolve each seat's launch command`);
+        cliLookupWarnings.push(`${seats.join(', ')}: the restore process could not read ${binary}'s version; the terminal host will resolve each seat's launch command`);
         continue;
       }
       if (!blocksLaunch(finding)) continue;
@@ -3446,6 +3447,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         .filter(({ cls }) => !wakeableWhileIdle(cls))
         .map(({ seat, cli }) => `${seat.name} is a ${isLeadSeat(team, seat.name) ? 'lead' : 'reviewer'} seat and ${cli} cannot be woken while it is idle; time-bound work is never dispatched to it`);
   const warnings: string[] = [
+    ...cliLookupWarnings,
     ...(folded ? [folded] : []),
     ...(gateApproval === null ? [] : [gateApproval]),
     ...(noApprovalNotice === null ? [] : [noApprovalNotice]),
