@@ -1,3 +1,5 @@
+import { traceChildStep, measureChildStore } from '../diagnostics/child-steps.ts';
+import { FALLBACK_STEP_CHUNK_ENTRIES } from '../send/fallback-events.ts';
 // One watch pass's mail reads, taken once.
 //
 // A pass asks three readers the same question about the same folders: `mailboxWaiting` lists the
@@ -22,7 +24,7 @@ import { messageKeyState } from '../store/keys.ts';
 /** What every reader of one pass names: the checkout's `.agents` directory, the checkout, the
  *  session whose drops are read, the home whose message key verifies them, and the team's resolved
  *  lead, when the caller loaded the team. A reader with no lead sees only the owner's clearances. */
-export type MailPassInput = { dir: string; root: string; session: string; home: string; lead?: string };
+export type MailPassInput = { dir: string; root: string; session: string; home: string; lead?: string; measure?: (source: 'drops' | 'messages', ms: number, count: number) => void };
 
 /** The stuck-episode marker beside a seat's drop folder. Dot-named, so no inbox scan takes it
  *  for mail; its presence is read from the folder listing, its contents only when it is there. */
@@ -66,7 +68,7 @@ export class MailPass {
   unread(seat: string): InboxMessage[] {
     const held = this.unreadBySeat.get(seat);
     if (held !== undefined) return held;
-    const listed = listUnread(
+    const listed = traceChildStep('snapshot drops unread', () => listUnread(
       this.dropDir(seat),
       {
         to: seat,
@@ -79,7 +81,7 @@ export class MailPass {
       (names) => {
         this.listedBySeat.set(seat, names);
       },
-    );
+    ));
     this.unreadBySeat.set(seat, listed);
     return listed;
   }
@@ -96,7 +98,16 @@ export class MailPass {
    *  pass. */
   unacked(): UnackedMessage[] {
     if (this.unackedOnce === null) {
-      this.unackedOnce = listUnackedMessages(this.input.root, this.input.session, this.input.home, this.recordAt, this.input.lead);
+      let count = 0;
+      this.unackedOnce = traceChildStep('snapshot unacked', () => listUnackedMessages(
+        this.input.root, this.input.session, this.input.home, this.recordAt, this.input.lead,
+        (source, ms, items) => {
+          this.input.measure?.(source, ms, items);
+          count += items;
+          // Reuse the fallback driver's existing chunk-entry cadence for diagnostic output.
+          measureChildStore(`snapshot ${source}`, ms, items, items === 0 || count % FALLBACK_STEP_CHUNK_ENTRIES === 0);
+        },
+      ));
     }
     return this.unackedOnce;
   }

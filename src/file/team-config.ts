@@ -1,3 +1,4 @@
+import { traceChildStep } from '../diagnostics/child-steps.ts';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { canonicalRecord, teamRecordOf } from './canonical-record.ts';
@@ -108,6 +109,10 @@ export function canonicalTeam(team: TeamFile): string {
 
 /** Finds, reads and validates the team's configuration for the folder `cwd`. */
 export function readTeamConfig(cwd: string, options: ReadTeamConfigOptions = {}): LoadResult {
+  return traceChildStep('root team configuration', () => readTeamConfigMeasured(cwd, options));
+}
+
+function readTeamConfigMeasured(cwd: string, options: ReadTeamConfigOptions = {}): LoadResult {
   const { source: _source, env, ...fileOptions } = options;
   // A named file is read and only that file: the way tests and snapshots hand a team in.
   if (options.file !== undefined) return withSource(loadTeamFile(cwd, { ...fileOptions, source: 'file' }), 'team-file');

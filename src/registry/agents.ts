@@ -1,3 +1,4 @@
+import { traceChildStep } from '../diagnostics/child-steps.ts';
 // The agent registry (layer 2): one file per agent, `<home>/.config/team/agents/<id>.yaml`.
 // The agent id is assigned once at registration and is immutable: it is never reused, never
 // renamed, never re-derived from a seat name. Every write goes through a temporary file and a
@@ -166,7 +167,11 @@ function cloneAgents(agents: readonly Agent[]): Agent[] {
 }
 
 /** Every valid agent record, by id. Invalid files are skipped; a numeric reach id refuses with a quoting repair. */
-export function readAgents(home: string): Agent[] {
+export function readAgents(...args: Parameters<typeof readAgentsMeasured>): ReturnType<typeof readAgentsMeasured> {
+  return traceChildStep('registry readAgents', () => readAgentsMeasured(...args));
+}
+
+function readAgentsMeasured(home: string): Agent[] {
   const memo = currentRunMemo();
   if (memo !== null) {
     const cached = memo.agents.get(home);

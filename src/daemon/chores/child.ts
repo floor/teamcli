@@ -1,3 +1,4 @@
+import { createChildSteps, traceChildStep } from '../../diagnostics/child-steps.ts';
 // The chores child's own loop: one process per group of roots, started by the machine daemon
 // through a one-use token.
 //
@@ -203,6 +204,14 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
     }
   };
 
+  const diagnostics = createChildSteps((text) => write({ type: 'note', text }));
+  const firstCycles = new Set(config.routes.filter((route) => route.watch !== undefined).map((route) => route.root));
+  const firstPasses = new Set(config.routes.map((route) => route.root));
+  const finishDiagnostics = (): void => {
+    if (firstCycles.size === 0 && firstPasses.size === 0) diagnostics.stop();
+  };
+  finishDiagnostics();
+
   const slices: ChoresSlices = {
     sliceMs: config.sliceMs,
     stopping: () => stopping,
@@ -278,9 +287,9 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
     const instant = new Date(at);
     let notes: string[];
     try {
-      notes = [...(await pass({ route, at: instant, slices }))];
+      notes = [...(await traceChildStep('fallback pass', () => pass({ route, at: instant, slices })))];
       if (sidebar !== null && !slices.stopping()) {
-        notes.push(...(await sidebar({ route, at: instant, slices })));
+        notes.push(...(await traceChildStep('sidebar pass', () => sidebar!({ route, at: instant, slices }))));
       }
     } catch (error) {
       // One root's failure is that root's own: the sibling roots still run, and the daemon log
@@ -292,6 +301,11 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
     const ms = Math.max(0, now().getTime() - startedAt);
     if (!stopping) {
       write({ type: 'pass', passes: [{ root: route.root, at, notes, chore: PASS_CHORE, ms }] });
+      if (firstPasses.delete(route.root)) {
+        diagnostics.complete();
+        write({ type: 'note', text: `first chores pass completed: ${route.root}` });
+        finishDiagnostics();
+      }
     }
   })();
 
@@ -433,7 +447,14 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       log: (text) => write({ type: 'note', text }),
       report: (root, state) => write({ type: 'watch-state', root, state }),
       pulse: (root, at) => write({ type: 'watch-pulse', root, at: at.toISOString() }),
-      cycle: (root, at) => write({ type: 'watch-cycle', root, at: at.toISOString() }),
+      cycle: (root, at) => {
+        write({ type: 'watch-cycle', root, at: at.toISOString() });
+        if (firstCycles.delete(root)) {
+          diagnostics.complete();
+          write({ type: 'note', text: `first-cycle completed: ${root}` });
+          finishDiagnostics();
+        }
+      },
       faultResult: (root, outcome, why) => write({ type: 'watch-fault-result', root, outcome, why }),
       now,
       ...(input.watchBase === undefined ? {} : { base: input.watchBase }),
@@ -545,6 +566,8 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
 
   await stopped;
 
+  diagnostics.complete();
+  diagnostics.stop();
   clearInterval(beatTimer);
   clearInterval(passTimer);
   const destroyable = stdin as unknown as { destroy?: () => void };

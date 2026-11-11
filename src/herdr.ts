@@ -1,3 +1,4 @@
+import { traceChildStep } from './diagnostics/child-steps.ts';
 import { traceBeatWork } from './diagnostics/beat-work.ts';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -96,6 +97,10 @@ export function setHerdrCapture(exec: HerdrCapture | null): void {
 }
 
 function run(args: string[], session?: string): unknown {
+  return traceChildStep(`terminal-host ${args.slice(0, 2).join(' ')}`, () => runMeasured(args, session));
+}
+
+function runMeasured(args: string[], session?: string): unknown {
   if (customRun) return customRun(args, session);
   const full = session ? ['--session', session, ...args] : args;
   const out = traceBeatWork('terminal-host read (sync)', () => execFileSync('herdr', full, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }));
@@ -105,7 +110,11 @@ function run(args: string[], session?: string): unknown {
 /** What one async read takes: the child's own kill after `timeoutMs`, and the loop's stop. */
 export type HerdrReadOptions = ChildOptions;
 
-async function runAsync(args: string[], session: string | undefined, options: HerdrReadOptions): Promise<unknown> {
+function runAsync(args: string[], session: string | undefined, options: HerdrReadOptions): Promise<unknown> {
+  return traceChildStep(`terminal-host ${args.slice(0, 2).join(' ')}`, () => runAsyncMeasured(args, session, options));
+}
+
+async function runAsyncMeasured(args: string[], session: string | undefined, options: HerdrReadOptions): Promise<unknown> {
   if (customRun) return customRun(args, session);
   const full = session ? ['--session', session, ...args] : args;
   const out = await execText('herdr', full, options);
@@ -482,6 +491,10 @@ export function setCaptureExec(exec: CaptureExec | null): void {
 // What a herdr command printed, or null when it did not run. Exit status is not the answer: a
 // command aimed at a session that does not exist can print an error and exit 0.
 function capture(args: string[], session?: string): string | null {
+  return traceChildStep(`terminal-host ${args.slice(0, 2).join(' ')}`, () => captureMeasured(args, session));
+}
+
+function captureMeasured(args: string[], session?: string): string | null {
   if (customCapture) return customCapture(args, session);
   const full = [...(session ? ['--session', session] : []), ...args];
   try {
