@@ -741,6 +741,20 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     // through 0.5.8 it refused every seat but the orchestrator, so with the daemon up no builder
     // or reviewer could send at all, whatever the rules admitted).
     const sender = typeof request.from === 'string' ? request.from : '';
+    // The team this endpoint was started for may be older than the record: a seat added while
+    // the daemon runs is not in it. When the sender or the recipient is not found, the team is
+    // read again from its record once, and the fresh copy answers this request and the next.
+    const knows = (team: TeamFile): boolean =>
+      (sender === 'owner' || sender === team.orchestrator || team.seats.some((s) => s.name === sender))
+      && team.seats.some((s) => s.name === seatName);
+    if (!knows(input.team)) {
+      try {
+        const fresh = readTeamConfig(input.root, { home: host.home });
+        if (fresh.ok && fresh.team.session === input.team.session && fresh.team.project === input.team.project) {
+          input.team = fresh.team;
+        }
+      } catch { /* keep the team the endpoint has */ }
+    }
     if (sender !== 'owner' && sender !== input.team.orchestrator && !input.team.seats.some((s) => s.name === sender)) {
       return Promise.resolve({
         v: 1,
