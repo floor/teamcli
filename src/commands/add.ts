@@ -57,6 +57,7 @@ import { lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
 import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { formatPlan, registryLaunches, upPlan, type UpSeat } from '../launch/plan.ts';
+import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
@@ -1121,6 +1122,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           root,
           session,
           sessionRunning: live === 'running',
+          ...(planned.launcher !== undefined ? { launcherDiscovery: loadTeamLaunchers(root) } : {}),
           seats: [{
             ...planned,
             launchProblem,
@@ -1244,6 +1246,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       seats: [seatForPlan],
       startFolders: placedStartFolders(prepared.team.seats, recorded),
       team: prepared.team,
+      ...(seatForPlan.launcher !== undefined ? { launcherDiscovery: loadTeamLaunchers(root) } : {}),
       watchAlive: true,
       teamFile: launchTeamFile(loaded),
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
@@ -1419,7 +1422,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], startFolders: placedStartFolders(prepared.team.seats, recorded), watchAlive: true, teamFile: launchTeamFile(loaded), cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], ...(planSeat.launcher !== undefined ? { launcherDiscovery: loadTeamLaunchers(root) } : {}), startFolders: placedStartFolders(prepared.team.seats, recorded), watchAlive: true, teamFile: launchTeamFile(loaded), cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false, launched: false };
@@ -1673,6 +1676,8 @@ function seatPlan(
     name: seat.name,
     cli: seat.cli,
     launch: seat.launch,
+    // A seat that names a launcher starts from it, as on `team up` and `team restart`.
+    ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
     cwd: start.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
