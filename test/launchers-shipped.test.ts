@@ -14,7 +14,7 @@ test('grok-build ships, and an unknown name does not', () => {
 
 test('a builder seat gets the always-approve line with the model named', () => {
   const made = shippedLauncher('grok-build', { role: 'builder' });
-  expect(made?.argv).toEqual(['grok', '--model', 'grok-4.7', '--no-subagents', '--always-approve']);
+  expect(made?.argv).toEqual(['grok', '--trust', '--model', 'grok-4.7', '--no-subagents', '--always-approve']);
 });
 
 test('a reviewer seat gets the read-only line: no always-approve, writes, edits, git and bun denied', () => {
@@ -42,7 +42,7 @@ test('a shipped launcher passes the library\'s own validation and resolves to it
     teamRoot: '/work/team', teamHome: '/work/team', cwd: '/work/team/seat', parentEnv: {}, existingPaths: [], seatNames: ['argus'],
   });
   expect(resolved.ok).toBe(true);
-  if (resolved.ok) expect(resolved.argv.slice(0, 3)).toEqual(['grok', '--model', 'grok-4.7']);
+  if (resolved.ok) expect(resolved.argv.slice(0, 4)).toEqual(['grok', '--trust', '--model', 'grok-4.7']);
 });
 
 test('only a read-only seat on a shipped launcher goes without the sandbox profile', () => {

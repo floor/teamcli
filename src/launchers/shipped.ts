@@ -28,7 +28,11 @@ function grokBuild(options: ShippedOptions): LauncherDefinition {
     name: 'grok-build',
     kind: 'custom',
     summary: readOnly ? 'Grok Build, Grok 4.7, read-only seat' : 'Grok Build, Grok 4.7, builder seat',
-    argv: ['grok', '--model', 'grok-4.7', '--no-subagents', ...permission, ...effort],
+    // `--trust`: 1.0.77's help does not list it, but the CLI takes it. Measured 2026-11-11 in a
+    // fresh empty folder: with it the CLI opened straight on its prompt; without it every fresh
+    // start of a seat drew the "Do you trust the contents of this directory?" dialog, in the
+    // same folder each time. The folder is the seat's own, made for it by the team.
+    argv: ['grok', '--trust', '--model', 'grok-4.7', '--no-subagents', ...permission, ...effort],
   };
 }
 
