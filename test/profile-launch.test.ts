@@ -186,6 +186,59 @@ describe('launch data through the profile files', () => {
   });
 });
 
+describe('Grok permission selectors', () => {
+  function command(line: string): string {
+    const profile = profileFor('grok');
+    if (!profile) throw new Error('grok has no profile');
+    return launchCommand(profile, line, 'Rules.');
+  }
+
+  test('always-approve keeps its mode without adding auto or trust', () => {
+    const result = command('grok --always-approve --model grok-4.7 --no-subagents');
+    expect(result).toContain('--always-approve');
+    expect(result).not.toContain('--permission-mode');
+    expect(result).not.toContain('--trust');
+  });
+
+  test.each(['auto', 'dontAsk'])('an explicit permission-mode %s keeps its value', (mode) => {
+    const result = command(`grok --permission-mode ${mode}`);
+    expect(result.match(/--permission-mode/g)).toHaveLength(1);
+    expect(result).toContain(`--permission-mode ${mode}`);
+    expect(result).not.toContain('--always-approve');
+  });
+
+  test('a joined permission-mode keeps its value', () => {
+    const result = command('grok --permission-mode=dontAsk');
+    expect(result.match(/--permission-mode/g)).toHaveLength(1);
+    expect(result).not.toContain('--permission-mode auto');
+  });
+
+  test('quoted flag names and wrapper scripts preserve an explicit choice', () => {
+    for (const line of ['grok "--always-approve"', 'zsh -lc "grok --always-approve"']) {
+      expect(command(line)).not.toContain('--permission-mode');
+    }
+  });
+
+  test('a flag mentioned inside rules does not select the permission mode', () => {
+    expect(command("grok --rules 'Never select --always-approve'"))
+      .toContain('--permission-mode auto');
+  });
+
+  test('no permission selector gets the current auto default without trust', () => {
+    const result = command('grok');
+    expect(result).toContain('--permission-mode auto');
+    expect(result).not.toContain('--trust');
+  });
+
+  test('explicit permission-mode also suppresses an always-approve profile default', () => {
+    const profile = profileFor('grok');
+    if (!profile) throw new Error('grok has no profile');
+    const result = launchCommand({ ...profile, unattended: ['--always-approve'] }, 'grok --permission-mode dontAsk', 'Rules.');
+    expect(result).not.toContain('--always-approve');
+    expect(result).toContain('--permission-mode dontAsk');
+  });
+});
+
 describe('the exit_clear a profile may name', () => {
   // One of the keys `pane send-keys` takes that empty an input box, or nothing. `enter` is
   // not among them on purpose: it sends what the box holds.
@@ -500,7 +553,7 @@ describe('the resume line a launch appends', () => {
     const profile = profileFor('grok');
     if (!profile) throw new Error('grok has no profile');
     expect(launchCommand(profile, `grok -r ${id}`, 'Rules.'))
-      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --rules Rules.`);
+      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --rules Rules.`);
   });
 
   test('a Grok line that already names a session keeps its own choice', () => {

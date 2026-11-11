@@ -448,6 +448,9 @@ function optionKey(cli: string, word: string): string {
     ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
     : {};
   const flag = word.split('=', 1)[0]!;
+  // Grok 1.0.77 accepts these as alternative permission selectors. Appending auto
+  // to an explicit always-approve line changes its effective permission mode.
+  if (cli === 'grok' && flag === '--always-approve') return '--permission-mode';
   const alias = aliases[flag];
   if (alias !== undefined) return alias;
   // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,

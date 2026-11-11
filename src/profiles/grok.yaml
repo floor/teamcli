@@ -24,20 +24,12 @@ process_names:
 tested:
   from: '1.0.50'
   to: '1.0.52'
-# From runs on Grok CLI 1.0.70 (f50904eaee6c): `grok --help` lists `--allow <RULE>` as
-# "Permission allow rule", `--permission-mode <MODE>` with `auto` among its values, and
-# `--sandbox <PROFILE>` as "Sandbox profile for filesystem and network access". `--trust` is not
-# listed but is taken: `grok --trust --version` printed `grok 1.0.70 (f50904eaee6c) [stable]`,
-# exit 0, and a fresh folder drew its trust dialog without it. A scratch TUI run with
-# `--permission-mode auto` ran `mv` and a shell redirection unattended; `dontAsk` left the CLI
-# asking with the widget up. The same run's line, `--trust --permission-mode auto --allow
-# 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --version`, exited 0 — the three
-# rules name the commands an unattended seat runs. The sandbox profile is named per launch
-# (`--sandbox team-seat-<project>-<seat>`): TeamCLI writes it under `$GROK_HOME/sandbox.toml` before the
-# pane starts (src/launch/grok-sandbox.ts). `--always-approve` is still taken when a file names
-# it, and it is the footer the 1.0.50–1.0.52 captures under test/fixtures/grok/ were taken with.
+# Measured with `grok --help` on 1.0.77 (50ca579fa996): --trust is not listed,
+# so it is not a default. --always-approve and --permission-mode are alternative
+# selectors; an explicit choice keeps the profile from adding another mode.
+# The allow defaults below remain for a launch without its own --allow rules.
+# The sandbox profile is named per launch by src/launch/grok-sandbox.ts.
 unattended:
-  - --trust
   - --permission-mode
   - auto
   - --allow
