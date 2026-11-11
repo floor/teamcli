@@ -304,8 +304,12 @@ describe('team send behind a provider wrapper', () => {
       const { host } = sendHost(made, claudeScreen('Opus 4.6'));
       const io = owner(made.root);
 
+      // Model drift on the recipient no longer refuses the send: the message is kept for the
+      // seat and the drift is flagged for its lead (deliver and flag, 2026-11-11). This world has
+      // no live route, so the send still exits 1, with the message kept.
       expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-      expect(io.err).toContain('model drift: DeepSeek Flash V4.1 vs Claude Opus 4.6');
+      expect(io.err).toContain("model drift: record says DeepSeek Flash V4.1, runs Claude Opus 4.6, awaiting the lead's confirm");
+      expect(io.err).toContain("kept in lead's inbox");
       made.cleanup();
     }
   });
