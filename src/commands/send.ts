@@ -574,7 +574,7 @@ type Report = {
   project: string | null;
   session: string | null;
   /** The receiving team's reporting scope; never used to admit or deliver the original send. */
-  holdScope?: { root: string; project: string; session: string; lead: string; leadSpec: string; dry: boolean };
+  holdScope?: { root: string; project: string; session: string; lead: string; leadSpec: string; senderLeadSpec: string; dry: boolean };
   /** The team the sender stands in, by team id: every history line this run writes carries it,
    *  so a reader in another team resolves the sender like the record does. A run that refused
    *  before a team was read names none, and writes no history line anyway. */
@@ -1652,6 +1652,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     root: to.root, project: to.project, session: to.session,
     lead: receiving.team.orchestrator || receiving.team.operator,
     leadSpec: `${receiving.team.orchestrator || receiving.team.operator}${to.cross ? `@${to.project}` : ''}`,
+    senderLeadSpec: team.orchestrator || team.operator,
     dry: args.flags.has('dry-run') || !reportHolds,
   };
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
@@ -7609,21 +7610,44 @@ async function held(io: Io, dir: string, who: string, seat: string, reason: stri
         let code = 1;
         let status = 'unconfirmed';
         let failure = 'the notice send did not confirm delivery';
+        let admittedTransportFailure = false;
         try {
           code = await runSendWithSnapshot([scope.leadSpec, result.notice.body, '--json'], noticeIo,
             { ...host, sendId: () => result.notice.id }, false);
-          const noticeResult = JSON.parse(output) as { status?: string; error?: { message?: string } };
+          const noticeResult = JSON.parse(output) as { status?: string; error?: { id?: string; message?: string }; delivery?: LegReport[] };
           status = noticeResult.status ?? 'unconfirmed';
           failure = noticeResult.error?.message ?? failure;
+          // These delivery errors are emitted only after ordinary send admission. Require an
+          // actual attempted leg too; refused legs, holds, malformed output and unknown errors
+          // prove no admitted transport failure and cannot authorize a runtime inbox write.
+          admittedTransportFailure = (noticeResult.error?.id === 'send.unreachable' || noticeResult.error?.id === 'send.not-delivered')
+            && Array.isArray(noticeResult.delivery)
+            && noticeResult.delivery.some((leg) => leg.state === 'attempted')
+            && !noticeResult.delivery.some((leg) => leg.state === 'refused');
         } catch {
           failure = 'the ordinary notice send could not complete';
         }
-        if (code !== 0) {
+        if (code !== 0 && admittedTransportFailure) {
           const queued = writeRuntimeNotice({
             ...scope, home: host.home, id: result.notice.id, body: result.notice.body, at: result.notice.at,
           });
           if (queued.ok) await announceArrival(queued.payload);
           status = queued.ok ? `not delivered (${failure}); queued for the lead reader` : `not delivered (${failure}); ${queued.reason}`;
+        } else if (code !== 0) {
+          status = `refused or admission unknown (${failure}); no runtime fallback written`;
+          // Report back inside the sender's team through the same admission path. A refusal
+          // here also writes no runtime copy: metadata does not confer send authority.
+          if (scope.senderLeadSpec !== '' && scope.senderLeadSpec !== scope.leadSpec) {
+            let ownOutput = '';
+            const ownIo = { ...io, stdout: (text: string) => { ownOutput += text; }, stderr: (_text: string) => {} };
+            try {
+              const ownCode = await runSendWithSnapshot([scope.senderLeadSpec,
+                `Held-send notice to ${scope.leadSpec} was refused or admission was unknown: ${failure}\n${result.notice.body}`, '--json'],
+                ownIo, { ...host, sendId: () => result.notice.id }, false);
+              const ownResult = JSON.parse(ownOutput) as { status?: string; error?: { message?: string } };
+              status += `; sender lead ${ownCode === 0 ? ownResult.status ?? 'notified' : `not notified (${ownResult.error?.message ?? 'send failed'})`}`;
+            } catch { status += '; sender lead notification could not complete'; }
+          }
         }
         reporting = `; ${String(result.count)} held send${result.count === 1 ? '' : 's'}; lead notice ${status}`;
       }

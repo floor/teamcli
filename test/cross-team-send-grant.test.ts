@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runGrant } from '../src/commands/grant.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { lobbyDir, lobbyTrustEntry, resolveLobby } from '../src/lobby/gate.ts';
@@ -708,4 +709,89 @@ describe('the general door', () => {
       { name: 'builder-at-floor-to-orchestrator-at-floor', from: 'builder@floor', to: 'orchestrator@floor', expires: FUTURE },
     ]);
   }, 30_000);
+});
+
+describe('held-send notices respect the original sender admission', () => {
+  test('a grant for a held worker cannot write a notice into the other team lead inbox', async () => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'held-notice-fixture-')));
+    const home = join(base, 'home');
+    const sockets = join(base, 'sockets');
+    mkdirSync(lobbyDir(home), { recursive: true });
+    mkdirSync(sockets);
+    writeFileSync(join(home, '.config', 'team', 'settings.yaml'), 'team-config.source: file\n');
+    // Both configured trust spellings belong to this synthetic home; no live config is changed.
+    const lobby = `${lobbyTrustEntry(home, { entity: 'elm' })}\n  - ${lobbyDir(home)}`;
+    const root = mkdirTeam('elm', {
+      project: 'elm', entity: 'elm', session: 'elm-run', coordinator: 'anchor', lobby,
+      seats: [
+        { name: 'anchor', role: 'coordinator', cli: 'claude-code', launch: 'claude' },
+        { name: 'courier', role: 'helper', cli: 'claude-code', launch: 'claude' },
+      ],
+    });
+    const receivingRoot = mkdirTeam('oak', {
+      project: 'oak', entity: 'elm', session: 'oak-run', coordinator: 'captain', lobby,
+      seats: [
+        { name: 'captain', role: 'coordinator', cli: 'claude-code', launch: 'claude' },
+        { name: 'worker', role: 'helper', cli: 'claude-code', launch: 'claude' },
+      ],
+    });
+    const dir = join(root, '.agents');
+    const receivingDir = join(receivingRoot, '.agents');
+    const ownTeam = teamIdOf(root);
+    const receivingTeam = teamIdOf(receivingRoot);
+    const anchor = registerSeat('anchor', 'coordinator', 'anchor-pane', { team: ownTeam, session: 'elm-run' });
+    const courier = registerSeat('courier', 'helper', 'courier-pane', { team: ownTeam, session: 'elm-run' });
+    const captain = registerSeat('captain', 'coordinator', 'captain-pane', { team: receivingTeam, session: 'oak-run' });
+    const worker = registerSeat('worker', 'helper', 'worker-pane', { team: receivingTeam, session: 'oak-run' });
+    upsertTeam(home, ownTeam, {
+      project: 'elm', entity: 'elm', session: 'elm-run', root,
+      lobby: resolveLobby(home, { entity: 'elm' }), lifecycle: 'running', by: 'test',
+      roster: [{ agent: anchor, seat: 'anchor', role: 'coordinator', leads: true },
+        { agent: courier, seat: 'courier', role: 'helper' }],
+    });
+    upsertTeam(home, receivingTeam, {
+      project: 'oak', entity: 'elm', session: 'oak-run', root: receivingRoot,
+      lobby: resolveLobby(home, { entity: 'elm' }), lifecycle: 'running', by: 'test',
+      roster: [{ agent: captain, seat: 'captain', role: 'coordinator', leads: true },
+        { agent: worker, seat: 'worker', role: 'helper' }],
+    });
+    updateState(dir, (state) => {
+      state.sessions['elm-run'] = { seats: { courier: {
+        stage: 'launched', pane: 'courier-pane', workspace: 'synthetic-workspace',
+      } }, worktrees: {} };
+    });
+    signSendRecord(home, 'worker-only', { from: 'courier@elm', to: 'worker@oak', expires: FUTURE });
+    const workerFile = join(home, '.config', 'team', 'agents', `${worker}.yaml`);
+    writeFileSync(workerFile, readFileSync(workerFile, 'utf8')
+      .replace('model: "Test"', 'model: "Claude Fable"').replace('version: "1"', 'version: "5.1"'));
+    const host = fake(sockets, home);
+    host.agents = () => [
+      { name: 'anchor', pane: 'anchor-pane' }, { name: 'courier', pane: 'courier-pane' },
+      { name: 'captain', pane: 'captain-pane' }, { name: 'worker', pane: 'worker-pane' },
+    ];
+    host.native.paneText = (_session, pane) => pane === 'worker-pane'
+      ? '❯ \n────────────────────────────────────────\n  main · …/fixture · Opus 4.6 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n'
+      : null;
+    const receiving = readTeamConfig(receivingRoot, { home });
+    expect(receiving.ok, JSON.stringify(receiving)).toBe(true);
+    const caller = { kind: 'seat' as const, name: 'courier', pane: 'courier-pane', session: 'elm-run' };
+    const refused = testIo(root, caller);
+    expect(await runSend(['captain@oak', 'A notice without a grant.', '--json'], refused, host)).toBe(1);
+    expect(JSON.parse(refused.out).error.id).toBe('send.refused');
+    expect(dropBodies(receivingDir, 'oak-run', 'captain')).toEqual([]);
+
+    const io = testIo(root, caller);
+    expect(await runSend(['worker@oak', 'Held worker message.', '--json'], io, host)).toBe(1);
+    const error = JSON.parse(io.out).error;
+    expect(error.id).toBe('send.held');
+    expect(error.message).toContain('model drift');
+    // The unchanged parent fails here: the refused inbox contains a runtime copy.
+    expect(dropBodies(receivingDir, 'oak-run', 'captain')).toEqual([]);
+    expect(error.message).toContain('no runtime fallback written');
+    expect(dropBodies(receivingDir, 'oak-run', 'worker')).toEqual([]);
+    const ownNotices = dropBodies(dir, 'elm-run', 'anchor');
+    expect(ownNotices).toHaveLength(1);
+    expect(ownNotices[0]).toContain('Held-send notice to captain@oak');
+    expect(ownNotices[0]).toContain('model drift');
+  });
 });
