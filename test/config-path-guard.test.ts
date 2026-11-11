@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { runConfig } from '../src/commands/config.ts';
-import { getAt, parsePath, withValue } from '../src/config/team-record.ts';
+import { editedRecordText, getAt, parsePath, withValue } from '../src/config/team-record.ts';
 import { parseYaml, toValue } from '../src/yaml.ts';
 import { seatOwner } from './helpers/owner-seat.ts';
 import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
@@ -255,4 +255,49 @@ describe('team config through an inherited name', () => {
       expect(at.store.prompts.length).toBe(1);
     });
   });
+});
+
+// A map set at a name the seats list does not hold adds a seat; a single value still needs
+// an existing item.
+test('a map at a new seat name adds the seat; a single value at a new name is refused', () => {
+  const record = toValue(parseYaml(TEAM));
+  const added = withValue(record, ['seats', 'argus'], { role: 'reviewer', cli: 'grok', launch: 'grok' });
+  expect(added.ok).toBe(true);
+  if (!added.ok) return;
+  expect(added.changed).toBe(true);
+  expect(getAt(added.root, ['seats', 'argus', 'name'])).toEqual({ found: true, value: 'argus' });
+  expect(getAt(added.root, ['seats', 'argus', 'cli'])).toEqual({ found: true, value: 'grok' });
+  // The original record is untouched.
+  expect(getAt(record, ['seats', 'argus']).found).toBe(false);
+
+  const scalar = withValue(record, ['seats', 'ghost'], 'grok');
+  expect(scalar.ok).toBe(false);
+  if (!scalar.ok) expect(scalar.why).toContain('has no item named "ghost"');
+
+  const mismatched = withValue(record, ['seats', 'argus'], { name: 'other', cli: 'grok' });
+  expect(mismatched.ok).toBe(false);
+  if (!mismatched.ok) expect(mismatched.why).toContain('is not "argus"');
+
+  const numbered = withValue(record, ['seats', '99'], { cli: 'grok' });
+  expect(numbered.ok).toBe(false);
+});
+
+test('adding a seat keeps the record\'s comments and writes the item after the last seat', () => {
+  const text = [
+    '# the team', 'project: demo', 'seats:', '  # the lead', '  - role: coordinator', '    name: lead', '    cli: claude-code', '    launch: claude',
+    '', '# rules below', 'rules:', '  - Be kind.', '',
+  ].join('\n');
+  const record = toValue(parseYaml(text));
+  const item = { role: 'reviewer', cli: 'grok', launch: 'grok' };
+  const changed = withValue(record, ['seats', 'argus'], item);
+  expect(changed.ok).toBe(true);
+  if (!changed.ok) return;
+  const edited = editedRecordText(text, ['seats', 'argus'], item, changed.root);
+  expect(edited.kept).toBe(true);
+  expect(edited.text).toContain('# the team');
+  expect(edited.text).toContain('  # the lead');
+  expect(edited.text).toContain('# rules below');
+  expect(edited.text.indexOf('name: argus')).toBeGreaterThan(edited.text.indexOf('name: lead'));
+  expect(edited.text.indexOf('name: argus')).toBeLessThan(edited.text.indexOf('# rules below'));
+  expect(JSON.stringify(toValue(parseYaml(edited.text)))).toBe(JSON.stringify(changed.root));
 });

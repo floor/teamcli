@@ -125,7 +125,22 @@ export function withValue(root: YamlValue, path: RecordPath, value: YamlValue | 
   const last = path[path.length - 1] as string;
   if (Array.isArray(at)) {
     const n = indexIn(at, last);
-    if (n < 0) return value === undefined ? { ok: true, root: copy, changed: false } : { ok: false, why: `${path.slice(0, -1).join('.')} has no item named "${last}"` };
+    if (n < 0) {
+      if (value === undefined) return { ok: true, root: copy, changed: false };
+      // A map set at a name the list does not hold yet is a new item: `seats.<name> {…}` adds
+      // a seat. A single value still needs an existing item, so a typing slip in a name cannot
+      // create one. The whole record is validated after the write, as for every set.
+      if (isMap(value) && !/^\d+$/.test(last)) {
+        const named = value.name;
+        if (named !== undefined && named !== last) {
+          return { ok: false, why: `${path.join('.')}: the item's name "${String(named)}" is not "${last}"` };
+        }
+        const { name: _dropped, ...rest } = value;
+        at.push({ name: last, ...rest });
+        return { ok: true, root: copy, changed: true };
+      }
+      return { ok: false, why: `${path.slice(0, -1).join('.')} has no item named "${last}"` };
+    }
     if (value === undefined) at.splice(n, 1);
     else at[n] = value;
     return { ok: true, root: copy, changed: true };
@@ -614,11 +629,56 @@ function keepsComments(before: string[], after: string[]): boolean {
   return true;
 }
 
+/** The record's text with the last item of the top-level list `path[0]` written after that
+ *  list's existing items, or null when `path` is not a new item of such a list. The item is
+ *  rendered by `recordText` and re-indented to the list's own indentation. */
+function appendedItemText(text: string, path: RecordPath, root: YamlValue): string | null {
+  if (path.length !== 2) return null;
+  const key = path[0] as string;
+  const list = getAt(root, [key]);
+  if (!list.found || !Array.isArray(list.value)) return null;
+  if (getAt(toValue(parseYaml(text)), path).found) return null;
+  const item = list.value[list.value.length - 1];
+  if (!isMap(item) || item.name !== path[1]) return null;
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => line === `${key}:` || line.startsWith(`${key}: `) || line.startsWith(`${key}:\t`) || line.startsWith(`${key}: #`));
+  if (start < 0 || lines[start]!.replace(/#.*$/, '').trim() !== `${key}:`) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^[A-Za-z_"']/.test(lines[i]!)) { end = i; break; }
+  }
+  const first = lines.slice(start + 1, end).find((line) => /^\s*-\s/.test(line));
+  if (first === undefined) return null;
+  const indent = first.length - first.trimStart().length;
+  // The last line that belongs to an item: blank lines and comments after it stay with what
+  // follows them.
+  let last = start;
+  for (let i = start + 1; i < end; i += 1) {
+    const line = lines[i]!;
+    if (line.trim() !== '' && !line.trimStart().startsWith('#')) last = i;
+  }
+  const rendered = recordText({ [key]: [item] }).split('\n');
+  const body = rendered.slice(1).filter((line, at, all) => !(line.trim() === '' && at === all.length - 1));
+  if (body.length === 0 || !/^\s*-\s/.test(body[0]!)) return null;
+  const made = body[0]!.length - body[0]!.trimStart().length;
+  const block = body.map((line) => (line.trim() === '' ? line : ' '.repeat(indent) + line.slice(made)));
+  return [...lines.slice(0, last + 1), ...block, ...lines.slice(last + 1)].join('\n');
+}
+
 /** The record's text with the value at `path` set (or, with `value` undefined, removed).
  *  `kept` is true when the change was made line by line and every comment the text carried is
  *  still there; false when the text was regenerated whole — the same value, its comments lost. */
 export function editedRecordText(text: string, path: RecordPath, value: YamlValue | undefined, root: YamlValue): { text: string; kept: boolean } {
   try {
+    // A new list item (`seats.<name> {…}`) is appended as its own lines after the list's last
+    // item, so the record's comments stay where they are. The same check as below decides: the
+    // text must parse to the changed record and keep every comment, else the whole rewrite runs.
+    const appended = value === undefined ? null : appendedItemText(text, path, root);
+    if (appended !== null &&
+        JSON.stringify(toValue(parseYaml(appended))) === JSON.stringify(root) &&
+        keepsComments(commentsOf(text), commentsOf(appended))) {
+      return { text: appended, kept: true };
+    }
     const ops = planEdit(text, path, value, root);
     if (ops !== null) {
       const next = applyOps(text, ops);
