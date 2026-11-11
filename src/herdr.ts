@@ -1,3 +1,4 @@
+import { traceBeatWork } from './diagnostics/beat-work.ts';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, closeSync, constants, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -97,7 +98,7 @@ export function setHerdrCapture(exec: HerdrCapture | null): void {
 function run(args: string[], session?: string): unknown {
   if (customRun) return customRun(args, session);
   const full = session ? ['--session', session, ...args] : args;
-  const out = execFileSync('herdr', full, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 });
+  const out = traceBeatWork('terminal-host read (sync)', () => execFileSync('herdr', full, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }));
   return (JSON.parse(out) as { result?: unknown }).result;
 }
 
@@ -470,7 +471,7 @@ export function sessionRunning(name: string): boolean | null {
 // returns the call's stdout and throws when herdr exits non-zero or the call times out.
 export type CaptureExec = (args: string[]) => string;
 const shellCaptureExec: CaptureExec = (args) =>
-  execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000 });
+  traceBeatWork('terminal-host capture (sync)', () => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000 }));
 let captureExec: CaptureExec = shellCaptureExec;
 
 /** Swaps the process call the metadata calls make; null restores the real one. */
@@ -1456,7 +1457,7 @@ export function sessionCleared(stdout: string, name: string): boolean {
 // throws when herdr refuses an option or the call times out. The real one shells out.
 export type PaneExec = (args: string[]) => string;
 const shellPaneExec: PaneExec = (args) =>
-  execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 });
+  traceBeatWork('terminal-host pane read (sync)', () => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }));
 let paneExec: PaneExec = shellPaneExec;
 
 /** Swaps the process call paneRead makes; null restores the real one. */

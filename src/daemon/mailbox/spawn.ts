@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // Starts the one mailbox router child. A failed start is a child that has already
 // left, so the supervisor's restart path decides it and the beat does not throw.
 import { spawn } from 'node:child_process';
@@ -99,7 +100,7 @@ export function spawnMailboxChild(): MailboxChild {
   child.stderr?.on('error', () => undefined);
   child.stdout?.setEncoding('utf8');
   let buffer = '';
-  child.stdout?.on('data', (chunk: string) => {
+  child.stdout?.on('data', (chunk: string) => traceBeatWork('mail frames (sync)', () => {
     buffer += chunk;
     let nl = buffer.indexOf('\n');
     while (nl !== -1) {
@@ -119,7 +120,7 @@ export function spawnMailboxChild(): MailboxChild {
         emit({ kind: 'message', message });
       }
     }
-  });
+  }));
   child.on('exit', (code, signal) => {
     emit({ kind: 'exit', code, signal });
     finish();

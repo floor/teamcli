@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../diagnostics/beat-work.ts';
 // The signing key and the per-project generations, kept outside every store a
 // seat's rules mention, in a folder of their own. A seat runs as the owner's
 // user, so it can read this key as easily as the owner can: the signature is
@@ -303,7 +304,7 @@ export function verifyPayload(payload: Json, signature: string, key: KeyObject):
   const publicKey = publicObjectOf(key);
   if (publicKey === null) return false;
   try {
-    return cryptoVerify(null, bytes, publicKey, raw);
+    return traceBeatWork('signature checks (sync)', () => cryptoVerify(null, bytes, publicKey, raw));
   } catch {
     return false;
   }
@@ -337,7 +338,7 @@ export function verifyDomain(domain: string, payload: Json, signature: string, k
   const publicKey = publicObjectOf(key);
   if (publicKey === null) return false;
   try {
-    return cryptoVerify(null, bytes, publicKey, raw);
+    return traceBeatWork('signature checks (sync)', () => cryptoVerify(null, bytes, publicKey, raw));
   } catch {
     return false;
   }

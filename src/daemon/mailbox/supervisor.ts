@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // One mailbox router for every root. The daemon's beat nudges it and reads its heartbeat.
 // The beat never waits on an ask, a reply, or the child: a child that leaves is recorded
 // late, and a later beat starts the replacement after a capped backoff.
@@ -131,7 +132,7 @@ export function createMailboxRouter(input: MailboxRouterInput): MailboxRouter {
     held.beats = 0;
     held.startedOnce = true;
     held.why = null;
-    held.unsubscribe = child.subscribe((event) => {
+    held.unsubscribe = child.subscribe((event) => traceBeatWork('mail child handling (sync)', () => {
       if (event.kind === 'exit') {
         if (held.child !== child) return;
         held.child = null;
@@ -173,7 +174,7 @@ export function createMailboxRouter(input: MailboxRouterInput): MailboxRouter {
         wakeTaken: event.message.result.wakeTaken,
         replyVerified: event.message.result.replyVerified,
       };
-    });
+    }));
   };
 
   return {

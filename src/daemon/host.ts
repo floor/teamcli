@@ -1,3 +1,4 @@
+import { createBeatWork, observeBeatWork, traceBeatWork } from '../diagnostics/beat-work.ts';
 // The one machine-wide daemon process: it serves the machine socket (protocol v1, health only
 // until the verified-principal binding lands) and hosts the existing per-clone send and bus
 // servers in this one process, so no second or third daemon process is started beside it.
@@ -568,7 +569,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     return { kind: 'bind-failed', reason: 'the daemon single-instance lock could not be taken' };
   }
 
+  const beatWork = createBeatWork();
+  const stopBeatWork = observeBeatWork(beatWork);
   const releaseLock = (): void => {
+    stopBeatWork();
     if (readLockPid(lockPath) === pid) {
       try {
         unlinkSync(lockPath);
@@ -1510,6 +1514,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     choresFleet = createChoresFleet({
       home,
       beatMs: heartbeatMs,
+      workSinceBeat: () => beatWork.take(),
       since,
       now,
       routes: routes.flatMap((route) => {
@@ -1952,9 +1957,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    */
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
-    run = (async () => {
+    run = traceBeatWork(`presence (wall):${one.route.root}`, () => (async () => {
       // Same pass and opt-in as presence; native publication has no dispatch consumer.
-      one.native.step();
+      traceBeatWork(`native feed (sync):${one.route.root}`, () => one.native.step());
       let healthy = false;
       let why: string | null = null;
       try {
@@ -2048,7 +2053,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
     })().finally(() => {
       if (presenceRuns.get(one.route.root) === run) presenceRuns.delete(one.route.root);
-    });
+    }));
     return run;
   };
 
@@ -2472,7 +2477,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       if (entry !== undefined) teamLogLine(dirname(entry.handle), 'daemon', 'daemon', decision.text, at);
       const lead = team.orchestrator;
       if (lead === '') continue;
-      void sendDaemonDirect(
+      void traceBeatWork('daemon notice (wall)', () => sendDaemonDirect(
         {
           reminder: 'stuck-child',
           due: at.toISOString(),
@@ -2481,7 +2486,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         },
         { root, seat: lead, body: decision.text },
         { ...realHost, home },
-      ).catch((error: unknown) => {
+      )).catch((error: unknown) => {
         logLine(`root ${root}: the stuck-child notice was not sent — ${messageOf(error)}`);
       });
     }
@@ -2489,7 +2494,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   beat = () => {
     if (input.runningRoots !== undefined && !closed) {
       try {
-        for (const root of input.runningRoots()) {
+        for (const root of traceBeatWork('registry discovery (sync)', () => input.runningRoots!())) {
           void hostCheckout(root).catch((error: unknown) => {
             logLine(`registry roots: ${messageOf(error)}`);
           });
@@ -2499,7 +2504,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
     }
     try {
-      faultInbox.consume(faultTargets);
+      traceBeatWork('fault inbox (sync)', () => faultInbox.consume(faultTargets));
     } catch (error) {
       logLine(`fault request: ${(error as Error).message}`);
     }
@@ -2507,15 +2512,15 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // pass that is still running is never awaited here, so one slow or hanging route cannot
     // stop the daemon's liveness or another route's cycles. Each route is isolated, and the beat
     // is marked so a pass that displaced this one carries the next due beat itself.
-    hostedBeat.tick();
+    traceBeatWork('watch tick (sync)', () => hostedBeat.tick());
     // The chores fleet is a nudge and a check, never a wait: a stuck child is signalled here and
     // its replacement starts on a later beat, so this tick returns at once whatever it is doing.
-    choresFleet?.tick(now());
+    traceBeatWork('chores tick (sync)', () => choresFleet?.tick(now()));
     // After the fleet has judged this beat: a watch still starting, or a chores child past its
     // late limit, is stopped and started for that root alone.
-    restartStuckChildren(now());
-    mailboxRouter?.tick(now());
-    void refreshHostedEndpoints();
+    traceBeatWork('stuck-child handling (sync)', () => restartStuckChildren(now()));
+    traceBeatWork('mail child tick (sync)', () => mailboxRouter?.tick(now()));
+    void traceBeatWork('endpoint refresh (wall)', () => refreshHostedEndpoints());
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
     // hosted root reads its own validated team file and its markers' durable due instants; the
     // pass keeps no state of its own, and close stops it with this timer. A root a chores fleet
@@ -2941,7 +2946,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           continue;
         }
         try {
-          const result = await runner(route.root, entry.file);
+          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file));
           if (result.kind === 'ran') {
             logLine(`restore ${route.root}: ${result.summary.line}`);
             if (loadHeld(route, result)) pendingRoutes.push(route);
@@ -3022,7 +3027,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             continue;
           }
           try {
-            const result = await runner(route.root, entry.file);
+            const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file));
             if (result.kind === 'ran') {
               logLine(`restore ${route.root}: ${result.summary.line}`);
               if (loadHeld(route, result)) stillPending.push(route);

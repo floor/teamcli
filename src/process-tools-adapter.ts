@@ -1,3 +1,4 @@
+import { traceBeatWork } from './diagnostics/beat-work.ts';
 // The platform adapter for process evidence. Identity must never select an executable through
 // the caller's PATH or inherit settings that change its output or load code into the child.
 import {
@@ -71,15 +72,15 @@ export function createProcessToolsAdapter(
   return {
     /** Missing trusted tools throw; evidence readers catch that as unreadable, never a match. */
     execSync(tool: ProcessTool, args: string[], options: SyncOptions): string {
-      return execFileSync(requireTool(tool), args, {
+      return traceBeatWork(`process read (sync):${tool}`, () => execFileSync(requireTool(tool), args, {
         ...options, encoding: 'utf8', env: processToolEnv(), cwd: '/', shell: false,
-      });
+      }));
     },
     /** The status-reading variant, with the same executable and environment boundary. */
     spawnSync(tool: ProcessTool, args: string[], options: SpawnOptions): SpawnSyncReturns<string> {
-      return spawnSync(requireTool(tool), args, {
+      return traceBeatWork(`process read (sync):${tool}`, () => spawnSync(requireTool(tool), args, {
         ...options, encoding: 'utf8', env: processToolEnv(), cwd: '/', shell: false,
-      });
+      }));
     },
     /** The asynchronous variant keeps the caller's deadline and stop signal. */
     exec(

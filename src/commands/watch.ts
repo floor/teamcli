@@ -1,3 +1,4 @@
+import { beginBeatWork } from '../diagnostics/beat-work.ts';
 import { refuseTyping } from '../send/no-pane-messaging.ts';
 import { machineAccountsOf } from '../information/machine-accounts.ts';
 import { randomUUID } from 'node:crypto';
@@ -1038,10 +1039,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   let unprovenPresenceNow: ReadonlyMap<string, PresenceUnproven> = new Map();
   let statusWaiters: { stop(): void; done: Promise<void> } | undefined;
   let statusWaitersKey = '';
+  let finishWatchPass = () => {};
   try {
     for (;;) {
       // A hosted pass starts only while the host still wants one.
       if (hosted?.signal.aborted) break;
+      finishWatchPass = beginBeatWork(`watch pass (wall):${first.root}`);
       // A daemon that hosts this route asks the live pane watch to hand over before it takes the
       // session. The request is read once per pass, before any effect: it must name this
       // checkout and session, come from a live process and carry a fresh beat on that daemon's
@@ -1950,6 +1953,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         cutPasses = 0;
         told.delete('read-cut');
       }
+      finishWatchPass();
       const waitSeconds = readWait(inForce.interval, gate.cut, cutPasses);
       // The label sweep, inside the wait: a running seat's own status line reaches line 2 in
       // about five seconds, not a whole interval. It repeats the pass's own rule on the panes
@@ -1980,6 +1984,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       if (!(await sources.wait(waitSeconds, sweep))) break;
     }
   } finally {
+    finishWatchPass();
     statusWaiters?.stop();
     await statusWaiters?.done;
     // A hosted watch never wrote the session's pane record, so it never deletes one either.

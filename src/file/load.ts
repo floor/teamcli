@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../diagnostics/beat-work.ts';
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
@@ -107,12 +108,12 @@ export function findRoot(cwd: string): string | null {
     if (cached !== undefined) return cached === '' ? null : cached;
   }
   try {
-    const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    const common = traceBeatWork('git root read (sync)', () => execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(5_000),
-    }).trim();
+    })).trim();
     const root = common ? dirname(common) : null;
     if (memo !== null) {
       memo.gitRoots.set(key, root ?? '');

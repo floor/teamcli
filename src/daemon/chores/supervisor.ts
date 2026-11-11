@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // The daemon's half of the chores isolation: one supervised child per group of roots, on the
 // daemon's existing heartbeat.
 //
@@ -77,6 +78,8 @@ export type ChoresFleetInput = {
    *  per-root/shared fleet it always was. */
   machine?: ChoresMachineInput;
   log: (text: string) => void;
+  /** Diagnostic wall/sync spans since the previous existing beat; also drained on on-time beats. */
+  workSinceBeat?: () => string;
   /** The machine's 1-minute load average, read when a stall is recorded so the log line can
    *  carry it. The default reads the host's own load; a test injects a fixed reading. */
   loadAverage?: () => number;
@@ -788,6 +791,10 @@ function recordChildLiveness(input: ChoresFleetInput, group: Group, frameAt: str
 }
 
 function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild, event: ChoresChildEvent): void {
+  traceBeatWork('chores child handling (sync)', () => handleChildEvent(input, group, child, event));
+}
+
+function handleChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild, event: ChoresChildEvent): void {
   if (group.child !== child) return;
   if (event.kind === 'note') {
     input.log(`chores ${rootList(group)}: ${event.text}`);
@@ -1062,11 +1069,16 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
   return {
     tick(at: Date): void {
       const ms = at.getTime();
+      // Lateness uses only the existing configured heartbeat cadence (one full beat late).
+      // Lead diagnostic request, 2026-11-11: attribution introduces no separate threshold.
       const stalled = lastTickMs !== null && ms - lastTickMs > input.beatMs * 2;
+      let work = '';
+      try { work = input.workSinceBeat?.() ?? ''; }
+      catch { work = 'diagnostic unavailable'; }
       if (stalled) {
         // The beat itself is the stall record for the main loop: it is logged once, with the
         // load, and no child is judged on the silence this daemon could not hear.
-        input.log(`chores: the daemon beat arrived late, ${String(ms - (lastTickMs ?? ms))} ms after the previous one on a ${String(input.beatMs)} ms cadence; ${loadNote(input)}`);
+        input.log(`chores: the daemon beat arrived late, ${String(ms - (lastTickMs ?? ms))} ms after the previous one on a ${String(input.beatMs)} ms cadence; ${loadNote(input)}${work === '' ? '' : `; work wall (overlap/await included), longest first: ${work}`}`);
       }
       lastTickMs = ms;
       for (const group of groups) tickGroup(input, group, at, stalled);

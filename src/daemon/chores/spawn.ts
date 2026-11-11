@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // Starting one chores child, and reading the token it was started with.
 //
 // A child is a second process running the child entry beside this module, so it has its own
@@ -336,7 +337,7 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
 
   child.stdout?.setEncoding('utf8');
   let stdoutBuffer = '';
-  child.stdout?.on('data', (chunk: string) => {
+  child.stdout?.on('data', (chunk: string) => traceBeatWork('chores frames (sync)', () => {
     stdoutBuffer += chunk;
     let nl = stdoutBuffer.indexOf('\n');
     while (nl !== -1) {
@@ -363,7 +364,7 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
       stdoutBuffer = '';
       emit({ kind: 'note', text: 'a child frame exceeded the frame limit and was dropped' });
     }
-  });
+  }));
 
   let stderrBuffer = '';
   child.stderr?.setEncoding('utf8');
