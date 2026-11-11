@@ -1,3 +1,4 @@
+import { recordDeliveredBody, RUNTIME_WAKE_MAX } from './readable-wake.ts';
 import { refuseTyping } from './no-pane-messaging.ts';
 // The `team send` delivery daemon (`<storeDir>/send/daemon.sock` and `daemon.lock`).
 //
@@ -813,7 +814,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
       if (trigger === null || trigger.trim().length === 0) {
         return Promise.resolve(refuseTyped(`${seatName}: the typed wake line is empty; nothing was typed`));
       }
-      if (/[\u0000-\u001f\u007f]/.test(trigger)) {
+      if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(trigger)) {
         return Promise.resolve(refuseTyped(`${seatName}: the typed wake line carries a control character; one line is typed, nothing else`));
       }
       if (trigger.length > TRIGGER_MAX) {
@@ -1808,20 +1809,22 @@ async function executeSocketSend(
   const dropDir = join(dir, 'send-drops', team.session, seatName);
   const existingIds = existingRecordIdsIn(dropDir);
   const compact = receiver?.compactDelivery === true;
-  const content = attributedBody(body, from, {
+  let content = attributedBody(body, from, {
     home: host.home,
     root,
     displayName: senderName === '' ? null : senderName === 'owner' ? 'the owner' : senderName,
     ...(rule === '' ? {} : { rule }),
     at: host.now(),
-    compact,
+    compact: false,
   });
   const reply = personPane
     ? null
     : compact
       ? compactReaderLine(msgId, existingIds)
       : readerLine(msgId, existingIds);
-  const frame = frameFor(content, msgId, reply);
+  const bodyIncluded = Buffer.byteLength(content, 'utf8') <= RUNTIME_WAKE_MAX;
+  if (!bodyIncluded) content = `${content.split('\n')[0]}\n\nBody too long for this wake; read it with: team drops --read.`;
+  const frame = frameFor(content, msgId, bodyIncluded ? null : reply);
   if (frame.length > FRAME_LIMIT) {
     return {
       v: 1,
@@ -1940,6 +1943,7 @@ async function executeSocketSend(
         });
         return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: taken.reason };
       }
+      if (bodyIncluded) recordDeliveredBody({ dropDir, id: msgId, root, session: team.session, seat: seatName, home: host.home });
       logLine(dir, 'send', who, `${seatName}: sent on the socket (${String(frame.length)} characters)`, host.now());
       const outcome = await listener.wait(timeoutS * 1000);
       if (outcome.kind === 'answered') {

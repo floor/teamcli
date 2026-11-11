@@ -1,3 +1,4 @@
+import { recordDeliveredBody } from '../send/readable-wake.ts';
 // `team mcp serve`: one seat's inbox, spoken to its CLI as MCP over stdio.
 //
 // The server is started by the seat's own launch line, so the seat, session, team file and root
@@ -520,6 +521,7 @@ function watchChannel(
         ? serving.channelMark(serving.dropDir, id)
         : markChannelNotified(serving.dropDir, id);
       if (!marked) return 'uncertain' as const;
+      recordDeliveredBody({ dropDir: serving.dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home });
       return 'pushed' as const;
     });
     if (committed === 'busy') {

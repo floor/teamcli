@@ -1,3 +1,4 @@
+import { RUNTIME_WAKE_MAX } from '../readable-wake.ts';
 // Narrow reusable Codex (`0.161.0`) relay adapter bridge for the committed sender walk
 // (`785d63e1f`, `src/commands/send.ts` + `src/send/fallback-walk.ts` + `packages/relay`).
 //
@@ -63,7 +64,6 @@ import {
 import { readState, type SeatState } from '../../state.ts';
 import type { AttemptOutcome, RelayReceipt as WalkRelayReceipt } from '../fallback-events.ts';
 import type { WalkAttempt } from '../fallback-walk.ts';
-import { TRIGGER_MAX } from '../native.ts';
 import {
   pushPointer,
   type PushSender,
@@ -374,17 +374,16 @@ export function probeCodexNativeRoute(input: CodexNativeProbeInput): CodexNative
   if (
     pointer === null
     || pointer === ''
-    || pointer.includes('\n')
     || pointer.includes('\r')
     || pointer.includes('\0')
-    || pointer.length > TRIGGER_MAX
+    || Buffer.byteLength(pointer, 'utf8') > RUNTIME_WAKE_MAX
   ) {
     return {
       status: 'refused',
       reason:
-        pointer === null || pointer.length > TRIGGER_MAX
-          ? `the pointer would exceed ${String(TRIGGER_MAX)} characters`
-          : 'the runtime pointer is not a valid single line',
+        pointer === null || Buffer.byteLength(pointer, 'utf8') > RUNTIME_WAKE_MAX
+          ? `the runtime message would exceed ${String(RUNTIME_WAKE_MAX)} bytes`
+          : 'the runtime message is empty or contains a carriage return or NUL byte',
     };
   }
 

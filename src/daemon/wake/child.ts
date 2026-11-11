@@ -1,3 +1,4 @@
+import { recordDeliveredBody } from '../../send/readable-wake.ts';
 // The wake child: one daemon-admitted typed wake, run in its own process.
 //
 // The daemon's send server answers `handed` at acceptance and never waits for the screen; this
@@ -15,7 +16,7 @@
 // child killed mid-walk leaves `reserved`, which is what was known at that point, and the
 // watch's own retry in the project's drop folder is still there to wake the seat.
 import { existsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { PaneProcesses } from '../../herdr.ts';
 import { acquireSeatLock } from '../../launch/seat-lock.ts';
 import { logLine } from '../../log.ts';
@@ -179,6 +180,7 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
       record(walk.reason, false, ms, walk);
       return { outcome: 'failed', reason: walk.reason };
     }
+    recordDeliveredBody({ dropDir: join(request.dir, 'send-drops', request.session, request.seat), id: request.id, root: request.root, session: request.session, seat: request.seat, home: request.home, wake: request.line });
     markWake(marker, {
       id: request.id,
       at: deps.now().toISOString(),
