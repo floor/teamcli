@@ -859,7 +859,8 @@ export function doctorFindings(
 
   for (let index = 0; index < findings.length; index++) {
     const finding = findings[index]!;
-    findings[index] = { level: finding.level, text: plainLine(finding.text) };
+    // Sanitize only display text: restore consumes the typed CLI-probe metadata.
+    findings[index] = { ...finding, text: plainLine(finding.text) };
   }
 
   // The legacy note is told only while the file really is legacy: once the owner has written the

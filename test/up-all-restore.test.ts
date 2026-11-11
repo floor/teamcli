@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { approvalOf } from '../src/approve/approval.ts';
-import type { DoctorSources } from '../src/commands/doctor.ts';
+import { doctorFindings, type DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { readChildMessage, readHostMessage } from '../src/daemon/chores/protocol.ts';
 import { DAEMON_LABEL, daemonLogPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
@@ -22,7 +22,7 @@ import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
-import { storePath, writeApproval } from '../src/store/store.ts';
+import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T04:15:00Z');
@@ -384,6 +384,60 @@ describe('team up --all single-command multi-team restore', () => {
     expect(io.err).toContain('alpha (session alpha):');
     expect(io.err).toContain('beta (session beta):');
     expect(io.err).toContain('all teams: 3 teams swept');
+  });
+
+  function missingCursorSources() {
+    const file = join(mainTeam.dir, 'team.yaml');
+    // A missing optional CLI must not hold this team's otherwise restorable lead.
+    const cursorRoot = join(base, 'cursor-clone');
+    mkdirSync(cursorRoot);
+    const yaml = teamYaml(mainTeam).replace('workspace:\n', `  - ${cursorRoot}\nworkspace:\n`);
+    const workerAt = yaml.indexOf(`  - role: implementer`);
+    const changed = yaml.slice(0, workerAt) + yaml.slice(workerAt)
+      .replace('cli: codex', 'cli: cursor')
+      .replace('vendor: openai', 'vendor: xai')
+      .replace('model: GPT Sol', 'model: Grok')
+      .replace('version: "6.1"', 'version: "4"')
+      .replace('launch: codex -m gpt-6.1-sol', 'launch: cursor-agent --model grok')
+      .replace('    stopped: true\n', '    cwd: ../cursor-clone\n');
+    writeFileSync(file, changed);
+    const loaded = loadTeamFile(mainTeam.root, { file, home });
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    writeApproval(storePath(loaded.team.project, loaded.root, home),
+      { approval: approvalOf(loaded.team, loaded.root, NOW), file: changed }, loaded.team.seats, home);
+    const made = buildMultiSources();
+    made.sources.doctor!.version = (binary) => binary === 'cursor-agent' ? null : '2.1.288';
+    made.sources.doctor!.onPath = (binary) => binary !== 'cursor-agent';
+    return { ...made, loaded };
+  }
+
+  test('doctorFindings preserves the missing-version metadata through text sanitization', () => {
+    const { loaded, sources } = missingCursorSources();
+    const findings = doctorFindings(loaded.team, loaded.root, mainTeam.dir, mainTeam.session,
+      sources.doctor!, loaded.warnings, approvalStanding(mainTeam.root, home));
+    expect(findings.find((finding) => finding.text.includes('cursor-agent'))).toMatchObject({
+      level: 'miss',
+      cliVersionUnavailable: { binary: 'cursor-agent', seats: [mainTeam.worker] },
+    });
+  });
+
+  test('restore continues the other seats and names a CLI the terminal host cannot launch', async () => {
+    const { sources, trace } = missingCursorSources();
+    const attempted: string[] = [];
+    sources.launch!.paneRun = (_session, _pane, command) => {
+      attempted.push(command);
+      return !command.includes('cursor-agent');
+    };
+    const io = testIo(neutralCwd, { kind: 'owner' });
+    const code = await runUp(['--all'], io, sources);
+    expect(code).toBe(1);
+    expect(trace.renamedBySession).toContainEqual({ session: mainTeam.session, pane: mainTeam.pane, name: mainTeam.lead });
+    expect(attempted.some((command) => command.includes('cursor-agent'))).toBe(true);
+    expect(io.err + io.out).toContain(mainTeam.worker);
+    expect(io.err + io.out).toContain(`${mainTeam.worker}: its launch command did not run`);
+    expect(readState(mainTeam.dir).sessions[mainTeam.session]?.seats[mainTeam.lead]?.launched)
+      .toEqual({ shell: RESTORED_PIDS.shell, cli: RESTORED_PIDS.foreground });
+    expect(io.err + io.out).not.toContain('before it planned a seat');
   });
 
   test('refuses with a non-zero exit when no registered team has a running session (no false all-clear)', async () => {
