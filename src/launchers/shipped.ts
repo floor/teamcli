@@ -3,9 +3,10 @@
 // folder can change what it runs. The seat's own settings (its role, its effort) choose among
 // the options the launcher exposes; they live in the team record and go through `team config`.
 import type { LauncherDefinition } from './types.ts';
+import { profileFor } from '../profiles/profile.ts';
 
 /** What a seat may ask of a shipped launcher. */
-export type ShippedOptions = { role?: string; effort?: string; version?: string };
+export type ShippedOptions = { role?: string; effort?: string; version?: string; vendor?: string; model?: string };
 
 /** The seat roles that only read: they get the CLI's own denials for writes, edits and git. */
 const READ_ONLY_ROLES: ReadonlySet<string> = new Set(['reviewer', 'tester', 'assistant']);
@@ -42,9 +43,61 @@ function grokBuild(options: ShippedOptions): LauncherDefinition {
   };
 }
 
+/** The Claude model id for a seat's model and version: `Claude Opus` + `5.5` is `claude-opus-5-5`.
+ *  Only the families Claude Code names (Opus, Sonnet, Haiku, Fable) and a plain dotted version. */
+function claudeModelId(model: string | undefined, version: string | undefined): string | null {
+  const family = /^Claude (Opus|Sonnet|Haiku|Fable)$/.exec(model ?? '')?.[1];
+  if (family === undefined || version === undefined || !/^\d+(\.\d+)*$/.test(version)) return null;
+  return `claude-${family.toLowerCase()}-${version.replaceAll('.', '-')}`;
+}
+
+/** Claude Code. The CLI's own permission prompts are skipped as on every unattended seat; the
+ *  model is the seat's. For Anthropic the model id is built from the seat's model and version.
+ *  For another provider (DeepSeek, Moonshot, Z.ai) the provider's env words come from the
+ *  claude-code profile's `vendors` table and are set in front of the CLI by `shippedEnv`. */
+function claudeCode(options: ShippedOptions): LauncherDefinition {
+  const model = claudeModelId(options.model, options.version);
+  const provider = options.vendor !== undefined && options.vendor !== 'anthropic' ? ` on ${options.vendor}` : '';
+  return {
+    format: 1,
+    name: 'claude-code',
+    kind: 'custom',
+    summary: `Claude Code${provider}`,
+    argv: ['claude', ...(model === null ? [] : ['--model', model]), '--dangerously-skip-permissions'],
+  };
+}
+
 const SHIPPED: Readonly<Record<string, (options: ShippedOptions) => LauncherDefinition>> = {
   'grok-build': grokBuild,
+  'claude-code': claudeCode,
 };
+
+/** Shell words a shipped launcher sets in front of its CLI, as `env` assignments; empty when it
+ *  needs none. A provider key is never a value here: the word is the profile's own keychain
+ *  lookup, which the pane's shell runs at start, so the secret never passes through TeamCLI,
+ *  its records or its logs. */
+export function shippedEnv(name: string | undefined, options: ShippedOptions): string[] {
+  if (name !== 'claude-code') return [];
+  const words: string[] = [];
+  if (options.effort !== undefined && /^[a-z]+$/.test(options.effort)) words.push(`CLAUDE_CODE_EFFORT_LEVEL=${options.effort}`);
+  const vendor = options.vendor;
+  if (vendor === undefined || vendor === 'anthropic') return words;
+  const block = profileFor('claude-code')?.vendors.find((one) => one.name === vendor);
+  if (block === undefined) return words;
+  const found = block.models.find((one) => one.model === options.model && one.version === options.version) ?? block.models[0];
+  if (found === undefined) return words;
+  const fill = (word: string) => word.replaceAll('{model}', found.id).replaceAll('{credential}', block.credential);
+  for (const word of block.env) words.push(fill(word));
+  // As the provider scripts this replaces set them (docs/guides/tools/claude-deepseek.sh, in use
+  // since 2026-10-02): no Anthropic key reaches a provider endpoint, and the betas and tool search
+  // the provider endpoints do not serve are off.
+  words.push('ANTHROPIC_API_KEY=', 'ENABLE_TOOL_SEARCH=false', 'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1');
+  // Every tier the CLI may pick runs the provider's model, as the scripts this replaces set.
+  for (const tier of ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) {
+    words.push(`${tier}=${found.id}`);
+  }
+  return words;
+}
 
 /** The names a seat can put in `launcher:` with no file anywhere. */
 export function shippedLauncherNames(): string[] {

@@ -21,7 +21,7 @@ import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
 import { discover } from '../launchers/resolve.ts';
-import { shippedLauncher, shippedLauncherIsReadOnly } from '../launchers/shipped.ts';
+import { shippedEnv, shippedLauncher, shippedLauncherIsReadOnly } from '../launchers/shipped.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
 import { getRelativeDirOps } from '../send/drop-retention.ts';
 import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
@@ -384,6 +384,8 @@ export function registryLaunches(steps: readonly Step[]): string[] {
 }
 
 export interface UpSeat {
+  /** The seat's vendor in the team file. A shipped launcher reads it to choose its provider. */
+  vendor?: string;
   /** The seat's role in the team file. A shipped launcher reads it to choose its permission line. */
   role?: string;
   name: string;
@@ -1523,11 +1525,14 @@ export function upPlan(input: UpInput): Step[] {
       };
       // A launcher TeamCLI ships is resolved from the package, configured by this seat's role
       // and effort; any other name is looked up in the team's launcher files.
-      const shipped = shippedLauncher(seat.launcher, {
+      const shippedOptions = {
         ...(seat.role === undefined ? {} : { role: seat.role }),
         ...(seat.effort === undefined ? {} : { effort: seat.effort }),
         ...(seat.version === undefined ? {} : { version: seat.version }),
-      });
+        ...(seat.model === undefined ? {} : { model: seat.model }),
+        ...(seat.vendor === undefined ? {} : { vendor: seat.vendor }),
+      };
+      const shipped = shippedLauncher(seat.launcher, shippedOptions);
       const decided = resolvedCommand({
         launcher: seat.launcher,
         discovery: shipped !== null
@@ -1546,7 +1551,11 @@ export function upPlan(input: UpInput): Step[] {
       // The resolver argv is the base line. The profile still places its rules, hooks,
       // inbox words, channel flag and session words on that line, and refuses when they
       // cannot be placed.
-      baseLine = decided.command;
+      // A shipped launcher's env words (a provider's endpoint, its key lookup, the effort) stand
+      // in front of the CLI as `env` assignments; they are the profile's own words, not quoted
+      // again, so the pane's shell runs the key lookup itself.
+      const envWords = shipped !== null ? shippedEnv(seat.launcher, shippedOptions) : [];
+      baseLine = envWords.length === 0 ? decided.command : `${envWords.join(' ')} ${decided.command}`;
       fromResolver = true;
     }
     let denyRecordLine: string | undefined;
