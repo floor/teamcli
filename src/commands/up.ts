@@ -2614,6 +2614,15 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   if (sources.doctor) {
     const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing, team, [], [], rulesOriginOf(loaded.source));
     for (const finding of findings) {
+      // A restore child's version probe cannot establish what the existing terminal session
+      // can launch. Run each eligible seat's planned command through the normal terminal-host
+      // launch path; its own launch result reports a failure without holding sibling seats.
+      // This exception is only the typed version-probe failure, never another doctor refusal.
+      if (internal?.restoreMissingOnly === true && finding.cliVersionUnavailable !== undefined) {
+        const { binary, seats } = finding.cliVersionUnavailable;
+        warnings.push(`${seats.join(', ')}: the restore process could not read ${binary}'s version; the terminal host will resolve each seat's launch command`);
+        continue;
+      }
       if (!blocksLaunch(finding)) continue;
       if (!dev.on && (finding.text.includes('team approve') || finding.text.includes('never approved'))) continue;
       if (finding.text.includes(' is read at start by ')) startupReadRefusals.push(finding.text);

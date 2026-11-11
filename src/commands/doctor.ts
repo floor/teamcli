@@ -178,7 +178,12 @@ export const USAGE =
   "Usage: team doctor [--session <name>] [--file <path>] [--login] [--jules] [--json]\nExits 0 when nothing is missing, 1 when something is missing, 2 when the invocation or team file can't be read.\n";
 
 export type Level = 'ok' | 'warn' | 'miss' | 'note';
-export type Finding = { level: Level; text: string };
+export type Finding = {
+  level: Level;
+  text: string;
+  /** A failed process-side version probe, not proof that the terminal host cannot launch it. */
+  cliVersionUnavailable?: { binary: string; seats: string[] };
+};
 
 // A missing or stale watch is not a reason for `up` to refuse: `up` starts the watch itself.
 export function blocksLaunch(finding: Finding): boolean {
@@ -317,7 +322,11 @@ function cliFindings(cli: string, seats: Seat[], sources: DoctorSources): Findin
   }
   const printed = sources.version(profile.binary);
   if (printed === null) {
-    return [{ level: 'miss', text: `install \`${profile.binary}\`: it is not on the PATH (${cli}: ${names})` }];
+    return [{
+      level: 'miss',
+      text: `install \`${profile.binary}\`: it is not on the PATH (${cli}: ${names})`,
+      cliVersionUnavailable: { binary: profile.binary, seats: seats.map((seat) => seat.name) },
+    }];
   }
   const findings = [versionFinding(profile.binary, printed, profile.tested, true)];
   const loggedIn = sources.loggedIn(profile);
