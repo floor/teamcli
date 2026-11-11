@@ -15,10 +15,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
+import { reportedConversationProblem } from '../src/commands/send.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
-import { findAgent, registerAgent, updateAgent } from '../src/registry/agents.ts';
+import { findAgent, recordProvenSeatConversation, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState, type SeatState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
@@ -368,6 +369,101 @@ describe("up's entry address refresh", () => {
     // The role is implementer, not lead, and its launch line is a wrapper's: neither is a gate.
     expect(made.trace.runs).toEqual([]);
     expect(addressOf(WRAPPED)).toBe(live);
+  });
+});
+
+describe('explicit conversation repair on the recorded live pane', () => {
+  const next = 'conversation-after-compaction';
+  function ready(withSocket = true) {
+    stand([{ name: WORKER }]);
+    recordSeat(WORKER, { stage: 'ready', pane: PANE, workspace: SPACE, launched: RECORDED });
+    registerSeat(WORKER, { pane: PANE, address: null });
+    return withSocket ? sock(200) : join(sockets, '200.sock');
+  }
+  function world(options: { duplicate?: boolean; replaced?: boolean } = {}) {
+    return makeWorld({
+      agents: () => [
+        { ...liveAgent(WORKER, PANE, SPACE), session: next },
+        ...(options.duplicate ? [{ ...liveAgent(WORKER, TWO_PANE, SPACE), session: next }] : []),
+      ],
+      processInfo: () => options.replaced ? { shell: 100, foreground: [999] } : PANE_PROCESSES,
+      workspaces: () => [{ id: SPACE, label: WORKER }],
+      workspacePanes: () => [PANE],
+    });
+  }
+  const binding = () => findAgent(home, { team: teamIdOf(root), seat: WORKER })?.reach.agent_session;
+
+  test('team up repairs both bindings and keeps the live CLI in its pane', async () => {
+    const socket = ready();
+    const made = world();
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp([], io, made.sources), said(io)).toBe(0);
+    expect(binding()).toBe(next);
+    expect(seatOf(WORKER)?.agent_session).toBe(next);
+    expect(addressOf(WORKER)).toBe(socket);
+    expect(made.trace.runs).toEqual([]);
+    expect(made.trace.closed).toEqual([]);
+    expect(reportedConversationProblem(findAgent(home, { team: teamIdOf(root), seat: WORKER })!, PANE,
+      { agents: () => [{ name: WORKER, pane: PANE, cli: 'claude', session: next }] })).toBeNull();
+    expect(teamLog()).toContain('rebound the live conversation on its recorded pane');
+  });
+
+  test('a missing live socket leaves both conversation bindings intact', async () => {
+    ready(false);
+    await runUp([], testIo(root, { kind: 'owner' }), world().sources);
+    expect(binding()).toBe(SES);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+  });
+
+  test('a dry run leaves both old conversation bindings intact', async () => {
+    ready();
+    const io = testIo(root, { kind: 'owner' });
+    await runUp(['--dry-run'], io, world().sources);
+    expect(binding()).toBe(SES);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+    expect(addressOf(WORKER)).toBeNull();
+  });
+
+  test('duplicate names never rebind the conversation', async () => {
+    ready();
+    await runUp([], testIo(root, { kind: 'owner' }), world({ duplicate: true }).sources);
+    expect(binding()).toBe(SES);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+  });
+
+  test('a protected automatic restore leaves a present pane bound as before', async () => {
+    ready();
+    await runUp([], testIo(root, { kind: 'owner' }), world().sources,
+      { nonInteractive: true, restore: true, restoreMissingOnly: true });
+    expect(binding()).toBe(SES);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+  });
+
+  test('a replaced process cannot supply a new conversation binding', async () => {
+    ready();
+    await runUp([], testIo(root, { kind: 'owner' }), world({ replaced: true }).sources, { nonInteractive: true });
+    expect(binding()).toBe(SES);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+  });
+
+  test('a successor registry record fences the state write too', () => {
+    const socket = ready();
+    const old = findAgent(home, { team: teamIdOf(root), seat: WORKER })!;
+    const held = seatOf(WORKER)!;
+    updateAgent(home, old.id, { reach: { agent_session: 'successor' } });
+    expect(recordProvenSeatConversation(home, old, dir, held, next, socket)).toBe(false);
+    expect(binding()).toBe('successor');
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+  });
+
+  test('a successor state record fences the registry write too', () => {
+    const socket = ready();
+    const old = findAgent(home, { team: teamIdOf(root), seat: WORKER })!;
+    const held = seatOf(WORKER)!;
+    updateState(dir, (file) => { file.sessions[SESSION]!.seats[WORKER]!.agent_session = 'successor'; });
+    expect(recordProvenSeatConversation(home, old, dir, held, next, socket)).toBe(false);
+    expect(binding()).toBe(SES);
+    expect(seatOf(WORKER)?.agent_session).toBe('successor');
   });
 });
 

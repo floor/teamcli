@@ -116,7 +116,7 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
-import { findAgent, recordProvenAgentAddress } from '../registry/agents.ts';
+import { findAgent, recordProvenAgentAddress, recordProvenSeatConversation } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
@@ -3576,7 +3576,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       if (!agent || agent.cli !== seat.cli || agent.lifecycle !== 'running'
         || agent.reach.session !== session || agent.reach.pane === null) continue;
       evictHerdrAgentList(aim(session));
-      const placed = livePlacement({ agents: (targetSession) => launch.agents(targetSession)?.map((one) => ({
+      const live = launch.agents(session);
+      const placed = livePlacement({ agents: () => live?.map((one) => ({
         name: one.name, pane: one.pane, cli: one.agent,
       })) ?? null }, agent);
       if ('error' in placed || placed.pane !== agent.reach.pane) continue;
@@ -3588,7 +3589,20 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       const address = liveSocketOf(agent.reach.address, measured, sources.sockets ?? defaultSocketsDirs());
       const inbound = declaredInboundOf({ dir, root, session, seat: seat.name, launch: agent.launch });
       if (address === null || inboundStaleReason(inbound, address) !== null) continue;
+      // A compaction or session switch can rotate the conversation while this same launched
+      // CLI stays on its recorded pane. Only one live report on that pane supplies a new id;
+      // neither a seat name nor a conversation alone is permission to rebind it.
+      const reports = live?.filter((one) => one.pane === placed.pane) ?? [];
+      const conversation = reports.length === 1 ? reports[0]?.session : undefined;
       try {
+        if (conversation !== undefined && conversation !== agent.reach.agent_session) {
+          if (!recordProvenSeatConversation(sources.home, agent, dir, held, conversation, address)) {
+            logLine(dir, 'up', callerLabel(caller), `${seat.name}: its conversation proof changed; the binding was not written`, sources.now?.() ?? new Date());
+          } else {
+            logLine(dir, 'up', callerLabel(caller), `${seat.name}: rebound the live conversation on its recorded pane`, sources.now?.() ?? new Date());
+          }
+          continue;
+        }
         if (!recordProvenAgentAddress(sources.home, agent, address)) {
           logLine(dir, 'up', callerLabel(caller), `${seat.name}: its address record changed; the socket address was not written`, sources.now?.() ?? new Date());
         }
