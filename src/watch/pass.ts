@@ -763,7 +763,12 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  const cantWork = seatWorkPlans(observations, state, processes, mailbox, now, memory, reports, once, keep);
+  // A paused team, or a seat paused on its own, is not working on purpose: its seats are left
+  // out of the can't-work detector, so the lead is not woken for a seat the pause stopped.
+  const cantWork = seatWorkPlans(
+    pause ? [] : observations.filter((obs) => seatPauses?.[obs.name] === undefined),
+    state, processes, mailbox, now, memory, reports, once, keep,
+  );
   return {
     reports,
     ...(queueDepths ? { queueSummary: enabled('team-idle') ? idleQueueSummary(teamObservation) : null } : {}),
