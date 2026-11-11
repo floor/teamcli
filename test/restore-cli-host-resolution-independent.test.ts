@@ -489,11 +489,11 @@ describe('restore CLI version probe deferral to terminal host resolution', () =>
       version: () => null,
     });
     // Non-lead seat-2 is not admitted to run up / restore.
-    const io = testIo(root, { kind: 'seat', name: 'seat-2', session: 'sweep' });
+    const io = testIo(root, { kind: 'seat', name: 'seat-2', pane: 'pane-gone-2', session: 'sweep' });
     const code = await runUp(['--file', teamFile], io, harness.sources({ doctor: doc }), {
       restore: true,
       restoreMissingOnly: true,
-      caller: { kind: 'seat', name: 'seat-2', session: 'sweep' },
+      caller: { kind: 'seat', name: 'seat-2', pane: 'pane-gone-2', session: 'sweep' },
     });
     expect(code).toBe(1);
     expect(harness.creates).toEqual([]);
