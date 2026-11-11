@@ -138,7 +138,7 @@ function receiptOf(value: unknown, identity: Identity, name: string): Receipt | 
   return value as Receipt;
 }
 
-export type NativeFeed = { step(): void; stepSliced(): Promise<void>; codexFrame(identity: Identity, text: string): void; close(): void };
+export type NativeFeed = { step(): void; codexFrame(identity: Identity, text: string): void; close(): void };
 
 /** The rejected set-aside keeps as many files as one spool pass reads. */
 export const STATUS_REJECTED_CAP = 64;
@@ -297,82 +297,6 @@ export function createNativeFeed(input: {
     // No correlated session end or live process proof exists; confirmation remains needed.
     status_process_confirmation: 'needed', status_reason: record.reason,
   });
-  function* stepSeats(): Generator<void> {
-    if (closed) return;
-    for (const seat of input.seats) {
-      yield;
-      if (closed) return;
-      // Remove predecessors before writing a marker for this pass's managed launch.
-      removeMarker(seat);
-      const identity = current(seat);
-      if (identity === null) {
-        owned.delete(seat); candidates.delete(seat);
-        const stale = paths({ ...input, seat });
-        if (stale !== null) spoolSweepResume.delete(stale.spool);
-        continue;
-      }
-      candidateOf(identity);
-      const one = paths(identity);
-      const held = launch(identity);
-      if (one === null || held === null) continue;
-      try {
-        mkdirSync(one.root, { recursive: true, mode: 0o700 });
-        const marker: Marker = { v: 1, ...held, owner, daemon: input.daemonOwner, expires: Date.now() + 3000 };
-        atomicJson(one.marker, marker);
-        owned.set(seat, identity.binding);
-        const cursorPath = join(one.root, `status-cursor-${identity.binding}.json`);
-        let cursor: Cursor = { seq: 0, last: null, pending: null };
-        try {
-          const value = boundedJson(cursorPath);
-          if (!shape(value, ['seq', 'last', 'pending']) || !Number.isSafeInteger(value.seq) || (value.seq as number) < 0
-            || (value.last !== null && (typeof value.last !== 'string' || !PRESENCE_ID.test(value.last)))) continue;
-          cursor = value as Cursor;
-        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') continue; }
-        // Replay exactly the persisted pending bytes; do not trust a cursor's arbitrary event.
-        if (cursor.pending !== null) {
-          if (!shape(cursor.pending, ['receipt', 'event']) || typeof cursor.pending.receipt !== 'string'
-            || !PRESENCE_ID.test(cursor.pending.receipt) || cursor.seq < 1) continue;
-          const name = `${cursor.pending.receipt}.json`;
-          const path = join(one.spool, name);
-          let receipt: Receipt | null;
-          try { receipt = receiptOf(boundedJson(path), identity, name); } catch { receipt = null; }
-          if (receipt === null) {
-            // A claim/launch change invalidates the pending submission. Keep the allocated
-            // publication ordinal, discard the receipt, and never replay it for a successor.
-            cursor = { seq: cursor.seq, last: cursor.last, pending: null };
-            atomicJson(cursorPath, cursor);
-            try { discard(one.root, path, name); } catch { /* already absent */ }
-          } else {
-            if (JSON.stringify(cursor.pending.event) !== JSON.stringify(eventOf(identity, receipt, cursor.seq))) continue;
-            if (launch(identity)?.epoch !== receipt.epoch || !append(cursor.pending.event)) continue;
-            cursor = { seq: cursor.seq, last: receipt.id, pending: null };
-            atomicJson(cursorPath, cursor);
-          }
-        }
-        sweepNonId(one.root, one.spool);
-        let names: string[];
-        try { names = readdirSync(one.spool).filter((name) => isReceiptName(name)).sort().slice(0, 64); }
-        catch { continue; }
-        for (const name of names) {
-          const path = join(one.spool, name);
-          let receipt: Receipt | null;
-          try { receipt = receiptOf(boundedJson(path), identity, name); } catch { receipt = null; }
-          // Invalid/stale receipts never reach the bus, and cannot pin the bounded queue.
-          if (receipt === null) { discard(one.root, path, name); continue; }
-          if (receipt.id === cursor.last) { unlinkSync(path); continue; }
-          if (launch(identity) === null || cursor.seq >= Number.MAX_SAFE_INTEGER) break;
-          const seq = cursor.seq + 1;
-          const event = eventOf(identity, receipt, seq);
-          cursor = { seq, last: cursor.last, pending: { receipt: receipt.id, event } };
-          atomicJson(cursorPath, cursor);
-          if (launch(identity)?.epoch !== receipt.epoch || !append(event)) break;
-          cursor = { seq, last: receipt.id, pending: null };
-          atomicJson(cursorPath, cursor);
-          unlinkSync(path);
-        }
-      } catch { /* fixed refusal: no payload, provider error or local path is logged */ }
-    }
-  }
   return {
     codexFrame(identity, text) {
       if (closed || !input.seats.includes(identity.seat) || identity.stateDir !== input.stateDir
@@ -387,12 +311,78 @@ export function createNativeFeed(input: {
       if (stage(identity, 'codex-frame', reason, candidate.epoch)) candidate.lastReason = reason;
     },
     step() {
-      for (const _ of stepSeats()) { /* synchronous callers drain the same steps */ }
-    },
-    async stepSliced() {
-      // Each seat keeps its fresh binding and epoch checks. Yield the daemon loop before
-      // the next seat so socket reads and timers can run during a large native-feed pass.
-      for (const _ of stepSeats()) await new Promise<void>((resolve) => setImmediate(resolve));
+      if (closed) return;
+      for (const seat of input.seats) {
+        // Remove predecessors before writing a marker for this pass's managed launch.
+        removeMarker(seat);
+        const identity = current(seat);
+        if (identity === null) {
+          owned.delete(seat); candidates.delete(seat);
+          const stale = paths({ ...input, seat });
+          if (stale !== null) spoolSweepResume.delete(stale.spool);
+          continue;
+        }
+        candidateOf(identity);
+        const one = paths(identity);
+        const held = launch(identity);
+        if (one === null || held === null) continue;
+        try {
+          mkdirSync(one.root, { recursive: true, mode: 0o700 });
+          const marker: Marker = { v: 1, ...held, owner, daemon: input.daemonOwner, expires: Date.now() + 3000 };
+          atomicJson(one.marker, marker);
+          owned.set(seat, identity.binding);
+          const cursorPath = join(one.root, `status-cursor-${identity.binding}.json`);
+          let cursor: Cursor = { seq: 0, last: null, pending: null };
+          try {
+            const value = boundedJson(cursorPath);
+            if (!shape(value, ['seq', 'last', 'pending']) || !Number.isSafeInteger(value.seq) || (value.seq as number) < 0
+              || (value.last !== null && (typeof value.last !== 'string' || !PRESENCE_ID.test(value.last)))) continue;
+            cursor = value as Cursor;
+          } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') continue; }
+          // Replay exactly the persisted pending bytes; do not trust a cursor's arbitrary event.
+          if (cursor.pending !== null) {
+            if (!shape(cursor.pending, ['receipt', 'event']) || typeof cursor.pending.receipt !== 'string'
+              || !PRESENCE_ID.test(cursor.pending.receipt) || cursor.seq < 1) continue;
+            const name = `${cursor.pending.receipt}.json`;
+            const path = join(one.spool, name);
+            let receipt: Receipt | null;
+            try { receipt = receiptOf(boundedJson(path), identity, name); } catch { receipt = null; }
+            if (receipt === null) {
+              // A claim/launch change invalidates the pending submission. Keep the allocated
+              // publication ordinal, discard the receipt, and never replay it for a successor.
+              cursor = { seq: cursor.seq, last: cursor.last, pending: null };
+              atomicJson(cursorPath, cursor);
+              try { discard(one.root, path, name); } catch { /* already absent */ }
+            } else {
+              if (JSON.stringify(cursor.pending.event) !== JSON.stringify(eventOf(identity, receipt, cursor.seq))) continue;
+              if (launch(identity)?.epoch !== receipt.epoch || !append(cursor.pending.event)) continue;
+              cursor = { seq: cursor.seq, last: receipt.id, pending: null };
+              atomicJson(cursorPath, cursor);
+            }
+          }
+          sweepNonId(one.root, one.spool);
+          let names: string[];
+          try { names = readdirSync(one.spool).filter((name) => isReceiptName(name)).sort().slice(0, 64); }
+          catch { continue; }
+          for (const name of names) {
+            const path = join(one.spool, name);
+            let receipt: Receipt | null;
+            try { receipt = receiptOf(boundedJson(path), identity, name); } catch { receipt = null; }
+            // Invalid/stale receipts never reach the bus, and cannot pin the bounded queue.
+            if (receipt === null) { discard(one.root, path, name); continue; }
+            if (receipt.id === cursor.last) { unlinkSync(path); continue; }
+            if (launch(identity) === null || cursor.seq >= Number.MAX_SAFE_INTEGER) break;
+            const seq = cursor.seq + 1;
+            const event = eventOf(identity, receipt, seq);
+            cursor = { seq, last: cursor.last, pending: { receipt: receipt.id, event } };
+            atomicJson(cursorPath, cursor);
+            if (launch(identity)?.epoch !== receipt.epoch || !append(event)) break;
+            cursor = { seq, last: receipt.id, pending: null };
+            atomicJson(cursorPath, cursor);
+            unlinkSync(path);
+          }
+        } catch { /* fixed refusal: no payload, provider error or local path is logged */ }
+      }
     },
     close() {
       closed = true;
