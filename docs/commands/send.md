@@ -872,14 +872,16 @@ held-message dialog is not a hold this run reports — the send ended `delivered
 frame was taken, and the daemon's presence pass records the hold afterwards, once for that id,
 and marks the socket held. Nothing is typed into the blocked box while the dialog stands.
 
-One hold writes nothing at all. When the recipient has a signed registry record and its pane
-names a model or version other than the record's, the run is `held` before the body is read and
-before any leg is walked, with `model drift: <recorded> vs <running>`: nothing is written on
-either side — no signed record, marker, drop or draft — and nothing is typed or dialed; the hold
-itself is one `team.log` line. No watch retry owns it, because there is no drop to retry. The way
-out is to repair the seat: `team restart <seat>` relaunches it through the launch line its
-registry record keeps, under the restart's own rules (the restart is the owner's or a lead's to
-run, and a seat mid-turn is not interrupted), and the sender sends again.
+A difference between the recipient's recorded and observed model does not by itself stop an
+admitted message. The normal delivery walk runs and its result also says `record says X, runs Y,
+awaiting the lead's confirm`. A notice goes to the recipient's lead through ordinary sender
+admission, once per observed drift episode. A refused notice is reported to the sender; no
+runtime fallback writes into that lead's inbox. The observation updates no registry record.
+
+The observed model still has to satisfy the entity's existing model rule. A disallowed model,
+or an unreadable rule that cannot judge it, refuses delivery explicitly. Existing public-only
+body and repository guards remain in force; a model observation cannot remove them. An unread
+model observation does not invent either drift or a model identity.
 
 Unsent text is the seat's own, and no send touches it. The typed wake is the only leg that types,
 and it types only into a box it read twice as the empty idle prompt: a box holding unsent text

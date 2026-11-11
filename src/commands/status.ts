@@ -1,3 +1,4 @@
+import { modelDriftNotes } from '../send/model-drift.ts';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { relative, resolve } from 'node:path';
@@ -770,6 +771,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // A send's webhook post left in flight with no bus serving the root to finish it: a reading,
   // never a delivered post.
   comparison.notes.push(...unfinishedWebhookNotes({ root, alive: sources.alive ?? pidAlive }));
+  if (sources.home !== undefined) comparison.notes.push(...modelDriftNotes({
+    dir, home: sources.home, root, session, team, live,
+  }));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),

@@ -1,3 +1,6 @@
+import { clearModelDrift, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
+import { readEntityModelRule } from '../policy/entity-rule.ts';
+import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
 import { inlineWake, oversizedWake, recordDeliveredBody, TYPED_WAKE_MAX, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
 import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
@@ -401,6 +404,8 @@ export type DaemonSendPrincipal = {
 };
 
 export type SendHost = {
+  /** Internal ordinary drift notice: stable timestamp/id, and no recursive lead notification. */
+  modelDriftNotice?: { at: string; admitted?(): void };
   /** The live agents of a session; null when herdr can't be reached. `cli` is the agent herdr
    *  reads on the pane (`claude`, `codex`, …), the process name a CLI profile names — null or
    *  absent when herdr reported none. */
@@ -568,6 +573,8 @@ function setLegState(report: Report, leg: WalkLeg, state: LegState, reason?: str
  *  names, the id of the frame it composed (null until one is built), and the team and session
  *  the send addresses, read from the receiving team file once it names one. */
 type Report = {
+  /** Recipient model drift is advisory unless the observed model violates an existing rule. */
+  recipientDrift?: string;
   json: boolean;
   seat: string | null;
   sent: string | null;
@@ -752,6 +759,7 @@ function dropNotWoken(report: Report): boolean {
  *  a dry run) has no id to print; a line that already names the id — the queued answer's — is
  *  left as it stands rather than naming it twice. */
 function withId(summary: string, report: Report): string {
+  if (report.recipientDrift !== undefined) summary = `${summary}; model drift: ${report.recipientDrift}`;
   const id = report.sent;
   if (id === null || id === '' || summary.includes(id)) return summary;
   return `${summary} (id ${id})`;
@@ -1629,6 +1637,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       cross,
     };
   }
+  host.modelDriftNotice?.admitted?.();
   // Whether this sender can make the native leg itself: a seat whose registry record or team file
   // declares Claude Code carries the cross-session SendMessage the leg is made with. The owner's
   // terminal, and every other CLI, do not, and their native leg stays a skip.
@@ -1690,9 +1699,12 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   });
   report.deliveryClass = classRead.cls;
   report.deliveryWords = classRead.words;
-  // The registry's signing model is the running seat's authority. A pane whose live status
-  // names another model is held before the body is read and before any delivery leg is walked;
-  // the team file is only the roster projection and cannot override that signed record.
+  // Source: lead decision 2026-11-11 02:30Z after the cross-lab design read. Recorded
+  // model metadata is not message authority: model-only drift delivers and flags. Judge the
+  // observed model against the existing entity rule; never infer another CLI or public-only
+  // setting from it. The existing public-body/repository route guards remain in force.
+  let recipientDrift: ModelDrift | undefined;
+  let repairedRecipient: string | undefined;
   const registeredTarget = readAgents(host.home).find((agent) =>
     agent.reach.team === teamIdOf(to.root) && agent.reach.seat === to.seat &&
     agent.reach.session === to.session && agent.lifecycle !== 'retired'
@@ -1710,10 +1722,18 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       version: registeredTarget.signing.version,
       launch: registeredTarget.launch,
     }, screen);
-    if (modelDiffers(running, registeredTarget.signing)) {
-      const declaredModel = `${registeredTarget.signing.model} ${registeredTarget.signing.version}`;
-      const runningLabel = `${running.model} ${running.version}`;
-      return held(io, dir, who, to.seat, `model drift: ${declaredModel} vs ${runningLabel}`, host, report);
+    if (running !== null) {
+      if (!receiving.ok) return configuration(io, 'the receiving team cannot be read, so the observed model policy cannot be judged', report);
+      const rule = readEntityModelRule(host.home, receiving.team);
+      const policyRefusal = observedModelRefusal({ name: to.seat, role: declared?.role ?? registeredTarget.signing.role }, running, rule);
+      if (policyRefusal !== null) return refuse(io, dir, who,
+        `${to.seat}: observed model violates policy: ${policyRefusal}; not kept or delivered`, host, report);
+      if (modelDiffers(running, registeredTarget.signing)) {
+        recipientDrift = { recipient: registeredTarget.id, recorded: registeredTarget.signing, observed: running };
+        report.recipientDrift = modelDriftText(recipientDrift);
+      } else {
+        repairedRecipient = registeredTarget.id;
+      }
     }
   }
   if (report.holdScope !== undefined && !report.holdScope.dry) {
@@ -1947,7 +1967,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // send walks the same delivery order and then waits on the thread for the first verified reply
   // record within the timeout window.
   const msgId = host.sendId?.() ?? randomUUID();
-  const record = recordOf(msgId, to, body, from, admission, host.now().toISOString(), subject === '' ? undefined : subject);
+  const record = recordOf(msgId, to, body, from, admission, host.modelDriftNotice?.at ?? host.now().toISOString(), subject === '' ? undefined : subject);
   const callerRoot = { root, session: team.session };
   if (dry) {
     // A dry run reports the same ordered legs a real send would, but it can only say whether each
@@ -2042,6 +2062,54 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // daemon principal is composed the same way. It is composed once here, before the walk, so no
   // route can transport without it and no caller has to remember to pass one.
   const directGuard = composedGuard(host);
+  if (repairedRecipient !== undefined && host.modelDriftNotice === undefined) {
+    const refusal = guardRefusal(directGuard);
+    if (refusal !== null) return refuse(io, dir, who, refusal.why, host, report);
+    clearModelDrift({ dir: to.dir, root: to.root, session: to.session, seat: to.seat, recipient: repairedRecipient });
+  }
+  if (recipientDrift !== undefined && host.modelDriftNotice === undefined) {
+    const refusal = guardRefusal(directGuard);
+    if (refusal !== null) return refuse(io, dir, who, refusal.why, host, report);
+    const lead = receiving.ok ? receiving.team.orchestrator || receiving.team.operator : '';
+    const leadId = findRegisteredAgent(host.home, { team: teamIdOf(to.root), seat: lead })?.id ?? null;
+    const notice = await reportModelDrift({
+      dir: to.dir, root: to.root, session: to.session, seat: to.seat,
+      drift: recipientDrift, lead, leadId, now: host.now(),
+      send: async (notice) => {
+        let output = '';
+        let noticeAdmitted = false;
+        const quiet: Io = { ...io, stdout: (text) => { output += text; }, stderr: (text) => { output += text; } };
+        const noticeHost: SendHost = { ...host, modelDriftNotice: { at: notice.at, admitted: () => { noticeAdmitted = true; } }, sendId: () => notice.id,
+          ...(host.direct === undefined ? {} : { direct: { ...host.direct, ended: () => {} } }),
+        };
+        const spec = to.cross ? `${lead}@${to.project}` : lead;
+        const code = await runSend([spec, notice.body, '--json'], quiet, noticeHost);
+        let recorded = code === 0;
+        let detail = recorded ? 'lead notice accepted by the ordinary send' : 'lead notice refused or not delivered';
+        try {
+          const result = JSON.parse(output) as { status?: string; error?: { id?: string; message?: string } };
+          detail = recorded ? `lead notice: ${result.status ?? 'accepted by the ordinary send'}`
+            : `lead notice not delivered: ${result.error?.message ?? detail}`;
+          // Only a post-admission ending may inspect its own notice copy. Admission refusals
+          // never reach this read, and there is no fallback writer or transport here.
+          if (!recorded && ['send.held', 'send.not-delivered', 'send.not-submitted', 'send.unreachable'].includes(result.error?.id ?? '')) {
+            const copy = readRecord(join(to.dir, 'send-drops', to.session, lead, notice.id), notice.id);
+            const key = messageKeyState(host.home);
+            if (key.kind === 'key' && copy.ok && copy.record !== null && verifyRecord(copy.record, key.key)) {
+              const payload = copy.record.payload;
+              if (payload.to === lead && payload.to_id === leadId && payload.session === to.session && samePath(payload.root, to.root)
+                && payload.from === from && payload.from_id === senderIdOf(admission) && payload.body.endsWith(notice.body)) {
+                recorded = true;
+                detail = 'lead notice kept by the ordinary send; awaiting delivery';
+              }
+            }
+          }
+        } catch { /* An unreadable result or copy never proves that a notice was delivered. */ }
+        return { ok: recorded, detail, retry: !noticeAdmitted };
+      },
+    });
+    report.recipientDrift = `${modelDriftText(recipientDrift)}; ${notice}`;
+  }
 
   // The delivery walk, in the owner's cascade over the legs the receiving seat's chain resolves
   // to: the channel classes, then typed, then the mailbox. A leg that takes
@@ -4355,7 +4423,7 @@ function queuedBusy(
     logLine(dir, 'send', who, `${seatName}: queued (receiver busy) (${leg}; ${why}; id ${msgId})`, host.now());
   }
   const ms = host.now().getTime() - startedAt;
-  const summary = withDelivery(`${seatName}: queued (receiver busy) (${leg}, ${String(ms)} ms; id ${msgId})`, report);
+  const summary = withId(withDelivery(`${seatName}: queued (receiver busy) (${leg}, ${String(ms)} ms; id ${msgId})`, report), report);
   if (report.json) {
     writeAction(io, report, { status: 'queued (receiver busy)', summary, channel: leg });
   } else {
@@ -4381,7 +4449,7 @@ function handedTypedWake(
 ): number {
   report.sent = msgId;
   const ms = host.now().getTime() - startedAt;
-  const summary = `${seatName}: handed to the daemon for a typed wake; outcome pending (typed, ${String(ms)} ms; id ${msgId})`;
+  const summary = withId(`${seatName}: handed to the daemon for a typed wake; outcome pending (typed, ${String(ms)} ms; id ${msgId})`, report);
   if (report.json) {
     writeAction(io, report, { status: 'handed to the daemon for a typed wake', summary, channel: 'typed' });
   } else {
@@ -6254,7 +6322,7 @@ export function sealDropTree(dir: string, session: string, seat: string): void {
  *  nothing, and the log records writes. Exit 0, always. */
 function dryRun(io: Io, seat: string, what: string, report: Report): number {
   report.sent = null;
-  const summary = `${seat}: dry-run: ${what}`;
+  const summary = withId(`${seat}: dry-run: ${what}`, report);
   const plan: PlanStep[] = [{ step: 'send', seat, detail: what, prefix: '+' }];
   if (report.json) {
     writeAction(io, report, { status: 'dry-run', summary, dryRun: true, channel: null, plan });

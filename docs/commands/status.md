@@ -5,6 +5,10 @@ in the structured output's `notes`. A model-drift hold also says that its body w
 the sender must retry; passing that preflight ends its reporting episode. A stored hold leaves
 the count when a verified read or clearance settles it. An unreadable report says `count unknown`.
 
+Recipient model drift appears in notes as `record says X, runs Y, awaiting the lead's confirm`.
+The note compares the running recipient's registry metadata with its live model reading; it
+changes no record. An observed model refused by the entity rule is named as refused too.
+
 Shows the team as it stands: one line per seat with what the session's herdr shows of it, and one
 `difference` for each way the file, the state and the live session disagree, each naming the command
 that repairs it. It changes nothing but the owner's `last_valid` copy of the file it read; a run that

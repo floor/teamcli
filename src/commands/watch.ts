@@ -1,4 +1,5 @@
 import { traceChildStep } from '../diagnostics/child-steps.ts';
+import { clearRepairedModelDrifts } from '../send/model-drift.ts';
 import { beginBeatWork } from '../diagnostics/beat-work.ts';
 import { refuseTyping } from '../send/no-pane-messaging.ts';
 import { machineAccountsOf } from '../information/machine-accounts.ts';
@@ -1848,6 +1849,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
             stuckReading,
           );
+        }
+        if (!foreign && sources.home !== undefined && current.ok && current.notice === undefined) {
+          clearRepairedModelDrifts({ dir, root, home: sources.home, session, team, live });
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);
         await yieldBeat();
