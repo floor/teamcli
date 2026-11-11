@@ -863,10 +863,18 @@ function handleChildEvent(input: ChoresFleetInput, group: Group, child: ChoresCh
       }
       return;
     }
-    case 'watch-pulse':
-      recordChildLiveness(input, group, message.at);
+    case 'watch-pulse': {
+      const heardAt = recordChildLiveness(input, group, message.at);
+      // Lead decision 2026-11-11 05:55Z: keep the existing startup limit as a no-progress
+      // limit. Only an actual watch work seam for this group's watched root refreshes it;
+      // independent timer heartbeats and diagnostic notes do not advance startup progress.
+      if (group.routes.some((entry) => entry.route.root === message.root && entry.watch !== undefined)
+        && group.watchState.get(message.root)?.phase === 'starting') {
+        group.watchPhaseSince.set(message.root, heardAt);
+      }
       input.watchPulse?.(message.root, new Date(message.at));
       return;
+    }
     case 'watch-cycle':
       recordChildLiveness(input, group, message.at);
       return;
