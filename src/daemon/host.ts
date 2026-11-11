@@ -1953,7 +1953,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     let run: Promise<void>;
     run = (async () => {
       // Same pass and opt-in as presence; native publication has no dispatch consumer.
-      one.native.step();
+      await one.native.stepSliced();
       let healthy = false;
       let why: string | null = null;
       try {
