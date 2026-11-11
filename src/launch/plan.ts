@@ -1691,15 +1691,9 @@ export function upPlan(input: UpInput): Step[] {
       launch: seat.launch,
       command,
     });
-    if (fromResolver && profile.cli === 'grok') {
-      const why = 'resolve-launch refuses a Grok seat: no sandbox profile on this path';
-      steps.push({
-        kind: 'skip',
-        text: `${seat.name}: would refuse: ${why}`,
-        do: { do: 'refuse', seat: seat.name, why },
-      });
-      continue;
-    }
+    // A Grok seat started from a declared launcher takes the same per-seat sandbox profile as a
+    // seat started from its raw line: `plannedSandbox` above is computed for both paths and rides
+    // the launch step, which writes the profile before the pane starts.
     if (fromResolver && managedCodex) {
       const why = 'resolve-launch refuses a seat that needs the managed Codex endpoint';
       steps.push({

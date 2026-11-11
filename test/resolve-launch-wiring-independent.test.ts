@@ -249,7 +249,8 @@ test('flag off gives today\'s argv for claude, codex, grok and agy', async () =>
   const today: Record<Seat['launch'], string> = {
     claude: '--dangerously-skip-permissions',
     codex: '--no-daemon',
-    grok: '--trust',
+    // grok 1.0.77 lists no --trust; the first unattended word is now the permission mode.
+    grok: '--permission-mode auto',
     agy: '--prompt-interactive',
   };
   for (const seat of SEATS) {
