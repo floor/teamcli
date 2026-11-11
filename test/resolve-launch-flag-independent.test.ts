@@ -1,6 +1,6 @@
-// The launch argv is the declarative resolver's only when the caller asks. With the flag off,
-// the pane runs the launch line it runs today. With the flag on, the resolver argv is the base
-// line and the profile still places its launch words on it. A refused resolution is the
+// A named launcher supplies the base argv without a flag. A seat with no launcher keeps
+// its raw launch line, including when the compatibility flag is passed. The profile still
+// places its launch words on a resolved base line. A refused resolution is the
 // resolver's own message, and that seat is not started. A Grok seat that is the lead starts at
 // the shared project root, and that launch is refused in those words; beside a lead it starts
 // in its own folder beside the project, inside the trust grant.
@@ -104,7 +104,7 @@ function launcherText(name: string, binary: string, word: string): string {
   ].join('\n');
 }
 
-function teamText(root: string, seats: readonly SeatFixture[], start?: string): string {
+function teamText(root: string, seats: readonly SeatFixture[], start?: string, named = true): string {
   const first = seats[0];
   if (first === undefined) throw new Error('a scene names no seat');
   const lead = seats.find((seat) => seat.role === 'coordinator')?.name ?? first.name;
@@ -119,7 +119,7 @@ function teamText(root: string, seats: readonly SeatFixture[], start?: string): 
     `    model: "${seat.model}"`,
     `    version: "${seat.version}"`,
     `    launch: ${seat.launch}`,
-    `    launcher: ${seat.name}-resolved`,
+    ...(named ? [`    launcher: ${seat.name}-resolved`] : []),
   ].join('\n')).join('\n');
   return `format: 1
 project: acme
@@ -233,7 +233,7 @@ function writeLaunchers(root: string, seats: readonly SeatFixture[], word = '--f
   }
 }
 
-function prepare(seats: readonly SeatFixture[], word?: string, covered = false, ownStart = false): { root: string; home: string; made: ReturnType<typeof world> } {
+function prepare(seats: readonly SeatFixture[], word?: string, covered = false, ownStart = false, named = true): { root: string; home: string; made: ReturnType<typeof world> } {
   scratch = fixtureBase('resolve-launch-');
   const home = join(scratch, 'home');
   const root = join(scratch, 'repo');
@@ -243,7 +243,7 @@ function prepare(seats: readonly SeatFixture[], word?: string, covered = false, 
   const start = ownStart ? join(scratch, 'grok-hand') : undefined;
   if (start !== undefined) mkdirSync(start, { recursive: true, mode: 0o700 });
   writeLaunchers(root, seats, word);
-  approve(root, home, teamText(root, seats, start), covered);
+  approve(root, home, teamText(root, seats, start, named), covered);
   return { root, home, made: world() };
 }
 
@@ -283,16 +283,16 @@ function release(): void {
   scratch = '';
 }
 
-describe('resolve-launch stays off unless named', () => {
-  test('flag off runs today\'s argv for claude, codex, grok and agy', async () => {
+describe('a named launcher resolves automatically', () => {
+  test('a seat without a launcher keeps its raw argv with the compatibility flag', async () => {
     for (const seat of CLIS) {
       // A Grok lead starts at the shared project root, which the sandbox refuses. Beside a
       // lead, this seat starts in its own folder beside the project, inside the trust grant.
       const own = seat.cli === 'grok';
       const seats = own ? [firstSeat(), seat] : [alone(seat)];
-      const { root, home, made } = prepare(seats, undefined, false, own);
+      const { root, home, made } = prepare(seats, undefined, false, own, false);
       const io = testIo(root, OWNER);
-      const code = await runUp([], io, sources(home, made));
+      const code = await runUp(['--resolve-launch'], io, sources(home, made));
       const command = made.runs.map((run) => run.command).find((line) => line.includes(`${seat.launch} `) || line.endsWith(seat.launch) || line.includes(` ${seat.launch} `));
       expect(command, `${seat.name}\n${io.out}${io.err}`).toBeDefined();
       expect(command).toContain('AGENT_UNATTENDED=1');
@@ -304,12 +304,12 @@ describe('resolve-launch stays off unless named', () => {
     }
   }, 30000);
 
-  test('flag on places the profile words on the resolver argv', async () => {
+  test('without a flag a named launcher gets its resolved argv and profile words', async () => {
     for (const seat of CLIS) {
       const one = alone(seat);
       const { root, home, made } = prepare([one], undefined, true);
       const io = testIo(root, OWNER);
-      const code = await runUp(['--resolve-launch'], io, sources(home, made));
+      const code = await runUp([], io, sources(home, made));
       const said = io.out + io.err;
       if (seat.cli === 'grok') {
         // This seat is the lead, so its start folder is the shared project root.
@@ -369,7 +369,7 @@ describe('resolve-launch stays off unless named', () => {
     const seat = firstSeat();
     const { root, home, made } = prepare([seat], '{inbox}', true);
     const io = testIo(root, OWNER);
-    const code = await runUp(['--resolve-launch'], io, sources(home, made));
+    const code = await runUp([], io, sources(home, made));
     expect(code, io.out + io.err).not.toBe(0);
     expect(io.out + io.err).toContain(PLACEHOLDER);
     expect(made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
@@ -384,14 +384,14 @@ describe('resolve-launch stays off unless named', () => {
       state.sessions[SESSION] = held;
     });
     const io = testIo(root, OWNER);
-    const code = await runUp(['--resolve-launch'], io, sources(home, made));
+    const code = await runUp([], io, sources(home, made));
     expect(code, io.out + io.err).not.toBe(0);
     expect(io.out + io.err).toContain(BLANK_SESSION);
     expect(made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
   });
 });
 
-describe('team restart uses the same flag', () => {
+describe('team restart selects the named launcher', () => {
   function restartSources(home: string, made: ReturnType<typeof world>): RestartSources {
     return {
       home,
@@ -411,11 +411,11 @@ describe('team restart uses the same flag', () => {
     };
   }
 
-  test('flag off restarts on today\'s argv and flag on places the profile words', async () => {
+  test('raw compatibility restart is unchanged and a named launcher resolves without a flag', async () => {
     const seat = firstSeat();
-    const off = prepare([seat]);
+    const off = prepare([seat], undefined, false, false, false);
     const offIo = testIo(off.root, OWNER);
-    const offCode = await runRestart([seat.name], offIo, restartSources(off.home, off.made));
+    const offCode = await runRestart([seat.name, '--resolve-launch'], offIo, restartSources(off.home, off.made));
     expect(offCode, offIo.out + offIo.err).toBe(0);
     const offCommand = off.made.runs.map((run) => run.command).find((line) => line.includes(seat.launch));
     expect(offCommand).toBeDefined();
@@ -426,11 +426,18 @@ describe('team restart uses the same flag', () => {
 
     const on = prepare([seat], undefined, true);
     const onIo = testIo(on.root, OWNER);
-    const onCode = await runRestart([seat.name, '--resolve-launch'], onIo, restartSources(on.home, on.made));
+    const onCode = await runRestart([seat.name], onIo, restartSources(on.home, on.made));
     const onCommand = on.made.runs.map((run) => run.command).find((line) => line.includes(seat.binary));
     expect(onCommand, onIo.out + onIo.err).toBeDefined();
     expect(onCommand).toContain('--from-resolver');
     expect(onCommand).toContain(placedWord(seat.cli));
     expect(onCode, onIo.out + onIo.err).toBe(0);
+    const dryIo = testIo(on.root, OWNER);
+    const dryCode = await runRestart([seat.name, '--dry-run'], dryIo, restartSources(on.home, on.made));
+    expect(dryCode, dryIo.out + dryIo.err).toBe(0);
+    expect(dryIo.out).toContain(seat.binary);
+    const output = join(import.meta.dir, '..', 'node_modules', '.cache', 'launcher-grok-tests', 'merge-2-dry-run.txt');
+    mkdirSync(dirname(output), { recursive: true });
+    writeFileSync(output, dryIo.out + dryIo.err);
   });
 });

@@ -122,7 +122,7 @@ export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --resume, --file and --session are the owner's and take no --client), and is never the owner.
 
---resolve-launch takes the named launcher argv as the base line and still places the profile's launch words on it. It is off unless named. A resolution that cannot be placed refuses that seat and starts it nowhere.
+A seat that names a launcher uses its resolved argv as the base line and still places the profile's launch words on it. --resolve-launch is accepted for compatibility and changes nothing. A resolution that cannot be placed refuses that seat and starts it nowhere.
 
 Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restart is refused or fails, 2 when the invocation or team file can't be read.
 `;
@@ -1053,17 +1053,18 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
   const liveRules = standing.kind !== 'verified' || owner;
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules, input.rulesOrigin ?? 'file');
+  const resolveLaunch = planSeat.launcher !== undefined;
   const tree = worktreeOf(recordedSession, next.name);
   if (tree !== undefined) planSeat.worktree = tree.path;
-  if (input.resolveLaunch === true && input.resume !== undefined) planSeat.resolveSession = input.resume;
-  if (input.resolveLaunch === true) {
+  if (resolveLaunch && input.resume !== undefined) planSeat.resolveSession = input.resume;
+  if (resolveLaunch) {
     const covered = launcherCoverRefusal(
       root,
       standing.kind === 'verified' ? standing.record.approval.fingerprints.sections : undefined,
     );
     if (covered !== null) return { kind: 'not-ready', message: covered };
   }
-  const launcherDiscovery = input.resolveLaunch === true ? loadTeamLaunchers(root) : undefined;
+  const launcherDiscovery = resolveLaunch ? loadTeamLaunchers(root) : undefined;
   if (input.registryLaunch) planSeat.launch = input.registryLaunch;
   if (next.cli === 'codex') {
     const recipe = currentCodexRecipe(planSeat.launch);
@@ -1123,7 +1124,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // The home and the team let the plan read the seat's codex-daemon policy, as `team up` does.
     home,
     team,
-    ...(input.resolveLaunch === true ? { resolveLaunch: true as const, launcherDiscovery } : {}),
+    ...(resolveLaunch ? { resolveLaunch: true as const, launcherDiscovery } : {}),
   }) : [];
   if (next.cli === 'codex') {
     const held = preview.find((step) => step.do?.do === 'refuse' && step.do.why.includes('obsolete Codex feature override'));
@@ -1493,7 +1494,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       home,
       team,
       ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
-      ...(input.resolveLaunch === true ? { resolveLaunch: true as const, launcherDiscovery } : {}),
+      ...(resolveLaunch ? { resolveLaunch: true as const, launcherDiscovery } : {}),
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
     // plan starts.

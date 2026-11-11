@@ -753,10 +753,9 @@ export interface UpInput {
     /** The whole step is already in force: the sentence says so, and nothing runs. */
     skip?: string;
   };
-  /** When true, a seat's pane command is the declarative launcher's argv. Absent keeps the
-   *  launch line the file already runs. */
+  /** Accepted for compatibility. A seat's launcher now selects resolution on its own. */
   resolveLaunch?: boolean;
-  /** Launcher homes for this run. Read only when `resolveLaunch` is set. */
+  /** Launcher homes for seats that name a launcher. */
   launcherDiscovery?: Discovery;
 }
 
@@ -1503,7 +1502,7 @@ export function upPlan(input: UpInput): Step[] {
     let command: string;
     let fromResolver = false;
     let baseLine = recordedLine;
-    if (input.resolveLaunch === true) {
+    if (seat.launcher !== undefined) {
       const ctx: ResolveContext = {
         teamRoot: input.root,
         teamHome: input.home ?? input.root,
