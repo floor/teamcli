@@ -8,7 +8,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { plainLine } from '../launch/plain.ts';
 import { readEntityModelRule, type EntityModelRule } from '../policy/entity-rule.ts';
 import { labOfModel, modelRuleAllows, modelRuleEntryFor, modelRuleSentence, modelRuleUnknownSentence } from '../policy/model-rule.ts';
-import { findAgent, type Agent } from '../registry/agents.ts';
+import { agentsDir, findAgent, type Agent } from '../registry/agents.ts';
 import { paneHoldsOnlyShell } from '../launch/identity.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { pidAlive, withLock } from '../state.ts';
@@ -168,7 +168,10 @@ export function clearModelDrift(input: Scope & {
   const observed = input.observation.model;
   try {
     const folder = paths(input);
-    withLock(folder.dir, () => {
+    // Registry -> episode, matching the registry -> state order used by registry writers.
+    // The unlink is the commit point: no normal registry writer may publish a new binding
+    // between this fresh comparison and deletion (lead R3 decision, 2026-11-11 05:12Z).
+    withLock(agentsDir(input.home), () => withLock(folder.dir, () => {
       const held = readEpisode(folder.file, input.root);
       // A pane read can outlive an external registry write. Revalidate the current winner from
       // files through the existing registry validator, never the send's earlier memo entry.
@@ -179,7 +182,7 @@ export function clearModelDrift(input: Scope & {
         || record.id !== input.recipient || recipientBinding(record) !== fence.binding
         || modelDiffers(observed, record.signing)) return;
       unlinkSync(folder.file);
-    });
+    }));
   } catch { /* An unreadable or busy report stays visible; never guess that repair occurred. */ }
 }
 
