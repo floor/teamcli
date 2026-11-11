@@ -166,6 +166,15 @@ unread_model: launch
 screen:
   unknown:
     - any: ['Resume this session with:']
+  # The folder trust dialog, from the 1.0.77 capture (`grok/1.0.77/trust.txt`): a fresh start
+  # without `--trust` drew it on 2026-11-11, in the seat's own folder, each time. It takes one
+  # key (`y` proceeds, `n` quits), so text typed at it answers it. A seat on it is waiting for
+  # a person, never ready.
+  trust:
+    - all:
+        - 'Do you trust the contents of this directory\?'
+        - '^\s*Yes, proceed\s+y\s*$'
+        - '^\s*No, quit\s+n\s*$'
   # The answer widget, from the 1.0.52 capture. A choice and a write approval draw the same
   # chrome: `Waiting on answers`, the ┃ frame, `↑/↓ navigate`, `Enter:submit`, and
   # `Tab:next answer`. A fresh directory drew no trust dialog, and a shell command in the
