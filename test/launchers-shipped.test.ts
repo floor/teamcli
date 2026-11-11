@@ -66,6 +66,10 @@ test('claude-code builds the Anthropic model id from the seat and skips the CLI 
   expect(reviewer).not.toContain('--dangerously-skip-permissions');
   expect(reviewer.join(' ')).toContain('--permission-mode dontAsk');
   expect(reviewer[reviewer.indexOf('--disallowedTools') + 1]).toContain('Bash(git *)');
+  const settings = JSON.parse(reviewer[reviewer.indexOf('--settings') + 1] ?? '{}');
+  expect(settings.sandbox.enabled).toBe(true);
+  expect(settings.sandbox.excludedCommands).toContain('team');
+  expect(settings.permissions.deny).toContain('Edit(**)');
   expect(shippedLauncher('claude-code', { model: 'DeepSeek Flash', version: '4.0', vendor: 'deepseek' })?.argv)
     .toEqual(['claude', '--dangerously-skip-permissions']);
   expect(shippedEnv('claude-code', { model: 'Claude Opus', version: '5.5', effort: 'high' })).toEqual(['CLAUDE_CODE_EFFORT_LEVEL=high']);

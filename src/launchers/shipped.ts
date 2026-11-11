@@ -62,11 +62,15 @@ function claudePermissions(role: string | undefined): string[] {
     '--permission-mode', 'dontAsk',
     '--allowedTools', 'Read,Glob,Grep,Bash(team *)',
     '--disallowedTools', 'Write,Edit,NotebookEdit,Bash(git *),Bash(bun *)',
-    // Known gap, measured 2026-11-11: the tool denials alone leave a shell redirection free to
-    // write a file (Write refused, `probe.txt` still written through Bash). Claude Code's sandbox
-    // stops that write, but with it the seat's `team send` could not find its team, even with
-    // `team` in `excludedCommands`. Until both hold at once, a Claude Code seat on this line
-    // cannot run git, but is not read-only.
+    // The tool denials alone leave a shell redirection free to write a file (measured
+    // 2026-11-11: Write refused, `probe.txt` still written through Bash). Claude Code's sandbox
+    // stops that write. `team` reaches its terminal host and its daemon over local sockets,
+    // which the sandbox closes by default, so those stay open; it runs outside the sandbox. The
+    // excluded command is named in three spellings because `["team"]` alone did not take effect
+    // (the seat's send still could not find its team); with these three it was delivered.
+    // Measured live 2026-11-11 on Claude Code 2.1.322: team send delivered; `printf … > file`,
+    // `git status` and the Write tool were each refused, and no file was written.
+    '--settings', '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":false,"excludedCommands":["team","team *","team:*"],"network":{"allowAllUnixSockets":true}},"permissions":{"deny":["Edit(**)","Write(**)"]}}',
   ];
 }
 
