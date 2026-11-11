@@ -52,3 +52,9 @@ test('only a read-only seat on a shipped launcher goes without the sandbox profi
   expect(shippedLauncherIsReadOnly('some-file-launcher', 'reviewer')).toBe(false);
   expect(shippedLauncherIsReadOnly(undefined, 'reviewer')).toBe(false);
 });
+
+test('the model follows the seat\'s version, 4.7 when it names none', () => {
+  expect(shippedLauncher('grok-build', { role: 'builder', version: '4.6' })?.argv).toContain('grok-4.6');
+  expect(shippedLauncher('grok-build', { role: 'builder' })?.argv).toContain('grok-4.7');
+  expect(shippedLauncher('grok-build', { role: 'builder', version: '4.7; rm' })?.argv).toContain('grok-4.7');
+});

@@ -1526,6 +1526,7 @@ export function upPlan(input: UpInput): Step[] {
       const shipped = shippedLauncher(seat.launcher, {
         ...(seat.role === undefined ? {} : { role: seat.role }),
         ...(seat.effort === undefined ? {} : { effort: seat.effort }),
+        ...(seat.version === undefined ? {} : { version: seat.version }),
       });
       const decided = resolvedCommand({
         launcher: seat.launcher,

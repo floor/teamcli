@@ -5,7 +5,7 @@
 import type { LauncherDefinition } from './types.ts';
 
 /** What a seat may ask of a shipped launcher. */
-export type ShippedOptions = { role?: string; effort?: string };
+export type ShippedOptions = { role?: string; effort?: string; version?: string };
 
 /** The seat roles that only read: they get the CLI's own denials for writes, edits and git. */
 const READ_ONLY_ROLES: ReadonlySet<string> = new Set(['reviewer', 'tester', 'assistant']);
@@ -23,16 +23,22 @@ function grokBuild(options: ShippedOptions): LauncherDefinition {
        '--deny', 'Write', '--deny', 'Edit', '--deny', 'Bash(git *)', '--deny', 'Bash(bun *)']
     : ['--always-approve'];
   const effort = options.effort === undefined || options.effort === '' ? [] : ['--effort', options.effort];
+  // The model is the seat's own: `grok-<version>` from its record (`version: "4.7"`), the id
+  // `grok models` lists on 1.0.77. A seat that names no version gets 4.7, the account default
+  // `grok models` showed on 2026-11-11. A version that is not a plain dotted number is refused
+  // by the caller's validation; here it is kept out of the argv.
+  const version = options.version !== undefined && /^\d+(\.\d+)*$/.test(options.version) ? options.version : '4.7';
+  const model = `grok-${version}`;
   return {
     format: 1,
     name: 'grok-build',
     kind: 'custom',
-    summary: readOnly ? 'Grok Build, Grok 4.7, read-only seat' : 'Grok Build, Grok 4.7, builder seat',
+    summary: readOnly ? `Grok Build, ${model}, read-only seat` : `Grok Build, ${model}, builder seat`,
     // `--trust`: 1.0.77's help does not list it, but the CLI takes it. Measured 2026-11-11 in a
     // fresh empty folder: with it the CLI opened straight on its prompt; without it every fresh
     // start of a seat drew the "Do you trust the contents of this directory?" dialog, in the
     // same folder each time. The folder is the seat's own, made for it by the team.
-    argv: ['grok', '--trust', '--model', 'grok-4.7', '--no-subagents', ...permission, ...effort],
+    argv: ['grok', '--trust', '--model', model, '--no-subagents', ...permission, ...effort],
   };
 }
 
