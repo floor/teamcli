@@ -51,6 +51,25 @@ function claudeModelId(model: string | undefined, version: string | undefined): 
   return `claude-${family.toLowerCase()}-${version.replaceAll('.', '-')}`;
 }
 
+/** Claude Code's permission words for a seat. A read-only seat (reviewer, tester, assistant)
+ *  runs without the bypass: `--permission-mode dontAsk` refuses, with no prompt, every tool not
+ *  allowed; it may read, search and run `team`, and writes, edits, git and bun are denied. Each
+ *  list is one comma-separated word so no later word of the line is read into it. Every other
+ *  seat keeps the bypass the unattended seats have run with. */
+function claudePermissions(role: string | undefined): string[] {
+  if (role === undefined || !READ_ONLY_ROLES.has(role)) return ['--dangerously-skip-permissions'];
+  return [
+    '--permission-mode', 'dontAsk',
+    '--allowedTools', 'Read,Glob,Grep,Bash(team *)',
+    '--disallowedTools', 'Write,Edit,NotebookEdit,Bash(git *),Bash(bun *)',
+    // Known gap, measured 2026-11-11: the tool denials alone leave a shell redirection free to
+    // write a file (Write refused, `probe.txt` still written through Bash). Claude Code's sandbox
+    // stops that write, but with it the seat's `team send` could not find its team, even with
+    // `team` in `excludedCommands`. Until both hold at once, a Claude Code seat on this line
+    // cannot run git, but is not read-only.
+  ];
+}
+
 /** Claude Code. The CLI's own permission prompts are skipped as on every unattended seat; the
  *  model is the seat's. For Anthropic the model id is built from the seat's model and version.
  *  For another provider (DeepSeek, Moonshot, Z.ai) the provider's env words come from the
@@ -63,7 +82,7 @@ function claudeCode(options: ShippedOptions): LauncherDefinition {
     name: 'claude-code',
     kind: 'custom',
     summary: `Claude Code${provider}`,
-    argv: ['claude', ...(model === null ? [] : ['--model', model]), '--dangerously-skip-permissions'],
+    argv: ['claude', ...(model === null ? [] : ['--model', model]), ...claudePermissions(options.role)],
   };
 }
 

@@ -451,6 +451,10 @@ function optionKey(cli: string, word: string): string {
   // Grok 1.0.77 accepts these as alternative permission selectors. Appending auto
   // to an explicit always-approve line changes its effective permission mode.
   if (cli === 'grok' && flag === '--always-approve') return '--permission-mode';
+  // Claude Code the same way: a line that names its own `--permission-mode` (a read-only seat's
+  // `dontAsk`) does not also get the `--dangerously-skip-permissions` default, which would turn
+  // the bypass back on over the seat's own choice (seen 2026-11-11 on a tester seat).
+  if (cli === 'claude-code' && flag === '--dangerously-skip-permissions') return '--permission-mode';
   const alias = aliases[flag];
   if (alias !== undefined) return alias;
   // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,

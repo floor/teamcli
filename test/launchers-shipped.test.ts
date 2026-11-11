@@ -62,6 +62,10 @@ test('the model follows the seat\'s version, 4.7 when it names none', () => {
 test('claude-code builds the Anthropic model id from the seat and skips the CLI prompts', () => {
   expect(shippedLauncher('claude-code', { model: 'Claude Opus', version: '5.5' })?.argv)
     .toEqual(['claude', '--model', 'claude-opus-5-5', '--dangerously-skip-permissions']);
+  const reviewer = shippedLauncher('claude-code', { model: 'Claude Haiku', version: '5.5', role: 'tester' })?.argv ?? [];
+  expect(reviewer).not.toContain('--dangerously-skip-permissions');
+  expect(reviewer.join(' ')).toContain('--permission-mode dontAsk');
+  expect(reviewer[reviewer.indexOf('--disallowedTools') + 1]).toContain('Bash(git *)');
   expect(shippedLauncher('claude-code', { model: 'DeepSeek Flash', version: '4.0', vendor: 'deepseek' })?.argv)
     .toEqual(['claude', '--dangerously-skip-permissions']);
   expect(shippedEnv('claude-code', { model: 'Claude Opus', version: '5.5', effort: 'high' })).toEqual(['CLAUDE_CODE_EFFORT_LEVEL=high']);
