@@ -522,6 +522,10 @@
         }
       }
     },
+    "seat_folder": {
+      "type": "string",
+      "$comment": "relative to the team folder; {project}, {team} and {seat} are filled in"
+    },
     "seats": {
       "type": "array",
       "minItems": 1,

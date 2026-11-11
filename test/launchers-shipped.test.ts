@@ -24,13 +24,13 @@ test('a reviewer seat gets the read-only line: no always-approve, writes, edits,
   for (const rule of ['Write', 'Edit', 'Bash(git *)', 'Bash(bun *)']) {
     const at = argv.indexOf(rule);
     expect(at, rule).toBeGreaterThan(0);
-    expect(argv[at - 1], rule).toBe('--deny');
+    expect(argv.at(at - 1), rule).toBe('--deny');
   }
   expect(argv[argv.indexOf('Read') - 1]).toBe('--allow');
 });
 
 test('the seat\'s effort rides the line when it has one', () => {
-  expect(shippedLauncher('grok-build', { role: 'builder', effort: 'high' })?.argv.slice(-2)).toEqual(['--effort', 'high']);
+  expect((shippedLauncher('grok-build', { role: 'builder', effort: 'high' })?.argv ?? []).slice(-2)).toEqual(['--effort', 'high']);
   expect(shippedLauncher('grok-build', { role: 'builder' })?.argv).not.toContain('--effort');
 });
 

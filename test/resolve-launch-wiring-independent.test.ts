@@ -249,8 +249,7 @@ test('flag off gives today\'s argv for claude, codex, grok and agy', async () =>
   const today: Record<Seat['launch'], string> = {
     claude: '--dangerously-skip-permissions',
     codex: '--no-daemon',
-    // grok 1.0.77 lists no --trust; the first unattended word is now the permission mode.
-    grok: '--permission-mode auto',
+    grok: '--trust',
     agy: '--prompt-interactive',
   };
   for (const seat of SEATS) {
@@ -294,7 +293,7 @@ test('flag on starts claude, codex and agy with the resolver argv plus their pro
   }
 });
 
-test('flag on refuses a Grok seat by name and starts nothing', async () => {
+test('a Grok seat at the shared project root is refused by name and starts nothing', async () => {
   const seat = SEATS.find((one) => one.launch === 'grok');
   if (seat === undefined) throw new Error('a scene names no grok seat');
   const { root, home, made } = prepare([seat], '--from-resolver', true);
@@ -302,9 +301,10 @@ test('flag on refuses a Grok seat by name and starts nothing', async () => {
   const code = await runUp(['--resolve-launch'], io, sources(home, made));
   const said = io.out + io.err;
   expect(code, said).not.toBe(0);
-  expect(said).toContain(`${seat.name}:`);
+  expect(said).toContain(seat.name);
   // This seat is the only one, so it is the lead and starts at the shared project root.
-  expect(said).toContain('cannot start in or grant an ancestor of the shared project root, lobby or team config folder; set the seat cwd to its own worktree or clone, then launch it again');
+  // Refused by the protected-checkout guard of team up, before any launch is planned.
+  expect(said).toContain('set its cwd to its own worktree or clone, then launch it again');
   expect(made.runs.some((run) => launchesSeat(run.command, seat))).toBe(false);
 });
 

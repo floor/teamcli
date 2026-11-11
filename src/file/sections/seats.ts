@@ -7,6 +7,7 @@ import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/r
 import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, MESSAGING_STORES, SENDER_NAME_MODES, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
+import { seatFolderOf } from './seat_folder.ts';
 import { hasVersionToken } from '../signature.ts';
 import { seatNumberOf } from '../../seat-names.ts';
 import type { Check } from '../check.ts';
@@ -43,12 +44,14 @@ export const DAEMON_NAME = 'daemon';
 export const seats: Section = {
   name: 'seats',
   owner: false,
-  after: ['trust', 'budgets'],
+  after: ['trust', 'budgets', 'project', 'in_project', 'seat_folder'],
   validate(entry, ctx) {
     const trust = valueOf<string[]>(ctx, 'trust');
+    const team = valueOf<string>(ctx, 'project');
+    const folder = { pattern: valueOf<string>(ctx, 'seat_folder'), team, project: valueOf<string | null>(ctx, 'in_project') ?? team };
     const accounts = valueOf<Budgeted>(ctx, 'budgets').declared;
     const marks: LeadMark[] = [];
-    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks, ctx.rootDir);
+    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks, ctx.rootDir, folder);
     ctx.leads = marks;
     return seats;
   },
@@ -172,7 +175,7 @@ export const seats: Section = {
 // that names an `account:` must name one of these, or it would silently spend nothing budgeted.
 function readSeats(
   entry: YamlEntry | undefined, check: Check, trust: string[], topLine: number, broken: Set<string>, accounts: ReadonlySet<string>,
-  marks: LeadMark[], root?: string,
+  marks: LeadMark[], root?: string, folder?: { pattern: string; project: string; team: string },
 ): DraftSeat[] {
   if (!entry) {
     check.fail(topLine, 'seats is required: at least the orchestrator\'s and the operator\'s seat');
@@ -242,7 +245,13 @@ function readSeats(
     if (display && version && fields.get('display') && !hasVersionToken(display, version)) {
       check.fail(fields.get('display')?.line ?? line, `${at}: display must contain the version "${version}" as a token of its own`);
     }
-    const place = readCwd(fields.get('cwd'), at, trust, check, root);
+    // A CLI that writes into its start folder (Grok, Cursor) needs a folder of its own. A line
+    // that names no cwd gets the team's seat folder, so adding such a seat needs no path.
+    const ownFolder = fields.get('cwd') === undefined && (cli === 'grok' || cli === 'cursor')
+      && folder !== undefined && folder.team !== '' && name !== undefined;
+    const place = ownFolder
+      ? { cwd: normalize(seatFolderOf(folder.pattern, folder.project, folder.team, name)), outside: false }
+      : readCwd(fields.get('cwd'), at, trust, check, root);
     const cwd = place.cwd;
     const mode = check.oneOf(fields.get('mode'), `${at}: mode`, MODES);
     const parked = check.flag(fields.get('parked'), `${at}: parked`);

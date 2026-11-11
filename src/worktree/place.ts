@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { migrationText } from '../file/migrate.ts';
@@ -99,6 +99,14 @@ export type OwnStartFolderInput = {
 export function ownStartFolderProblem(input: OwnStartFolderInput): string | null {
   const repair = 'set the seat cwd to its own worktree or clone, then launch it again';
   let start: string;
+  // A seat's own folder inside the team's folder is made when it is missing: it is where the
+  // team's seat_folder setting puts a Grok or Cursor seat that names no cwd. Never the team's
+  // folder itself, never its state folder, never a path outside it.
+  const wanted = resolve(input.root, input.cwd);
+  const below = relative(input.root, wanted);
+  if (below !== '' && !below.startsWith('..') && !isAbsolute(below) && below.split(sep)[0] !== '.agents' && !existsSync(wanted)) {
+    try { mkdirSync(wanted, { recursive: true }); } catch { /* the check below reports it */ }
+  }
   try {
     start = realpathSync(resolve(input.root, input.cwd));
     if (!statSync(start).isDirectory()) throw new Error('not a directory');

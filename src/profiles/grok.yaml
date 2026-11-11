@@ -24,12 +24,14 @@ process_names:
 tested:
   from: '1.0.50'
   to: '1.0.52'
-# Measured with `grok --help` on 1.0.77 (50ca579fa996): --trust is not listed,
-# so it is not a default. --always-approve and --permission-mode are alternative
-# selectors; an explicit choice keeps the profile from adding another mode.
-# The allow defaults below remain for a launch without its own --allow rules.
+# `--trust` is not listed by `grok --help` (1.0.70, 1.0.77) but is taken: on 1.0.77
+# (50ca579fa996), 2026-11-11, a fresh empty folder opened straight on the prompt with it and drew
+# the folder trust dialog without it, on every fresh start. --always-approve and
+# --permission-mode are alternative selectors; an explicit choice keeps the profile from adding
+# another mode. The allow defaults below remain for a launch without its own --allow rules.
 # The sandbox profile is named per launch by src/launch/grok-sandbox.ts.
 unattended:
+  - --trust
   - --permission-mode
   - auto
   - --allow

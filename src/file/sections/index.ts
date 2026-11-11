@@ -18,6 +18,7 @@ import { orchestrator } from './orchestrator.ts';
 import { operator } from './operator.ts';
 import { session } from './session.ts';
 import { visibility } from './visibility.ts';
+import { seatFolder } from './seat_folder.ts';
 import { tools } from './tools.ts';
 import { budgets } from './budgets.ts';
 import { watch } from './watch.ts';
@@ -85,6 +86,9 @@ export const SECTIONS: readonly Section[] = [
   budgets,
   watch,
   watchChecks,
+  // Where a seat that needs its own folder starts when its line names none: non-owner and
+  // additive, read by the seats section below.
+  seatFolder,
   seats,
   // The file's word on how a send to its seats walks: non-owner and additive, so a file written
   // before it keeps every digest and approval it had, and it changes no approval fingerprint.

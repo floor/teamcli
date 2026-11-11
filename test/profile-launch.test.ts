@@ -193,11 +193,11 @@ describe('Grok permission selectors', () => {
     return launchCommand(profile, line, 'Rules.');
   }
 
-  test('always-approve keeps its mode without adding auto or trust', () => {
+  test('always-approve keeps its mode without adding auto, and the folder is trusted', () => {
     const result = command('grok --always-approve --model grok-4.7 --no-subagents');
     expect(result).toContain('--always-approve');
     expect(result).not.toContain('--permission-mode');
-    expect(result).not.toContain('--trust');
+    expect(result.match(/--trust/g)).toHaveLength(1);
   });
 
   test.each(['auto', 'dontAsk'])('an explicit permission-mode %s keeps its value', (mode) => {
@@ -224,10 +224,10 @@ describe('Grok permission selectors', () => {
       .toContain('--permission-mode auto');
   });
 
-  test('no permission selector gets the current auto default without trust', () => {
+  test('no permission selector gets the auto default, and the folder is trusted', () => {
     const result = command('grok');
     expect(result).toContain('--permission-mode auto');
-    expect(result).not.toContain('--trust');
+    expect(result).toContain('--trust');
   });
 
   test('explicit permission-mode also suppresses an always-approve profile default', () => {
@@ -553,7 +553,7 @@ describe('the resume line a launch appends', () => {
     const profile = profileFor('grok');
     if (!profile) throw new Error('grok has no profile');
     expect(launchCommand(profile, `grok -r ${id}`, 'Rules.'))
-      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --rules Rules.`);
+      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --rules Rules.`);
   });
 
   test('a Grok line that already names a session keeps its own choice', () => {
