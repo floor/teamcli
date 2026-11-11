@@ -1,3 +1,4 @@
+import { traceBeatWork } from './diagnostics/beat-work.ts';
 // One child process, awaited and bounded: the process side of every async read in the watch.
 // Each read gets a deadline of its own (the per-call limit, shortened by the pass's remaining
 // budget) and the loop's stop signal, so a read can never outlive the pass it was taken for.
@@ -18,7 +19,7 @@ export const DEFAULT_CHILD_TIMEOUT_MS = 10_000;
 
 /** One child, its stdout, or a rejection. Killed with SIGKILL at its deadline or at the stop. */
 export function execText(file: string, args: readonly string[], options: ChildOptions = {}): Promise<string> {
-  return new Promise((resolve, reject) => {
+  const run = () => new Promise<string>((resolve, reject) => {
     execFile(file, [...args], {
       encoding: 'utf8',
       timeout: options.timeoutMs ?? DEFAULT_CHILD_TIMEOUT_MS,
@@ -27,6 +28,7 @@ export function execText(file: string, args: readonly string[], options: ChildOp
       ...(options.env === undefined ? {} : { env: options.env }),
     }, (error, stdout) => (error === null ? resolve(stdout) : reject(error)));
   });
+  return file === 'herdr' ? traceBeatWork('terminal-host read (wall)', run) : run();
 }
 
 /** A child whose deadline fired: killed with the signal above, whatever it traps. */

@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // Starting one restore child and reading its one result.
 //
 // A child is a second process running the entry beside this module, so a restore pass's
@@ -235,7 +236,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
   });
 
   child.stdout?.setEncoding('utf8');
-  child.stdout?.on('data', (chunk: string) => {
+  child.stdout?.on('data', (chunk: string) => traceBeatWork('restore child handling (sync)', () => {
     stdoutBuffer += chunk;
     let nl = stdoutBuffer.indexOf('\n');
     while (nl !== -1) {
@@ -266,7 +267,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
       endRunning();
       discardRestoreInherit(input.home, nonce);
     }
-  });
+  }));
 
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => {

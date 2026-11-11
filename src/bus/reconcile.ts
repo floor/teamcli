@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../diagnostics/beat-work.ts';
 // Reconciliation pass for the event bus (RFC 002 Amendment 01 §4.2).
 //
 // Runs at bus startup and every `reconcile-interval` seconds. Scans the project's durable
@@ -1483,7 +1484,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
 export function reconcilePass(options: ReconcileOptions): ReconcileResult {
   const steps = reconcileSteps(options);
   for (;;) {
-    const next = steps.next();
+    const next = traceBeatWork(`mail scan slice (sync):${options.root}`, () => steps.next());
     if (next.done) return next.value;
   }
 }
@@ -1602,11 +1603,15 @@ async function retryDeferredAppends(
  * loop. The pass result carries the records that eventually landed. An aborted pass stops
  * between slices and before its next append, and answers as cancelled rather than as a failure.
  */
-export async function reconcilePassAsync(options: ReconcileOptions): Promise<ReconcileResult> {
+export function reconcilePassAsync(options: ReconcileOptions): Promise<ReconcileResult> {
+  return traceBeatWork(`mail scan (wall):${options.root}`, () => measuredReconcilePass(options));
+}
+
+async function measuredReconcilePass(options: ReconcileOptions): Promise<ReconcileResult> {
   const state = options.state ?? createReconcileState();
   // Read once for the pass and its deferred drain, so neither re-reads the policy store per
   // append and both count the same retained files.
-  const resolved = withLogSettings(options);
+  const resolved = traceBeatWork(`mail scan settings (sync):${options.root}`, () => withLogSettings(options));
   const sliceMs = options.sliceMs ?? DEFAULT_RECONCILE_SLICE_MS;
   const steps = reconcileSteps({ ...resolved, state, appendWaitMs: 0 });
   activeAsyncPasses += 1;
@@ -1618,7 +1623,7 @@ export async function reconcilePassAsync(options: ReconcileOptions): Promise<Rec
       // stops the pass before it reads or appends anything else. Closing the generator runs the
       // finally of a seal that is holding the event lock across a yield, so the key is released.
       if (options.signal?.aborted === true) return cancelledResult();
-      const next = steps.next();
+      const next = traceBeatWork(`mail scan slice (sync):${options.root}`, () => steps.next());
       if (next.done) {
         finished = true;
         const result = next.value;
