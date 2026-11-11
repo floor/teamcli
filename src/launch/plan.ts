@@ -23,6 +23,7 @@ import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-
 import { discover } from '../launchers/resolve.ts';
 import { shippedEnv, shippedLauncher, shippedLauncherIsReadOnly } from '../launchers/shipped.ts';
 import { launchAccountFor, type LaunchAccount } from '../launchers/accounts.ts';
+import { identityFor } from '../commands/git.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
 import { getRelativeDirOps } from '../send/drop-retention.ts';
 import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
@@ -1563,6 +1564,22 @@ export function upPlan(input: UpInput): Step[] {
       // in front of the CLI as `env` assignments; they are the profile's own words, not quoted
       // again, so the pane's shell runs the key lookup itself.
       const envWords = shipped !== null ? shippedEnv(seat.launcher, shippedOptions) : [];
+      // No GitHub credential reaches a seat on a shipped launcher: plain gh finds no login and
+      // git no credential helper, so the owner's own GitHub login is never used by a seat. GitHub
+      // goes through `team git` and `team gh`, which hold the entity's token per command. Local
+      // commits carry the entity's identity when it declares one.
+      if (shipped !== null && input.home !== undefined) {
+        envWords.push(
+          'GH_TOKEN=', 'GITHUB_TOKEN=', `GH_CONFIG_DIR=${join(input.home, '.config', 'team', 'gh-none')}`,
+          'GIT_TERMINAL_PROMPT=0', 'GIT_CONFIG_COUNT=1', 'GIT_CONFIG_KEY_0=credential.helper', 'GIT_CONFIG_VALUE_0=',
+        );
+        const entity = input.team?.entity;
+        const id = entity ? identityFor(input.home, entity) : null;
+        if (id !== null && !('why' in id) && /^[A-Za-z0-9._@+-]+$/.test(id.authorName) && /^[A-Za-z0-9._@+-]+$/.test(id.authorEmail)) {
+          envWords.push(`GIT_AUTHOR_NAME=${id.authorName}`, `GIT_AUTHOR_EMAIL=${id.authorEmail}`,
+            `GIT_COMMITTER_NAME=${id.authorName}`, `GIT_COMMITTER_EMAIL=${id.authorEmail}`);
+        }
+      }
       baseLine = envWords.length === 0 ? decided.command : `${envWords.join(' ')} ${decided.command}`;
       fromResolver = true;
     }
