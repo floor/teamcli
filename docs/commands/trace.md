@@ -134,10 +134,8 @@ the trace below can name it:
 
 ```console send-id="66666666-6666-4666-8666-666666666666"
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
-team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
-team beacon, session "beacon"
-gpt-reviewer: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
-exit 0
+team send: gpt-reviewer: not delivered: no live route; kept in gpt-reviewer's inbox (id <id>)
+exit 1
 ```
 
 `team trace` then reads the id back: the staging, every leg the walk tried with its route, verdict

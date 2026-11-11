@@ -961,28 +961,24 @@ seats:
 
 A plain send walks the default order — the seat's own inbox, then the `typed` word the walk
 filters out, then its drop folder. No server serves this seat's inbox, so the signed record lands
-in its drop folder, the command says on stderr that the message waits in the bus inbox, and the
-line carries the seat's delivery class. The seat's own read hands it the message and writes its
-receipt, which a running watch records as one `delivered (read)` history line.
+in its drop folder and no live route delivers it: the command says so on stderr, keeps the copy in
+the bus inbox, and exits 1. The seat's own read hands it the message and writes its receipt, which
+a running watch records as one `delivered (read)` history line.
 
 ```console
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
-team send: claude-keeper: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
-team beacon, session "beacon"
-claude-keeper: queued, not woken (drop, 0 ms); queued; claude-keeper reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
-exit 0
+team send: claude-keeper: not delivered: no live route; kept in claude-keeper's inbox (id <id>)
+exit 1
 ```
 
 Two seats of one team whose lines both write `role: operator` write to each other — the one rule
-a role's own word decides, and it never crosses teams. The send is admitted, delivered and logged
-like any other:
+a role's own word decides, and it never crosses teams. The send is admitted, kept in the bus inbox
+and logged like any other:
 
 ```console caller=operator-a
 $ team send operator-b "the handover is ready" ; echo "exit $?"
-team send: operator-b: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
-team beacon, session "beacon"
-operator-b: queued, not woken (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
-exit 0
+team send: operator-b: not delivered: no live route; kept in operator-b's inbox (id <id>)
+exit 1
 ```
 
 A sender whose own file declares Claude Code, to a receiver whose delivery order adds `native`
@@ -1019,15 +1015,13 @@ exit 1
 ```
 
 `--wait` writes the record on the seat's delivery walk and waits on the thread for the first
-verified reply record:
+verified reply record when a live leg takes the send. A walk that ends in the bus inbox waits for
+nothing and reports the kept copy, exactly as a send without `--wait`:
 
-```console reply="the gate is green"
+```console
 $ team send claude-keeper "is the gate green?" --wait ; echo "exit $?"
-team send: claude-keeper: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
-team beacon, session "beacon"
-claude-keeper: answered (id 44444444-4444-4444-8444-444444444444)
-the gate is green
-exit 0
+team send: claude-keeper: not delivered: no live route; kept in claude-keeper's inbox (id <id>)
+exit 1
 ```
 
 A dry run of the same send names the walk and writes nothing:
@@ -1149,24 +1143,22 @@ exit 1
 ```
 
 A native-CLI seat whose inbox no server serves takes the send in its drop folder: the signed
-record lands there, the command says on stderr that the message waits in the bus inbox, and its
-own read hands it the message. The receipt it writes is what the watch promotes:
+record lands there, the command says on stderr that no live route delivered it, and its own read
+hands it the message. The receipt it writes is what the watch promotes:
 
 ```console
 $ team send gpt-reviewer "hello" ; echo "exit $?"
-team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
-team beacon, session "beacon"
-gpt-reviewer: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
-exit 0
+team send: gpt-reviewer: not delivered: no live route; kept in gpt-reviewer's inbox (id <id>)
+exit 1
 ```
 
-`--wait` on any seat waits on the thread for a reply record; when the window closes with no reply,
-it exits 1 and leaves the thread open:
+`--wait` on a seat a live leg reaches waits on the thread for a reply record; when the window
+closes with no reply, it exits 1 and leaves the thread open. A send that only reaches the bus
+inbox waits for nothing and reports the kept copy:
 
 ```console
 $ team send gpt-reviewer "hello" --wait --timeout 5 ; echo "exit $?"
-team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
-team send: gpt-reviewer: timeout: sent, no reply on the thread within 5s; the thread stays open (id <id>)
+team send: gpt-reviewer: not delivered: no live route; kept in gpt-reviewer's inbox (id <id>)
 exit 1
 ```
 

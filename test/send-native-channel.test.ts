@@ -83,7 +83,7 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
-  expect(code).toBe(0);
+  expect(code).toBe(1);
   expect(host.frames).toEqual([]);
   expect(pane.typed.length).toBe(0);
   expect(pane.typed).toEqual([]);
@@ -145,7 +145,7 @@ test('a registered recipient behind a provider wrapper is not held for the famil
   });
   const io = owner(made.root);
 
-  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
   expect(io.err).not.toContain('model drift');
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -217,7 +217,7 @@ test('an unrecognized launcher leaves a foreign model unread: its banner is not 
   registerLeadWith(made, host, { model: 'GLM', version: '5.3' }, 'unknown-wrapper');
   const io = owner(made.root);
 
-  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
   expect(io.err).not.toContain('model drift');
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -241,7 +241,7 @@ test('a wrapper banner naming the signed model in its own words is not a drift',
     registerLeadWith(made, host, one.signing, one.launch);
     const io = owner(made.root);
 
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     expect(io.err).not.toContain('model drift');
     const drops = dropDir(made.dir, 'lead');
     const files = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -306,7 +306,7 @@ test('a declaration that spells the family inside its model matches the banner',
     registerLeadWith(made, host, one.signing, one.launch);
     const io = owner(made.root);
 
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     expect(io.err).not.toContain('model drift');
     const drops = dropDir(made.dir, 'lead');
     expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
@@ -330,7 +330,7 @@ test('a declaration that spells the family inside its model holds another versio
     registerLeadWith(made, host, { model: 'Kimi K2.5', version: '2.5' }, 'claude-kimi.sh');
     const io = owner(made.root);
 
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(one.held ? 1 : 0);
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     if (one.held) {
       expect(io.err).toContain('model drift: Kimi K2.5 2.5 vs');
       expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
@@ -362,7 +362,7 @@ test('a number inside a model word is model identity, never part of the version'
     registerLeadWith(made, host, one.signing, 'claude-glm.sh');
     const io = owner(made.root);
 
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(one.held ? 1 : 0);
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     if (one.held) {
       expect(io.err).toContain('model drift: GLM 2B');
       expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
@@ -404,7 +404,7 @@ test('the direct typed leg names the signed sender and the team it wrote from', 
 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
-  expect(code).toBe(0);
+  expect(code).toBe(1);
   expect(pane.typed).toEqual([]);
 });
 
@@ -661,8 +661,9 @@ test('a handoff with no socket falls back to the typed drop and records the skip
 
   const code = await runSend(['lead', 'hello'], io, host);
 
-  expect(code).toBe(0);
-  expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+  expect(code).toBe(1);
+  expect(io.out).toBe('');
+  expect(withoutSendId(io.err)).toBe('team send: lead: not delivered: no live route; kept in lead\'s inbox\n');
   expect(pane.typed.length).toBe(0);
   expect(readdirSync(dropDir(made.dir, 'lead')).filter((name) => !name.includes('.')).length).toBe(1);
   expect(existsSync(pending(made))).toBe(false);
@@ -676,7 +677,7 @@ test('a handoff with no socket falls back to the typed drop and records the skip
       body: HELPER_BODY,
       id: expect.any(String),
       thread: expect.any(String),
-      outcome: 'queued, not woken',
+      outcome: 'not delivered',
       ms: 0,
       via: 'drop',
       failed: [
@@ -1467,8 +1468,9 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
 
   // Without a socket, handOff returns fallback and the walk continues straight to drop with zero pane writes.
   const sendIo = helperCaller(made.root);
-  expect(await runSend(['lead', 'hello'], sendIo, host)).toBe(0);
-  expect(withoutSendId(sendIo.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+  expect(await runSend(['lead', 'hello'], sendIo, host)).toBe(1);
+  expect(sendIo.out).toBe('');
+  expect(withoutSendId(sendIo.err)).toBe('team send: lead: not delivered: no live route; kept in lead\'s inbox\n');
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
 

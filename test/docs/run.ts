@@ -461,13 +461,15 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'order':
       return runOrder(rest, io, world.orderSources());
     case 'send': {
-      // Every seat of the page's file is a live agent, so a native-CLI example resolves.
+      // Every seat of the page's file is a live agent, so a native-CLI example resolves — with
+      // the CLI herdr reports, which the socket address is read against: the page's own file
+      // declares it, and a seat whose row reports none answers no address.
       // `reply="…"` on the fence is the fake seat's answer on the thread: with it, the wait
       // finds a signed reply record on that thread and prints the reply;
       // without it, the seat stays silent and the wait times out.
-      const seats = page.team?.seats.map((seat) => seat.name) ?? ['claude-keeper'];
+      const seats = page.team?.seats.map((seat) => ({ name: seat.name, cli: seat.cli })) ?? [{ name: 'claude-keeper', cli: 'claude-code' }];
       const replyPath = reply !== undefined
-        ? writeDocReply(fixture.root, fixture.home, page.session, seats[0] ?? 'claude-keeper', spec.now, reply)
+        ? writeDocReply(fixture.root, fixture.home, page.session, seats[0]?.name ?? 'claude-keeper', spec.now, reply)
         : null;
       try {
         return await runSend(rest, io, sendHost(fixture, seats, spec.now, reply, sendId));
@@ -600,7 +602,7 @@ function writeDocReply(root: string, home: string, session: string, fromSeat: st
   return path;
 }
 
-function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string, sendId?: string): SendHost {
+function sendHost(fixture: Fixture, seats: { name: string; cli?: string | null }[], now: string, reply?: string, sendId?: string): SendHost {
   // A page that traces its own send's id pins it with `send-id="<uuid>"`: the steps are filed
   // under that id, so the `team trace <id>` line that follows reads a fixed story. Without one,
   // the wait example pins its own reply thread and every other send draws a fresh id.
@@ -611,7 +613,7 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
   // The seat's own evidence for this line: idle until the Enter, working after it.
   let working = false;
   return {
-    agents: () => seats.map((name, index) => ({ name, pane: `w1:p${String(index + 1)}` })),
+    agents: () => seats.map((seat, index) => ({ name: seat.name, pane: `w1:p${String(index + 1)}`, cli: seat.cli ?? null })),
     processInfo: () => ({ shell: SEND_PID, foreground: [] }),
     socketsDir: sockets,
     native: {
@@ -631,7 +633,7 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
           back.on('connect', () => {
             // The measured shape: the harness stamps its attribution wrapper around the body
             // (see src/send/reply.ts), so the page's example exercises the peel.
-            const wrapped = `<cross-session-message from="uds:/tmp/cc-socks/${String(SEND_PID)}.sock" from-name="${seats[0] ?? 'seat'}" from-mode="bypass">\n${reply}\n</cross-session-message>`;
+            const wrapped = `<cross-session-message from="uds:/tmp/cc-socks/${String(SEND_PID)}.sock" from-name="${seats[0]?.name ?? 'seat'}" from-mode="bypass">\n${reply}\n</cross-session-message>`;
             const frame = JSON.stringify({ type: 'user', message: { role: 'user', content: wrapped }, msg_id: 'reply-1' });
             back.end(`${frame}\n`, resolve);
           });
