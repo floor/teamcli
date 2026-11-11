@@ -179,6 +179,9 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // to the owner seat (Touch ID); `--approval <id>` applies it once the owner's verified signature
   // binds these words. Nothing is written on a request, and an approval for other words refuses.
   let seatApproved = false;
+  let auditRule = 'owner-only';
+  let auditClient = rawIo.general?.clientId;
+  if (rawIo.general !== undefined) auditRule = `general-grant:${rawIo.general.grantId}`;
   if (args.flags.has('request') || args.values.approval !== undefined) {
     const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home, root, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) }, [root]);
     if (step.kind === 'requested') {
@@ -190,6 +193,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       return 1;
     }
     seatApproved = step.kind === 'admitted';
+    if (step.kind === 'admitted') auditRule = `${step.admission.via}${step.admission.ruleId === undefined ? '' : `:${step.admission.ruleId}`}`;
   }
   // A general grant: the owner signed it once for this principal across these entities, so a set
   // or unset under it applies directly, with no per-action request.
@@ -207,6 +211,8 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     }
     if (!json) io.stderr(`team config: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
     seatApproved = true;
+    auditRule = `general-grant:${admitted.grant.grant_id}`;
+    auditClient = admitted.grant.client_id;
   }
   const gate = charterGate(
     home,
@@ -230,6 +236,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     });
   }
   let liftAudit: (() => void) | null = null;
+  if (gate.kind === 'admit' && !seatApproved && rawIo.general === undefined) auditRule = 'charter';
   if (gate.kind !== 'admit' && !seatApproved) {
     const caller = callerOf(rawIo);
     const detached = detachedRefusal(caller);
@@ -264,7 +271,10 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
         return 1;
       }
       liftAudit = lift.audit;
+      auditRule = `dev-mode:${lift.role}`;
       io.stderr(`${lift.warning}\n`);
+    } else if (!isOwner(caller)) {
+      auditRule = 'leads-own-team:clear-stopped';
     }
   }
   let next: string;
@@ -351,7 +361,10 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     return 0; // exit: config.planned
   }
   const now = sources.now;
-  const wrote = writeTeamText(file, next, { home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}) });
+  const wrote = writeTeamText(file, next, {
+    home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}),
+    audit: { caller: callerOf(rawIo), rule: auditRule, ...(auditClient === undefined ? {} : { client: auditClient }) },
+  });
   if (!wrote.ok) {
     const said = wrote.errors.map((p) => (p.line ? `line ${p.line}: ` : '') + p.message).join('; ');
     refuse(io, json, 'config', {
