@@ -70,7 +70,9 @@ function claudePermissions(role: string | undefined): string[] {
     // (the seat's send still could not find its team); with these three it was delivered.
     // Measured live 2026-11-11 on Claude Code 2.1.322: team send delivered; `printf … > file`,
     // `git status` and the Write tool were each refused, and no file was written.
-    '--settings', '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":false,"excludedCommands":["team","team *","team:*"],"network":{"allowAllUnixSockets":true}},"permissions":{"deny":["Edit(**)","Write(**)"]}}',
+    // The sandbox and the edit denials go in the seat's settings file (shippedClaudeSettings),
+    // beside TeamCLI's hooks: the CLI reads one --settings, and a second one here would drop the
+    // hooks that give the seat its socket route (measured 2026-11-11: "no live route").
   ];
 }
 
@@ -149,4 +151,22 @@ export function shippedLauncherIsReadOnly(name: string | undefined, role: string
 export function shippedLauncher(name: string | undefined, options: ShippedOptions): LauncherDefinition | null {
   if (!isShippedLauncher(name)) return null;
   return SHIPPED[name as string]!(options);
+}
+
+/** The Claude Code settings a read-only seat on the claude-code launcher adds to its settings
+ *  file: Claude Code's sandbox with Edit and Write denied, and `team` run outside it with local
+ *  sockets open so the seat can still send (measured live 2026-11-11 on Claude Code 2.1.322:
+ *  a shell write, git and the Write tool refused; team send delivered). Undefined for any other
+ *  seat. The excluded command is named in three spellings; `["team"]` alone did not take effect. */
+export function shippedClaudeSettings(launcher: string | undefined, role: string | undefined): Record<string, unknown> | undefined {
+  if (launcher !== 'claude-code' || role === undefined || !READ_ONLY_ROLES.has(role)) return undefined;
+  return {
+    sandbox: {
+      enabled: true,
+      autoAllowBashIfSandboxed: false,
+      excludedCommands: ['team', 'team *', 'team:*'],
+      network: { allowAllUnixSockets: true },
+    },
+    permissions: { deny: ['Edit(**)', 'Write(**)'] },
+  };
 }

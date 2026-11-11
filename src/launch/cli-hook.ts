@@ -20,6 +20,7 @@
 // (`supportsCliHook`). Nothing under the owner's CLI home is read or written: the settings file
 // is one this run names on the seat's launch line, and the hooks take nothing from the CLI's
 // stdin — no session id, no transcript path, no environment.
+import { shippedClaudeSettings } from '../launchers/shipped.ts';
 import {
   closeSync, constants, fchmodSync, lstatSync, lutimesSync, mkdirSync, openSync, readSync, renameSync,
   unlinkSync, writeSync, type Stats,
@@ -58,6 +59,10 @@ export type CliHookSeat = {
   /** The seat's inbound word. Generated Claude settings default to accept; explicit hold
    *  and refuse override that default and any accepting launch script. */
   inbound?: CrossSessionInbound;
+  /** The seat's shipped launcher and role, when it has them: a read-only seat on the claude-code
+   *  launcher gets its sandbox and denials in this same settings file, since the CLI reads one. */
+  launcher?: string;
+  role?: string;
 };
 
 /** Whether a seat's name can become a file name: the team file's own rule (one path segment,
@@ -677,7 +682,10 @@ export function installCliHooks(
       ? recordPresenceBinding(dir, session, seat)
       : presenceBindingAt(dir, session, seat);
     const presence = binding === null ? undefined : { dir, session, seat, binding };
-    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command, inbound, presence, cli))) continue;
+    const base = cliHookSettings(statePath, drops, command, inbound, presence, cli);
+    const extra = shippedClaudeSettings(byName.get(seat)?.launcher, byName.get(seat)?.role);
+    const text = extra === undefined ? base : `${JSON.stringify({ ...extra, ...(JSON.parse(base) as Record<string, unknown>) }, null, 2)}\n`;
+    if (!writeSettings(settingsPath, text)) continue;
     landed[seat] = settingsPath;
   }
   return landed;

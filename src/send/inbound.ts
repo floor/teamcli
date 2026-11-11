@@ -98,7 +98,9 @@ export function declaredInboundOf(input: {
 }): InboundDeclaration {
   const launch = input.launch ?? '';
   const settings = cliHookSettingsPath(input.dir, input.session, input.seat);
-  if (settings !== null && !setsSettings(launch)) {
+  // A line recorded with the generated file already on it (a seat on a shipped launcher records
+  // its whole compiled line) still carries that file as its settings: the file decides.
+  if (settings !== null && (!setsSettings(launch) || onlyGeneratedSettings(launch, settings))) {
     const at = mtimeOf(settings);
     // The file is on the line: its own word decides, including "no word at all".
     if (at !== null) return { policy: policyAt(settings), declaredAt: at, source: settings, generated: true };
@@ -286,4 +288,10 @@ export function socketHeldReason(held: HeldSocket | null, declaration: InboundDe
     && (declaration.source !== held.source || declaration.declaredAt !== held.declaredAt);
   if (reconfirmed) return null;
   return 'its last socket frame was held at its box, and its declaration has not been re-confirmed since; restart its CLI host so it accepts';
+}
+
+/** True when every `--settings` value on the line is the generated per-seat file itself. */
+function onlyGeneratedSettings(launch: string, generated: string): boolean {
+  const values = [...launch.matchAll(/--settings(?:=|\s+)('[^']*'|"[^"]*"|\S+)/g)].map((m) => m[1]!.replace(/^['"]|['"]$/g, ''));
+  return values.length > 0 && values.every((value) => value === generated);
 }

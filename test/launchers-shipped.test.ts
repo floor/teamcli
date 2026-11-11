@@ -1,6 +1,6 @@
 // The launchers TeamCLI ships: one per vendor CLI, configured by the seat's role and effort.
 import { expect, test } from 'bun:test';
-import { isShippedLauncher, shippedEnv, shippedLauncher, shippedLauncherIsReadOnly, shippedLauncherNames } from '../src/launchers/shipped.ts';
+import { isShippedLauncher, shippedClaudeSettings, shippedEnv, shippedLauncher, shippedLauncherIsReadOnly, shippedLauncherNames } from '../src/launchers/shipped.ts';
 import { discover, resolveLaunch } from '../src/launchers/resolve.ts';
 
 test('grok-build ships, and an unknown name does not', () => {
@@ -66,7 +66,8 @@ test('claude-code builds the Anthropic model id from the seat and skips the CLI 
   expect(reviewer).not.toContain('--dangerously-skip-permissions');
   expect(reviewer.join(' ')).toContain('--permission-mode dontAsk');
   expect(reviewer[reviewer.indexOf('--disallowedTools') + 1]).toContain('Bash(git *)');
-  const settings = JSON.parse(reviewer[reviewer.indexOf('--settings') + 1] ?? '{}');
+  expect(reviewer).not.toContain('--settings');
+  const settings = shippedClaudeSettings('claude-code', 'tester') as { sandbox: { enabled: boolean; excludedCommands: string[] }; permissions: { deny: string[] } };
   expect(settings.sandbox.enabled).toBe(true);
   expect(settings.sandbox.excludedCommands).toContain('team');
   expect(settings.permissions.deny).toContain('Edit(**)');
