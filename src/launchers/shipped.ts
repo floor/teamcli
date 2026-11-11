@@ -72,6 +72,9 @@ const SHIPPED: Readonly<Record<string, (options: ShippedOptions) => LauncherDefi
   'claude-code': claudeCode,
 };
 
+/** Compact windows by provider, from the provider scripts the launcher replaces. */
+const COMPACT_WINDOWS: Readonly<Record<string, number>> = { deepseek: 786432 };
+
 /** Shell words a shipped launcher sets in front of its CLI, as `env` assignments; empty when it
  *  needs none. A provider key is never a value here: the word is the profile's own keychain
  *  lookup, which the pane's shell runs at start, so the secret never passes through TeamCLI,
@@ -87,11 +90,25 @@ export function shippedEnv(name: string | undefined, options: ShippedOptions): s
   const found = block.models.find((one) => one.model === options.model && one.version === options.version) ?? block.models[0];
   if (found === undefined) return words;
   const fill = (word: string) => word.replaceAll('{model}', found.id).replaceAll('{credential}', block.credential);
-  for (const word of block.env) words.push(fill(word));
+  // A computed value is written as one double-quoted shell word, with no quotes nested inside
+  // it, so the launch line stays words a shell and TeamCLI's own line reader split the same way:
+  // the item is looked up by its service name alone (`-a "$USER"` dropped; one item per name).
+  const oneWord = (word: string): string => {
+    const at = word.indexOf('=$(');
+    if (at < 0) return word;
+    const value = word.slice(at + 1).replace(/\s+-a\s+"\$USER"/, '');
+    return `${word.slice(0, at)}="${value}"`;
+  };
+  for (const word of block.env) words.push(oneWord(fill(word)));
   // As the provider scripts this replaces set them (docs/guides/tools/claude-deepseek.sh, in use
   // since 2026-10-02): no Anthropic key reaches a provider endpoint, and the betas and tool search
   // the provider endpoints do not serve are off.
   words.push('ANTHROPIC_API_KEY=', 'ENABLE_TOOL_SEARCH=false', 'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1');
+  // The compact window the provider's context allows; Claude Code does not know these model
+  // ids and otherwise assumes 200k ("Model "deepseek-flash" isn't recognized · context assumed
+  // to be 200k tokens", seen 2026-11-11). Source: claude-deepseek.sh, in use since 2026-10-02.
+  const window = COMPACT_WINDOWS[vendor];
+  if (window !== undefined) words.push(`CLAUDE_CODE_AUTO_COMPACT_WINDOW=${window}`);
   // Every tier the CLI may pick runs the provider's model, as the scripts this replaces set.
   for (const tier of ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) {
     words.push(`${tier}=${found.id}`);

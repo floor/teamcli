@@ -73,7 +73,11 @@ test('claude-code on a provider takes the profile\'s env words, the key only as 
   expect(words).toContain('ANTHROPIC_MODEL=deepseek-flash');
   expect(words).toContain('CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash');
   const token = words.find((word) => word.startsWith('ANTHROPIC_AUTH_TOKEN='));
-  expect(token?.startsWith('ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security ')).toBe(true);
+  // One double-quoted word, nothing nested inside it, so the line splits the same everywhere.
+  expect(token?.startsWith('ANTHROPIC_AUTH_TOKEN="$(/usr/bin/security ')).toBe(true);
+  expect(token?.endsWith(')"')).toBe(true);
+  expect(token?.slice('ANTHROPIC_AUTH_TOKEN="'.length, -1)).not.toContain('"');
+  expect(words).toContain('CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432');
   expect(shippedEnv('grok-build', { vendor: 'deepseek' })).toEqual([]);
   expect(shippedEnv('claude-code', { vendor: 'no-such-provider' })).toEqual([]);
 });
