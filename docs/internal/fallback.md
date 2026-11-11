@@ -10,9 +10,13 @@ retired, and what that cannot do.
 - `delivered`: `status: "delivered"`.
 - `refused`: `status: "all-failed"` with `escalatedAt` set — exhaustion was decided and the main
   escalation published.
-- `expired`: `status: "trying"`; whether it is old enough is the retention word's question.
+- `expired`: `status: "trying"` or `"pending"`; whether it is old enough is the retention word's question.
 - Null: an `outbox` intent is still pending, or `all-failed` has no `escalatedAt` yet. The
   escalation pass must flush such an episode first, and retirement must never archive it.
+
+A daemon handoff records `status: "pending"` and an attempt with `outcome: "pending"`.
+The wake child's ending uses the same fallback writer to record `delivered` or `all-failed`
+with its typed attempt and reason. A late handoff cannot overwrite that settled outcome.
 
 ## The retention word
 

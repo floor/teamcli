@@ -4256,7 +4256,7 @@ function noteDaemonOutcome(note: WalkNote | null, res: DaemonSendResponse, at: D
   // the typed step is the child's own — the daemon files it in the receiving store after this run
   // has exited, so this step must not take the typed record id.
   if (res.outcome === 'handed') {
-    note(walkAttempt('daemon', 'delivered', false, at, startedAt, { reason: 'handed to the daemon for a typed wake' }));
+    note(walkAttempt('daemon', 'pending', false, at, startedAt, { reason: 'handed to the daemon for a typed wake; outcome pending' }));
     return;
   }
   const outcome: AttemptOutcome =
@@ -4365,7 +4365,7 @@ function handedTypedWake(
 ): number {
   report.sent = msgId;
   const ms = host.now().getTime() - startedAt;
-  const summary = `${seatName}: handed to the daemon for a typed wake (typed, ${String(ms)} ms; id ${msgId})`;
+  const summary = `${seatName}: handed to the daemon for a typed wake; outcome pending (typed, ${String(ms)} ms; id ${msgId})`;
   if (report.json) {
     writeAction(io, report, { status: 'handed to the daemon for a typed wake', summary, channel: 'typed' });
   } else {
