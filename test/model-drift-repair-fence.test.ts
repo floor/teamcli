@@ -1,14 +1,16 @@
 // Author regressions for the two source counterexamples (lead, 2026-11-11 03:27Z).
 // Synthetic registry, model frames and suspended reads only; no CLI, pane or hardware probe.
 import { afterEach, expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runSend } from '../src/commands/send.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
-import { registerAgent } from '../src/registry/agents.ts';
+import { agentsDir, findAgent, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { currentRunMemo } from '../src/run-memo.ts';
 import { reportModelDrift } from '../src/send/model-drift.ts';
 import type { Live } from '../src/status/compare.ts';
 import { signedSeatModel } from '../src/status/statusline.ts';
@@ -122,3 +124,59 @@ for (const sameEpisode of [false, true]) {
     expect(f.notices()).toBe(before);
   });
 }
+
+test('a family-only provider banner does not prove repair of version drift', async () => {
+  const f = fixture();
+  const observed = { model: 'GLM', version: '5.4' };
+  await f.report(observed);
+  const id = JSON.parse(readFileSync(f.episode, 'utf8')).id;
+  const screen = wrapperPane('glm') + CLI_SCREEN;
+  // The legacy display borrows the declaration's version; that field was never observed.
+  expect(signedSeatModel({ cli: 'claude-code', ...RECORDED, launch: 'claude-glm.sh' }, screen)).toEqual(RECORDED);
+  await runSend(['lead', 'synthetic body'], owner(f.w.root), fake(f.w, {
+    agents: () => [{ name: 'lead', pane: PANE, cli: 'claude' }],
+    native: { ...quietNative(), paneText: () => screen },
+  }));
+  expect(existsSync(f.episode)).toBe(true);
+  await f.watch(f.live(screen));
+  expect(existsSync(f.episode)).toBe(true);
+  expect(JSON.parse(readFileSync(f.episode, 'utf8')).id).toBe(id);
+  await f.report(observed);
+  expect(f.notices()).toBe(1);
+});
+
+test('a registry binding replaced by an external atomic writer defeats a memoized repair clear', async () => {
+  const f = fixture();
+  await f.report();
+  const file = join(agentsDir(f.w.home), `${f.record.id}.yaml`);
+  const original = readFileSync(file, 'utf8');
+  updateAgent(f.w.home, f.record.id, { reach: { pane: 'synthetic-pane-new' } });
+  const next = readFileSync(file, 'utf8');
+  const restore = `${file}.synthetic-restore`;
+  writeFileSync(restore, original);
+  renameSync(restore, file);
+  let rewritten = false;
+  const host = fake(f.w, {
+    agents: () => [{ name: 'lead', pane: PANE, cli: 'claude' }],
+    native: { ...quietNative(), paneText: () => {
+      if (!rewritten) {
+        expect(currentRunMemo()?.agents.get(f.w.home)?.find((agent) => agent.id === f.record.id)?.reach.pane).toBe(PANE);
+        // A separate repository-owned process publishes a valid prebuilt record atomically;
+        // it cannot invalidate this send's normal in-process registry memo.
+        const writer = spawnSync(process.execPath, [join(import.meta.dir, 'helpers', 'model-drift-registry-writer.ts'), file, next],
+          { cwd: join(import.meta.dir, '..'), encoding: 'utf8' });
+        expect(writer.status, writer.stderr).toBe(0);
+        expect(readFileSync(file, 'utf8')).toBe(next);
+        expect(findAgent(f.w.home, { team: teamIdOf(f.w.root), seat: 'lead' })?.reach.pane).toBe(PANE);
+        rewritten = true;
+      }
+      return wrapperPane('glm-5.3') + CLI_SCREEN;
+    } },
+  });
+  await runSend(['lead', 'synthetic body'], owner(f.w.root), host);
+  expect(rewritten).toBe(true);
+  expect(existsSync(f.episode)).toBe(true);
+  const before = f.notices();
+  await f.report();
+  expect(f.notices()).toBe(before);
+});

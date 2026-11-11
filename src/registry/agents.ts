@@ -166,13 +166,14 @@ function cloneAgents(agents: readonly Agent[]): Agent[] {
   return agents.map(cloneAgent);
 }
 
-/** Every valid agent record, by id. Invalid files are skipped; a numeric reach id refuses with a quoting repair. */
-export function readAgents(...args: Parameters<typeof readAgentsMeasured>): ReturnType<typeof readAgentsMeasured> {
-  return traceChildStep('registry readAgents', () => readAgentsMeasured(...args));
+/** Every valid agent record, by id. Invalid files are skipped; a numeric reach id refuses with a quoting repair.
+ * A fresh read uses the same file/id/schema validation, bypassing and leaving the run memo alone. */
+export function readAgents(home: string, options: { fresh?: boolean } = {}): Agent[] {
+  return traceChildStep('registry readAgents', () => readAgentsMeasured(home, options));
 }
 
-function readAgentsMeasured(home: string): Agent[] {
-  const memo = currentRunMemo();
+function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Agent[] {
+  const memo = options.fresh === true ? null : currentRunMemo();
   if (memo !== null) {
     const cached = memo.agents.get(home);
     if (cached !== undefined) return cloneAgents(cached);
@@ -421,8 +422,9 @@ export function recordAgentSessionWhen(
 export function findAgent(
   home: string,
   query: { team: string; seat: string; seatHandle?: string | null },
+  options: { fresh?: boolean } = {},
 ): Agent | null {
-  const agents = readAgents(home);
+  const agents = readAgents(home, options);
   let found: Agent | null = null;
   for (const agent of agents) {
     if (agent.lifecycle === 'retired') continue;

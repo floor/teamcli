@@ -141,7 +141,7 @@ function recipientBinding(record: Agent): string {
 export function captureModelDriftFence(input: Scope & { home: string }, supplied?: Agent): ModelDriftFence | null {
   try {
     const held = readEpisode(paths(input).file, input.root);
-    const record = supplied ?? findAgent(input.home, { team: teamIdOf(input.root), seat: input.seat });
+    const record = supplied ?? findAgent(input.home, { team: teamIdOf(input.root), seat: input.seat }, { fresh: true });
     if (held === null || record === null || held.recipient !== record.id
       || record.reach.team !== teamIdOf(input.root) || record.reach.seat !== input.seat
       || record.reach.session !== input.session) return null;
@@ -170,7 +170,9 @@ export function clearModelDrift(input: Scope & {
     const folder = paths(input);
     withLock(folder.dir, () => {
       const held = readEpisode(folder.file, input.root);
-      const record = findAgent(input.home, { team: teamIdOf(input.root), seat: input.seat });
+      // A pane read can outlive an external registry write. Revalidate the current winner from
+      // files through the existing registry validator, never the send's earlier memo entry.
+      const record = findAgent(input.home, { team: teamIdOf(input.root), seat: input.seat }, { fresh: true });
       if (held === null || record === null || record.lifecycle !== 'running'
         || held.id !== fence.episodeId || held.generation !== fence.generation
         || held.recipient !== input.recipient || record.id !== fence.recipient
