@@ -1678,6 +1678,7 @@ function seatPlan(
     launch: seat.launch,
     // A seat that names a launcher starts from it, as on `team up` and `team restart`.
     ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
+    ...(seat.launcher !== undefined && seat.role !== undefined ? { role: seat.role } : {}),
     cwd: start.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),

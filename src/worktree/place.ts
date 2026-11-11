@@ -74,7 +74,7 @@ export function protectedLanding(root: string, folder: string, checkouts: readon
   return null;
 }
 
-export type StartFolder = { name: string; cli: string; cwd: string };
+export type StartFolder = { name: string; cli: string; cwd: string; stopped?: boolean };
 
 /** Occupied start folders come from the placement record, not a later file edit. Worktrees
  *  keyed by task are included too, even when a single-seat add or restart plans no peers. */
@@ -131,6 +131,9 @@ export function ownStartFolderProblem(input: OwnStartFolderInput): string | null
   }
   for (const peer of input.peers) {
     if (peer.name === input.seat) continue;
+    // A seat the team file marks stopped runs nothing and holds no start folder. When it is
+    // started again, this same check runs for it against every seat that is then standing.
+    if (peer.stopped === true) continue;
     const other = realLanding(input.root, peer.cwd).real;
     // A shared-root peer does not claim every worktree below the root. Keep overlap checks
     // for profile-writing peers and for every peer with a separate start folder.

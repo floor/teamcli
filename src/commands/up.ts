@@ -76,6 +76,7 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
+import { isShippedLauncher } from '../launchers/shipped.ts';
 import { loadTeamLaunchers, rawAgentSession } from '../launch/resolve-flag.ts';
 import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { inboxLive } from '../mcp/inbox.ts';
@@ -805,6 +806,7 @@ function seatPlan(
     launch: registry?.launch ?? seat.launch,
     ...(seat.channelOff === true ? { channelOff: true as const } : {}),
     ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
+    ...(seat.launcher !== undefined && seat.role !== undefined ? { role: seat.role } : {}),
     cwd: seat.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
@@ -3288,7 +3290,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
   const resolveLaunch = seats.some((seat) => seat.launcher !== undefined);
   if (resolveLaunch) {
-    const covered = launcherCoverRefusal(
+    // A shipped launcher is package code and needs no cover; a launcher file in the team's folder does.
+    const covered = seats.every((seat) => seat.launcher === undefined || isShippedLauncher(seat.launcher)) ? null : launcherCoverRefusal(
       root,
       standing.kind === 'verified' ? standing.record.approval.fingerprints.sections : undefined,
     );

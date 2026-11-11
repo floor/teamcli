@@ -20,6 +20,8 @@ import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
+import { discover } from '../launchers/resolve.ts';
+import { shippedLauncher } from '../launchers/shipped.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
 import { getRelativeDirOps } from '../send/drop-retention.ts';
 import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
@@ -382,6 +384,8 @@ export function registryLaunches(steps: readonly Step[]): string[] {
 }
 
 export interface UpSeat {
+  /** The seat's role in the team file. A shipped launcher reads it to choose its permission line. */
+  role?: string;
   name: string;
   cli: string;
   launch: string;
@@ -1512,9 +1516,17 @@ export function upPlan(input: UpInput): Step[] {
         seatNames: input.seats.map((one) => one.name),
         ...(seat.resolveSession === undefined ? {} : { sessionArg: seat.resolveSession }),
       };
+      // A launcher TeamCLI ships is resolved from the package, configured by this seat's role
+      // and effort; any other name is looked up in the team's launcher files.
+      const shipped = shippedLauncher(seat.launcher, {
+        ...(seat.role === undefined ? {} : { role: seat.role }),
+        ...(seat.effort === undefined ? {} : { effort: seat.effort }),
+      });
       const decided = resolvedCommand({
         launcher: seat.launcher,
-        discovery: input.launcherDiscovery ?? { launchers: new Map(), diagnostics: [] },
+        discovery: shipped !== null
+          ? discover([{ level: 'machine', files: { [`${seat.launcher}.yaml`]: shipped } }])
+          : input.launcherDiscovery ?? { launchers: new Map(), diagnostics: [] },
         ctx,
       });
       if ('refusal' in decided) {

@@ -81,6 +81,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
+import { isShippedLauncher } from '../launchers/shipped.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
@@ -1057,7 +1058,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   const tree = worktreeOf(recordedSession, next.name);
   if (tree !== undefined) planSeat.worktree = tree.path;
   if (resolveLaunch && input.resume !== undefined) planSeat.resolveSession = input.resume;
-  if (resolveLaunch) {
+  // A shipped launcher is package code and needs no cover; a launcher file in the team's folder does.
+  if (resolveLaunch && !isShippedLauncher(planSeat.launcher)) {
     const covered = launcherCoverRefusal(
       root,
       standing.kind === 'verified' ? standing.record.approval.fingerprints.sections : undefined,
@@ -1982,6 +1984,7 @@ function buildUpSeat(
     // Every launch-seat builder carries the declaration's opt-out.
     ...(seat.channelOff === true ? { channelOff: true as const } : {}),
     ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
+    ...(seat.launcher !== undefined && seat.role !== undefined ? { role: seat.role } : {}),
     cwd: start.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
