@@ -891,7 +891,19 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     let rewrote: string | null = null;
     if (!temporary && !swap) {
       const refused = withLock(dir, () => {
-        const where = { home: sources.home ?? homedir(), command: 'remove' };
+        const where = {
+          home: sources.home ?? homedir(), command: 'remove', now: sources.now,
+          audit: {
+            caller,
+            rule: io.general !== undefined ? `general-grant:${io.general.grantId}`
+              : clientRun !== null ? `client-grant:${clientRun.grant.grantId}`
+              : charterAdmitted ? 'charter'
+                : delegatePane !== null ? 'delegate:remove'
+                  : createGranted ? 'standing-create-grant'
+                    : verdict.kind !== 'ok' ? 'dev-mode:caller' : 'owner-or-leads',
+            ...(clientRun !== null ? { client: clientRun.grant.clientId } : io.general !== undefined ? { client: io.general.clientId } : {}),
+          },
+        };
         const text = readTeamText(path, where);
         const next = args.flags.has('keep') ? markStopped(text, name) : takeOut(text, name);
         if (next === text) return null;

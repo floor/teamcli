@@ -35,6 +35,7 @@ import { readTeamConfig, type ReadTeamConfigOptions } from '../file/team-config.
 import { readLaunchedTeam, readTeamText, readTeamTextTarget, teamPlace, writeTeamText } from '../file/team-text.ts';
 import { clearStopped, hasSeat, markStopped } from '../file/lines.ts';
 import { setSeatStopped } from '../file/stopped-mark.ts';
+import type { RecordWriteAudit } from '../file/record-write-audit.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -755,7 +756,18 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     // the old pane is closed and before the launch reads the file's own words. A launch that
     // does not reach ready puts it back: the failed run leaves the mark exactly as it was.
     ...(declared.stopped
-      ? { declare: () => declareRevived(path, name, home), restore: () => declareStopped(path, name, home) }
+      ? {
+        declare: () => rewriteSeatEntry(path, name, home, false, {
+          caller: mainOrchestrator ?? caller, rule: io.general !== undefined ? `general-grant:${io.general.grantId}`
+            : mainOrchestrator !== null ? 'entity-main-orchestrator' : 'owner-or-leads',
+          ...(io.general !== undefined ? { client: io.general.clientId } : {}),
+        }, sources.now),
+        restore: () => rewriteSeatEntry(path, name, home, true, {
+          caller: mainOrchestrator ?? caller, rule: io.general !== undefined ? `general-grant:${io.general.grantId}`
+            : mainOrchestrator !== null ? 'entity-main-orchestrator' : 'owner-or-leads',
+          ...(io.general !== undefined ? { client: io.general.clientId } : {}),
+        }, sources.now),
+      }
       : {}),
     ...(clearedLaunch !== undefined
       ? { registryLaunch: clearedLaunch }
@@ -2525,8 +2537,10 @@ function rewriteSeatEntry(
   name: string,
   home: string,
   stopped: boolean,
+  audit: RecordWriteAudit,
+  now: () => Date,
 ): { ok: true } | { ok: false; why: string } {
-  const where = { home, command: 'restart' };
+  const where = { home, command: 'restart', audit, now };
   let text: string;
   try {
     text = readTeamText(path, where);
@@ -2557,26 +2571,6 @@ function rewriteSeatEntry(
     };
   }
   return { ok: true };
-}
-
-/**
- * The sign-off a revival lifts, cleared after the old pane is closed and before the launch,
- * which reads the file's own words: the seat's entry loses `stopped: true` and keeps everything
- * else. A failed write is the caller's abort: nothing is launched from a file the run could not
- * rewrite.
- */
-function declareRevived(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
-  return rewriteSeatEntry(path, name, home, false);
-}
-
-/**
- * The sign-off a launch that did not reach ready puts back: the seat's entry is marked
- * `stopped: true` again — exactly as it was, without re-adding a seat that left the file and
- * without touching another entry — and the whole text is validated before it replaces what was
- * read.
- */
-function declareStopped(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
-  return rewriteSeatEntry(path, name, home, true);
 }
 
 function herdrRefused(out: Io, json: boolean): number {

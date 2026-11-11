@@ -1319,7 +1319,20 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (delegatePane !== null) logDelegated(dir, delegatePane, 'add', sources.now());
     if (built.edited !== original) {
       const written = withLock(dir, () => {
-        const where = { home: sources.home ?? homedir(), command: 'add' };
+        const where = {
+          home: sources.home ?? homedir(), command: 'add', now: sources.now,
+          audit: {
+            caller,
+            rule: io.general !== undefined ? `general-grant:${io.general.grantId}`
+              : clientRun !== null ? `client-grant:${clientRun.grant.grantId}`
+              : seatApproved && seatStep.kind === 'admitted' ? seatStep.admission.via
+                : delegatePane !== null ? 'delegate:add'
+                  : liftAudit !== null ? 'dev-mode:record'
+                    : createGranted ? 'standing-create-grant'
+                      : ownerRun ? 'owner-only' : 'owner-or-leads',
+            ...(clientRun !== null ? { client: clientRun.grant.clientId } : io.general !== undefined ? { client: io.general.clientId } : {}),
+          },
+        };
         if (readTeamText(path, where) !== original) return { kind: 'changed' as const };
         const wrote = writeTeamText(path, built.edited, where);
         return wrote.ok ? { kind: 'ok' as const } : { kind: 'invalid' as const, errors: wrote.errors };

@@ -30,6 +30,16 @@ leaves.
 A record the registry holds is written there (`edited_by: config <verb>`);
 on the legacy `file` source the team file is written instead.
 
+Successful team-record edits append `record-write` lines through the existing team log writer,
+in `.agents/team.log`. Each changed key names the time, caller and caller's team when the roster
+resolves it, admitting rule, command and target team. Known seat flags, CLI words and watch or
+machine measurements include `old` and `new`; `{ "absent": true }` marks a missing value.
+Free text (including models, launch recipes and rules) and every unknown key may contain a secret:
+their lines contain the key and `changed: true`, with neither value. Seat paths use names rather
+than positions; list order and formatting changes have their own redacted markers. Refused edits
+and edits that change nothing append no record-write line. The same reporting covers the team
+definition edits made by `add`, `remove`, and a restart lifting or restoring a stopped mark.
+
 Writes are the owner's, from a terminal outside a pane, as editing the file was; `get` is any
 caller's. One unset is the exception: a team's `leads` seat clears its own team's stopped mark —
 `team config unset seats.<seat>.stopped` — with no card, dev mode on or off, the same seat that
