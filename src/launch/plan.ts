@@ -21,7 +21,7 @@ import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
 import { discover } from '../launchers/resolve.ts';
-import { shippedLauncher } from '../launchers/shipped.ts';
+import { shippedLauncher, shippedLauncherIsReadOnly } from '../launchers/shipped.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
 import { getRelativeDirOps } from '../send/drop-retention.ts';
 import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
@@ -1452,7 +1452,12 @@ export function upPlan(input: UpInput): Step[] {
     const lineNamesSandbox = lineWords === null
       ? /(^|\s)--sandbox(=|\s|$)/.test(recordedLine)
       : lineWords.some((word) => word === '--sandbox' || word.startsWith('--sandbox='));
-    const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox
+    // A read-only seat on a shipped launcher is held by the CLI's own permission policy (it
+    // refuses writes, edits and git, and denies what is not allowed), so it takes no TeamCLI
+    // sandbox profile: that profile also stops the seat's own `team` commands from reading the
+    // registry and the process table, which left such a seat unable to send.
+    const launcherSkipsSandbox = shippedLauncherIsReadOnly(seat.launcher, seat.role);
+    const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox && !launcherSkipsSandbox
       ? grokSandbox
       : undefined;
     // A start folder that is the shared project root would grant that whole checkout, including

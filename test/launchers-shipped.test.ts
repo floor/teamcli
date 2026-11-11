@@ -1,6 +1,6 @@
 // The launchers TeamCLI ships: one per vendor CLI, configured by the seat's role and effort.
 import { expect, test } from 'bun:test';
-import { isShippedLauncher, shippedLauncher, shippedLauncherNames } from '../src/launchers/shipped.ts';
+import { isShippedLauncher, shippedLauncher, shippedLauncherIsReadOnly, shippedLauncherNames } from '../src/launchers/shipped.ts';
 import { discover, resolveLaunch } from '../src/launchers/resolve.ts';
 
 test('grok-build ships, and an unknown name does not', () => {
@@ -43,4 +43,12 @@ test('a shipped launcher passes the library\'s own validation and resolves to it
   });
   expect(resolved.ok).toBe(true);
   if (resolved.ok) expect(resolved.argv.slice(0, 3)).toEqual(['grok', '--model', 'grok-4.7']);
+});
+
+test('only a read-only seat on a shipped launcher goes without the sandbox profile', () => {
+  expect(shippedLauncherIsReadOnly('grok-build', 'reviewer')).toBe(true);
+  expect(shippedLauncherIsReadOnly('grok-build', 'builder')).toBe(false);
+  expect(shippedLauncherIsReadOnly('grok-build', undefined)).toBe(false);
+  expect(shippedLauncherIsReadOnly('some-file-launcher', 'reviewer')).toBe(false);
+  expect(shippedLauncherIsReadOnly(undefined, 'reviewer')).toBe(false);
 });

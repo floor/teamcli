@@ -45,6 +45,12 @@ export function isShippedLauncher(name: string | undefined): boolean {
   return name !== undefined && Object.prototype.hasOwnProperty.call(SHIPPED, name);
 }
 
+/** True when the seat starts from a shipped launcher in its read-only form: the CLI's own
+ *  permission policy holds it, and the launch adds no sandbox profile of its own. */
+export function shippedLauncherIsReadOnly(name: string | undefined, role: string | undefined): boolean {
+  return isShippedLauncher(name) && role !== undefined && READ_ONLY_ROLES.has(role);
+}
+
 /** The shipped launcher `name` as this seat configures it, or null when TeamCLI ships none
  *  by that name. */
 export function shippedLauncher(name: string | undefined, options: ShippedOptions): LauncherDefinition | null {
