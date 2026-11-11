@@ -4,8 +4,8 @@ import { recordDeliveredBody } from '../../send/readable-wake.ts';
 // The daemon's send server answers `handed` at acceptance and never waits for the screen; this
 // child owns the walk from there. It re-reads the seat live (one pane, not a bare shell), takes
 // the seat lock, runs `deliverTypedWake` with the pane host, and writes its outcome — the history
-// line, the trace step and the log line — before it exits. Nothing here types on its own: the
-// walk is the one module that does, and this child only binds it to a session.
+// line, the fallback episode, the trace step and the log line — before it exits. Nothing here
+// types on its own: the walk is the one module that does, and this child only binds it to a session.
 //
 // The wake marker beside the staged copy is the reservation the daemon took before it spawned
 // this child. A marker that reads `sent` or `read` is an earlier wake's: this request is the same
@@ -21,6 +21,7 @@ import type { PaneProcesses } from '../../herdr.ts';
 import { acquireSeatLock } from '../../launch/seat-lock.ts';
 import { logLine } from '../../log.ts';
 import { appendHistory } from '../../send/history.ts';
+import { noteTypedWake } from '../../send/fallback-events.ts';
 import { legStep } from '../../send/steps.ts';
 import type { TypedWakeHost, TypedWakeResult } from '../../send/typed-wake.ts';
 import { markWake, releaseWake, wakeMarkAt, wakePath } from '../../send/wake-marker.ts';
@@ -76,6 +77,11 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
     const outcome = delivered ? 'delivered (typed wake)' : 'unreachable';
     const submitMs = sinceStaged(walked?.submittedAt);
     const workingMs = sinceStaged(walked?.workingAt);
+    const noted = noteTypedWake({
+      root: request.root, home: request.home, project: request.project, session: request.session, seat: request.seat,
+      id: request.id, outcome: delivered ? 'delivered' : 'unreachable', reason, at: new Date(at), ms,
+    });
+    if (!noted.ok) logLine(request.dir, 'send', request.from, `${request.seat}: the typed-wake fallback outcome was not recorded (${noted.reason})`, deps.now());
     try {
       appendHistory(request.project, request.root, request.home, {
         ts: at,

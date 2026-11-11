@@ -242,10 +242,11 @@ in place, and no box, status or transcript is read.
 
 The daemon runs the screen walk where it can. With a send daemon running for the receiving seat's
 own team, the send stages the message, hands the daemon the trigger line, and ends at acceptance —
-`handed to the daemon for a typed wake` (exit 0, `send.handed`) — after the daemon has written its
+`handed to the daemon for a typed wake; outcome pending` (exit 0, `send.handed`) — after the daemon has written its
 own durable copy of the record, taken the wake's marker and started one wake child. The child
 re-reads the seat, takes its lock, runs the walk, and writes the history line (`delivered (typed
-wake)` or `unreachable`) and the trace step when it ends; the send never waits for that answer. A
+wake)` or `unreachable`) and the trace step when it ends; it also settles the same fallback marker
+from `pending` to the actual outcome, retaining the failure reason. The send never waits for that answer. A
 compose seat, a seat of another team, a `--wait` run, a run with no daemon socket, and a daemon
 that runs no wake child are reached directly instead, in the send's own process and exactly once.
 
@@ -765,7 +766,7 @@ live agent carried the seat's name, its pane could not be told apart, it was bac
 or the trigger outgrew the measured line.
 
 A wake handed to the daemon is its own ending, not one of those class-word lines: the send prints
-`<seat>: handed to the daemon for a typed wake (typed, <n> ms; id <id>)` and exits 0
+`<seat>: handed to the daemon for a typed wake; outcome pending (typed, <n> ms; id <id>)` and exits 0
 (`send.handed`), naming the acceptance and never a delivery. The id on it is the one the child's
 history line keeps; the child writes that line — `delivered (typed wake)` or `unreachable` — with
 the trace step and the log line, and the send itself writes no history line for the handoff.
