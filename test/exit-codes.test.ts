@@ -7259,7 +7259,7 @@ scene('reload.start-unrecorded', async (place) => {
 });
 scene('reload.start', async (place) => {
   grokReloadRefusal(place, true, true);
-  return show(await reloaded(place, ['lead']), 'cannot start in or grant an ancestor');
+  return show(await reloaded(place, ['lead']), 'would start inside the protected checkout');
 });
 scene('reload.absent', async (place) => {
   write(place, TEAM);
