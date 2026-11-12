@@ -251,7 +251,12 @@ function readSeats(
     }
     // A CLI that writes into its start folder (Grok, Cursor) needs a folder of its own. A line
     // that names no cwd gets the team's seat folder, so adding such a seat needs no path.
-    const ownFolder = fields.get('cwd') === undefined && (cli === 'grok' || cli === 'cursor')
+    // A Claude Code seat on the shipped launcher gets one too (2026-11-12): the shared lobby gives
+    // it nothing (its hooks, settings and rules come from TeamCLI's machine folder), and a builder
+    // there writes into a folder every team shares. The orchestrator and a lead keep the lobby.
+    const claudeOnLauncher = cli === 'claude-code' && launcherName === 'claude-code'
+      && role !== 'orchestrator' && role !== 'lead';
+    const ownFolder = fields.get('cwd') === undefined && (cli === 'grok' || cli === 'cursor' || claudeOnLauncher)
       && folder !== undefined && folder.team !== '' && name !== undefined;
     const place = ownFolder
       ? { cwd: normalize(seatFolderOf(folder.pattern, folder.project, folder.team, name)), outside: false }
