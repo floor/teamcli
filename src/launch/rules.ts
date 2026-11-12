@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { renderSignature } from '../file/signature.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -263,7 +264,23 @@ export function rulesOf(
 ): string {
   const resolvedWork = work === undefined ? workSettingsFor(team, root, home) : work;
   const { input, delivery } = rulesInputOf(team, seat, root, resolvedWork, origin);
-  return rulesText(input, delivery);
+  return withSeatBrief(rulesText(input, delivery), seat, root);
+}
+
+/** The seat's own standing brief (`brief:`), after the team's rules: read whole at each call, so
+ *  every delivery (a launch option, a rules file, a check) carries the same text and a changed
+ *  brief reads as changed rules. A brief that cannot be read is named in the rules, never
+ *  dropped in silence. */
+export function withSeatBrief(rules: string, seat: Pick<Seat, 'brief'>, root: string): string {
+  if (seat.brief === undefined) return rules;
+  const path = isAbsolute(seat.brief) ? seat.brief : resolve(root, seat.brief);
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8').trim();
+  } catch {
+    return `${rules}\n\nYour seat's own brief (${path}) could not be read: tell the orchestrator in one line.`;
+  }
+  return text === '' ? rules : `${rules}\n\nYour seat's own standing brief, from ${path}:\n\n${text}`;
 }
 
 export type ComposedRuleOrigin =

@@ -135,6 +135,13 @@ export type Seat = {
    * only when asked to resolve a launcher; otherwise the launch line is the command.
    */
   launcher?: string;
+  /** Overrides what a shipped launcher's role default gives the seat: `read` holds it to reads
+   *  and `team`, `write` lets it write whatever its role. Omitted: the role decides (reviewer,
+   *  tester and assistant read; every other role writes). */
+  access?: 'read' | 'write';
+  /** A file whose text is added to this seat's own rules at every launch, after the team's: a
+   *  standing brief that is the seat's alone. Relative to the team's root, or absolute. */
+  brief?: string;
   cwd: string;
   /**
    * Set when `cwd` is outside the project and matches no trust path. Not a file word and not

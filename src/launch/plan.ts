@@ -392,6 +392,8 @@ export interface UpSeat {
   vendor?: string;
   /** The seat's role in the team file. A shipped launcher reads it to choose its permission line. */
   role?: string;
+  /** The seat's own `access`, over its role's default (shipped launchers). */
+  access?: 'read' | 'write';
   name: string;
   cli: string;
   launch: string;
@@ -1470,7 +1472,7 @@ export function upPlan(input: UpInput): Step[] {
     // refuses writes, edits and git, and denies what is not allowed), so it takes no TeamCLI
     // sandbox profile: that profile also stops the seat's own `team` commands from reading the
     // registry and the process table, which left such a seat unable to send.
-    const launcherSkipsSandbox = shippedLauncherIsReadOnly(seat.launcher, seat.role);
+    const launcherSkipsSandbox = shippedLauncherIsReadOnly(seat.launcher, seat.role, seat.access);
     const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox && !launcherSkipsSandbox
       ? grokSandbox
       : undefined;
@@ -1539,6 +1541,7 @@ export function upPlan(input: UpInput): Step[] {
       // and effort; any other name is looked up in the team's launcher files.
       const shippedOptions = {
         ...(seat.role === undefined ? {} : { role: seat.role }),
+        ...(seat.access === undefined ? {} : { access: seat.access }),
         ...(seat.effort === undefined ? {} : { effort: seat.effort }),
         ...(seat.version === undefined ? {} : { version: seat.version }),
         ...(seat.model === undefined ? {} : { model: seat.model }),

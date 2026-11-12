@@ -6,10 +6,17 @@ import type { LauncherDefinition } from './types.ts';
 import type { LaunchAccount } from './accounts.ts';
 
 /** What a seat may ask of a shipped launcher. */
-export type ShippedOptions = { role?: string; effort?: string; version?: string; vendor?: string; model?: string; account?: LaunchAccount };
+export type ShippedOptions = { role?: string; access?: 'read' | 'write'; effort?: string; version?: string; vendor?: string; model?: string; account?: LaunchAccount };
 
 /** The seat roles that only read: they get the CLI's own denials for writes, edits and git. */
 const READ_ONLY_ROLES: ReadonlySet<string> = new Set(['reviewer', 'tester', 'assistant']);
+
+/** Whether a seat reads only: its own `access` when it names one, otherwise its role's default.
+ *  An assistant that relays, and so writes files, names `access: write`. */
+export function readsOnly(role: string | undefined, access?: 'read' | 'write'): boolean {
+  if (access !== undefined) return access === 'read';
+  return role !== undefined && READ_ONLY_ROLES.has(role);
+}
 
 /** Grok Build, the Grok CLI. Lines measured on grok 1.0.77 (50ca579fa996) on 2026-11-11:
  *  the builder line ran reads, writes, git and bun unprompted with the footer
@@ -18,7 +25,7 @@ const READ_ONLY_ROLES: ReadonlySet<string> = new Set(['reviewer', 'tester', 'ass
  *  Only the Bun test runner was measured for the reviewer's denials. The model is named
  *  because 1.0.77's welcome screen asks for it to be selected otherwise. */
 function grokBuild(options: ShippedOptions): LauncherDefinition {
-  const readOnly = options.role !== undefined && READ_ONLY_ROLES.has(options.role);
+  const readOnly = readsOnly(options.role, options.access);
   const permission = readOnly
     ? ['--permission-mode', 'dontAsk', '--allow', 'Read', '--allow', 'Bash(team *)',
        '--deny', 'Write', '--deny', 'Edit', '--deny', 'Bash(git *)', '--deny', 'Bash(bun *)']
@@ -56,8 +63,8 @@ function claudeModelId(model: string | undefined, version: string | undefined): 
  *  allowed; it may read, search and run `team`, and writes, edits, git and bun are denied. Each
  *  list is one comma-separated word so no later word of the line is read into it. Every other
  *  seat keeps the bypass the unattended seats have run with. */
-function claudePermissions(role: string | undefined): string[] {
-  if (role === undefined || !READ_ONLY_ROLES.has(role)) return ['--dangerously-skip-permissions'];
+function claudePermissions(role: string | undefined, access?: 'read' | 'write'): string[] {
+  if (!readsOnly(role, access)) return ['--dangerously-skip-permissions'];
   return [
     '--permission-mode', 'dontAsk',
     '--allowedTools', 'Read,Glob,Grep,Bash(team *)',
@@ -88,7 +95,7 @@ function claudeCode(options: ShippedOptions): LauncherDefinition {
     name: 'claude-code',
     kind: 'custom',
     summary: `Claude Code${provider}`,
-    argv: ['claude', ...(model === null ? [] : ['--model', model]), ...claudePermissions(options.role)],
+    argv: ['claude', ...(model === null ? [] : ['--model', model]), ...claudePermissions(options.role, options.access)],
   };
 }
 
@@ -142,8 +149,8 @@ export function isShippedLauncher(name: string | undefined): boolean {
 
 /** True when the seat starts from a shipped launcher in its read-only form: the CLI's own
  *  permission policy holds it, and the launch adds no sandbox profile of its own. */
-export function shippedLauncherIsReadOnly(name: string | undefined, role: string | undefined): boolean {
-  return isShippedLauncher(name) && role !== undefined && READ_ONLY_ROLES.has(role);
+export function shippedLauncherIsReadOnly(name: string | undefined, role: string | undefined, access?: 'read' | 'write'): boolean {
+  return isShippedLauncher(name) && readsOnly(role, access);
 }
 
 /** The shipped launcher `name` as this seat configures it, or null when TeamCLI ships none
@@ -158,8 +165,8 @@ export function shippedLauncher(name: string | undefined, options: ShippedOption
  *  sockets open so the seat can still send (measured live 2026-11-11 on Claude Code 2.1.322:
  *  a shell write, git and the Write tool refused; team send delivered). Undefined for any other
  *  seat. The excluded command is named in three spellings; `["team"]` alone did not take effect. */
-export function shippedClaudeSettings(launcher: string | undefined, role: string | undefined): Record<string, unknown> | undefined {
-  if (launcher !== 'claude-code' || role === undefined || !READ_ONLY_ROLES.has(role)) return undefined;
+export function shippedClaudeSettings(launcher: string | undefined, role: string | undefined, access?: 'read' | 'write'): Record<string, unknown> | undefined {
+  if (launcher !== 'claude-code' || !readsOnly(role, access)) return undefined;
   return {
     sandbox: {
       enabled: true,

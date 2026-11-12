@@ -593,6 +593,18 @@
             "minLength": 1,
             "$comment": "the declarative launcher whose argv this seat runs when the launch is asked to resolve one; omitted, the launch line is unchanged and the digest is unchanged"
           },
+          "access": {
+            "enum": [
+              "read",
+              "write"
+            ],
+            "$comment": "overrides the role default of a shipped launcher: read holds the seat to reads and team commands, write lets it write whatever its role; omitted, the role decides (reviewer, tester and assistant read)"
+          },
+          "brief": {
+            "type": "string",
+            "minLength": 1,
+            "$comment": "a file whose text is added to this seat's own rules at every launch, after the team's; relative to the team root or absolute"
+          },
           "cwd": {
             "type": "string",
             "$comment": "relative to the project, or a trust path"

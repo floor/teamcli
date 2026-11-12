@@ -64,6 +64,8 @@ export type CliHookSeat = {
    *  launcher gets its sandbox and denials in this same settings file, since the CLI reads one. */
   launcher?: string;
   role?: string;
+  /** The seat's own `access`, over its role's default (shipped launchers). */
+  access?: 'read' | 'write';
 };
 
 /** Whether a seat's name can become a file name: the team file's own rule (one path segment,
@@ -726,7 +728,7 @@ export function installCliHooks(
       : presenceBindingAt(dir, session, seat);
     const presence = binding === null ? undefined : { dir, session, seat, binding };
     const base = cliHookSettings(statePath, drops, command, inbound, presence, cli);
-    const extra = shippedClaudeSettings(byName.get(seat)?.launcher, byName.get(seat)?.role);
+    const extra = shippedClaudeSettings(byName.get(seat)?.launcher, byName.get(seat)?.role, byName.get(seat)?.access);
     const text = extra === undefined ? base : `${JSON.stringify({ ...extra, ...(JSON.parse(base) as Record<string, unknown>) }, null, 2)}\n`;
     if (!writeSettings(settingsPath, text)) continue;
     landed[seat] = settingsPath;
