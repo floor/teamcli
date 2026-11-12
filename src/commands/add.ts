@@ -1683,6 +1683,7 @@ function seatPlan(
     ...(seat.launcher !== undefined && seat.vendor !== undefined ? { vendor: seat.vendor } : {}),
     ...(seat.launcher !== undefined && seat.account !== undefined ? { account: seat.account } : {}),
     cwd: start.cwd,
+    ...(seat.cwdDefaulted === true ? { cwdDefaulted: true as const } : {}),
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
     model: seat.model,

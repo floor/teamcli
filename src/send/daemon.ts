@@ -748,7 +748,11 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     const knows = (team: TeamFile): boolean =>
       (sender === 'owner' || sender === team.orchestrator || team.seats.some((s) => s.name === sender))
       && team.seats.some((s) => s.name === seatName);
-    if (!knows(input.team)) {
+    // A recipient the copy holds as stopped may have been started since (`team add` clears the
+    // mark in the record), and refusing it on the old copy would keep it unreachable until a
+    // daemon restart (the Gemini tester, 2026-11-12): that copy is read again too.
+    const staleStop = input.team.seats.some((s) => s.name === seatName && s.stopped === true);
+    if (!knows(input.team) || staleStop) {
       try {
         const fresh = readTeamConfig(input.root, { home: host.home });
         if (fresh.ok && fresh.team.session === input.team.session && fresh.team.project === input.team.project) {

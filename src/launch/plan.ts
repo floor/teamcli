@@ -1,5 +1,5 @@
-import { realpathSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ownStartFolderProblem, type StartFolder, type OwnStartFolderInput } from '../worktree/place.ts';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
@@ -1316,6 +1316,15 @@ export function upPlan(input: UpInput): Step[] {
     let cwd = channelPlace !== null
       ? channelPlace.cwd
       : isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
+    // A seat whose folder is the team's seat folder (it names no cwd) gets that folder made when
+    // it is missing, whatever its CLI, as a Grok or Cursor seat's start check makes it: only inside
+    // the team's folder, never its state folder. Its inbox registration and its pane start there.
+    if (seat.cwdDefaulted === true && channelPlace === null && !existsSync(cwd)) {
+      const below = relative(input.root, cwd);
+      if (below !== '' && !below.startsWith('..') && !isAbsolute(below) && below.split(sep)[0] !== '.agents') {
+        try { mkdirSync(cwd, { recursive: true }); } catch { /* the start checks below report it */ }
+      }
+    }
     const channel = channelFallback === undefined && claudeChannelSeat(asChannel)
       ? { root: input.root, ...(input.home === undefined ? {} : { home: input.home }),
           ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }) }
@@ -1528,6 +1537,10 @@ export function upPlan(input: UpInput): Step[] {
     const launchWarnings: string[] = [];
     let command: string;
     let fromResolver = false;
+    // A launcher TeamCLI ships: its line is resolved like a launcher file's, but the seat still
+    // takes everything a plain line takes at launch — the Grok sandbox profile written for it and
+    // the managed Codex endpoint — because nothing in the package's line provides them.
+    let shippedLaunch = false;
     let baseLine = recordedLine;
     if (seat.launcher !== undefined) {
       const ctx: ResolveContext = {
@@ -1595,6 +1608,7 @@ export function upPlan(input: UpInput): Step[] {
       }
       baseLine = envWords.length === 0 ? decided.command : `${envWords.join(' ')} ${decided.command}`;
       fromResolver = true;
+      shippedLaunch = shipped !== null;
     }
     let denyRecordLine: string | undefined;
     if (profile.cli === 'grok' && commandDeny !== 'off') {
@@ -1759,7 +1773,7 @@ export function upPlan(input: UpInput): Step[] {
     // A Grok seat started from a declared launcher takes the same per-seat sandbox profile as a
     // seat started from its raw line: `plannedSandbox` above is computed for both paths and rides
     // the launch step, which writes the profile before the pane starts.
-    if (fromResolver && managedCodex) {
+    if (fromResolver && !shippedLaunch && managedCodex) {
       const why = 'resolve-launch refuses a seat that needs the managed Codex endpoint';
       steps.push({
         kind: 'skip',
@@ -1781,7 +1795,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), ...(channelFallback === undefined ? {} : { channelNotice: channelFallback }), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...(fromResolver || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...(fromResolver || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }), ...(profile.cli === 'cursor' && commandDeny !== 'off' ? { cursorCommandDeny: commandDeny } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), ...(channelFallback === undefined ? {} : { channelNotice: channelFallback }), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...((fromResolver && !shippedLaunch) || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...((fromResolver && !shippedLaunch) || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }), ...(profile.cli === 'cursor' && commandDeny !== 'off' ? { cursorCommandDeny: commandDeny } : {}) },
       });
     }
     const rules = profile.rulesMode;

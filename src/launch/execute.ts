@@ -1602,7 +1602,9 @@ export async function executePlan(
         // The sandbox file and the managed endpoint belong to the file's own launch line.
         // A resolved argv already carries the profile's words; those two stays are the next
         // commit. Resume and the session mint still run: a resolved line is a seat launch.
-        if (op.resolved !== true) {
+        // A shipped launcher's resolved line carries its Grok sandbox and managed Codex endpoint
+        // like a plain line (the plan names them only for those); a launcher file's does not.
+        if (op.resolved !== true || op.grokSandbox !== undefined || op.codexEndpoint !== undefined) {
         // A Grok seat's sandbox profile is written before its command runs, the same place the
         // plan decided to name it. The profile is the seat's write wall, so a file that cannot
         // be written refuses the seat. Nothing is launched without it. The record names the
