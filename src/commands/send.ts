@@ -14,7 +14,7 @@ import { nudgeBus } from '../bus/server.ts';
 import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, readAncestors, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
 import { placedCallerTeam } from '../registry/binding.ts';
 import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
@@ -38,7 +38,7 @@ import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor, type TypedWake } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
-import { getAgent, readAgents, recordProvenAgentAddress, type Agent } from '../registry/agents.ts';
+import { getAgent, readAgents, recordAgentSessionWhen, recordProvenAgentAddress, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { findTeams, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { crossTeamsFor } from '../send/cross-teams.ts';
@@ -7389,10 +7389,32 @@ function noAgentRecord(caller: Caller, declared: DeclaredSender | null): string 
 
 /** A reported conversation mismatch is never this record's sender. An integration with no
  *  report, or a record-only path with no live reader, keeps its existing placement checks. */
-export function reportedConversationProblem(record: Agent, pane: string, live?: Pick<SendHost, 'agents'>): string | null {
+export function reportedConversationProblem(
+  record: Agent,
+  pane: string,
+  live?: Pick<SendHost, 'agents'> & { home?: string },
+  ancestors: () => readonly { pid: number }[] | null = readAncestors,
+): string | null {
   if (record.reach.agent_session == null) return null;
   const panes = live?.agents(record.reach.session)?.filter((agent) => agent.pane === pane) ?? [];
-  if (panes.some((agent) => agent.session !== undefined && agent.session !== record.reach.agent_session)) {
+  const reported = panes.filter((agent) => agent.session !== undefined && agent.session !== record.reach.agent_session);
+  if (reported.length > 0) {
+    // The same CLI process with a new conversation: a compaction or a cleared conversation keeps
+    // the process and changes the id herdr reports (the orchestrator, 2026-11-12). The proof is
+    // the record's own socket address, `<folder>/<pid>.sock`, naming a process that is one of
+    // this call's own ancestors: the call runs inside the very CLI the record reaches, so the
+    // record follows the one conversation the pane reports, and the call stands.
+    const pid = /\/(\d+)\.sock$/.exec(record.reach.address ?? '')?.[1];
+    const fresh = reported.length === 1 && panes.length === 1 ? reported[0]!.session : undefined;
+    if (pid !== undefined && fresh !== undefined && live?.home !== undefined
+      && (ancestors() ?? []).some((process) => process.pid === Number(pid))) {
+      try {
+        const wrote = recordAgentSessionWhen(live.home, record.id, fresh, (current) =>
+          current.reach.agent_session === record.reach.agent_session && current.reach.address === record.reach.address
+            ? true : 'the record changed while this call read it');
+        if (wrote.kind === 'written') return null;
+      } catch { /* the refusal below stands */ }
+    }
     return `the live conversation on pane ${pane} does not match the registry's conversation for seat ${record.reach.seat}; this call is not proven as that seat; run team up or team restart ${record.reach.seat}`;
   }
   return null;
