@@ -144,7 +144,7 @@ describe('the launch and the managed Codex endpoint', () => {
     });
     await executePlan(launchStep({ dir: STATE_DIR }), 'acme', host);
     expect(calls).toEqual(['managed', `paneRun:codex --remote ${URL}`, 'stop']);
-    expect(said.join('')).toContain('its launch command did not run; left at launched');
+    expect(said.join('')).toContain('its launch command did not run (the terminal host did not take the line in pane p1); left at launched');
   });
 
   test('a pane that never ran leaves a reused endpoint alone: it is not this launch’s to stop', async () => {

@@ -429,7 +429,7 @@ test('a failed launch before the close leaves the recorded workspace open and th
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
 
-  expect(io.out).toContain(`${SEAT}: left out: its launch command did not run; left at launched\n`);
+  expect(io.out).toContain(`${SEAT}: left out: its launch command did not run (the terminal host did not take the line in pane w2:p1); left at launched\n`);
   expect(made.trace.closed).toEqual([]);
   expect(io.err).toContain(`${SEAT}: its recorded workspace ${OLD_WORKSPACE} was left as it is; the seat is not ready on a replacement\n`);
   expect(seatState()).toMatchObject({ stage: 'launched', pane: NEW_PANE, workspace: NEW_WORKSPACE });
@@ -454,7 +454,7 @@ test('a failed launch that closed nothing leaves the prior record exactly as it 
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
 
-  expect(io.out).toContain(`${SEAT}: left out: its launch command did not run; left at launched\n`);
+  expect(io.out).toContain(`${SEAT}: left out: its launch command did not run (the terminal host did not take the line in pane w2:p1); left at launched\n`);
   expect(made.trace.closed).toEqual([]);
   const agent = agentNow();
   expect(agent.id).toBe(id);

@@ -777,11 +777,48 @@ export function workspaceCreate(
 
 // Types a command into a pane and sends it. For a seat's launch, at a shell. An exit into an
 // agent is `typeText` and then `pressEnter`, and only after the screen was read as idle again.
+/** How long a launch waits for a new pane's shell to reach its prompt. */
+export const PANE_RUN_PROMPT_WAIT_MS = 15_000;
+const PANE_RUN_RETRY_MS = 250;
+
+function blockFor(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Whether herdr refused the line only because the pane's shell has not reached its prompt yet:
+ *  the terminal is still in canonical mode, which takes at most 1024 bytes a line (herdr 0.9.5:
+ *  `pane_send_failed`, "…canonical mode with a 1024-byte limit; wait for the shell prompt and
+ *  retry"). Measured 2026-11-12: a launch typed ~100 ms after its workspace was made hit this
+ *  with a 1105-byte first line; the same pane took a 8000-byte line once its shell was up. */
+function waitsForPrompt(said: string): boolean {
+  return said.includes('pane_send_failed') && said.includes('canonical mode');
+}
+
 export function paneRun(pane: string, command: string, session?: string): boolean {
-  const out = capture(['pane', 'run', pane, command], session);
-  if (out === null) return false;
-  const body = parsed(out);
-  return body === null || !isHerdrError(body);
+  const deadline = Date.now() + PANE_RUN_PROMPT_WAIT_MS;
+  for (;;) {
+    let out: string | null;
+    let refused = '';
+    if (customCapture) {
+      out = customCapture(['pane', 'run', pane, command], session);
+    } else {
+      try {
+        out = traceChildStep('terminal-host pane run', () => captureExec([...(session ? ['--session', session] : []), 'pane', 'run', pane, command]));
+      } catch (error) {
+        const e = error as { stderr?: unknown; stdout?: unknown };
+        refused = `${String(e.stderr ?? '')}${String(e.stdout ?? '')}`;
+        out = null;
+      }
+    }
+    if (out !== null) {
+      const body = parsed(out);
+      if (body === null || !isHerdrError(body)) return true;
+      refused = out;
+    }
+    // The shell is still starting: the same line is offered again once it is at its prompt.
+    if (!waitsForPrompt(refused) || Date.now() >= deadline) return false;
+    blockFor(PANE_RUN_RETRY_MS);
+  }
 }
 
 // The id team reports a pane's display_agent under. Herdr 0.7.1 requires `--source`; nothing

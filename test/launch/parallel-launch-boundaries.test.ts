@@ -334,11 +334,11 @@ describe('parallel launch window boundaries', () => {
     expect(launchedAt.get('a-pane')).toBe(0);
     expect(launchedAt.get('c-pane')).toBe(0);
     expect(out.join('')).toBe(
-      'a: ready\nb: left out: its launch command did not run; left at launched\nc: ready\n',
+      'a: ready\nb: left out: its launch command did not run (the terminal host did not take the line in pane b-pane); left at launched\nc: ready\n',
     );
     expect(logged).toEqual([
       { who: 'a', what: 'ready' },
-      { who: 'b', what: 'left out: its launch command did not run; left at launched' },
+      { who: 'b', what: 'left out: its launch command did not run (the terminal host did not take the line in pane b-pane); left at launched' },
       { who: 'c', what: 'ready' },
     ]);
   });

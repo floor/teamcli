@@ -1670,7 +1670,16 @@ export async function executePlan(
         let channelCurrent = true;
         try { if (channel?.ok) channel.lease.check(); } catch { channelCurrent = false; }
         if (!guardRestore(op.seat)) break;
-        if (!here || !channelCurrent || !host.paneRun(session, here.pane, launch.command)) {
+        // Each way the line can fail to run is named: one sentence for three causes hid which
+        // one a stale pane hit (the Kimi and DeepSeek testers, 2026-11-12).
+        const notRun = !here
+          ? 'no pane was found for it'
+          : !channelCurrent
+            ? 'its channel lease was no longer current'
+            : !host.paneRun(session, here.pane, launch.command)
+              ? `the terminal host did not take the line in pane ${here.pane}`
+              : null;
+        if (notRun !== null || !here) {
           // The fresh-start fallback is logged with its real outcome, never as a launch that
           // did not happen: the terminal's scrollback loses this, so the log keeps the truth.
           if (freshFrom !== undefined) {
@@ -1686,7 +1695,7 @@ export async function executePlan(
             }
           }
           dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: 'its launch command did not run; left at launched' });
+          final(op.seat, { kind: 'left out', reason: `its launch command did not run (${notRun}); left at launched` });
           break;
         }
         if (freshFrom !== undefined) {
