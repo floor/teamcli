@@ -231,31 +231,48 @@ test('restart on a machine with no installed unit is refused and stops nothing',
   expect(fixture.events).toEqual([]);
 });
 
-test('a restarted daemon that does not answer is started again, and the restart is reported as undone', async () => {
+test('a restarted daemon that answers late is restarted, never stopped again', async () => {
+  // A daemon hosting several checkouts on a loaded machine answers seconds after its load: the
+  // restart waits the cold-start window an install gives, and the late answer is a restart.
   const fixture = fixtureScene(true);
   const named = grantFor(fixture.home, ['daemon']);
   fixture.seedPrevious();
-  // The first health window's probes are unanswered; the one after the undo answers, so the
-  // scene reports a restored daemon rather than a lost one.
   fixture.setProbeDelay(8);
   const io = sceneIo(fixture);
   io.general = named;
 
   const code = await runDaemon(['restart'], io, sourcesOf(fixture));
 
-  expect(code, io.out + io.err).toBe(1);
-  expect(io.err).toContain('the restarted daemon did not answer the health probe');
-  expect(io.err).toContain('started again and its daemon answers');
-  expect(fixture.events.filter((one) => one.kind === 'stop').length).toBe(2);
-  expect(fixture.events.filter((one) => one.kind === 'load' && one.accepted).length).toBe(2);
+  expect(code, io.out + io.err).toBe(0);
+  expect(io.out).toContain('restarted');
+  expect(fixture.events.filter((one) => one.kind === 'stop').length).toBe(1);
   expect(fixture.running()).toBe('previous');
 });
 
-test('a restarted daemon that never answers leaves no daemon, says so and names the install', async () => {
+test('a restarted daemon alive and silent through the window is reported starting, and left running', async () => {
   const fixture = fixtureScene(true);
   const named = grantFor(fixture.home, ['daemon']);
   fixture.seedPrevious();
   fixture.setProbeDelay(100);
+  const io = sceneIo(fixture);
+  io.general = named;
+
+  const code = await runDaemon(['restart', '--json'], io, sourcesOf(fixture));
+
+  expect(code, io.out + io.err).toBe(0);
+  const document = JSON.parse(io.out) as { restarted: boolean; starting?: boolean };
+  expect(document.restarted).toBe(true);
+  expect(document.starting).toBe(true);
+  expect(fixture.events.filter((one) => one.kind === 'stop').length).toBe(1);
+  expect(fixture.running()).toBe('previous');
+});
+
+test('a restarted daemon whose process is gone leaves no daemon, says so and names the install', async () => {
+  const fixture = fixtureScene(true);
+  const named = grantFor(fixture.home, ['daemon']);
+  fixture.seedPrevious();
+  // Every load is taken and starts nothing: the restarted daemon and the one started again are dead.
+  fixture.setPolicy('accept-dead');
   const io = sceneIo(fixture);
   io.general = named;
 

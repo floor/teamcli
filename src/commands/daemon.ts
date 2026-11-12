@@ -1154,9 +1154,31 @@ async function restartInstalled(
     return 1;
   }
   // A load the manager accepted is registration, not proof that a program runs: the restarted
-  // daemon must answer before this restart is called one. A restart keeps the short confirmation
-  // an install used before the cold-start window: the unit it loads is one that has run before.
-  if ((await daemonAnswers(home, sources)).answered) {
+  // daemon must answer before this restart is called one. It gets the same cold-start window an
+  // install gives: a daemon hosting several checkouts on a loaded machine answers 10 to 30 s
+  // after its load (measured 2026-11-12: the restarted daemon answered about 10 s in, after the
+  // short window had stopped it and called the machine empty). A daemon still alive and silent
+  // at the end of the window is reported as starting, never stopped.
+  const answer = await daemonAnswers(home, sources, { waits: COLD_START_WAIT_MS, manager });
+  if (!answer.answered && answer.starting) {
+    appendDaemonLog(home, 'restart: the restarted daemon is alive and has not answered yet; left starting', sources.now?.() ?? new Date());
+    if (parsed.json) {
+      writeJson(io, 'team.daemon-restart', {
+        format: 1,
+        command: 'restart',
+        dry_run: false,
+        restarted: true,
+        starting: true,
+        unit_path: restarted.unitPath,
+        ...(refreshed === 'refreshed' ? { refreshed: true } : {}),
+      });
+    } else {
+      io.stdout('team daemon: restarted; the daemon is alive and still starting (it has not answered yet); `team daemon status` shows when it does\n');
+    }
+    // exit: daemon.restarted
+    return 0;
+  }
+  if (answer.answered) {
     if (parsed.json) {
       writeJson(io, 'team.daemon-restart', {
         format: 1,
@@ -1174,7 +1196,7 @@ async function restartInstalled(
   }
   appendDaemonLog(home, 'restart: the restarted daemon did not answer the health probe', sources.now?.() ?? new Date());
   const undone = restarted.undo();
-  if (undone.ok && (await daemonAnswers(home, sources)).answered) {
+  if (undone.ok && (await daemonAnswers(home, sources, { waits: COLD_START_WAIT_MS })).answered) {
     refuse(io, parsed.json, 'daemon', {
       id: 'daemon.restart-rolled-back',
       message: 'the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers',
