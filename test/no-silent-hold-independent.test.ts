@@ -410,7 +410,13 @@ function makeFakeHost(
 }
 
 describe('no-silent-hold + held-notice-synthetic (d4e2cd11b) independent verification', () => {
-  test('Scene 1: held send reports to sender and recipient lead once per id (metadata only), updates status notes, honors dry-run/session separation, and clears on preflight recovery or verified receipt', async () => {
+  // SKIPPED 2026-11-12 (Atlas): this scene makes its hold with model drift, and since 3b8ec1a2f
+  // ("deliver permitted recipient model drift with warnings", docs/commands/send.md) drift alone
+  // no longer holds a send: it is delivered or kept with a drift notice to the lead, and only a
+  // model the entity rule disallows is refused (plainly, not held). The held-notice machinery is
+  // still covered by the dialog-held scenes. To rewrite on the new contract: TeamCLI team, with
+  // the cross-lab review that commit still asks for.
+  test.skip('Scene 1: held send reports to sender and recipient lead once per id (metadata only), updates status notes, honors dry-run/session separation, and clears on preflight recovery or verified receipt', async () => {
     const w = makeSyntheticWorld();
     // Configure seat-peer with Claude Fable 5.1 in registry while pane shows Opus 4.6 -> model drift hold
     registerSyntheticSeat(w.home, 'seat-peer', 'implementer', 'pane-seat-peer', {
@@ -753,7 +759,13 @@ describe('no-silent-hold + held-notice-synthetic (d4e2cd11b) independent verific
     }
   });
 
-  test('Scene 3: worker-only cross-team grant where notice to recipient lead is refused writes NOTHING into recipient lead inbox and notifies sender and sender own lead', async () => {
+  // SKIPPED 2026-11-12 (Atlas): this scene makes its hold with model drift, and since 3b8ec1a2f
+  // ("deliver permitted recipient model drift with warnings", docs/commands/send.md) drift alone
+  // no longer holds a send: it is delivered or kept with a drift notice to the lead, and only a
+  // model the entity rule disallows is refused (plainly, not held). The held-notice machinery is
+  // still covered by the dialog-held scenes. To rewrite on the new contract: TeamCLI team, with
+  // the cross-lab review that commit still asks for.
+  test.skip('Scene 3: worker-only cross-team grant where notice to recipient lead is refused writes NOTHING into recipient lead inbox and notifies sender and sender own lead', async () => {
     const w = makeSyntheticWorld();
     // Grant seat-a@alpha -> seat-b@beta ONLY (no grant to lead-b@beta)
     signSendGrant(w.home, 'worker-only-grant', {
@@ -817,7 +829,13 @@ describe('no-silent-hold + held-notice-synthetic (d4e2cd11b) independent verific
     expect(senderLeadNotices[0]).not.toContain(secretCrossBody);
   });
 
-  test('Scene 4: admitted same-team lead notice whose transport fails queues runtime notice without recursion and leaves unrelated lead mail unread', async () => {
+  // SKIPPED 2026-11-12 (Atlas): this scene makes its hold with model drift, and since 3b8ec1a2f
+  // ("deliver permitted recipient model drift with warnings", docs/commands/send.md) drift alone
+  // no longer holds a send: it is delivered or kept with a drift notice to the lead, and only a
+  // model the entity rule disallows is refused (plainly, not held). The held-notice machinery is
+  // still covered by the dialog-held scenes. To rewrite on the new contract: TeamCLI team, with
+  // the cross-lab review that commit still asks for.
+  test.skip('Scene 4: admitted same-team lead notice whose transport fails queues runtime notice without recursion and leaves unrelated lead mail unread', async () => {
     const w = makeSyntheticWorld('[typed]');
     // Put an unrelated unread message in lead-a's drop folder beforehand
     const unrelatedId = '44444444-4444-4444-8444-444444444444';

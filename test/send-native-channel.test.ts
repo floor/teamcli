@@ -115,7 +115,7 @@ test('a registered recipient with model drift is held before any send leg writes
   const io = owner(made.root);
 
   expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-  expect(io.err).toContain('model drift: DeepSeek Flash 4.1 vs Claude Opus 4.6');
+  expect(io.err).toContain('model drift: record says DeepSeek Flash 4.1, runs Claude Opus 4.6');
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
   expect(host.frames).toEqual([]);
@@ -174,20 +174,19 @@ function registerLeadWith(made: World, host: Fake, signing: { model: string; ver
   });
 }
 
-/** A drift hold reports the attempt to the receiving lead, but the notice is itself a send to
- *  that lead and meets the same drift hold. A refused or unknown admission writes no record
- *  into that lead's inbox; the folder itself may be left behind by the reporting step's own
- *  preparation, so the check is for records, never for the folder. The sender's own lead being
- *  the same seat in these one-team worlds, no second copy anywhere goes either. The sender
- *  reads the outcome in its own held line: the count, the refusal, and that no body was kept. */
+/** Model drift no longer stops an admitted message (docs/commands/send.md, 3b8ec1a2f): the
+ *  message takes its normal walk — here, with no live route in this world, it is kept in the
+ *  recipient's inbox — the sender's own line names the drift as awaiting the lead's confirm, and
+ *  one notice goes to the recipient's lead through ordinary admission (the lead is the recipient
+ *  in these one-team worlds, so that notice lands in the same inbox). A model the entity's rule
+ *  disallows is refused instead; that path has its own scenes. */
 function expectNoHeldNotice(made: World, io: TestIo): void {
   const dir = dropDir(made.dir, 'lead');
   const records = existsSync(dir) ? readdirSync(dir).filter((name) => !name.includes('.')) : [];
-  expect(records).toEqual([]);
-  expect(io.err).toContain('1 held send');
-  expect(io.err).toContain('lead notice refused or admission unknown');
-  expect(io.err).toContain('no runtime fallback written');
-  expect(io.err).toContain('body not read or kept; retry after repair');
+  expect(records.length).toBe(2);
+  expect(io.err).toContain("awaiting the lead's confirm");
+  expect(io.err).toContain('lead notice not delivered');
+  expect(io.err).not.toContain('body not read or kept');
 }
 
 // A path, an `env` prefix, or quotes spell the CLI's own binary; no launcher there selects a
@@ -202,7 +201,7 @@ test('the CLI reached by a path, through env, or quoted is the CLI: a foreign si
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('model drift: DeepSeek Flash V4.1 vs Claude Opus 4.6');
+    expect(io.err).toContain('model drift: record says DeepSeek Flash V4.1, runs Claude Opus 4.6');
     expectNoHeldNotice(made, io);
     made.cleanup();
   }
@@ -219,7 +218,7 @@ test('a Claude family spelled in lower case is read off the CLI screen, never as
   const io = owner(made.root);
 
   expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-  expect(io.err).toContain('model drift: claude fable 5.1 vs Claude Opus 4.6');
+  expect(io.err).toContain('model drift: record says claude fable 5.1, runs Claude Opus 4.6');
   expectNoHeldNotice(made, io);
 });
 
@@ -276,7 +275,7 @@ test('a wrapper banner naming another version is still held', async () => {
   const io = owner(made.root);
 
   expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-  expect(io.err).toContain('model drift: GLM 5.3 vs glm 5.4');
+  expect(io.err).toContain('model drift: record says GLM 5.3, runs glm 5.4');
   expectNoHeldNotice(made, io);
 });
 
@@ -285,10 +284,10 @@ test('a wrapper banner naming another version is still held', async () => {
 // round-2 head the sorted comparison called these matches, and the send walked.)
 test('a wrapper banner holding the signed version in another order is held', async () => {
   const cases = [
-    { signing: { model: 'GLM', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-3.5', drift: 'GLM 5.3 vs glm 3.5' },
+    { signing: { model: 'GLM', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-3.5', drift: 'record says GLM 5.3, runs glm 3.5' },
     {
       signing: { model: 'DeepSeek Flash', version: 'V4.1' }, launch: 'claude-deepseek.sh',
-      banner: 'deepseek-v1.4-flash', drift: 'DeepSeek Flash V4.1 vs deepseek v1.4.flash',
+      banner: 'deepseek-v1.4-flash', drift: 'record says DeepSeek Flash V4.1, runs deepseek v1.4.flash',
     },
   ];
   for (const one of cases) {
@@ -348,7 +347,7 @@ test('a declaration that spells the family inside its model holds another versio
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     if (one.held) {
-      expect(io.err).toContain('model drift: Kimi K2.5 2.5 vs');
+      expect(io.err).toContain('model drift: record says Kimi K2.5 2.5, runs');
       expectNoHeldNotice(made, io);
     } else {
       expect(io.err).not.toContain('model drift');
@@ -380,7 +379,7 @@ test('a number inside a model word is model identity, never part of the version'
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     if (one.held) {
-      expect(io.err).toContain('model drift: GLM 2B');
+      expect(io.err).toContain('model drift: record says GLM 2B');
       expectNoHeldNotice(made, io);
     } else {
       expect(io.err).not.toContain('model drift');
@@ -406,7 +405,7 @@ test('a version the id spells with a different run is another version', async ()
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('model drift: Kimi');
+    expect(io.err).toContain('model drift: record says Kimi');
     expectNoHeldNotice(made, io);
     made.cleanup();
   }

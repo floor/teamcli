@@ -168,11 +168,13 @@ test('a real send to a synthetic Cursor pane accepts the split and writes a sign
   expect(record?.payload.body).toContain(MESSAGE);
 });
 
-test('the same synthetic send still holds a real variant difference before writing a message', async () => {
+test('the same synthetic send still reports a real variant difference, for the lead to confirm', async () => {
+  // Drift alone no longer stops an admitted message (docs/commands/send.md, 3b8ec1a2f): the
+  // message takes its walk (kept in the inbox here, no live route) and the drift is named.
   const fixture = sendFixture(cursorScreen('Flash'));
   expect(await runSend(['receiver', MESSAGE], fixture.io, fixture.host)).toBe(1);
-  expect(fixture.io.err).toContain('model drift');
-  expect(existsSync(fixture.drops) ? readdirSync(fixture.drops) : []).toEqual([]);
+  expect(fixture.io.err).toContain('model drift: record says');
+  expect(fixture.io.err).toContain("awaiting the lead's confirm");
 });
 
 test('an unread synthetic Cursor pane stays unread and does not fabricate drift', async () => {
