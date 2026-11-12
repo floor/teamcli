@@ -2830,6 +2830,18 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       },
     });
     if (reading === 'gone') return undefined;
+    // A pane the host restored at its own bare shell holds no seat: a host restart brings back
+    // a CLI that cannot resume (Grok Build on 2026-11-12) as an empty prompt. The restore runs
+    // the seat's own line in that same pane, as `team up` does; nothing is created or closed.
+    // The reading is fresh each time it is asked (a kept pane is cached, this one is not), so a
+    // program that appears in the pane before the launch makes it kept again and nothing runs.
+    if (reading === 'present') {
+      const pane = restoreOriginals.get(name)?.pane;
+      if (pane !== undefined) {
+        evictHerdrPaneProcessInfo(pane, aim(session));
+        if (paneHoldsOnlyShell(sources.launch?.processInfo?.(session, pane) ?? null)) return undefined;
+      }
+    }
     const result = {
       reason: reading === 'present'
         ? 'restore left the recorded pane untouched; it is still present'
@@ -2951,7 +2963,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     const quiet = held?.pane !== undefined && restoring && declaresChannel
       ? await channelRestoreQuiet(root, session, seat.name, sources)
       : false;
-    const planned = seatPlan(
+    const planSeat = (keep: UpSeat['restoreKeep']): UpSeat => seatPlan(
       standing,
       team,
       seat,
@@ -2979,8 +2991,21 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       worktreeOf(recorded, seat.name)?.path,
       (pane) => sources.launch?.processInfo?.(session, pane) ?? null,
       quiet,
-      restoreKeepOf(seat.name),
+      keep,
     );
+    let planned = planSeat(restoreKeepOf(seat.name));
+    // A host restart keeps a seat's pane and drops its name. The restore keeps that pane as it
+    // is, but the seat is still read for an adoption: one in the very pane and workspace the
+    // record names is carried, so the plan renames the pane back (by the adoption's own proof)
+    // instead of leaving the team unplaced. Anything else the open reading planned is dropped.
+    if (planned.restoreKeep !== undefined && !planned.human && !planned.stopped) {
+      const open = planSeat(undefined);
+      const held = recorded?.seats[seat.name];
+      if (open.adopted !== undefined && held !== undefined
+        && open.adopted.pane === held.pane && open.adopted.workspace === held.workspace) {
+        planned = { ...planned, adopted: open.adopted };
+      }
+    }
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
     if (grantedSeat !== null && seat.name === grantedSeat) {

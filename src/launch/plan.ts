@@ -1071,7 +1071,15 @@ export function upPlan(input: UpInput): Step[] {
       steps.push({ kind: 'skip', text: `${seat.name}: stopped in the file; start it with \`team add ${seat.name}\`` });
       continue;
     }
-    if (seat.restoreKeep !== undefined) {
+    // A host restart keeps the panes and drops their names and sidebar lines. A restore pass
+    // leaves a still-present recorded pane as it is, but gives it back what the restart took:
+    // a pane proven to hold this seat's own process is adopted (renamed back, then re-tied, by
+    // the adoption's own fresh proof), and every kept pane has its sidebar painted again. Neither
+    // types into the pane, launches it or closes it.
+    const adoptsInPlace = seat.restoreKeep !== undefined && seat.adopted !== undefined
+      && seat.adopted.pane === seat.pane && seat.adopted.workspace === seat.workspace;
+    if (seat.restoreKeep !== undefined && !adoptsInPlace) {
+      repaint(seat, seat.pane, seat.workspace);
       steps.push({
         kind: 'skip',
         text: `${seat.name}: ${seat.restoreKeep.reason}`,

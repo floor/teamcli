@@ -948,8 +948,10 @@ export async function executePlan(
   // plan's command. Every other launch stores the pinned recipe, never the expanded command.
   // A seat this run did not launch has no entry, so a later record keeps what an earlier launch wrote.
   const recordLines = new Map<string, string>();
-  const recordSeat = (seat: string, patch: Parameters<Host['record']>[1]): void => {
-    if (!guardRestore(seat)) return;
+  const recordSeat = (seat: string, patch: Parameters<Host['record']>[1], proved = false): void => {
+    // `proved`: the adoption's re-tie, written only after its own fresh proof that the recorded
+    // pane holds this seat's own process; it touches no pane, so the restore guard does not hold it.
+    if (!proved && !guardRestore(seat)) return;
     const line = recordLines.get(seat);
     host.record(seat, line === undefined || patch.launch_line !== undefined ? patch : { ...patch, launch_line: line });
   };
@@ -1221,7 +1223,13 @@ export async function executePlan(
     // A path can change after planning or workspace creation. Check before the first write
     // for this seat, including inbox registration; a refused start also suppresses cleanup.
     if (seat && invalidStart.has(seat)) return;
-    if (seat && (step.kind !== 'skip' || (op?.do === 'record' && op.launched !== undefined)) && !guardRestore(seat)) return;
+    // A restore pass leaves a still-present recorded pane as the host restored it, with two
+    // exceptions that type nothing, launch nothing and close nothing: the sidebar repaint
+    // (`relabel`) and the adoption (`adopt`), which renames the pane back to its seat only after
+    // its own fresh proof that the pane holds that seat. A host restart drops every pane's name
+    // and sidebar line while keeping the pane, so without them a restored team came back unplaced.
+    const paintsOnly = op?.do === 'relabel' || op?.do === 'adopt';
+    if (seat && !paintsOnly && (step.kind !== 'skip' || (op?.do === 'record' && op.launched !== undefined)) && !guardRestore(seat)) return;
     const launch = seat === undefined ? undefined : launches.get(seat);
     if (launch !== undefined && !guardStart(launch)) return;
 
@@ -2190,7 +2198,7 @@ export async function executePlan(
           // is the fallback for a reading the host could not give twice.
           launched: launchedIdentity(processNow) ?? op.launched,
           ...(proof.kind === 'session' && op.session !== undefined ? { agent_session: op.session } : {}),
-        });
+        }, true);
         provedRestored.add(op.seat);
         dropped.add(op.seat);
         final(op.seat, { kind: 'ready' }, `  restored and re-tied: ${proof.sentence}\n`);

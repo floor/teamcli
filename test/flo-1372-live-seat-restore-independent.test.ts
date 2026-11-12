@@ -167,6 +167,10 @@ type WorldSeat = {
   agentStatus?: 'idle' | 'working';
   process: PaneProcesses | null;
   screen?: string;
+  /** The host restored the pane but dropped its name (a host restart): listed with no name. */
+  unnamed?: boolean;
+  /** The conversation the host reports for the pane's agent. */
+  session?: string;
 };
 
 type Harness = {
@@ -277,12 +281,13 @@ function makeHarness(initialSeats: Record<string, WorldSeat>): Harness {
       for (const [name, item] of seats) {
         if (item.inAgentList) {
           list.push({
-            name,
+            name: item.unnamed === true ? null : name,
             agent: 'claude',
             pane: item.pane,
             workspace: item.workspace,
             status: item.agentStatus ?? 'idle',
             cwd: null,
+            ...(item.session === undefined ? {} : { session: item.session }),
           });
         }
       }
@@ -485,7 +490,7 @@ describe('independent restore sweep and conversation-store boundaries', () => {
         inPaneList: true,
         inAgentList: true,
         agentStatus: 'idle',
-        process: { shell: 700, foreground: [700, 701] },
+        process: { shell: 700, foreground: [701] },
         screen: CLAUDE_IDLE.replace('Opus 5.5 · Acme billing', 'deepseek-v3 · API Usage Billing'),
       },
     });
@@ -1127,5 +1132,74 @@ describe('independent restore sweep and conversation-store boundaries', () => {
     expect(afterSeats['seat-3']?.workspace).toBe('ws-fresh-1');
     expect(afterSeats['seat-3']?.stage).toBe('ready');
     expect(afterSeats['seat-4']).toBeUndefined();
+  });
+
+  test('scene 7 (host restart): a recorded pane the host restored with its name dropped is renamed back to its seat, and nothing is launched, typed or closed', async () => {
+    writeFileSync(teamFile, teamYaml({ seats: [{ name: 'seat-1' }] }));
+    recordSessionSeats({
+      'seat-1': {
+        stage: 'ready',
+        pane: 'pane-seat-1',
+        workspace: 'ws-seat-1',
+        launched: { shell: 500, cli: [501] },
+        agent_session: CONV_ONE,
+      },
+    });
+    await approve();
+
+    // The restart kept the pane and its conversation, gave it new processes, and dropped its name.
+    const harness = makeHarness({
+      'seat-1': {
+        pane: 'pane-seat-1',
+        workspace: 'ws-seat-1',
+        inWorkspaceList: true,
+        inPaneList: true,
+        inAgentList: true,
+        unnamed: true,
+        session: CONV_ONE,
+        process: { shell: 700, foreground: [701] },
+      },
+    });
+    harness.conversationAnswer = true;
+
+    const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: harness.sources() });
+    expect(result.kind).toBe('ran');
+    if (result.kind !== 'ran') return;
+    expect(harness.renames).toEqual([{ pane: 'pane-seat-1', name: 'seat-1' }]);
+    expect(harness.creates).toEqual([]);
+    expect(harness.runs).toEqual([]);
+    expect(harness.closes).toEqual([]);
+    expect(result.summary.refused_seats).toEqual([]);
+  });
+
+  test('scene 8 (host restart, bare shell): a recorded pane the host restored at its own bare shell gets the seat\'s line in that same pane, and nothing is created or closed', async () => {
+    writeFileSync(teamFile, teamYaml({ seats: [{ name: 'seat-1' }] }));
+    recordSessionSeats({
+      'seat-1': {
+        stage: 'ready',
+        pane: 'pane-seat-1',
+        workspace: 'ws-seat-1',
+        launched: { shell: 500, cli: [501] },
+      },
+    });
+    await approve();
+
+    const harness = makeHarness({
+      'seat-1': {
+        pane: 'pane-seat-1',
+        workspace: 'ws-seat-1',
+        inWorkspaceList: true,
+        inPaneList: true,
+        inAgentList: false,
+        process: { shell: 700, foreground: [700] },
+      },
+    });
+
+    const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: harness.sources() });
+    expect(result.kind).toBe('ran');
+    if (result.kind !== 'ran') return;
+    expect(harness.creates).toEqual([]);
+    expect(harness.closes).toEqual([]);
+    expect(harness.runs.map((run) => run.pane)).toEqual(['pane-seat-1']);
   });
 });
