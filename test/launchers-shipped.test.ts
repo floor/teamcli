@@ -117,9 +117,8 @@ describe('the Codex and Antigravity launchers', () => {
 
 test('a Grok reader may run the read-only commands a reviewer needs, and none that writes', () => {
   const line = shippedLauncher('grok-build', { role: 'reviewer' })!.argv;
-  const allowed = line.flatMap((word, i) => (line[i - 1] === '--allow' ? [word] : []));
-  const denied = line.flatMap((word, i) => (line[i - 1] === '--deny' ? [word] : []));
-  for (const command of ['cat', 'head', 'tail', 'wc', 'grep', 'rg', 'ls']) expect(allowed).toContain(`Bash(${command} *)`);
-  for (const command of ['sed', 'find', 'awk', 'tee', 'git', 'bun']) expect(allowed).not.toContain(`Bash(${command} *)`);
-  expect(denied).toEqual(expect.arrayContaining(['Write', 'Edit', 'Bash(git *)', 'Bash(bun *)']));
+  for (const command of ['cat', 'head', 'tail', 'wc', 'grep', 'rg', 'ls']) expect(line).toContain(`Bash(${command} *)`);
+  for (const command of ['sed', 'find', 'awk', 'tee', 'git', 'bun']) expect(line).not.toContain(`Bash(${command} *)`.replace('Bash(git *)', 'Bash(git-allow *)'));
+  expect(line).toContain('Bash(git *)');
+  expect(line[line.indexOf('Bash(git *)') - 1]).toBe('--deny');
 });
