@@ -7,7 +7,7 @@
 //
 //   bun scripts/test-fast.ts [--out <folder>]
 //
-// Exits 1 when any shard failed, 0 otherwise.
+// Exits 1 when any shard failed or ran no tests, 0 otherwise.
 import { spawn } from 'node:child_process';
 import { createWriteStream, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,8 +32,11 @@ const runs = Array.from({ length: assignment.shards }, (_, index) => new Promise
 const results = await Promise.all(runs);
 let pass = 0; let fail = 0; let skip = 0;
 const failures: string[] = [];
+const silent: string[] = [];
 for (const result of results) {
   const text = readFileSync(result.log, 'utf8');
+  // A shard that printed no totals ran nothing (an unassigned file, a crash): say why, and fail.
+  if (!/^\s*\d+ pass$/m.test(text)) silent.push(`shard ${result.index} ran no tests (exit ${result.code}):\n${text.trim().split('\n').slice(-5).map((line) => `  ${line}`).join('\n')}`);
   for (const match of text.matchAll(/^\s*(\d+) (pass|fail|skip)$/gm)) {
     const count = Number(match[1]);
     if (match[2] === 'pass') pass += count; else if (match[2] === 'fail') fail += count; else skip += count;
@@ -43,4 +46,5 @@ for (const result of results) {
 const seconds = Math.round((Date.now() - started) / 1000);
 console.log(`test:fast: ${pass} pass, ${fail} fail, ${skip} skip across ${assignment.shards} shards in ${seconds}s; logs in ${out}`);
 for (const line of failures) console.log(line);
-process.exit(results.some((result) => result.code !== 0) ? 1 : 0);
+for (const line of silent) console.log(line);
+process.exit(silent.length > 0 || results.some((result) => result.code !== 0) ? 1 : 0);
