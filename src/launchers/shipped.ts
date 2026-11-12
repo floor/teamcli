@@ -167,6 +167,8 @@ export function shippedClaudeSettings(launcher: string | undefined, role: string
       excludedCommands: ['team', 'team *', 'team:*'],
       network: { allowAllUnixSockets: true },
     },
-    permissions: { deny: ['Edit(**)', 'Write(**)'] },
+    // `Edit(**)` covers every file-writing tool; Claude Code 2.1.322 warns that a `Write(**)`
+    // rule "never matches" (seen on the tester's screen 2026-11-12), so only Edit is named.
+    permissions: { deny: ['Edit(**)'] },
   };
 }

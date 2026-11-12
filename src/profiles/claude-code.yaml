@@ -13,6 +13,10 @@ unattended:
   - --dangerously-skip-permissions
 rules:
   option: --append-system-prompt
+  # The rules as a file instead of their whole text on the line (Claude Code 2.1.322 takes it;
+  # measured 2026-11-12 with -p: the model answered from a rule only the file held). The file is
+  # named by the text's hash, under TeamCLI's machine folder (src/launch/rules-text.ts).
+  file_option: --append-system-prompt-file
 # The delivery class a run measured: the development channel (src/mcp/channel.ts) and the
 # cross-session socket (src/send/inbound.ts) each wake an idle seat. The settings hooks mark turn
 # boundaries, so a launch carrying neither adapter reads its inbox only when it takes a turn.

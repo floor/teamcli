@@ -1,4 +1,5 @@
 // A launch profile, read from the CLI's YAML file. The screen is loaded separately.
+import { rulesTextFile } from '../launch/rules-text.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -111,6 +112,9 @@ export interface Profile {
   /** The option that carries the rules, or null when they go as a first message or are
    *  prepended to each brief. */
   rulesOption: string | null;
+  /** The option that names a file holding the rules (`--append-system-prompt-file`), when the
+   *  CLI takes one. The launch then names that file instead of carrying the rules' whole text. */
+  rulesFileOption: string | null;
   /** How the rules reach the seat: as a launch option, as its first message, or prepended to
    *  every brief a send types into its pane. A seat with no standing session — a fresh one per
    *  brief, like the Jules TUI's — has nowhere to keep a first-message line, so its profile
@@ -551,7 +555,11 @@ export function launchCommandOrRefusal(
     && !sets(['--name', '-n'], /(^|\s)(--name(=|\s|$)|-n(\s|$))/)) {
     options.push('--name', displayName);
   }
-  if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
+  if (profile.rulesOption !== null) {
+    const file = profile.rulesFileOption === null ? null : rulesTextFile(rules, launching);
+    if (file !== null) options.push(profile.rulesFileOption!, file);
+    else options.push(profile.rulesOption, rules);
+  }
   if (place) {
     for (const word of profile.mcpInbox?.launchArgs ?? []) options.push(fillInboxPlace(word, place));
   }
@@ -1960,6 +1968,7 @@ function launchOf(root: YamlNode): Shipped {
       unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
       features: featuresEntry ? featuresOf(featuresEntry.value) : [],
       rulesOption: rules.option,
+      rulesFileOption: rules.fileOption ?? null,
       rulesMode: rules.mode,
       rulesPrompt: rules.prompt,
       publicOnly: publicOnlyEntry ? boolOf(publicOnlyEntry.value, 'public_only') : false,
@@ -2323,18 +2332,24 @@ function template(text: string, line: number): void {
   if (rest.includes('{') || rest.includes('}')) fail(line, 'a template is "{n}" or "{n:title}"');
 }
 
-function rulesOf(node: YamlNode): { mode: 'option' | 'message' | 'prepend'; option: string | null; prompt: string | null } {
+function rulesOf(node: YamlNode): { mode: 'option' | 'message' | 'prepend'; option: string | null; prompt: string | null; fileOption?: string } {
   if (node.kind === 'scalar' && node.value === 'first-message') return { mode: 'message', option: null, prompt: null };
   if (node.kind === 'scalar' && node.value === 'prepend') return { mode: 'prepend', option: null, prompt: null };
   const entries = mapping(node, 'rules');
-  only(entries, ['option', 'launch_prompt']);
+  only(entries, ['option', 'launch_prompt', 'file_option']);
+  const fileOption = optional(entries, 'file_option');
   const prompt = optional(entries, 'launch_prompt');
   if (prompt !== undefined) {
     if (optional(entries, 'option') !== undefined) fail(prompt.line, '"option" and "launch_prompt" are one or the other, not both');
     const word = text(prompt, 'launch_prompt');
     return { mode: 'message', option: null, prompt: word === 'positional' ? '' : word };
   }
-  return { mode: 'option', option: text(required(entries, 'option', node.line), 'option'), prompt: null };
+  return {
+    mode: 'option',
+    option: text(required(entries, 'option', node.line), 'option'),
+    prompt: null,
+    ...(fileOption === undefined ? {} : { fileOption: text(fileOption, 'file_option') }),
+  };
 }
 
 /** The value of `compose_module`: a module shipped beside the profiles whose `compose` export
