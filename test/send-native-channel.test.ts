@@ -174,19 +174,16 @@ function registerLeadWith(made: World, host: Fake, signing: { model: string; ver
   });
 }
 
-/** Model drift no longer stops an admitted message (docs/commands/send.md, 3b8ec1a2f): the
- *  message takes its normal walk — here, with no live route in this world, it is kept in the
- *  recipient's inbox — the sender's own line names the drift as awaiting the lead's confirm, and
- *  one notice goes to the recipient's lead through ordinary admission (the lead is the recipient
- *  in these one-team worlds, so that notice lands in the same inbox). A model the entity's rule
- *  disallows is refused instead; that path has its own scenes. */
+/** Model drift under the default `model-drift: rule` policy: these worlds declare no entity
+ *  model rule, so nothing permits the drifted model and the send is refused before anything is
+ *  kept — no record in the recipient's inbox, nothing typed — with the drift named and the repair
+ *  (team restart). `deliver` and `hold` have their own scenes (test/model-drift-policy.test.ts). */
 function expectNoHeldNotice(made: World, io: TestIo): void {
   const dir = dropDir(made.dir, 'lead');
   const records = existsSync(dir) ? readdirSync(dir).filter((name) => !name.includes('.')) : [];
-  expect(records.length).toBe(2);
-  expect(io.err).toContain("awaiting the lead's confirm");
-  expect(io.err).toContain('lead notice not delivered');
-  expect(io.err).not.toContain('body not read or kept');
+  expect(records).toEqual([]);
+  expect(io.err).toContain('no entity model rule allows this model for the seat');
+  expect(io.err).toContain('not kept or delivered');
 }
 
 // A path, an `env` prefix, or quotes spell the CLI's own binary; no launcher there selects a

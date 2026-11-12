@@ -1,4 +1,4 @@
-import { captureModelDriftFence, clearModelDrift, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
+import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
 import { inlineWake, oversizedWake, recordDeliveredBody, typedWakeMaxFor, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
@@ -1727,10 +1727,15 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     if (running !== null) {
       if (!receiving.ok) return configuration(io, 'the receiving team cannot be read, so the observed model policy cannot be judged', report);
       const rule = readEntityModelRule(host.home, receiving.team);
-      const policyRefusal = observedModelRefusal({ name: to.seat, role: declared?.role ?? registeredTarget.signing.role }, running, rule);
+      // The signed role is the seat's (review finding 3): the file's role does not widen it.
+      const judged = { name: to.seat, role: registeredTarget.signing.role };
+      const policyRefusal = observedModelRefusal(judged, running, rule);
       if (policyRefusal !== null) return refuse(io, dir, who,
         `${to.seat}: observed model violates policy: ${policyRefusal}; not kept or delivered`, host, report);
       if (modelDiffers(running, registeredTarget.signing)) {
+        const held = driftRefusal(modelDriftMode(host.home, to.root, receiving.team), judged, running, rule);
+        if (held !== null) return refuse(io, dir, who,
+          `${to.seat}: model drift: record says ${registeredTarget.signing.model} ${registeredTarget.signing.version}, runs ${running.model} ${running.version}; ${held}; not kept or delivered: repair the seat (team restart ${to.seat})`, host, report);
         recipientDrift = { recipient: registeredTarget.id, recorded: registeredTarget.signing, observed: running };
         report.recipientDrift = modelDriftText(recipientDrift);
       } else if (positiveModelObservation(observation)) {

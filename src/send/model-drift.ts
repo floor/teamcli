@@ -7,6 +7,8 @@ import { readStateFile, writeStateFile } from '../file-write.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { plainLine } from '../launch/plain.ts';
 import { readEntityModelRule, type EntityModelRule } from '../policy/entity-rule.ts';
+import { readPolicyChain } from '../policy/sources.ts';
+import { resolvePolicyChain } from '../policy/resolve.ts';
 import { labOfModel, modelRuleAllows, modelRuleEntryFor, modelRuleSentence, modelRuleUnknownSentence } from '../policy/model-rule.ts';
 import { agentsDir, findAgent, type Agent } from '../registry/agents.ts';
 import { paneHoldsOnlyShell } from '../launch/identity.ts';
@@ -23,6 +25,34 @@ type Scope = { dir: string; root: string; session: string; seat: string };
 type Episode = ModelDrift & { id: string; generation: string; at: string; lead: string; leadId: string | null; state: 'sending' | 'recorded' | 'failed' | 'uncertain'; pid: number; detail: string };
 
 /** The proposed observation is judged as a model, never as the file's old vendor word. */
+export type ModelDriftMode = 'rule' | 'deliver' | 'hold';
+
+/** The `model-drift` policy for the receiving team (entity, project, team levels), `rule` when
+ *  the chain cannot be read or names none. */
+export function modelDriftMode(home: string, root: string, team: TeamFile): ModelDriftMode {
+  try {
+    const chain = resolvePolicyChain(readPolicyChain({ home, teamRoot: root, team }), { upToLevel: 'team' });
+    const value = chain.ok ? chain.policies['model-drift']?.value : undefined;
+    return value === 'deliver' || value === 'hold' ? value : 'rule';
+  } catch {
+    return 'rule';
+  }
+}
+
+/** Why a drifted send is refused under the policy, or null when it may go on (with its drift
+ *  notice). `hold` refuses every drift; `rule` lets it through only when the entity's model rule
+ *  names this seat and allows the observed lab — a missing rule or a seat the rule does not name
+ *  is no permission (review finding 3); `deliver` lets every drift through. */
+export function driftRefusal(mode: ModelDriftMode, seat: { name: string; role: string }, observed: Running, rule: EntityModelRule): string | null {
+  if (mode === 'deliver') return null;
+  if (mode === 'hold') return 'the model-drift policy holds every drift until the seat is repaired';
+  if (rule.kind !== 'rule') return 'no entity model rule allows this model for the seat';
+  if (modelRuleEntryFor(rule.entries, seat) === undefined) return 'the entity model rule names no entry for this seat';
+  const lab = labOfModel(observed.model);
+  if (lab === undefined || !modelRuleAllows(rule.entries, { ...seat, vendor: lab })) return 'the entity model rule does not allow this model for the seat';
+  return null;
+}
+
 export function observedModelRefusal(seat: { name: string; role: string }, observed: Running, rule: EntityModelRule): string | null {
   if (rule.kind === 'none') return null;
   if (rule.kind === 'unreadable') return `the entity model rule cannot be read (${rule.why})`;

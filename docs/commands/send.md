@@ -872,16 +872,21 @@ held-message dialog is not a hold this run reports — the send ended `delivered
 frame was taken, and the daemon's presence pass records the hold afterwards, once for that id,
 and marks the socket held. Nothing is typed into the blocked box while the dialog stands.
 
-A difference between the recipient's recorded and observed model does not by itself stop an
-admitted message. The normal delivery walk runs and its result also says `record says X, runs Y,
-awaiting the lead's confirm`. A notice goes to the recipient's lead through ordinary sender
-admission, once per observed drift episode. A refused notice is reported to the sender; no
-runtime fallback writes into that lead's inbox. The observation updates no registry record.
+A difference between the recipient's recorded and observed model ("drift") is decided by the
+`model-drift` policy (entity, project or team level):
 
-The observed model still has to satisfy the entity's existing model rule. A disallowed model,
-or an unreadable rule that cannot judge it, refuses delivery explicitly. Existing public-only
-body and repository guards remain in force; a model observation cannot remove them. An unread
-model observation does not invent either drift or a model identity.
+- `rule`, the default: the message goes on only when the entity's model rule names this seat
+  (by name or by its signed role) and allows the observed model's lab. A missing rule, or a rule
+  that names no entry for the seat, is no permission: the send is refused before anything is kept,
+  with `model drift: record says X, runs Y; …; not kept or delivered: repair the seat`.
+- `deliver`: the message takes its normal walk and the result says `record says X, runs Y,
+  awaiting the lead's confirm`; one notice goes to the recipient's lead per drift episode.
+- `hold`: every drift is refused, nothing kept, until the seat is repaired (`team restart`).
+
+Under every value, a model the entity's rule forbids, or a rule that cannot be read, refuses
+delivery explicitly; public-only body and repository guards remain in force. The observation
+updates no registry record, and an unread model observation does not invent either drift or a
+model identity.
 
 Unsent text is the seat's own, and no send touches it. The typed wake is the only leg that types,
 and it types only into a box it read twice as the empty idle prompt: a box holding unsent text

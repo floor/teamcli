@@ -179,6 +179,7 @@ export const ADVISED_POLICY_NAMES = [
   'board',
   'review-terms',
   'workspace-mode',
+  'model-drift',
   'landing-mode',
   'vault-root',
   'entity-orchestrator',
@@ -285,6 +286,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   pane_conduct: 'pane-conduct',
   review_terms: 'review-terms',
   workspace_mode: 'workspace-mode',
+  model_drift: 'model-drift',
   landing_mode: 'landing-mode',
   vault_root: 'vault-root',
   entity_orchestrator: 'entity-orchestrator',
@@ -2303,6 +2305,22 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     lowerLevelChooses: true,
     parseValue: (raw: unknown) => (raw === 'worktree' ? 'worktree' : raw === 'shared' || raw === 'branch' ? 'shared' : null),
     valueProblem: (raw: unknown) => `workspace-mode is worktree or shared (branch), got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // What a send does when the recipient runs another model than its signed record (review
+  // finding 3, 2026-11-12): `rule` (the default) delivers only when the entity's model rule names
+  // the seat and allows the observed lab, and refuses otherwise with nothing kept; `deliver` always
+  // delivers with a drift notice to the lead; `hold` refuses every drift until the seat is
+  // repaired. A model the rule forbids is refused under every value.
+  'model-drift': {
+    name: 'model-drift',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'rule',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: (raw: unknown) => (raw === 'rule' || raw === 'deliver' || raw === 'hold' ? raw : null),
+    valueProblem: (raw: unknown) => `model-drift is rule, deliver or hold, got ${JSON.stringify(raw)}`,
     isWithin: () => true,
   },
   // How changes land: one pull request per change, a batch of reviewed commits per pull request, or
