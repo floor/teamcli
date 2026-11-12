@@ -163,7 +163,12 @@ export function legacyWatchDigests(team: Approvable, omittedIdleFirst: boolean):
 }
 
 function seatDigest(seat: Record<string, unknown>, free: Set<string>): string {
-  const fields = Object.fromEntries(Object.entries(seat).filter(([key]) => !free.has(key)));
+  // A seat folder the file did not write is a loaded default, digested as the `.` the file
+  // implies, as the canonical record keeps it (src/file/canonical-record.ts).
+  const defaulted = seat.cwdDefaulted === true;
+  const fields = Object.fromEntries(Object.entries(seat)
+    .filter(([key]) => !free.has(key) && key !== 'cwdDefaulted')
+    .map(([key, value]) => (key === 'cwd' && defaulted ? [key, '.'] : [key, value])));
   return digest(fields);
 }
 

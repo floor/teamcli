@@ -139,6 +139,10 @@ export type Seat = {
    *  and `team`, `write` lets it write whatever its role. Omitted: the role decides (reviewer,
    *  tester and assistant read; every other role writes). */
   access?: 'read' | 'write';
+  /** Set when `cwd` is the team's seat folder because the file names none. Not a file word: the
+   *  approved record keeps the `.` the file implies, so a record approved before the seat folder
+   *  existed keeps its signature (team-record-c14n-v1 is frozen). */
+  cwdDefaulted?: true;
   /** A file whose text is added to this seat's own rules at every launch, after the team's: a
    *  standing brief that is the seat's alone. Relative to the team's root, or absolute. */
   brief?: string;

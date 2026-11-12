@@ -127,7 +127,11 @@ export function teamRecordOf(team: { seats?: readonly object[] } & Record<string
   return {
     ...copy,
     seats: (copy.seats as readonly object[]).map((seat) =>
-      Object.fromEntries(Object.entries(seat).filter(([key]) => !SEAT_SOURCE_FIELDS.includes(key))),
+      Object.fromEntries(Object.entries(seat)
+        .filter(([key]) => !SEAT_SOURCE_FIELDS.includes(key) && key !== 'cwdDefaulted')
+        // A seat folder the file did not write is a loaded default: the record keeps the `.`
+        // the file implies, so approvals signed before the seat folder existed still verify.
+        .map(([key, value]) => (key === 'cwd' && (seat as { cwdDefaulted?: true }).cwdDefaulted === true ? [key, '.'] : [key, value]))),
     ),
   };
 }

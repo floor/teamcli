@@ -362,6 +362,7 @@ function readSeats(
       seats.push({
         role, cli, vendor, model, version, display, launch, cwd, parked, stopped, line,
         ...(launcherName !== undefined ? { launcher: launcherName } : {}),
+        ...(ownFolder ? { cwdDefaulted: true as const } : {}),
         ...(access !== undefined ? { access } : {}),
         ...(brief !== undefined ? { brief } : {}),
         name: name + suffix,
