@@ -114,3 +114,10 @@ describe('the Codex and Antigravity launchers', () => {
     expect(shippedLauncherNames()).toEqual(['antigravity', 'claude-code', 'codex', 'grok-build']);
   });
 });
+
+test('only the launchers that emit a read-only line count as read-only (review finding 5)', () => {
+  expect(shippedLauncherIsReadOnly('grok-build', 'reviewer')).toBe(true);
+  expect(shippedLauncherIsReadOnly('claude-code', 'tester')).toBe(true);
+  expect(shippedLauncherIsReadOnly('codex', 'reviewer')).toBe(false);
+  expect(shippedLauncherIsReadOnly('antigravity', 'tester')).toBe(false);
+});

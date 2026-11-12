@@ -1597,7 +1597,11 @@ export function upPlan(input: UpInput): Step[] {
       if (shipped !== null && input.home !== undefined) {
         envWords.push(
           'GH_TOKEN=', 'GITHUB_TOKEN=', `GH_CONFIG_DIR=${join(input.home, '.config', 'team', 'gh-none')}`,
-          'GIT_TERMINAL_PROMPT=0', 'GIT_CONFIG_COUNT=1', 'GIT_CONFIG_KEY_0=credential.helper', 'GIT_CONFIG_VALUE_0=',
+          'GIT_TERMINAL_PROMPT=0', 'GIT_CONFIG_COUNT=2', 'GIT_CONFIG_KEY_0=credential.helper', 'GIT_CONFIG_VALUE_0=',
+          // No SSH either (review finding 4): the owner's SSH agent would otherwise let a builder
+          // push an ssh GitHub URL as the owner. The agent socket is cleared and git's ssh command
+          // is `false`, so an ssh remote fails at once; GitHub goes through team git over HTTPS.
+          'GIT_CONFIG_KEY_1=core.sshCommand', 'GIT_CONFIG_VALUE_1=false', 'SSH_AUTH_SOCK=',
         );
         const entity = input.team?.entity;
         const id = entity ? identityFor(input.home, entity) : null;
