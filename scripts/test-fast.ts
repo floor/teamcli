@@ -1,0 +1,46 @@
+#!/usr/bin/env bun
+// The whole suite on this machine, every shard at once. The shards are CI's own
+// (scripts/ci-shard-assignment.json, balanced by recorded time); each runs as its own
+// `bun scripts/ci-shard-tests.ts --run i/N` process, so the cores share the suite instead of one
+// process walking 1,400 files in turn. Each shard's output goes to its own log; the summary at
+// the end gives the totals and every failing test, with the log that holds it.
+//
+//   bun scripts/test-fast.ts [--out <folder>]
+//
+// Exits 1 when any shard failed, 0 otherwise.
+import { spawn } from 'node:child_process';
+import { createWriteStream, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+
+const ROOT = resolve(import.meta.dir, '..');
+const assignment = JSON.parse(readFileSync(join(ROOT, 'scripts', 'ci-shard-assignment.json'), 'utf8')) as { shards: number };
+const at = process.argv.indexOf('--out');
+const out = at === -1 ? mkdtempSync(join(tmpdir(), 'team-test-fast-')) : resolve(process.argv[at + 1]!);
+mkdirSync(out, { recursive: true });
+const started = Date.now();
+
+const runs = Array.from({ length: assignment.shards }, (_, index) => new Promise<{ index: number; code: number; log: string }>((done) => {
+  const log = join(out, `shard-${index}.log`);
+  const stream = createWriteStream(log);
+  const child = spawn('bun', ['scripts/ci-shard-tests.ts', '--run', `${index}/${assignment.shards}`], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stdout.pipe(stream, { end: false });
+  child.stderr.pipe(stream, { end: false });
+  child.on('close', (code) => { stream.end(); done({ index, code: code ?? 1, log }); });
+}));
+
+const results = await Promise.all(runs);
+let pass = 0; let fail = 0; let skip = 0;
+const failures: string[] = [];
+for (const result of results) {
+  const text = readFileSync(result.log, 'utf8');
+  for (const match of text.matchAll(/^\s*(\d+) (pass|fail|skip)$/gm)) {
+    const count = Number(match[1]);
+    if (match[2] === 'pass') pass += count; else if (match[2] === 'fail') fail += count; else skip += count;
+  }
+  for (const line of text.split('\n')) if (line.startsWith('(fail)')) failures.push(`shard ${result.index}: ${line.replace(/ \[[0-9.]+m?s\]$/, '')}`);
+}
+const seconds = Math.round((Date.now() - started) / 1000);
+console.log(`test:fast: ${pass} pass, ${fail} fail, ${skip} skip across ${assignment.shards} shards in ${seconds}s; logs in ${out}`);
+for (const line of failures) console.log(line);
+process.exit(results.some((result) => result.code !== 0) ? 1 : 0);

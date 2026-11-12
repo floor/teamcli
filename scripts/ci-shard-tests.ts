@@ -498,7 +498,9 @@ if (import.meta.main) {
     const parts = mine.filter((unit) => unit.includes('#'));
     let status = 0;
     if (files.length) {
-      const ran = spawnSync('bun', ['test', ...files], { cwd: ROOT, stdio: 'inherit' });
+      // `./` makes each a path: a bare `test/x.test.ts` is a name filter, and in a checkout that
+      // holds nested seat worktrees it also ran their copies.
+      const ran = spawnSync('bun', ['test', ...files.map((file) => `./${file}`)], { cwd: ROOT, stdio: 'inherit' });
       if (ran.status !== 0) status = 1;
     }
     for (const part of parts) {

@@ -46,6 +46,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:fast": "bun scripts/test-fast.ts",
     "e2e": "bun scripts/e2e.ts",
     "build": "bun scripts/build.ts",
     "pack": "bun scripts/pack.ts",
