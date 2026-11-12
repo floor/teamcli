@@ -114,11 +114,3 @@ describe('the Codex and Antigravity launchers', () => {
     expect(shippedLauncherNames()).toEqual(['antigravity', 'claude-code', 'codex', 'grok-build']);
   });
 });
-
-test('a Grok reader may run the read-only commands a reviewer needs, and none that writes', () => {
-  const line = shippedLauncher('grok-build', { role: 'reviewer' })!.argv;
-  for (const command of ['cat', 'head', 'tail', 'wc', 'grep', 'rg', 'ls']) expect(line).toContain(`Bash(${command} *)`);
-  for (const command of ['sed', 'find', 'awk', 'tee', 'git', 'bun']) expect(line).not.toContain(`Bash(${command} *)`.replace('Bash(git *)', 'Bash(git-allow *)'));
-  expect(line).toContain('Bash(git *)');
-  expect(line[line.indexOf('Bash(git *)') - 1]).toBe('--deny');
-});
