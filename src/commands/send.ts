@@ -1601,7 +1601,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host);
+    admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host, dir);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -1612,7 +1612,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host);
+    admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host, dir);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -4075,7 +4075,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host);
+    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host, dir);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -4086,7 +4086,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host);
+    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host, dir);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -7134,6 +7134,7 @@ export function admissionOf(
   watch?: { principal: WatchSendPrincipal; root: string },
   daemon?: { principal: DaemonSendPrincipal; root: string },
   live?: Pick<SendHost, 'agents'>,
+  stateDir?: string,
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
   if (caller.kind === 'watch') return watchAdmissionOf(caller, team, target, seatName, watch);
@@ -7145,7 +7146,7 @@ export function admissionOf(
   // name is not that seat, and a caller of the same name in another session is not either — so a
   // record the call does not stand as refuses instead of acting for it. Nobody is judged by it.
   if (record !== null) {
-    const identity = recordIdentityProblem(caller, record, at, live);
+    const identity = recordIdentityProblem(caller, record, at, live, stateDir);
     if (identity !== null) return { ok: false, why: identity };
   }
   const declared = record === null ? declaredSenderOf(caller, team, fileTeamId) : null;
