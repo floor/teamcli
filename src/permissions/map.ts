@@ -77,6 +77,16 @@ function buildGates(): Record<string, Gate> {
       why: 'marking a message read is the record\'s addressee on its own pane, or the owner: the signed receipt is the same gate team messages writes, and it never reaches another seat\'s folder',
       terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
     },
+    git: {
+      kind: 'owner-or-own-team',
+      why: 'git push, fetch and pull with the entity\'s GitHub identity: the token is read for that one command and handed to that process only; force pushes, pushes to main or master, deletes and mirrors are refused before anything runs',
+      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
+    },
+    gh: {
+      kind: 'owner-or-own-team',
+      why: 'the gh CLI with the entity\'s GitHub identity, the token held by that one process; merges, releases, repository deletes and renames, API writes, and credential, secret, key, variable and settings commands are refused before anything runs',
+      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
+    },
     init: {
       kind: 'owner-only',
       why: 'writing a team where none exists is the owner\'s act in 0.5.0: no create-bounds exist yet, so no agent holds `create`; since 0.5.7 an owner-signed general grant covering `init` (or every op, `*`) admits it (`team init --general <grant> --key <client.key>`), and a grant that lists entities is refused until 0.5.11',

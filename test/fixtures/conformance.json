@@ -1471,6 +1471,13 @@
       "provenance": "capture"
     },
     {
+      "file": "grok/1.0.77/trust.txt",
+      "cli": "grok",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
       "file": "grok/1.0.52/idle.txt",
       "cli": "grok",
       "classify": "idle",

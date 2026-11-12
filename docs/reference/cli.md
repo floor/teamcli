@@ -1550,6 +1550,60 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 | --- | --- | --- |
 | `id...` | no | no |
 
+## `gh`
+
+Hidden: no
+
+Usage:
+
+    team gh <arguments>
+
+### Who may run it
+
+`owner-or-own-team` — the gh CLI with the entity's GitHub identity, the token held by that one process; merges, releases, repository deletes and renames, API writes, and credential, secret, key, variable and settings commands are refused before anything runs
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `arguments` | no | no |
+
+## `git`
+
+Hidden: no
+
+Usage:
+
+    team git <arguments>
+
+### Who may run it
+
+`owner-or-own-team` — git push, fetch and pull with the entity's GitHub identity: the token is read for that one command and handed to that process only; force pushes, pushes to main or master, deletes and mirrors are refused before anything runs
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `arguments` | no | no |
+
 ## `grant`
 
 Hidden: no
@@ -4066,6 +4120,7 @@ Hidden: no
 Usage:
 
     team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]
+    team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]
     team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
     team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
@@ -4091,6 +4146,7 @@ Usage:
 | `--key` | yes | no | no |
 | `--no-launch` | no | no | no |
 | `--reason` | yes | no | no |
+| `--rebind` | yes | no | no |
 | `--request` | no | no | no |
 | `--resolve-launch` | no | no | no |
 | `--serial` | no | no | no |

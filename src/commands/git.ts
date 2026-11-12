@@ -11,20 +11,20 @@ import { loadTeamFile } from '../file/load.ts';
 import { keyOf, realSecurityRun } from '../release/keychain.ts';
 import { parseYaml, toValue } from '../yaml.ts';
 
-export const USAGE = `Usage: team git push [<git push arguments>]
-       team git fetch [<git fetch arguments>]
-       team git pull [<git pull arguments>]
-       team gh <gh arguments>
+export const USAGE = `Usage: team git <arguments>
 
-Runs git or gh against GitHub with the entity's GitHub identity
-(~/.config/team/entities/<entity>/identity.yaml). The token is read from the keychain for this
-one command and given to that process only; the seat never holds it. Refused before anything
-runs: a force push, a push to main or master, a push that deletes a branch or mirrors, and the gh
-commands that merge, release, delete a repository, or touch credentials, secrets or keys.
+Runs git push, fetch or pull against GitHub with the entity's GitHub identity
+(~/.config/team/entities/<entity>/identity.yaml); any other git command is refused. The token is
+read from the keychain for this one command and given to that process only; the seat never holds
+it. Refused before anything runs: a force push, a push to main or master, and a push that deletes
+a branch or mirrors. team gh does the same for the gh CLI.
 
 Exits with the command's own code, 1 when it is refused or the identity cannot be read, 2 when
 the invocation can't be read.
 `;
+
+/** Every word after the command goes to git: the command takes no option of its own. */
+export const VALUE_OPTIONS: readonly string[] = [];
 
 /** The trunks no seat pushes to: a trunk merge needs a gate pass (roles RFC 009, A.3). */
 const TRUNKS = new Set(['main', 'master']);
