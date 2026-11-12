@@ -133,7 +133,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   setup: ['credential-id', 'grant-duration', 'public-key', 'request-expiry', 'roots', 'rule-lifetime', 'signature', 'signer', 'team'],
   show: [],
   status: ['client', 'file', 'project', 'session', 'team'],
-  swap: ['file', 'to'],
+  swap: ['effort', 'file', 'model', 'to', 'vendor', 'version'],
   tempo: [],
   trace: [],
   unlock: [],

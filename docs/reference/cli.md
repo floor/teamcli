@@ -3904,7 +3904,7 @@ Hidden: no
 
 Usage:
 
-    team swap <seat> <preset> [--dry-run] [--file <path>] [--json]
+    team swap <seat> <preset> [--model <model>] [--version <version>] [--vendor <vendor>] [--effort <effort>] [--dry-run] [--file <path>] [--json]
     team swap [--rule | --run] [--file <path>] [--json]
     team swap queue <seat> [--to <target>] [--file <path>] [--json]
     team swap now <seat> [--file <path>] [--json]
@@ -3919,13 +3919,17 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--effort` | yes | no | no |
 | `--file` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--model` | yes | no | no |
 | `--rule` | no | no | no |
 | `--run` | no | no | no |
+| `--vendor` | yes | no | no |
+| `--version` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

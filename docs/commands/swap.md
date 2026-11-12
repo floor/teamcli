@@ -18,12 +18,24 @@ a `note:` line, and `team next` refuses a claim for the seat a swap waits on.
 
 ## Synopsis
 
+    team swap <seat> <preset> [--model <model>] [--version <version>] [--vendor <vendor>] [--effort <effort>] [--dry-run] [--file <path>] [--json]
     team swap [--file <path>] [--json]
     team swap --rule [--file <path>] [--json]
     team swap queue <seat> [--to <target>] [--file <path>] [--json]
     team swap now <seat> [--file <path>] [--json]
     team swap --run [--file <path>] [--json]
     team swap cancel <seat> [--file <path>] [--json]
+
+`team swap <seat> <preset>` installs a recipe at once and starts the seat fresh. The `<preset>` is
+a launcher TeamCLI ships, a preset launcher file in the team's `.agents/launchers/`, or another
+seat of the team whose fields are copied. A shipped launcher gives its own CLI, vendor and default
+model: `grok-build` Grok 4.7, `codex` GPT Sol 6.1, `antigravity` Gemini Argon 4 at high effort, and
+`claude-code` the seat's own Claude model on its vendor (another vendor names `--model` and
+`--version`). `--model`, `--version`, `--vendor` and `--effort` override that default and apply to
+a shipped launcher only. The seat keeps its name, role, label and access; a Grok seat with no
+folder of its own gets the team's seat folder (`worktrees/{project}/{team}/{seat}`), and the
+restart the swap runs launches the seat through the launcher. Example:
+`team swap builder-2 grok-build`, or `team swap reviewer-1 claude-code --vendor deepseek --model "DeepSeek Flash" --version 4.0`.
 
 A `<target>` is `<cli>:<model>`, and the recipe is copied from a seat of the entity that already
 runs it. A name in the seat's own CLI profile's vendor table — `<vendor>:<model>` — moves the seat
@@ -105,6 +117,8 @@ is not a rollback.
 
 | Flag | Meaning |
 | --- | --- |
+| `--model <model>`, `--version <version>`, `--vendor <vendor>`, `--effort <effort>` | with `<seat> <preset>` naming a shipped launcher: the model the seat runs, over the launcher's default |
+| `--dry-run` | with `<seat> <preset>`: plan the swap and write nothing |
 | `--rule` | list every breach of the entity's model rule, with the donor each recipe came from |
 | `--to <target>` | with `queue`: take the recipe from a seat running `<cli>:<model>`, instead of the rule's own proposal; `<vendor>:<model>` instead moves the seat between vendors of its own CLI through the profile's vendor table, with no donor and no launcher script |
 | `<seat>` | the seat to queue, force or cancel; required by `queue`, `now` and `cancel` |

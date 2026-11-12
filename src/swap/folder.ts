@@ -1,5 +1,6 @@
 // The own folder a direct preset swap needs. Planning is read-only; creation records the
 // worktree under the state lock. No fetch, setup command, branch deletion or shared checkout reset.
+import { SEAT_FOLDER_DEFAULT, seatFolderOf } from '../file/sections/seat_folder.ts';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -26,12 +27,22 @@ export function presetFolder(input: FolderInput): SwapFolder | { why: string } {
     lobby: lobbyOf(home, root, team), peers: placedStartFolders(team.seats, recorded) });
   if (problem === null && (tree !== undefined || insideTrust(cwd, team.trust, root, home)) &&
       (tree !== undefined || protectedLanding(root, cwd, team.workspace.protected) === null)) {
-    return { cwd, mode: 'worktree' };
+    // A recorded git worktree is worktree mode; a seat's own plain folder keeps the seat's mode.
+    return { cwd, mode: tree !== undefined ? 'worktree' : seat.mode };
   }
   // Never remove or steal another seat's slot. A missing folder is not silently reused either.
   const task = `swap-${seat.name}`;
   if (taskProblem(task)) return { why: 'the seat name cannot form a worktree task' };
-  if (!team.workspace.path) return { why: 'this preset needs an own worktree: set workspace.path inside an accepted trust path' };
+  // A team that names no worktree path gives the seat its seat folder instead, as a Grok or
+  // Cursor seat that names no cwd gets (worktrees/{project}/{team}/{seat}, made at launch inside
+  // the team's folder), in shared mode: no git worktree is created.
+  if (!team.workspace.path) {
+    const own = seatFolderOf(SEAT_FOLDER_DEFAULT, team.inProject ?? team.project, team.project, seat.name);
+    const ownProblem = ownStartFolderProblem({ cli, seat: seat.name, cwd: own, root, home,
+      lobby: lobbyOf(home, root, team), peers: placedStartFolders(team.seats, recorded) });
+    if (ownProblem !== null && !/needs an existing start folder/.test(ownProblem)) return { why: ownProblem };
+    return { cwd: own, mode: 'shared' };
+  }
   const path = fillPattern(team.workspace.path, { repo: team.project, task });
   const branch = fillPattern(team.workspace.branch, { kind: 'swap', task });
   if (!path || !branch) return { why: 'the workspace path or branch has an unknown placeholder' };

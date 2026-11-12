@@ -1,5 +1,6 @@
 // The direct preset form. It keeps the queued model-rule form's stop/launch engine, but
 // installs a whole recipe at once and never borrows the old conversation's session id.
+import { isShippedLauncher } from '../launchers/shipped.ts';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -10,7 +11,7 @@ import { performRestart, realSources, type PerformResult } from '../commands/res
 import { hasSeat, rewriteSeatPreset, type SeatModelFields } from '../file/lines.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { readTeamText, writeTeamText } from '../file/team-text.ts';
-import { validateTeamFile } from '../file/validate.ts';
+import { validateWithWorkspaceMode } from '../file/load.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { charterGate, passCharterOwner } from '../charter/check.ts';
@@ -30,6 +31,55 @@ import { createPresetFolder, presetFolder, rollbackPresetFolder, type PresetAllo
 
 type Recipe = SeatModelFields & { launcher?: string };
 const NO_DEV = { on: false, by: null, governed: false, ignored: false, expired: null, refusals: [] };
+
+/** What a swap onto a shipped launcher may say about the model; the rest is the launcher's. */
+export type ShippedChoice = { model?: string; version?: string; vendor?: string; effort?: string };
+
+const DOTTED = /^\d+(\.\d+)*$/;
+
+/**
+ * The recipe for a swap onto a launcher TeamCLI ships: the launcher's CLI, vendor and a default
+ * model, which the swap's own --model, --version, --vendor and --effort override. A Claude Code
+ * seat keeps the seat's own model when it already runs Claude Code on that vendor; a provider
+ * the seat does not already run names its model and version. The launch line is the CLI's name:
+ * the launcher builds the rest at launch.
+ */
+export function shippedRecipe(name: string, choice: ShippedChoice, seat: Seat): Recipe | { why: string } {
+  if (choice.version !== undefined && !DOTTED.test(choice.version)) return { why: `--version must be a plain dotted number, not "${choice.version}"` };
+  if (choice.effort !== undefined && !/^[a-z]+$/.test(choice.effort)) return { why: `--effort must be one word, not "${choice.effort}"` };
+  const pick = (model: string, version: string) => {
+    const m = choice.model ?? model;
+    const v = choice.version ?? version;
+    return { model: m, version: v, display: `${m} ${v}` };
+  };
+  const effort = choice.effort ?? seat.effort;
+  const withEffort = effort === undefined ? {} : { effort };
+  switch (name) {
+    case 'grok-build':
+      if (choice.vendor !== undefined && choice.vendor !== 'xai') return { why: 'grok-build runs xAI models only' };
+      return { cli: 'grok', vendor: 'xai', ...pick('Grok', '4.7'), launch: 'grok', launcher: name, ...withEffort };
+    case 'codex':
+      if (choice.vendor !== undefined && choice.vendor !== 'openai') return { why: 'codex runs OpenAI models only' };
+      return { cli: 'codex', vendor: 'openai', ...pick('GPT Sol', '6.1'), launch: 'codex', launcher: name, ...withEffort };
+    case 'antigravity': {
+      const vendor = choice.vendor ?? 'google';
+      if (vendor !== 'google') return { why: 'antigravity runs Gemini models only through this launcher' };
+      return { cli: 'antigravity', vendor, ...pick('Gemini Argon', '4'), launch: 'agy', launcher: name, effort: effort ?? 'high' };
+    }
+    case 'claude-code': {
+      const vendor = choice.vendor ?? (seat.cli === 'claude-code' ? seat.vendor : 'anthropic');
+      const keeps = seat.cli === 'claude-code' && seat.vendor === vendor;
+      const model = choice.model ?? (keeps ? seat.model : undefined);
+      const version = choice.version ?? (keeps ? seat.version : undefined);
+      if (model === undefined || version === undefined) {
+        return { why: `name the model with --model and --version: the seat does not already run claude-code on ${vendor}` };
+      }
+      return { cli: 'claude-code', vendor, model, version, display: `${model} ${version}`, launch: 'claude', launcher: name, ...withEffort };
+    }
+    default:
+      return { why: `no shipped launcher named "${name}"` };
+  }
+}
 
 /** A named launcher is authoritative; a declared seat is an existing complete recipe. */
 export function presetRecipe(name: string, team: TeamFile, root: string, cwd: string): Recipe | { why: string } {
@@ -58,7 +108,7 @@ export function presetRecipe(name: string, team: TeamFile, root: string, cwd: st
 }
 
 export async function runPresetSwap(argv: string[], io: Io, options: SwapCommandOptions): Promise<number> {
-  const args = readArgs(argv, ['file'], ['dry-run', 'json']);
+  const args = readArgs(argv, ['file', 'model', 'version', 'vendor', 'effort'], ['dry-run', 'json']);
   const json = hasJsonFlag(argv);
   const fail = (id: string, why: string, code: 1 | 2 = 1): number => {
     if (json) writeJsonError(io, id, plainText(why), null, code);
@@ -98,7 +148,19 @@ export async function runPresetSwap(argv: string[], io: Io, options: SwapCommand
   if (!owner && name === team.orchestrator) return fail('swap.caller', 'only the owner swaps the orchestrator seat');
   const declared = team.seats.find(s => s.name === name);
   if (!declared || declared.human || declared.stopped) return fail('swap.seat', 'the target must be a declared, active agent seat');
-  const recipe = presetRecipe(preset, team, root, declared.cwd);
+  // A launcher TeamCLI ships is its own recipe; its model options apply to it alone.
+  const choice: ShippedChoice = {
+    ...(args.values.model === undefined ? {} : { model: args.values.model }),
+    ...(args.values.version === undefined ? {} : { version: args.values.version }),
+    ...(args.values.vendor === undefined ? {} : { vendor: args.values.vendor }),
+    ...(args.values.effort === undefined ? {} : { effort: args.values.effort }),
+  };
+  if (!isShippedLauncher(preset) && Object.keys(choice).length > 0) {
+    return fail('swap.invocation', '--model, --version, --vendor and --effort apply to a shipped launcher (grok-build, claude-code, codex, antigravity)', 2);
+  }
+  const recipe = isShippedLauncher(preset)
+    ? shippedRecipe(preset, choice, declared)
+    : presetRecipe(preset, team, root, declared.cwd);
   if ('why' in recipe) return fail('swap.target', recipe.why);
   const charter = charterGate(home, { operation: 'swap', cwd: root, vendor: recipe.vendor }, options.ownerSeatStore);
   if (charter.kind === 'block' && !owner) return fail('swap.caller', charter.message);
@@ -121,7 +183,9 @@ export async function runPresetSwap(argv: string[], io: Io, options: SwapCommand
   try { before = readTeamText(path, { home, command: 'swap' }); }
   catch (error) { return fail('swap.io', String(error)); }
   const text = rewriteSeatPreset(before, name, fields);
-  const checked = validateTeamFile(text, { home, root });
+  // The same validation the loader runs: a team whose workspace mode comes from its policy chain
+  // (no `workspace.mode` in the record) is not held to the worktree default's requirements.
+  const checked = validateWithWorkspaceMode(text, root, { home });
   if (!checked.ok) return fail('swap.target', checked.errors.map(p => p.message).join('; '));
   const changes = Object.fromEntries(['cli', 'vendor', 'model', 'version', 'display', 'launch', 'cwd', 'mode', 'launcher', 'account', 'effort', 'modelFrom'].map(k => {
     const key = k as keyof Seat;

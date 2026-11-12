@@ -489,7 +489,7 @@ export function placedProblems(
 // requirements to learn its entity and project, then validated for real in the resolved mode.
 // A file that writes its mode is validated once, as before; so is every file when the chain holds
 // no `workspace-mode` (the release default is `worktree`).
-function validateWithWorkspaceMode(text: string, root: string, options: { home?: string; fs?: FsReader }): ReturnType<typeof validateTeamFile> {
+export function validateWithWorkspaceMode(text: string, root: string, options: { home?: string; fs?: FsReader }): ReturnType<typeof validateTeamFile> {
   // The default lead's chain is read from the same home the policy chain uses, so a team that
   // names no lead in its file resolves one the same way under either source.
   const leadHome = options.home ?? homedir();

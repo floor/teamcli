@@ -66,13 +66,17 @@ import { runPresetSwap } from '../swap/preset.ts';
 // out at the seat's boundary. This command owns the queue and the listing; the run is the
 // watch's, or `team swap --run` for a team whose watch is not running.
 
-export const USAGE = `Usage: team swap <seat> <preset> [--dry-run] [--file <path>] [--json]
+export const USAGE = `Usage: team swap <seat> <preset> [--model <model>] [--version <version>] [--vendor <vendor>] [--effort <effort>] [--dry-run] [--file <path>] [--json]
        team swap [--rule | --run] [--file <path>] [--json]
        team swap queue <seat> [--to <target>] [--file <path>] [--json]
        team swap now <seat> [--file <path>] [--json]
        team swap cancel <seat> [--file <path>] [--json]
 
 <seat> <preset> installs that recipe and starts the seat fresh; --dry-run plans it and writes nothing.
+A <preset> may be a launcher TeamCLI ships: grok-build (Grok 4.7), codex (GPT Sol 6.1), antigravity
+(Gemini Argon 4, high) or claude-code (the seat's own Claude model, or the one --model and --version
+name). --model, --version, --vendor and --effort override the launcher's default; they apply to a
+shipped launcher only. The seat keeps its name, role, label and access.
 With no subcommand the command lists the queue. --rule reads the entity rule and takes no seat. --run drains the queue and takes no seat.
 A <target> is <cli>:<model>, and the recipe is copied from a seat of the entity that already runs it.
 A <vendor>:<model> target moves the seat between vendors of its own CLI through the profile's vendor
@@ -196,7 +200,7 @@ export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOpt
   if (words.length >= 2 && !['queue', 'now', 'cancel'].includes(words[0] ?? '')) {
     // The preset form reads only the flags it takes. runPresetSwap parses this same list and
     // is what reports a flag the form does not take.
-    readArgs(argv, ['file'], ['dry-run', 'json']);
+    readArgs(argv, ['file', 'model', 'version', 'vendor', 'effort'], ['dry-run', 'json']);
     return runPresetSwap(argv, rawIo, options);
   }
   const executed = execute(argv, rawIo, options);
