@@ -63,42 +63,64 @@ export function isNoRepository(problem: Problem): boolean {
 // where the file would be.
 /** A seat's own folder, `<root>/worktrees/<project>/<team>/<seat>` (the seat_folder default), is
  *  read as `<root>`'s team: a seat started there runs `team` commands that find their team from
- *  the folder (2026-11-12: a seat moved there could not read its inbox). Only that exact shape,
- *  four levels under a root that holds its own `.agents/team.yaml`; no other parent is walked. */
+ *  the folder (2026-11-12: a seat moved there could not read its inbox). Only when the shape is
+ *  exact and the team agrees with it: `<project>` and `<team>` are that team's own, and `<seat>` is
+ *  one of its seats (review finding, 2026-11-12). No other parent is walked. */
 function seatFolderTeam(cwd: string): { root: string; path: string } | 'link' | null {
-  let here: string;
+  const shape = seatFolderShape(cwd);
+  if (shape === null) return null;
+  const plain = plainFolderTeam(shape.root);
+  if (plain === null || plain === 'link') return plain;
+  let text: string;
   try {
-    here = realpathSync(cwd);
+    text = readFileSync(plain.path, 'utf8');
   } catch {
     return null;
   }
-  const team = dirname(here);
-  const project = dirname(team);
-  const worktrees = dirname(project);
-  if (basename(worktrees) !== 'worktrees') return null;
-  return plainFolderTeam(dirname(worktrees));
+  return teamOwnsSeatFolder(text, shape) ? plain : null;
 }
 
-/** The team root of a seat's own folder for the registry: the same exact shape as
- *  seatFolderTeam, with the root known by its registry record (a team whose `.agents/team.yaml`
- *  was migrated away still has one), or else by its own team file. */
-function seatFolderRoot(cwd: string, home: string): string | null {
+type SeatFolderShape = { root: string; project: string; team: string; seat: string };
+
+/** The four segments of a seat folder path, or null for any other shape. */
+function seatFolderShape(cwd: string): SeatFolderShape | null {
   let here: string;
   try {
     here = realpathSync(cwd);
   } catch {
     return null;
   }
-  const worktrees = dirname(dirname(dirname(here)));
+  const teamDir = dirname(here);
+  const projectDir = dirname(teamDir);
+  const worktrees = dirname(projectDir);
   if (basename(worktrees) !== 'worktrees') return null;
-  const root = dirname(worktrees);
+  return { root: dirname(worktrees), project: basename(projectDir), team: basename(teamDir), seat: basename(here) };
+}
+
+/** Whether the team this text defines owns that seat folder: its project (in_project, else the
+ *  team's project) and team name are the middle segments, and the leaf names one of its seats. */
+function teamOwnsSeatFolder(text: string, shape: SeatFolderShape): boolean {
+  const checked = validateWithWorkspaceMode(text, shape.root, {});
+  if (!checked.ok) return false;
+  const team = checked.team;
+  return team.project === shape.team && (team.inProject ?? team.project) === shape.project
+    && team.seats.some((seat) => seat.name === shape.seat);
+}
+
+/** The team root of a seat's own folder for the registry: the same exact shape and the same
+ *  agreement as seatFolderTeam, judged on the registry's record of that root (a team whose
+ *  `.agents/team.yaml` was migrated away still has one), or else on its own team file. */
+function seatFolderRoot(cwd: string, home: string): string | null {
+  const shape = seatFolderShape(cwd);
+  if (shape === null) return null;
+  let stored;
   try {
-    if (readStoredTeamConfig(home, teamIdOf(root)) !== null) return root;
+    stored = readStoredTeamConfig(home, teamIdOf(shape.root));
   } catch {
     return null;
   }
-  const plain = plainFolderTeam(root);
-  return plain !== null && plain !== 'link' ? root : null;
+  if (stored !== null) return teamOwnsSeatFolder(stored.text, shape) ? shape.root : null;
+  return seatFolderTeam(cwd) !== null ? shape.root : null;
 }
 
 function plainFolderTeam(cwd: string): { root: string; path: string } | 'link' | null {
