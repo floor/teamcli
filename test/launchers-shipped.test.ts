@@ -98,16 +98,16 @@ describe('the Codex and Antigravity launchers', () => {
     expect(line).toEqual(['codex', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=high', '-a', 'never', '-s', 'danger-full-access']);
   });
 
-  test('a Codex reader runs in the read-only sandbox, and a plain GPT model has no family word', () => {
+  test('a Codex reader runs the builder line (its sandbox stops team), and a plain GPT model has no family word', () => {
     const line = shippedLauncher('codex', { role: 'reviewer', model: 'GPT', version: '6' })!.argv;
-    expect(line).toEqual(['codex', '-m', 'gpt-6', '-a', 'never', '-s', 'read-only']);
+    expect(line).toEqual(['codex', '-m', 'gpt-6', '-a', 'never', '-s', 'danger-full-access']);
   });
 
-  test('an Antigravity seat names its Gemini model with its effort, high by default; a reader is sandboxed', () => {
+  test('an Antigravity seat names its Gemini model with its effort, high by default; a reader runs the same line', () => {
     expect(shippedLauncher('antigravity', { role: 'builder', model: 'Gemini Argon', version: '4' })!.argv)
       .toEqual(['agy', '--model', 'gemini-4-argon-high']);
     expect(shippedLauncher('antigravity', { role: 'reviewer', model: 'Gemini Flash', version: '3.8', effort: 'medium' })!.argv)
-      .toEqual(['agy', '--model', 'gemini-3.8-flash-medium', '--sandbox']);
+      .toEqual(['agy', '--model', 'gemini-3.8-flash-medium']);
   });
 
   test('both are shipped names', () => {

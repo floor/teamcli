@@ -112,14 +112,19 @@ function codexModelId(model: string | undefined, version: string | undefined): s
  *  sandbox. The profile adds its pinned features, the managed endpoint and the rules line. */
 function codex(options: ShippedOptions): LauncherDefinition {
   const model = codexModelId(options.model, options.version);
-  const readOnly = readsOnly(options.role, options.access);
+  // Measured 2026-11-12 on codex-cli 0.167: in Codex's read-only sandbox a reader reads and its
+  // writes are refused, but `team` cannot read the process list it places its caller with, so the
+  // seat cannot send. Until a per-command exception exists (ACP lets TeamCLI answer each request),
+  // a reader runs the builder line: its read-only limit is a rule it is given, not enforced.
+  const readOnly = false;
+  void readsOnly;
   const effort = options.effort !== undefined && /^[a-z]+$/.test(options.effort)
     ? ['-c', `model_reasoning_effort=${options.effort}`] : [];
   return {
     format: 1,
     name: 'codex',
     kind: 'custom',
-    summary: readOnly ? `Codex${model === null ? '' : `, ${model}`}, read-only seat` : `Codex${model === null ? '' : `, ${model}`}, builder seat`,
+    summary: `Codex${model === null ? '' : `, ${model}`}${readOnly ? ', read-only seat' : ''}`,
     argv: ['codex', ...(model === null ? [] : ['-m', model]), ...effort,
       '-a', 'never', '-s', readOnly ? 'read-only' : 'danger-full-access'],
   };
@@ -138,12 +143,16 @@ function antigravityModelId(model: string | undefined, version: string | undefin
  *  and pre-trusts the seat's folder); a reader also runs with the CLI's terminal sandbox. */
 function antigravity(options: ShippedOptions): LauncherDefinition {
   const model = antigravityModelId(options.model, options.version, options.effort);
-  const readOnly = readsOnly(options.role, options.access);
+  // Measured 2026-11-12 on agy 1.5.7: `--sandbox` limits the terminal only — a reader's edit tool
+  // still wrote a file — and inside it `team` could not place its caller, so the seat could not
+  // send. A reader runs the builder line until ACP lets TeamCLI refuse writes itself; its
+  // read-only limit is a rule it is given, not enforced.
+  const readOnly = false;
   return {
     format: 1,
     name: 'antigravity',
     kind: 'custom',
-    summary: readOnly ? `Antigravity${model === null ? '' : `, ${model}`}, read-only seat` : `Antigravity${model === null ? '' : `, ${model}`}, builder seat`,
+    summary: `Antigravity${model === null ? '' : `, ${model}`}${readOnly ? ', read-only seat' : ''}`,
     argv: ['agy', ...(model === null ? [] : ['--model', model]), ...(readOnly ? ['--sandbox'] : [])],
   };
 }
