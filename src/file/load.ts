@@ -2,7 +2,7 @@ import { traceBeatWork } from '../diagnostics/beat-work.ts';
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
 import { type FsReader } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
@@ -61,6 +61,46 @@ export function isNoRepository(problem: Problem): boolean {
 // chose it). Inside it, `.agents` must be a real directory and `team.yaml` a real file. A link at
 // either is not opened. `null` is the ordinary miss (nothing there); `'link'` is a link standing
 // where the file would be.
+/** A seat's own folder, `<root>/worktrees/<project>/<team>/<seat>` (the seat_folder default), is
+ *  read as `<root>`'s team: a seat started there runs `team` commands that find their team from
+ *  the folder (2026-11-12: a seat moved there could not read its inbox). Only that exact shape,
+ *  four levels under a root that holds its own `.agents/team.yaml`; no other parent is walked. */
+function seatFolderTeam(cwd: string): { root: string; path: string } | 'link' | null {
+  let here: string;
+  try {
+    here = realpathSync(cwd);
+  } catch {
+    return null;
+  }
+  const team = dirname(here);
+  const project = dirname(team);
+  const worktrees = dirname(project);
+  if (basename(worktrees) !== 'worktrees') return null;
+  return plainFolderTeam(dirname(worktrees));
+}
+
+/** The team root of a seat's own folder for the registry: the same exact shape as
+ *  seatFolderTeam, with the root known by its registry record (a team whose `.agents/team.yaml`
+ *  was migrated away still has one), or else by its own team file. */
+function seatFolderRoot(cwd: string, home: string): string | null {
+  let here: string;
+  try {
+    here = realpathSync(cwd);
+  } catch {
+    return null;
+  }
+  const worktrees = dirname(dirname(dirname(here)));
+  if (basename(worktrees) !== 'worktrees') return null;
+  const root = dirname(worktrees);
+  try {
+    if (readStoredTeamConfig(home, teamIdOf(root)) !== null) return root;
+  } catch {
+    return null;
+  }
+  const plain = plainFolderTeam(root);
+  return plain !== null && plain !== 'link' ? root : null;
+}
+
 function plainFolderTeam(cwd: string): { root: string; path: string } | 'link' | null {
   let here: string;
   try {
@@ -189,7 +229,10 @@ function readRegistryThenFile(cwd: string, options: LoadTeamFileOptions): LoadRe
   // same root `team migrate` imports: the registry is still looked up there, and only a folder
   // with no record falls through to the plain team file.
   const found = findRoot(cwd);
-  const root = found ?? realOrResolved(cwd);
+  // A seat's own folder (`<root>/worktrees/<project>/<team>/<seat>`) is its team root's, for the
+  // registry as for the file (seatFolderTeam).
+  const seatRoot = found === null ? seatFolderRoot(cwd, home) : null;
+  const root = found ?? seatRoot ?? realOrResolved(cwd);
   const path = join(root, TEAM_FILE);
   const id = teamIdOf(root);
   let stored;
@@ -277,7 +320,7 @@ function readTeamYaml(cwd: string, options: LoadTeamFileOptions = {}): LoadResul
       // file, present or missing, stays the one file — so a nested `.agents/team.yaml` cannot
       // take its place. A link at `.agents` or at `team.yaml` is not that file: it is refused
       // and not followed. `--file` still opens the path it names.
-      const plain = plainFolderTeam(cwd);
+      const plain = plainFolderTeam(cwd) ?? seatFolderTeam(cwd);
       if (plain === 'link') {
         return { ok: false, errors: [{ line: 0, message: LINK_NOT_FOLLOWED }] };
       }
