@@ -254,8 +254,12 @@ function readSeats(
     // A Claude Code seat on the shipped launcher gets one too (2026-11-12): the shared lobby gives
     // it nothing (its hooks, settings and rules come from TeamCLI's machine folder), and a builder
     // there writes into a folder every team shares. The orchestrator and a lead keep the lobby.
-    const claudeOnLauncher = cli === 'claude-code' && launcherName === 'claude-code'
-      && role !== 'orchestrator' && role !== 'lead';
+    // The same for a Codex or Antigravity seat on its shipped launcher. An operator keeps its
+    // placement too: it works across checkouts (merges), not in one folder of its own.
+    const onLauncher = (cli === 'claude-code' && launcherName === 'claude-code')
+      || (cli === 'codex' && launcherName === 'codex')
+      || (cli === 'antigravity' && launcherName === 'antigravity');
+    const claudeOnLauncher = onLauncher && role !== 'orchestrator' && role !== 'lead' && role !== 'operator';
     const ownFolder = fields.get('cwd') === undefined && (cli === 'grok' || cli === 'cursor' || claudeOnLauncher)
       && folder !== undefined && folder.team !== '' && name !== undefined;
     const place = ownFolder

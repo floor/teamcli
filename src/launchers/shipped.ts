@@ -99,9 +99,60 @@ function claudeCode(options: ShippedOptions): LauncherDefinition {
   };
 }
 
+/** The Codex model id for a seat's model and version: `GPT Sol` + `6.1` is `gpt-6.1-sol`, and a
+ *  plain `GPT` + `6` is `gpt-6` (the ids the floor seats' lines name, 2026-11-12). */
+function codexModelId(model: string | undefined, version: string | undefined): string | null {
+  const family = /^GPT(?: ([A-Za-z]+))?$/.exec(model ?? '');
+  if (family === null || version === undefined || !/^\d+(\.\d+)*$/.test(version)) return null;
+  return family[1] === undefined ? `gpt-${version}` : `gpt-${version}-${family[1].toLowerCase()}`;
+}
+
+/** Codex. The model and its reasoning effort are the seat's. A builder runs with no approval and
+ *  full access, as every unattended Codex seat has; a reader runs in Codex's own read-only
+ *  sandbox. The profile adds its pinned features, the managed endpoint and the rules line. */
+function codex(options: ShippedOptions): LauncherDefinition {
+  const model = codexModelId(options.model, options.version);
+  const readOnly = readsOnly(options.role, options.access);
+  const effort = options.effort !== undefined && /^[a-z]+$/.test(options.effort)
+    ? ['-c', `model_reasoning_effort=${options.effort}`] : [];
+  return {
+    format: 1,
+    name: 'codex',
+    kind: 'custom',
+    summary: readOnly ? `Codex${model === null ? '' : `, ${model}`}, read-only seat` : `Codex${model === null ? '' : `, ${model}`}, builder seat`,
+    argv: ['codex', ...(model === null ? [] : ['-m', model]), ...effort,
+      '-a', 'never', '-s', readOnly ? 'read-only' : 'danger-full-access'],
+  };
+}
+
+/** The Antigravity model id: `Gemini Argon` + `4` + effort `high` is `gemini-4-argon-high`, the
+ *  ids `agy models` listed on 1.5.6 (2026-11-12). With no effort the seat runs `high`. */
+function antigravityModelId(model: string | undefined, version: string | undefined, effort: string | undefined): string | null {
+  const family = /^Gemini ([A-Za-z]+)$/.exec(model ?? '')?.[1];
+  if (family === undefined || version === undefined || !/^\d+(\.\d+)*$/.test(version)) return null;
+  const level = effort !== undefined && /^(low|medium|high)$/.test(effort) ? effort : 'high';
+  return `gemini-${version}-${family.toLowerCase()}-${level}`;
+}
+
+/** Antigravity, the Gemini CLI. Every seat skips the CLI's own prompts (the profile adds the flag,
+ *  and pre-trusts the seat's folder); a reader also runs with the CLI's terminal sandbox. */
+function antigravity(options: ShippedOptions): LauncherDefinition {
+  const model = antigravityModelId(options.model, options.version, options.effort);
+  const readOnly = readsOnly(options.role, options.access);
+  return {
+    format: 1,
+    name: 'antigravity',
+    kind: 'custom',
+    summary: readOnly ? `Antigravity${model === null ? '' : `, ${model}`}, read-only seat` : `Antigravity${model === null ? '' : `, ${model}`}, builder seat`,
+    argv: ['agy', ...(model === null ? [] : ['--model', model]), ...(readOnly ? ['--sandbox'] : [])],
+  };
+}
+
 const SHIPPED: Readonly<Record<string, (options: ShippedOptions) => LauncherDefinition>> = {
   'grok-build': grokBuild,
   'claude-code': claudeCode,
+  codex,
+  antigravity,
 };
 
 /** Shell words a shipped launcher sets in front of its CLI, as `env` assignments; empty when it
