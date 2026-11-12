@@ -3,7 +3,7 @@
 // names, so the record follows the conversation the pane reports. Any other caller still gets the
 // refusal.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { reportedConversationProblem } from '../src/commands/send.ts';
@@ -42,6 +42,15 @@ describe('a new conversation in the same CLI process', () => {
     const said = reportedConversationProblem(record, PANE, live('new-conversation'), () => [{ pid: 4400 }, { pid: 4304 }, { pid: 1 }]);
     expect(said).toBeNull();
     expect(getAgent(home, record.id)?.reach.agent_session).toBe('new-conversation');
+  });
+
+  test('the seat\'s state follows with the record, so the next team up does not copy the old one back', () => {
+    const dir = join(home, 'state');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'team.state.json'), JSON.stringify({ format: 1, sessions: { floor: { seats: { orchestrator: { stage: 'ready', pane: PANE, agent_session: 'old-conversation' } } } } }));
+    expect(reportedConversationProblem(record, PANE, live('new-conversation'), () => [{ pid: 4304 }], dir)).toBeNull();
+    const state = JSON.parse(readFileSync(join(dir, 'team.state.json'), 'utf8')) as { sessions: { floor: { seats: { orchestrator: { agent_session: string } } } } };
+    expect(state.sessions.floor.seats.orchestrator.agent_session).toBe('new-conversation');
   });
 
   test('a call from any other process is refused and the record is left as it was', () => {

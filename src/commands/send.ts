@@ -28,7 +28,7 @@ import type { Command, Io } from '../io.ts';
 import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, holderText, seatLockHolder, seatLockPath, type LockHolder } from '../launch/seat-lock.ts';
-import { readState, type SeatState } from '../state.ts';
+import { readState, updateState, type SeatState } from '../state.ts';
 import { logLine } from '../log.ts';
 import { tokenMark } from '../quota/out-of-tokens.ts';
 import { messageKeyOf } from '../store/keys.ts';
@@ -4231,7 +4231,7 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
       }
     }
     if (callerRecord !== null) {
-      const identity = recordIdentityProblem(caller, callerRecord, standing, host);
+      const identity = recordIdentityProblem(caller, callerRecord, standing, host, dir);
       if (identity !== null) return refuse(io, dir, who, identity, host, report);
     }
   }
@@ -7394,6 +7394,7 @@ export function reportedConversationProblem(
   pane: string,
   live?: Pick<SendHost, 'agents'> & { home?: string },
   ancestors: () => readonly { pid: number }[] | null = readAncestors,
+  stateDir?: string,
 ): string | null {
   if (record.reach.agent_session == null) return null;
   const panes = live?.agents(record.reach.session)?.filter((agent) => agent.pane === pane) ?? [];
@@ -7412,7 +7413,21 @@ export function reportedConversationProblem(
         const wrote = recordAgentSessionWhen(live.home, record.id, fresh, (current) =>
           current.reach.agent_session === record.reach.agent_session && current.reach.address === record.reach.address
             ? true : 'the record changed while this call read it');
-        if (wrote.kind === 'written') return null;
+        if (wrote.kind === 'written') {
+          // The seat's state follows too, or the next `team up` copies the old conversation back
+          // over the record (seen 2026-11-12). Only a state that still names the old one moves.
+          if (stateDir !== undefined) {
+            try {
+              updateState(stateDir, (state) => {
+                const held = state.sessions[record.reach.session]?.seats[record.reach.seat];
+                if (held === undefined || held.agent_session !== record.reach.agent_session) return false;
+                held.agent_session = fresh;
+                return true;
+              }, { writeWhen: (moved) => moved });
+            } catch { /* the record moved; the state keeps its own until the next launch */ }
+          }
+          return null;
+        }
       } catch { /* the refusal below stands */ }
     }
     return `the live conversation on pane ${pane} does not match the registry's conversation for seat ${record.reach.seat}; this call is not proven as that seat; run team up or team restart ${record.reach.seat}`;
@@ -7426,7 +7441,7 @@ export function reportedConversationProblem(
  *  the pane proof every admitted seat meets). Session and seat name alone bind nobody: a pane
  *  renamed to a registered seat's name is not that seat, and a caller of that name in another
  *  session is not it either. */
-function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding, live?: Pick<SendHost, 'agents'>): string | null {
+function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding, live?: Pick<SendHost, 'agents'>, stateDir?: string): string | null {
   const name = record.reach.seat;
   if (caller.kind !== 'seat') {
     return `the registry holds agent ${record.id} for seat ${name}, and this call is ${describeCaller(caller)}: a record is its own seat's, never a placement beside it`;
@@ -7441,7 +7456,7 @@ function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding, 
     const on = record.reach.pane === null ? 'no pane' : `pane ${record.reach.pane}`;
     return `the registry records ${on} for seat ${name} in session ${record.reach.session}, and this call is on pane ${caller.pane}: a pane renamed to a seat's name is not that seat`;
   }
-  const conversation = reportedConversationProblem(record, caller.pane, live);
+  const conversation = reportedConversationProblem(record, caller.pane, live, readAncestors, stateDir);
   if (conversation !== null) return conversation;
   const verdict = callerVerdict(caller, name, at);
   if (verdict.kind === 'no-pane') return noPaneRefusal(verdict.name);
