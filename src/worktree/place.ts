@@ -74,7 +74,7 @@ export function protectedLanding(root: string, folder: string, checkouts: readon
   return null;
 }
 
-export type StartFolder = { name: string; cli: string; cwd: string; stopped?: boolean };
+export type StartFolder = { name: string; cli: string; cwd: string; stopped?: boolean; cwdDefaulted?: true };
 
 /** Occupied start folders come from the placement record, not a later file edit. Worktrees
  *  keyed by task are included too, even when a single-seat add or restart plans no peers. */
@@ -83,7 +83,7 @@ export function placedStartFolders(
 ): StartFolder[] {
   return seats.map(seat => ({ ...seat,
     cwd: state?.seats[seat.name]?.start_cwd ||
-      (seat.cwd === '.' ? worktreeOf(state, seat.name)?.path : undefined) || seat.cwd,
+      (seat.cwd === '.' || seat.cwdDefaulted === true ? worktreeOf(state, seat.name)?.path : undefined) || seat.cwd,
   }));
 }
 
@@ -232,7 +232,7 @@ function placedSeatStart(
     const lobby = verifiedLobby ?? lobbyOf(home, root, team);
     // A fresh workspace can use the seat's recorded worktree. An explicit file cwd still
     // stands and is checked, so naming a lobby is refused rather than silently repaired.
-    const cwd = seat.cwd === '.' && worktree !== undefined ? worktree : seat.cwd;
+    const cwd = (seat.cwd === '.' || seat.cwdDefaulted === true) && worktree !== undefined ? worktree : seat.cwd;
     const problem = ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers: placedStartFolders(team.seats, recorded) });
     if (problem !== null) return { problem: `seat ${seat.name}: ${problem}` };
     const start = realLanding(root, cwd);

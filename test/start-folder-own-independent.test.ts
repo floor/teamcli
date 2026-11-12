@@ -36,7 +36,10 @@ function retarget(team: TeamFile, cwdOf: Readonly<Record<string, string>>): Team
     ...team,
     seats: team.seats.map((seat) => {
       const cwd = cwdOf[seat.name];
-      return cwd === undefined ? seat : { ...seat, cwd };
+      if (cwd === undefined) return seat;
+      // A file that writes a cwd has no defaulted seat folder: drop the loader's mark with it.
+      const { cwdDefaulted: _defaulted, ...written } = seat;
+      return { ...written, cwd };
     }),
   };
 }

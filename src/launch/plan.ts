@@ -408,6 +408,8 @@ export interface UpSeat {
   cwd: string;
   /** The seat's recorded worktree, relative to the root or absolute. */
   worktree?: string;
+  /** The seat's cwd is the team's seat folder because the file names none (`Seat.cwdDefaulted`). */
+  cwdDefaulted?: true;
   /** Actual recorded start of a pane reused for an in-place launch. */
   startCwd?: string;
   label: string;
@@ -1350,7 +1352,7 @@ export function upPlan(input: UpInput): Step[] {
       continue;
     }
     const inPlace = reuse !== undefined || ownLine !== undefined || (!fresh && seat.pane !== undefined);
-    if (inPlace && (profile.cli === 'grok' || profile.cli === 'cursor') && seat.cwd === '.' && seat.worktree !== undefined) {
+    if (inPlace && (profile.cli === 'grok' || profile.cli === 'cursor') && (seat.cwd === '.' || seat.cwdDefaulted === true) && seat.worktree !== undefined) {
       cwd = resolve(input.root, seat.worktree);
     }
     if (seat.launchProblem && wouldLaunch) {
@@ -1496,7 +1498,7 @@ export function upPlan(input: UpInput): Step[] {
             // Keep occupied records as well as placements planned by this run. Single-seat
             // commands still compare the complete team, and new peers compare each other.
             peers: [...(input.startFolders ?? input.team.seats.filter(peer => !input.seats.some(placed => placed.name === peer.name))), ...input.seats.map(peer => ({ ...peer,
-              cwd: peer.cwd === '.' ? peer.worktree ?? peer.cwd : peer.cwd,
+              cwd: peer.cwd === '.' || peer.cwdDefaulted === true ? peer.worktree ?? peer.cwd : peer.cwd,
             }))] }
         : undefined;
     if (ownStartFolder !== undefined && wouldLaunch && inPlace) {

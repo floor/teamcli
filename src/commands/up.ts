@@ -811,6 +811,7 @@ function seatPlan(
     ...(seat.launcher !== undefined && seat.vendor !== undefined ? { vendor: seat.vendor } : {}),
     ...(seat.launcher !== undefined && seat.account !== undefined ? { account: seat.account } : {}),
     cwd: seat.cwd,
+    ...(seat.cwdDefaulted === true ? { cwdDefaulted: true as const } : {}),
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
     model: registry?.model ?? seat.model,
@@ -1606,7 +1607,7 @@ function restartNote(
   }
   // Cursor and Grok with "." start in the recorded worktree. A record that already names it
   // needs no note, and a record that names the lobby is moved to that folder, not into the lobby.
-  if ((seat.cli === 'grok' || seat.cli === 'cursor') && seat.cwd === '.' && worktree !== undefined) {
+  if ((seat.cli === 'grok' || seat.cli === 'cursor') && (seat.cwd === '.' || seat.cwdDefaulted === true) && worktree !== undefined) {
     if (recorded.start_cwd === worktree) return {};
     return { restartNote: `a relaunch moves it to its own folder: ${fix}` };
   }

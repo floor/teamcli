@@ -1054,7 +1054,13 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
   const liveRules = standing.kind !== 'verified' || owner;
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules, input.rulesOrigin ?? 'file');
-  const resolveLaunch = planSeat.launcher !== undefined;
+  // A named launcher resolves on its own (8cf63fb22), except in a preset swap: the swap resolved
+  // its team preset itself and wrote the line, so restarting it resolves nothing again (and asks no
+  // launcher-file cover the swap's own resolution did not ask). A shipped launcher always resolves.
+  const resolveLaunch = planSeat.launcher !== undefined
+    && (input.command !== 'swap' || isShippedLauncher(planSeat.launcher));
+  // The planned seat then runs the line the swap wrote, as a seat with no launcher does.
+  if (!resolveLaunch) delete planSeat.launcher;
   const tree = worktreeOf(recordedSession, next.name);
   if (tree !== undefined) planSeat.worktree = tree.path;
   if (resolveLaunch && input.resume !== undefined) planSeat.resolveSession = input.resume;

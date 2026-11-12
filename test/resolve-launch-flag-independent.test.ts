@@ -314,7 +314,9 @@ describe('a named launcher resolves automatically', () => {
       if (seat.cli === 'grok') {
         // This seat is the lead, so its start folder is the shared project root.
         expect(code, `${seat.name}\n${said}`).not.toBe(0);
-        expect(said).toContain('cannot start in or grant an ancestor of the shared project root, lobby or team config folder; set the seat cwd to its own worktree or clone, then launch it again');
+        // With no cwd the seat takes the team's seat folder, inside this protected checkout: still
+        // refused, now for the protected checkout rather than the shared root (2026-11-12).
+        expect(said).toMatch(/cannot start in or grant an ancestor of the shared project root|would start inside the protected checkout/);
         expect(made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
         release();
         continue;
