@@ -1,4 +1,5 @@
 import { recordDeliveredBody, RUNTIME_WAKE_MAX } from './readable-wake.ts';
+import { typedWakeMaxFor } from './readable-wake.ts';
 import { refuseTyping } from './no-pane-messaging.ts';
 // The `team send` delivery daemon (`<storeDir>/send/daemon.sock` and `daemon.lock`).
 //
@@ -831,8 +832,10 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
       if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(trigger)) {
         return Promise.resolve(refuseTyped(`${seatName}: the typed wake line carries a control character; one line is typed, nothing else`));
       }
-      if (trigger.length > TRIGGER_MAX) {
-        return Promise.resolve(refuseTyped(`${seatName}: the typed wake line is past the measured ${String(TRIGGER_MAX)} characters; nothing was typed`));
+      // The seat's CLI's own measured limit (a profile's `typed_wake_max`; 200 when it names none).
+      const typedMax = Math.max(TRIGGER_MAX, typedWakeMaxFor(configured.cli));
+      if (Buffer.byteLength(trigger, 'utf8') > typedMax) {
+        return Promise.resolve(refuseTyped(`${seatName}: the typed wake line is past the measured ${String(typedMax)} bytes; nothing was typed`));
       }
       if ((profileFor(configured.cli)?.typedWake ?? null) === null) {
         return Promise.resolve(refuseTyped(`${seatName} runs ${configured.cli}: its profile declares no typed wake; nothing was typed`));
