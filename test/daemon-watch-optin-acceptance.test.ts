@@ -512,6 +512,25 @@ describe('the install contract writes only the opt-in that was asked for', () =>
     expect(service.programs.at(-1)).toMatchObject({ roots: [world.root], presence: true, watch: true });
   });
 
+  test('an install that drops an opt-in the installed unit runs with says so', async () => {
+    const world = scratch();
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: world.home });
+    const install = async (argv: string[]) => {
+      const io = testIo(world.root, owner);
+      expect(await runDaemon(argv, io, sourcesOf(world.home, {
+        accountHome: world.home,
+        service: manager,
+        program: { execPath: '/runtime/bin/node', entry: programAt(world.home) },
+        health: async () => ANSWERING,
+      }))).toBe(0);
+      return io;
+    };
+    expect((await install(['install', '--presence'])).err).not.toContain('drops');
+    const plain = await install(['install']);
+    expect(plain.err).toContain('the installed unit runs with --presence, and this install drops it');
+    expect(readFileSync(manager.unitPath(world.home), 'utf8')).not.toContain('--presence');
+  });
+
   test('the written unit carries --watch exactly once and presence only when asked', async () => {
     const world = scratch();
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: world.home });

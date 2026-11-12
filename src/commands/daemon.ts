@@ -1584,6 +1584,23 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // exit: daemon.entry-missing
     return 1;
   }
+  // An install writes exactly the opt-ins it is given (the install contract). One the installed
+  // unit runs with and this install does not name is dropped, and the install says so: a plain
+  // install once dropped `--presence` with no word and presence hosting stopped for three hours
+  // (2026-11-12). `team daemon restart` refreshes a new build and keeps the unit's opt-ins.
+  let installedWords: readonly string[] = [];
+  try {
+    installedWords = manager.unit(targetHome)?.programArguments ?? [];
+  } catch {
+    // An unreadable unit names nothing to warn about.
+  }
+  const dropped = [
+    !parsed.presence && installedWords.includes('--presence') ? '--presence' : null,
+    !parsed.watch && installedWords.includes('--watch') ? '--watch' : null,
+  ].filter((word) => word !== null);
+  if (dropped.length > 0) {
+    io.stderr(`warning: the installed unit runs with ${dropped.join(' and ')}, and this install drops it; name it again to keep it, or use \`team daemon restart\` to load a new build with the unit's own opt-ins\n`);
+  }
   const fullProgram: ServiceProgram = {
     ...program,
     roots: named.roots,
