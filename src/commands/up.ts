@@ -1396,6 +1396,12 @@ function seatPlan(
   // created or closed. The live run re-reads the pane and its workspace immediately before the
   // launch (`execute.ts`), and a changed reading leaves the seat out with nothing launched.
   if (verdict === 'gone' && recorded.workspace && recorded.pane && recorded.launched) {
+    // A Grok or Cursor pane started in a folder that is not the seat's own folder today (a seat
+    // whose cwd moved since, such as out of the lobby) cannot take the seat's line in place: its
+    // start folder is refused for that CLI. The seat is repaired in a new workspace instead,
+    // as `team restart` does; the old one is closed.
+    const startsElsewhere = (seat.cli === 'grok' || seat.cli === 'cursor') && seat.cwd !== '.'
+      && recorded.start_cwd !== undefined && resolve(root, seat.cwd) !== recorded.start_cwd;
     // A seat with no live process here is not this session's to relaunch when its agent record
     // stands in another session's pane: the registry's reach names the pane a send resolves, so
     // a launch here would write this session's pane over a seat another session still holds —
@@ -1432,7 +1438,7 @@ function seatPlan(
       ) {
         return {
           ...planned,
-          repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli, reuse: true },
+          repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli, ...(startsElsewhere ? {} : { reuse: true }) },
           freshStart: FRESH_START,
         };
       }
@@ -1452,7 +1458,7 @@ function seatPlan(
     }
     return {
       ...planned,
-      repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli, reuse: true },
+      repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli, ...(startsElsewhere ? {} : { reuse: true }) },
     };
   }
   const named = known.find((agent) => agent.name === seat.name);
