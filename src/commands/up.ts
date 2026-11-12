@@ -2813,6 +2813,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   const restoreOriginals = new Map<string, RecordedPane>(Object.entries(recorded?.seats ?? {})
     .map(([name, seat]) => [name, { pane: seat.pane, workspace: seat.workspace }]));
   const restoreKept = new Map<string, NonNullable<UpSeat['restoreKeep']>>();
+  const restoreAtShell = new Set<string>();
   const restoreKeepOf = (name: string): UpSeat['restoreKeep'] => {
     if (internal?.restoreMissingOnly !== true) return undefined;
     const kept = restoreKept.get(name);
@@ -2835,11 +2836,18 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // the seat's own line in that same pane, as `team up` does; nothing is created or closed.
     // The reading is fresh each time it is asked (a kept pane is cached, this one is not), so a
     // program that appears in the pane before the launch makes it kept again and nothing runs.
+    // Once read at its bare shell, the seat stays launchable for the rest of this run: the launch
+    // it plans puts a CLI in that pane, and the steps after it (the rename, the record) must not
+    // read that CLI as a pane to keep. The launch itself re-reads the pane just before it runs.
+    if (restoreAtShell.has(name)) return undefined;
     if (reading === 'present') {
       const pane = restoreOriginals.get(name)?.pane;
       if (pane !== undefined) {
         evictHerdrPaneProcessInfo(pane, aim(session));
-        if (paneHoldsOnlyShell(sources.launch?.processInfo?.(session, pane) ?? null)) return undefined;
+        if (paneHoldsOnlyShell(sources.launch?.processInfo?.(session, pane) ?? null)) {
+          restoreAtShell.add(name);
+          return undefined;
+        }
       }
     }
     const result = {

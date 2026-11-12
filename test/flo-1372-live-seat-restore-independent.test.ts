@@ -1194,6 +1194,24 @@ describe('independent restore sweep and conversation-store boundaries', () => {
         process: { shell: 700, foreground: [700] },
       },
     });
+    // The launch puts the CLI in front of that pane, as the real host does.
+    const baseRun = harness.launch.paneRun!;
+    harness.launch.paneRun = (session, pane, command) => {
+      const ran = baseRun(session, pane, command);
+      const seat = harness.seats.get('seat-1')!;
+      if (pane === seat.pane) {
+        seat.process = { shell: 700, foreground: [701] };
+        seat.inAgentList = true;
+        seat.unnamed = true;
+      }
+      return ran;
+    };
+    const baseRename = harness.launch.renameAgent;
+    harness.launch.renameAgent = (session, pane, name) => {
+      const seat = harness.seats.get('seat-1')!;
+      if (pane === seat.pane && name === 'seat-1') seat.unnamed = false;
+      return baseRename(session, pane, name);
+    };
 
     const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: harness.sources() });
     expect(result.kind).toBe('ran');
@@ -1201,5 +1219,7 @@ describe('independent restore sweep and conversation-store boundaries', () => {
     expect(harness.creates).toEqual([]);
     expect(harness.closes).toEqual([]);
     expect(harness.runs.map((run) => run.pane)).toEqual(['pane-seat-1']);
+    // The rename after the launch is not held by the CLI the launch itself put in the pane.
+    expect(harness.renames).toEqual([{ pane: 'pane-seat-1', name: 'seat-1' }]);
   });
 });
