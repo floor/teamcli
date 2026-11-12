@@ -194,6 +194,10 @@ export interface Profile {
    *  `WAKE_IDLE_SETTLE_MS`. A declared value is never under `WAKE_IDLE_SETTLE_FLOOR_MS`: two
    *  reads closer than one host read cannot catch a screen that changed between them. */
   typedWakeSettleMs: number | null;
+  /** The longest typed wake, in bytes, whose line this CLI's box was measured to read back
+   *  (`typed_wake_max`); null, the default, is `TYPED_WAKE_MAX`. A longer body goes as the
+   *  short 'read it with team drops' line instead. */
+  typedWakeMax: number | null;
   /** The words a typed wake appends after the message's header, so the woken seat takes its
    *  fastest read path: a profile whose seats carry an MCP inbox names the inbox tool, and one
    *  without keeps the shipped sentence. Null, the default, is the shipped
@@ -1370,7 +1374,7 @@ const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules',
 // (the delivery CLI a session runs and the public-only declaration the send path proves),
 // `features` (the pinned feature set the launch and the recorded line carry) and the watch
 // retry (`watch_wake`, `watch_wake_tries`).
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'typed_wake_settle_ms', 'wake', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'typed_wake_settle_ms', 'typed_wake_max', 'wake', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1949,6 +1953,18 @@ function launchOf(root: YamlNode): Shipped {
     fail(typedWakeSettleMsEntry.line, '"typed_wake_settle_ms" needs "typed_wake": it spaces the wake\'s two reads');
   }
   const typedWakeSettleMs = typedWakeSettleMsEntry ? typedWakeSettleMsOf(typedWakeSettleMsEntry) : null;
+  const typedWakeMaxEntry = optional(entries, 'typed_wake_max');
+  if (typedWakeMaxEntry !== undefined && typedWake === null) {
+    fail(typedWakeMaxEntry.line, '"typed_wake_max" needs "typed_wake": it bounds the typed line');
+  }
+  let typedWakeMax: number | null = null;
+  if (typedWakeMaxEntry !== undefined) {
+    const node = typedWakeMaxEntry.value;
+    if (node.kind !== 'scalar' || typeof node.value !== 'number' || !Number.isInteger(node.value) || node.value < 1 || node.value > 4096) {
+      fail(typedWakeMaxEntry.line, '"typed_wake_max" must be a whole number of bytes from 1 to 4096');
+    }
+    typedWakeMax = node.value as number;
+  }
   const watchWake = watchWakeEntry ? watchWakeOf(watchWakeEntry) : typedWake !== null;
   if (watchWakeEntry !== undefined && watchWake && typedWake === null) {
     fail(watchWakeEntry.line, '"watch_wake: on" needs "typed_wake": the watch retries the same wake a send types');
@@ -1990,6 +2006,7 @@ function launchOf(root: YamlNode): Shipped {
       settings: settingsEntry ? settingsOf(settingsEntry.value) : null,
       typedWake,
       typedWakeSettleMs,
+      typedWakeMax,
       readHint: readHintEntry ? readHintOf(readHintEntry) : null,
       wake,
       watchWake,

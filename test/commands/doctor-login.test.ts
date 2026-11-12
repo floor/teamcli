@@ -105,6 +105,7 @@ describe('checkLogin with fake command results', () => {
       features: [],
       rulesOption: null,
       rulesFileOption: null,
+      typedWakeMax: null,
       rulesMode: 'message', rulesPrompt: null,
       publicOnly: false,
       standingRules: [],

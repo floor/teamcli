@@ -831,7 +831,17 @@ export function composerBox(data: ScreenData, lines: string[], options?: ScreenO
   const suffix: RegExp | null | undefined = 'stripSuffix' in data.composer ? data.composer.stripSuffix : undefined;
   if (suffix) rest = rest.replace(suffix, '');
   const indent = found[0].length + rest.length - rest.trimStart().length;
-  const rows = hit.rows ?? [];
+  // A bordered box draws its side on every row it wraps the text onto, not only the input row:
+  // Grok Build 1.0.77 wraps a long line as `  │   more text` under `  │ ❯ text` (measured
+  // 2026-11-12 on a 300-byte line). The side is the box's frame, so it reads as the indent
+  // it stands in; the text after it is compared as before. A row without that side stays as it
+  // is, and the read-back refuses it.
+  const side = /^\s*[│┃|]/.exec(found[0])?.[0];
+  const rows = (hit.rows ?? []).map((row) => {
+    if (side === undefined || !row.startsWith(side)) return row;
+    const inner = ' '.repeat(side.length) + row.slice(side.length);
+    return suffix ? inner.replace(suffix, '') : inner;
+  });
   // The pane draws empty rows of its own under the text, inside the box's frame — the drop
   // before the status line, or before the closing rule. The captures name them per profile
   // (`frame_rows`), and only those are stripped: they are the box's frame, not its content.

@@ -4,10 +4,16 @@ import { join } from 'node:path';
 import { currentClaimIn, readMessage } from '../mcp/inbox.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { attributedBody } from './sender-claim.ts';
+import { profileFor } from '../profiles/index.ts';
 import { verifiedRecordAt, type RecordPayload } from './record.ts';
 
 export const RUNTIME_WAKE_MAX = 64 * 1024;
 export const TYPED_WAKE_MAX = 200;
+
+/** The longest typed wake for this CLI: its profile's measured `typed_wake_max`, or 200. */
+export function typedWakeMaxFor(cli: string | undefined): number {
+  return (cli === undefined ? null : profileFor(cli)?.typedWakeMax ?? null) ?? TYPED_WAKE_MAX;
+}
 
 export function oversizedWake(payload: RecordPayload): string {
   return `Message from ${payload.from}: body too long for this wake. Read it with: team drops --read --id ${payload.id} --seat ${payload.to}`;

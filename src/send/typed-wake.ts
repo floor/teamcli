@@ -1,4 +1,4 @@
-import { TYPED_WAKE_MAX } from './readable-wake.ts';
+import { typedWakeMaxFor } from './readable-wake.ts';
 // The typed wake: one line, one acknowledgement. A profile that declares `typed_wake: screen`
 // lets a send put one trigger line into a composer two reads showed as the empty idle prompt.
 // `wake: agent-prompt` asks herdr to prompt the agent and types nothing; every other profile
@@ -392,8 +392,9 @@ export async function deliverTypedWake(
   cli: string,
   options: TypedWakeOptions = {},
 ): Promise<TypedWakeResult> {
-  if (/[\x00-\x08\x0b-\x1f\x7f]/.test(line) || Buffer.byteLength(line, 'utf8') > TYPED_WAKE_MAX) {
-    return { delivered: false, typed: false, tries: 0, reason: `the wake does not fit ${String(TYPED_WAKE_MAX)} bytes; nothing was typed` };
+  const max = typedWakeMaxFor(cli);
+  if (/[\x00-\x08\x0b-\x1f\x7f]/.test(line) || Buffer.byteLength(line, 'utf8') > max) {
+    return { delivered: false, typed: false, tries: 0, reason: `the wake does not fit ${String(max)} bytes; nothing was typed` };
   }
   const marks: WakeMarks = {};
   const result = await walkTypedWake(host, pane, line, cli, options, marks);

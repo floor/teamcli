@@ -1,7 +1,7 @@
 import { captureModelDriftFence, clearModelDrift, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
-import { inlineWake, oversizedWake, recordDeliveredBody, TYPED_WAKE_MAX, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
+import { inlineWake, oversizedWake, recordDeliveredBody, typedWakeMaxFor, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
 import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -3130,7 +3130,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     const compose = profileFor(to.cli)?.compose ?? null;
     // The receiving team's `message-display` policy decides the words the wake opens with; a team
     // file that did not read leaves the shipped template, never an unnamed wake.
-    const trigger = inlineWake(record, host.home, TYPED_WAKE_MAX) ?? readTriggerLine(to.seat, to.session, {
+    const trigger = inlineWake(record, host.home, typedWakeMaxFor(to.cli)) ?? readTriggerLine(to.seat, to.session, {
       seat: record.from,
       team: team.project,
       template: wakeTemplate,
@@ -5698,7 +5698,7 @@ async function deliverClientRecord(
     }
     const compose = profileFor(cli)?.compose ?? null;
     const wakeTemplate = messageDisplayInForce({ home: host.home, root, team, now: host.now() });
-    const trigger = inlineWake(record, host.home, TYPED_WAKE_MAX) ?? readTriggerLine(seatName, session, {
+    const trigger = inlineWake(record, host.home, typedWakeMaxFor(cli)) ?? readTriggerLine(seatName, session, {
       seat: from,
       team: project,
       template: wakeTemplate,
@@ -6106,7 +6106,7 @@ export async function walkReplyDelivery(input: {
         { seat: from, ...(input.payload.from_id === null ? {} : { id: input.payload.from_id }) },
         { ...input.naming, mode: 'nickname' },
       );
-      const trigger = inlineWake(input.payload, input.host.home, TYPED_WAKE_MAX) ?? readTriggerLine(seatName, input.session, {
+      const trigger = inlineWake(input.payload, input.host.home, typedWakeMaxFor(cli)) ?? readTriggerLine(seatName, input.session, {
         seat: from,
         team: input.sender.project,
         template: wakeTemplate,

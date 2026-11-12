@@ -57,6 +57,10 @@ delivery: pull-on-turn
 # Nothing else is typed, and a wake that cannot deliver leaves the message in the bus inbox.
 # See src/send/typed-wake.ts.
 typed_wake: screen
+# The longest wake line the box reads back, with margin. Measured 2026-11-12 on Grok Build
+# 1.0.77 (a 190-column pane): lines of 150, 300, 500, 800, 1200 and 2000 bytes each read back
+# whole once the box reader takes the side `│` Grok draws on wrapped rows; 4000 did not.
+typed_wake_max: 1500
 # Enter does not submit on Grok Build. The wake asks herdr to prompt the agent, and still waits
 # for the working screen. Nothing is typed into the pane. The read hint stays the shipped
 # `Read it with: team drops --read.`
