@@ -58,6 +58,15 @@ describe('the seats\' settings files live in TeamCLI\'s machine folder', () => {
     expect(one).not.toContain('project');
   });
 
+  test('a seat whose line names no settings file and that has only the project file keeps its declaration', () => {
+    const legacy = cliHookLegacySettingsPath(dir, SESSION, 'lead')!;
+    mkdirSync(dirname(legacy), { recursive: true });
+    writeFileSync(legacy, '{"crossSessionInbound":"accept"}\n');
+    const declared = declaredInboundOf({ dir, root, session: SESSION, seat: 'lead', launch: 'zsh lead.sh' });
+    expect(declared.policy).toBe('accept');
+    expect(declared.source).toBe(legacy);
+  });
+
   test('a seat still running on the file in the project keeps its socket declaration until its next launch', () => {
     const legacy = cliHookLegacySettingsPath(dir, SESSION, 'worker')!;
     mkdirSync(dirname(legacy), { recursive: true });

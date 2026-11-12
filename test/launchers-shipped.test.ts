@@ -1,5 +1,5 @@
 // The launchers TeamCLI ships: one per vendor CLI, configured by the seat's role and effort.
-import { expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { isShippedLauncher, shippedClaudeSettings, shippedEnv, shippedLauncher, shippedLauncherIsReadOnly, shippedLauncherNames } from '../src/launchers/shipped.ts';
 import { discover, resolveLaunch } from '../src/launchers/resolve.ts';
 
@@ -90,4 +90,27 @@ test('claude-code on a provider takes its words from the launch account, the key
   expect(token?.slice('ANTHROPIC_AUTH_TOKEN="'.length, -1)).not.toContain('"');
   expect(shippedEnv('claude-code', { vendor: 'deepseek' })).toEqual([]);
   expect(shippedEnv('grok-build', { vendor: 'deepseek', account })).toEqual([]);
+});
+
+describe('the Codex and Antigravity launchers', () => {
+  test('a Codex builder runs its model and effort with no approval and full access', () => {
+    const line = shippedLauncher('codex', { role: 'builder', model: 'GPT Sol', version: '6.1', effort: 'high' })!.argv;
+    expect(line).toEqual(['codex', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=high', '-a', 'never', '-s', 'danger-full-access']);
+  });
+
+  test('a Codex reader runs in the read-only sandbox, and a plain GPT model has no family word', () => {
+    const line = shippedLauncher('codex', { role: 'reviewer', model: 'GPT', version: '6' })!.argv;
+    expect(line).toEqual(['codex', '-m', 'gpt-6', '-a', 'never', '-s', 'read-only']);
+  });
+
+  test('an Antigravity seat names its Gemini model with its effort, high by default; a reader is sandboxed', () => {
+    expect(shippedLauncher('antigravity', { role: 'builder', model: 'Gemini Argon', version: '4' })!.argv)
+      .toEqual(['agy', '--model', 'gemini-4-argon-high']);
+    expect(shippedLauncher('antigravity', { role: 'reviewer', model: 'Gemini Flash', version: '3.8', effort: 'medium' })!.argv)
+      .toEqual(['agy', '--model', 'gemini-3.8-flash-medium', '--sandbox']);
+  });
+
+  test('both are shipped names', () => {
+    expect(shippedLauncherNames()).toEqual(['antigravity', 'claude-code', 'codex', 'grok-build']);
+  });
 });

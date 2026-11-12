@@ -101,7 +101,13 @@ export function declaredInboundOf(input: {
   // A seat launched before the settings files moved out of the project still runs with the old
   // file on its line; that file decides for it until its next launch.
   const legacy = cliHookLegacySettingsPath(input.dir, input.session, input.seat);
-  const settings = legacy !== null && setsSettings(launch) && onlyGeneratedSettings(launch, legacy) ? legacy : current;
+  // A line that names no settings file ran with the generated one wherever it then lived: a seat
+  // launched before the move has only the file in the project state folder, and that file is its
+  // declaration (every such seat lost its socket route until this, 2026-11-12).
+  const legacyNamed = legacy !== null && setsSettings(launch) && onlyGeneratedSettings(launch, legacy);
+  const legacyOnly = legacy !== null && !setsSettings(launch)
+    && (current === null || mtimeOf(current) === null) && mtimeOf(legacy) !== null;
+  const settings = legacyNamed || legacyOnly ? legacy : current;
   // A line recorded with the generated file already on it (a seat on a shipped launcher records
   // its whole compiled line) still carries that file as its settings: the file decides.
   if (settings !== null && (!setsSettings(launch) || onlyGeneratedSettings(launch, settings))) {
