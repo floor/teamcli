@@ -2,7 +2,7 @@
 // file rides with its rules at every launch.
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readsOnly, shippedLauncher } from '../src/launchers/shipped.ts';
 import { withSeatBrief } from '../src/launch/rules.ts';
@@ -29,6 +29,11 @@ describe('a seat\'s brief', () => {
     const rules = withSeatBrief('team rules', { brief: 'brief.md' }, root);
     expect(rules.startsWith('team rules')).toBe(true);
     expect(rules).toContain('Relay every ask whole.');
+  });
+
+  test('a brief named from the home folder with ~ is read there', () => {
+    const rules = withSeatBrief('team rules', { brief: '~/.no-such-brief-file' }, root);
+    expect(rules).toContain(`${homedir()}/.no-such-brief-file`);
   });
 
   test('a seat with no brief keeps the team\'s rules as they are', () => {

@@ -273,7 +273,8 @@ export function rulesOf(
  *  dropped in silence. */
 export function withSeatBrief(rules: string, seat: Pick<Seat, 'brief'>, root: string): string {
   if (seat.brief === undefined) return rules;
-  const path = isAbsolute(seat.brief) ? seat.brief : resolve(root, seat.brief);
+  const named = seat.brief === '~' || seat.brief.startsWith('~/') ? `${homedir()}${seat.brief.slice(1)}` : seat.brief;
+  const path = isAbsolute(named) ? named : resolve(root, named);
   let text: string;
   try {
     text = readFileSync(path, 'utf8').trim();
