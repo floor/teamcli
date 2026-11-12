@@ -199,7 +199,7 @@ export type RestoreRelaunch = 'launcher' | 'model' | 'channel';
  * the pane is idle; a busy pane stays and the one step is logged.
  */
 export function restoreRelaunch(input: {
-  seat: Pick<Seat, 'cli'> & { launch?: string; modelFrom?: Seat['modelFrom'] };
+  seat: Pick<Seat, 'cli'> & { launch?: string; modelFrom?: Seat['modelFrom']; launcher?: string; vendor?: string };
   proof: RestoreProof;
   screen: string | null;
   status: string | undefined;
@@ -211,7 +211,13 @@ export function restoreRelaunch(input: {
 }): RestoreRelaunch | 'busy-line' | null {
   if (input.proof.kind === 'none') return null;
   const launch = input.seat.launch;
-  const launcher = launch !== undefined && usesLauncher({
+  // A Claude Code seat on the shipped launcher with a provider other than Anthropic starts with
+  // the provider's endpoint and key set in front of the CLI. A host restart resumes the CLI
+  // without them, and every turn then fails on the model (vlist's DeepSeek reviewer, 2026-11-12),
+  // so it is launched again from its own line, as a wrapper-script seat is.
+  const providerLaunch = input.seat.cli === 'claude-code' && input.seat.launcher === 'claude-code'
+    && input.seat.vendor !== undefined && input.seat.vendor !== 'anthropic';
+  const launcher = providerLaunch || launch !== undefined && usesLauncher({
     cli: input.seat.cli,
     launch,
     ...(input.seat.modelFrom === undefined ? {} : { modelFrom: input.seat.modelFrom }),
