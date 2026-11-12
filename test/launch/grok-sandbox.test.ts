@@ -840,7 +840,9 @@ describe('Grok start folders stay within the seat grants', () => {
   for (const cli of ['grok', 'cursor']) test(`${cli} fresh placement uses its recorded own worktree and never overrides an explicit lobby`, () => {
     const w = placement(), seat = { ...w.seat, cli, cwd: '.' };
     expect(seatStart(w.team, seat, w.root, w.home, undefined, w.start)).toEqual({ cwd: w.start });
-    const explicit = seatStart(w.team, { ...seat, cwd: w.lobby }, w.root, w.home, undefined, w.start);
+    // A written cwd carries no loader default mark (Seat.cwdDefaulted).
+    const { cwdDefaulted: _defaulted, ...written } = seat as typeof seat & { cwdDefaulted?: true };
+    const explicit = seatStart(w.team, { ...written, cwd: w.lobby }, w.root, w.home, undefined, w.start);
     expect('problem' in explicit).toBe(true);
   });
 

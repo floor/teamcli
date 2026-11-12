@@ -1562,8 +1562,6 @@ Usage:
 
 `owner-or-own-team` — the gh CLI with the entity's GitHub identity, the token held by that one process; merges, releases, repository deletes and renames, API writes, and credential, secret, key, variable and settings commands are refused before anything runs
 
-A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
-
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1588,8 +1586,6 @@ Usage:
 ### Who may run it
 
 `owner-or-own-team` — git push, fetch and pull with the entity's GitHub identity: the token is read for that one command and handed to that process only; force pushes, pushes to main or master, deletes and mirrors are refused before anything runs
-
-A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
 
 ### Flags
 

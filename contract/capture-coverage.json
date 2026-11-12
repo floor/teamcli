@@ -450,7 +450,7 @@
         "undocumented": 0
       },
       "trust": {
-        "real": 0,
+        "real": 1,
         "constructed": 0,
         "undocumented": 0
       },
@@ -2463,6 +2463,83 @@
             "undocumented": 0
           }
         },
+        "1.0.77": {
+          "idle": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "feedback survey": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        },
         "1.0.70": {
           "idle": {
             "real": 1,
@@ -2899,12 +2976,13 @@
     },
     "gemini": {},
     "grok": {
-      "working": "the welcome frame is a ready box",
+      "idle": "in this folder",
+      "working": "in this folder",
       "unsent": "the installed binary 1.0.60 is newer than this folder's 1.0.52",
-      "permission": "no permission dialog was drawn in this folder",
-      "question": "no question dialog was drawn in this folder",
+      "permission": "in this folder",
+      "question": "in this folder",
       "trust": "a fresh directory showed no trust dialog on this CLI",
-      "unknown": "the folder holds no shell-return frame"
+      "unknown": "in this folder"
     },
     "jules": {
       "unsent": "reason not stated",
@@ -4798,6 +4876,12 @@
       "file": "grok/1.0.70/idle.txt",
       "cli": "grok",
       "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.77/trust.txt",
+      "cli": "grok",
+      "kind": "trust",
       "provenance": "capture"
     },
     {

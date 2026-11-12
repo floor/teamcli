@@ -16,7 +16,7 @@ const runs = new Map<string, { status: number | null; output: string }>();
 function runScenes(ids: string): { status: number | null; output: string } {
   const had = runs.get(ids);
   if (had !== undefined) return had;
-  const run = spawnSync('bun', ['test', join('test', 'exit-codes.test.ts')], {
+  const run = spawnSync('bun', ['test', './' + join('test', 'exit-codes.test.ts')], {
     cwd: repo,
     env: { ...process.env, TEAM_EXIT_IDS: ids },
     encoding: 'utf8',

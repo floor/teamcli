@@ -137,7 +137,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   tempo: [],
   trace: [],
   unlock: [],
-  up: ['approval', 'client', 'file', 'reason', 'session', 'team'],
+  up: ['approval', 'client', 'file', 'reason', 'rebind', 'session', 'team'],
   usage: [],
   waits: [],
   watch: ['file', 'session'],

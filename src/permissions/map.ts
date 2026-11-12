@@ -80,12 +80,10 @@ function buildGates(): Record<string, Gate> {
     git: {
       kind: 'owner-or-own-team',
       why: 'git push, fetch and pull with the entity\'s GitHub identity: the token is read for that one command and handed to that process only; force pushes, pushes to main or master, deletes and mirrors are refused before anything runs',
-      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
     },
     gh: {
       kind: 'owner-or-own-team',
       why: 'the gh CLI with the entity\'s GitHub identity, the token held by that one process; merges, releases, repository deletes and renames, API writes, and credential, secret, key, variable and settings commands are refused before anything runs',
-      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
     },
     init: {
       kind: 'owner-only',
