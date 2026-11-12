@@ -5,6 +5,11 @@ import { afterEach } from 'bun:test';
 
 process.env.TEAM_CONFIG_SOURCE ??= 'file';
 process.env.TEAM_NO_SYSTEM_TRASH ??= '1';
+// The seats' generated settings files live under TeamCLI's machine folder in real use. The older
+// scenes build their path by hand in the project state folder, so the suite keeps that layout
+// (`project`); test/cli-hook-home.test.ts covers the machine folder itself. No scene writes
+// into the real home.
+process.env.TEAM_HOOKS_HOME ??= 'project';
 // `hostConfigPath` is the only source path that reads an `XDG_*` base variable (`XDG_CONFIG_HOME`).
 // Clearing it at preload and after each test keeps an ambient or per-test `XDG_CONFIG_HOME` from
 // redirecting scratch-home scenes to a shared or live terminal-host config file; a test that

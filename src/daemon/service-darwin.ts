@@ -14,6 +14,7 @@
 // path is used only after it is verified to be this user's own, owner-only, without a group- or
 // world-writable file, and byte-identical to the name it carries; anything else is refused,
 // because a retained copy that was changed must never be run.
+import { cliHooksHome } from '../launch/cli-hook.ts';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { syncChildTimeout } from '../child.ts';
@@ -705,6 +706,9 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       const fault = walk(join(root, '.agents', 'hooks'), 0);
       if (fault !== null) return { hashes: [], fault };
     }
+    // The settings files moved to TeamCLI's machine folder (2026-11-12): read there too.
+    const moved = process.env.TEAM_HOOKS_HOME === 'project' ? null : walk(cliHooksHome(), 0);
+    if (moved !== null) return { hashes: [], fault: moved };
     return { hashes: [...found].sort(), fault: null };
   };
 

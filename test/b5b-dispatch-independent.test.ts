@@ -529,7 +529,7 @@ function runDefaultSources(): DefaultSourcesRun {
   writeFileSync(script, DEFAULT_SOURCES_RUNNER);
   const printed = execFileSync(process.execPath, [script, root, 'worker', 'fixture-pane-worker'], {
     cwd: root,
-    env: { HOME: home, PATH: process.env.PATH ?? '', BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' },
+    env: { HOME: home, PATH: process.env.PATH ?? '', BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0', TEAM_HOOKS_HOME: process.env.TEAM_HOOKS_HOME ?? '' },
     encoding: 'utf8',
   });
   return JSON.parse(printed) as DefaultSourcesRun;

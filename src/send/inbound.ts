@@ -31,7 +31,7 @@
 // skipped rather than sent a frame its session would hold.
 import { chmodSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { cliHookSettingsPath, setsSettings } from '../launch/cli-hook.ts';
+import { cliHookSettingsPath, cliHookLegacySettingsPath, setsSettings } from '../launch/cli-hook.ts';
 import {
   inboundPolicyOf, launchWords, readDeclarationText, wrapperInboundOf, type CrossSessionInbound,
 } from '../launch/declaration.ts';
@@ -97,7 +97,11 @@ export function declaredInboundOf(input: {
   launch?: string;
 }): InboundDeclaration {
   const launch = input.launch ?? '';
-  const settings = cliHookSettingsPath(input.dir, input.session, input.seat);
+  const current = cliHookSettingsPath(input.dir, input.session, input.seat);
+  // A seat launched before the settings files moved out of the project still runs with the old
+  // file on its line; that file decides for it until its next launch.
+  const legacy = cliHookLegacySettingsPath(input.dir, input.session, input.seat);
+  const settings = legacy !== null && setsSettings(launch) && onlyGeneratedSettings(launch, legacy) ? legacy : current;
   // A line recorded with the generated file already on it (a seat on a shipped launcher records
   // its whole compiled line) still carries that file as its settings: the file decides.
   if (settings !== null && (!setsSettings(launch) || onlyGeneratedSettings(launch, settings))) {

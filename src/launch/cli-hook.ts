@@ -22,9 +22,10 @@
 // stdin — no session id, no transcript path, no environment.
 import { shippedClaudeSettings } from '../launchers/shipped.ts';
 import {
-  closeSync, constants, fchmodSync, lstatSync, lutimesSync, mkdirSync, openSync, readSync, renameSync,
-  unlinkSync, writeSync, type Stats,
+  closeSync, constants, fchmodSync, lstatSync, lutimesSync, mkdirSync, openSync, readSync, realpathSync,
+  renameSync, unlinkSync, writeSync, type Stats,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,9 +89,50 @@ function sessionFolderName(session: string): string | null {
   return Buffer.byteLength(encoded) <= 255 ? encoded : null;
 }
 
-/** The settings file the launch of one seat in one session names, under the project state
- *  folder. */
+/** Where the seats' generated settings files live: TeamCLI's own machine folder, outside every
+ *  checkout, worktree and lobby. `TEAM_HOOKS_HOME` moves it (the test suite points it at a
+ *  scratch folder); otherwise `~/.config/team/hooks`. */
+export function cliHooksHome(): string {
+  const set = process.env.TEAM_HOOKS_HOME;
+  return set !== undefined && set !== '' ? set : join(homedir(), '.config', 'team', 'hooks');
+}
+
+/** One folder per project state folder, named by a hash of its real path, so two teams never
+ *  share a seat's file and nothing about the project's path is spelled out in the name. */
+function hooksFolderOf(dir: string): string {
+  let real = dir;
+  try { real = realpathSync(dir); } catch { /* not created yet: the path as given */ }
+  return createHash('sha256').update(real).digest('hex').slice(0, 12);
+}
+
+/** The settings file the launch of one seat in one session names: under TeamCLI's machine
+ *  folder (`cliHooksHome`), never in the project. The file holds the seat's hooks and, for a
+ *  read-only seat, its sandbox and denials; in a checkout a seat could read and edit it.
+ *  (Until 2026-11-12 it lived at `<project state folder>/hooks/<session>/<seat>.json`, which
+ *  `cliHookLegacySettingsPath` still names for seats launched before the move.) */
 export function cliHookSettingsPath(dir: string, session: string, seat: string): string | null {
+  const folder = sessionFolderName(session);
+  if (folder === null || !seatFileName(seat)) return null;
+  if (hooksInProject()) return join(dir, 'hooks', folder, `${seat}.json`);
+  return join(cliHooksHome(), hooksFolderOf(dir), folder, `${seat}.json`);
+}
+
+/** `TEAM_HOOKS_HOME=project` keeps the layout from before the move (the files in the project
+ *  state folder). Only the test suite's older scenes set it; they build that path by hand. */
+function hooksInProject(): boolean {
+  return process.env.TEAM_HOOKS_HOME === 'project';
+}
+
+/** The folders, outermost first, the installer makes for one session's settings files. */
+function hooksFoldersFor(dir: string, folder: string): string[] {
+  if (hooksInProject()) return [join(dir, 'hooks'), join(dir, 'hooks', folder)];
+  const home = cliHooksHome();
+  return [home, join(home, hooksFolderOf(dir)), join(home, hooksFolderOf(dir), folder)];
+}
+
+/** The path a seat launched before the move still runs with: its line names it until the next
+ *  launch, so the socket check reads it. Nothing new is written there. */
+export function cliHookLegacySettingsPath(dir: string, session: string, seat: string): string | null {
   const folder = sessionFolderName(session);
   if (folder === null || !seatFileName(seat)) return null;
   return join(dir, 'hooks', folder, `${seat}.json`);
@@ -657,10 +699,11 @@ export function installCliHooks(
   if (Object.keys(planned).length === 0) return {};
   const folder = sessionFolderName(session);
   if (folder === null) return {};
-  const hooks = join(dir, 'hooks', folder);
+  // The settings files go under TeamCLI's machine folder, each level the owner's alone (0700);
+  // the hooks' own state files stay in the project state folder, which the seat's sandbox grants.
   const states = join(dir, 'seat-state', folder);
-  if (!ensureFolder(join(dir, 'hooks')) || !ensureFolder(join(dir, 'seat-state'))
-    || !ensureFolder(hooks) || !ensureFolder(states)) return {};
+  if (!hooksFoldersFor(dir, folder).every((each) => ensureFolder(each)) || !ensureFolder(join(dir, 'seat-state'))
+    || !ensureFolder(states)) return {};
   const guarded = guard !== undefined && commandGuardAvailable();
   const cli = runner === undefined ? cliRunner() : runner;
   const launches = new Map(seats.map((seat) => [seat.name, seat.launch]));
