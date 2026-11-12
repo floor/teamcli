@@ -157,7 +157,7 @@ test('a seat that is not the owner and holds no grant is refused install and res
 });
 
 test('a verified grant admits restart through the door, which stops and starts the installed unit and writes nothing', async () => {
-  const fixture = fixtureScene();
+  const fixture = fixtureScene(true);
   const named = grantFor(fixture.home, ['*']);
   fixture.seedPrevious();
   const unitBefore = readFileSync(fixture.unitPath, 'utf8');
@@ -178,6 +178,26 @@ test('a verified grant admits restart through the door, which stops and starts t
   expect(document.restarted).toBe(true);
   // The installed definition is the one that ran: a restart never rewrites it.
   expect(readFileSync(fixture.unitPath, 'utf8')).toBe(unitBefore);
+});
+
+test('a restart after a new build refreshes the runtime copy, so the daemon runs the installed program', async () => {
+  // The unit was installed from the previous program; the installed program is now the next one.
+  // Reloading the same unit would run the old copy: the restart refreshes it as an install does.
+  const fixture = fixtureScene();
+  const named = grantFor(fixture.home, ['*']);
+  fixture.seedPrevious();
+  const scene = sceneIo(fixture);
+
+  const result = generalDoor('daemon', ['restart', '--json', '--general', named.grant, '--key', named.key], scene);
+  expect(result.kind).toBe('admitted');
+  if (result.kind !== 'admitted') return;
+  const code = await runDaemon(result.argv, result.io, sourcesOf(fixture));
+
+  expect(code, scene.out + scene.err).toBe(0);
+  expect(fixture.running()).toBe('next');
+  const document = JSON.parse(scene.out) as { restarted: boolean; refreshed?: boolean };
+  expect(document.restarted).toBe(true);
+  expect(document.refreshed).toBe(true);
 });
 
 test('restart --dry-run prints the plan and stops or starts nothing', async () => {
@@ -212,7 +232,7 @@ test('restart on a machine with no installed unit is refused and stops nothing',
 });
 
 test('a restarted daemon that does not answer is started again, and the restart is reported as undone', async () => {
-  const fixture = fixtureScene();
+  const fixture = fixtureScene(true);
   const named = grantFor(fixture.home, ['daemon']);
   fixture.seedPrevious();
   // The first health window's probes are unanswered; the one after the undo answers, so the
@@ -232,7 +252,7 @@ test('a restarted daemon that does not answer is started again, and the restart 
 });
 
 test('a restarted daemon that never answers leaves no daemon, says so and names the install', async () => {
-  const fixture = fixtureScene();
+  const fixture = fixtureScene(true);
   const named = grantFor(fixture.home, ['daemon']);
   fixture.seedPrevious();
   fixture.setProbeDelay(100);

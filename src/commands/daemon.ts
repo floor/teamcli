@@ -1039,6 +1039,56 @@ const RESTART_STEPS: readonly string[] = [
  *  whole recovery, and naming each checkout keeps the rerun's hosted set the owner's choice. */
 const RESTART_REPAIR = 'run `team daemon install --root <folder>` with each checkout to host';
 
+/** The retained runtime entry a run line names (`<copy>/dist/cli.js`), or null. */
+function copyEntryOf(words: readonly string[] | null | undefined): string | null {
+  return words?.find((word) => /\/daemon-runtime\/[0-9a-f]{64}\//.test(word)) ?? null;
+}
+
+/**
+ * Whether the installed unit runs an older copy than the installed program would make now, and
+ * if so the refresh: the same program an install would write, with the unit's own `--presence`
+ * and `--watch` and this run's roots. `current` when the copy is the installed program's (or
+ * nothing can be compared: the plain restart runs), `refreshed` when an install replaced it,
+ * `failed` when that install failed (it has already said why).
+ */
+function refreshStaleCopy(
+  manager: ServiceManager,
+  io: Io,
+  parsed: Parsed,
+  home: string,
+  sources: DaemonCommandSources,
+): 'current' | 'refreshed' | 'failed' {
+  const words = manager.unit(home)?.programArguments ?? null;
+  const running = copyEntryOf(words);
+  const program = localProgram(sources);
+  if (words === null || running === null || program === null) return 'current';
+  const named = rootsOf({ ...parsed, roots: [] }, io, home, 'install');
+  if ('problem' in named) return 'current';
+  const fullProgram: ServiceProgram = {
+    ...program,
+    roots: named.roots,
+    ...(words.includes('--presence') ? { presence: true } : {}),
+    ...(words.includes('--watch') ? { watch: true } : {}),
+    ...(io.env.PATH !== undefined && io.env.PATH !== '' ? { path: io.env.PATH } : {}),
+  };
+  let planned: string | null;
+  try {
+    planned = copyEntryOf(manager.plan(home, fullProgram).program);
+  } catch {
+    return 'current';
+  }
+  if (planned === null || planned === running) return 'current';
+  const installed = manager.install(home, fullProgram);
+  if (installed.ok) return 'refreshed';
+  appendDaemonLog(home, `restart: refreshing the runtime copy failed: ${installed.detail ?? installed.why}`, sources.now?.() ?? new Date());
+  refuse(io, parsed.json, 'daemon', {
+    id: 'daemon.restart-failed',
+    message: `the installed program changed and its runtime copy could not be refreshed: ${installed.why}`,
+    repair: RESTART_REPAIR,
+  });
+  return 'failed';
+}
+
 /**
  * `team daemon restart`: stops the daemon the service manager holds under the installed unit and
  * loads that same unit again, writing nothing. Success is reported only after the restarted
@@ -1071,7 +1121,17 @@ async function restartInstalled(
     // exit: daemon.restart-dry-run
     return 0;
   }
-  const restarted = manager.restart(home);
+  // A restart reloads the installed unit, and that unit runs the retained copy an install made.
+  // When the installed program has changed since (a new build), reloading the same unit runs the
+  // old copy: the new code never reaches the daemon (seen 2026-11-12: a day of builds that a
+  // restart never loaded). The restart then refreshes the copy as an install does, with the
+  // installed unit's own opt-ins (`--presence`, `--watch`) and roots, and reports that it did.
+  const refreshed = refreshStaleCopy(manager, io, parsed, home, sources);
+  if (refreshed === 'failed') return 1;
+  const restarted = refreshed === 'refreshed'
+    ? { ok: true as const, unitPath: manager.unitPath(home), undo: () => manager.restart(home) }
+    : manager.restart(home);
+  if (refreshed === 'refreshed' && !parsed.json) io.stdout('team daemon: the installed program changed since the last install; its runtime copy was refreshed\n');
   if (!restarted.ok) {
     appendDaemonLog(home, `restart: ${restarted.detail ?? restarted.why}`, sources.now?.() ?? new Date());
     if (restarted.reason === 'not-installed') {
@@ -1104,6 +1164,7 @@ async function restartInstalled(
         dry_run: false,
         restarted: true,
         unit_path: restarted.unitPath,
+        ...(refreshed === 'refreshed' ? { refreshed: true } : {}),
       });
     } else {
       io.stdout('team daemon: restarted; the system\'s service manager runs the installed unit again\n');
