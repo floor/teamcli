@@ -18,6 +18,9 @@ export function readsOnly(role: string | undefined, access?: 'read' | 'write'): 
   return role !== undefined && READ_ONLY_ROLES.has(role);
 }
 
+/** The read-only shell commands a Grok reader may run without a prompt. */
+const READER_SHELL: readonly string[] = ['cat', 'head', 'tail', 'wc', 'grep', 'rg', 'ls', 'diff', 'pwd'];
+
 /** Grok Build, the Grok CLI. Lines measured on grok 1.0.77 (50ca579fa996) on 2026-11-11:
  *  the builder line ran reads, writes, git and bun unprompted with the footer
  *  `Grok 4.7 (high) · always-approve`; the reviewer line ran reads and `team` commands
@@ -28,6 +31,11 @@ function grokBuild(options: ShippedOptions): LauncherDefinition {
   const readOnly = readsOnly(options.role, options.access);
   const permission = readOnly
     ? ['--permission-mode', 'dontAsk', '--allow', 'Read', '--allow', 'Bash(team *)',
+       // A command neither allowed nor denied is not refused in silence: Grok 1.0.77 asks, and a
+       // reviewer stalled on a prompt for `wc` (2026-11-12). The read-only commands a reviewer
+       // reads with are allowed; none of them writes a file. `sed`, `find`, `awk` and `tee` are
+       // left out: each can write.
+       ...READER_SHELL.flatMap((command) => ['--allow', `Bash(${command} *)`]),
        '--deny', 'Write', '--deny', 'Edit', '--deny', 'Bash(git *)', '--deny', 'Bash(bun *)']
     : ['--always-approve'];
   const effort = options.effort === undefined || options.effort === '' ? [] : ['--effort', options.effort];
