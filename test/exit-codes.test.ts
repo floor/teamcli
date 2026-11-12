@@ -1,5 +1,6 @@
 // One run per row of contract/exit-codes.json. Each trigger is a temporary directory and the
 // injectable stand-ins the other command tests use: no herdr session, no user-level store.
+import gitCommand from '../src/commands/git.ts';
 import * as setupFs from 'node:fs';
 import { fakeOwnerStore, seatOwner } from './helpers/owner-seat.ts';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
@@ -5068,8 +5069,10 @@ function fakeDaemonService(overrides: Partial<ServiceManager> = {}): FakeDaemonS
 
 /** A manager that answers a restart by loading the installed unit again; whether the daemon it
  *  starts answers is the scene's health seam. */
-function restartingService(): FakeDaemonService {
+function restartingService(gone = false): FakeDaemonService {
   return fakeDaemonService({
+    // A gone daemon: the service manager records no live job for it either.
+    ...(gone ? { job: () => null } : {}),
     restart: (home) => {
       const success: ServiceRestartSuccess = {
         ok: true,
@@ -5273,6 +5276,14 @@ scene('daemon.restarted', async (place) => {
   const ran = await daemonRan(place, ['restart'], owner, { service, health: async () => answeringHealth() });
   return show(ran, 'team daemon: restarted');
 });
+async function githubRan(place: Place, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  io.env = { ...io.env, HOME: place.home };
+  return { code: await gitCommand(argv, io), out: io.out, err: io.err };
+}
+scene('git.usage', async (place) => show(await githubRan(place, []), 'Usage: team git'));
+scene('git.refused', async (place) => show(await githubRan(place, ['push', '--force']), 'refused'));
+scene('git.no-entity', async (place) => show(await githubRan(place, ['fetch']), 'no entity GitHub identity applies'));
 scene('daemon.not-installed', async (place) =>
   show(
     await daemonRan(place, ['restart'], owner, {
@@ -5296,21 +5307,39 @@ scene('daemon.restart-failed', async (place) =>
     }),
     'no daemon is running',
   ));
+/** No daemon process at all: the reading a rollback is for (a silent live one is `starting`). */
+function goneHealth(): DaemonHealth {
+  return { ...unansweredHealth(), state: 'not-running', running: false, pid: null };
+}
 scene('daemon.restart-rolled-back', async (place) => {
-  // The restarted daemon's own probe window stays unanswered; the daemon the undo starts
-  // answers in the second window, so the restart is reported as undone.
-  const service = restartingService();
-  const ran = await daemonRan(place, ['restart'], owner, { service, health: healthFrom(10), sleep: async () => {} });
+  // The restarted daemon is gone through its whole cold-start window; the daemon the undo starts
+  // answers, so the restart is reported as undone.
+  let probes = 0;
+  const service = restartingService(true);
+  const ran = await daemonRan(place, ['restart'], owner, {
+    service,
+    health: async () => { probes += 1; return probes > 16 ? answeringHealth() : goneHealth(); },
+    sleep: async () => {},
+  });
   return show(ran, 'the installed unit was started again and its daemon answers');
 });
 scene('daemon.restart-rollback-failed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: restartingService(true),
+      health: async () => goneHealth(),
+      sleep: async () => {},
+    }),
+    'no daemon is running',
+  ));
+scene('daemon.restart-starting', async (place) =>
   show(
     await daemonRan(place, ['restart'], owner, {
       service: restartingService(),
       health: async () => unansweredHealth(),
       sleep: async () => {},
     }),
-    'no daemon is running',
+    'still starting',
   ));
 scene('daemon.no-root', async (place) => show(await daemonRan(place, ['install'], owner, { service: fakeDaemonService() }), 'run team from a project'));
 scene('daemon.run-root', async (place) =>
@@ -8783,7 +8812,13 @@ const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepa
   'daemon.chores-ended',
   // Re-checks after asynchronous brief delivery defend against a concurrently changed start
   // folder. The synchronous start refusals have direct scenes above.
-  'reload.inbox-start-same', 'reload.inbox-start-unrecorded']);
+  'reload.inbox-start-same', 'reload.inbox-start-unrecorded',
+  // team git and team gh past their refusals read the entity's token from the owner's keychain
+  // and run git or gh against GitHub, which no scene may do; their refusals have scenes above.
+  'git.identity', 'git.platform', 'git.token', 'git.ran', 'git.failed',
+  // A refresh that fails needs a stale runtime copy and a refused install of a real unit;
+  // test/daemon-restart.test.ts takes the refresh itself.
+  'daemon.restart-refresh-failed']);
 
 const contract = loadContract();
 contract.rows.forEach((row, index) => scenePosition.set(row.id, index));

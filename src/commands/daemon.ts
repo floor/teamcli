@@ -1082,7 +1082,7 @@ function refreshStaleCopy(
   if (installed.ok) return 'refreshed';
   appendDaemonLog(home, `restart: refreshing the runtime copy failed: ${installed.detail ?? installed.why}`, sources.now?.() ?? new Date());
   refuse(io, parsed.json, 'daemon', {
-    id: 'daemon.restart-failed',
+    id: 'daemon.restart-refresh-failed',
     message: `the installed program changed and its runtime copy could not be refreshed: ${installed.why}`,
     repair: RESTART_REPAIR,
   });
@@ -1127,7 +1127,10 @@ async function restartInstalled(
   // restart never loaded). The restart then refreshes the copy as an install does, with the
   // installed unit's own opt-ins (`--presence`, `--watch`) and roots, and reports that it did.
   const refreshed = refreshStaleCopy(manager, io, parsed, home, sources);
-  if (refreshed === 'failed') return 1;
+  if (refreshed === 'failed') {
+    // exit: daemon.restart-refresh-failed
+    return 1;
+  }
   const restarted = refreshed === 'refreshed'
     ? { ok: true as const, unitPath: manager.unitPath(home), undo: () => manager.restart(home) }
     : manager.restart(home);
@@ -1175,7 +1178,7 @@ async function restartInstalled(
     } else {
       io.stdout('team daemon: restarted; the daemon is alive and still starting (it has not answered yet); `team daemon status` shows when it does\n');
     }
-    // exit: daemon.restarted
+    // exit: daemon.restart-starting
     return 0;
   }
   if (answer.answered) {

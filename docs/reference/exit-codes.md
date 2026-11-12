@@ -277,6 +277,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.faulted` | `daemon` | 0 | the one named route's hosted run ended as a counted fault and restarts on the next heartbeat | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.installed` | `daemon` | 0 | the user service unit was written and registered, and the daemon it started answers the machine socket; success is reported only after that probe | `team daemon install` |
 | `daemon.restart-dry-run` | `daemon` | 0 | the restart plan was printed and nothing was stopped or started | `team daemon restart --dry-run` |
+| `daemon.restart-starting` | `daemon` | 0 | the installed unit was started again and its daemon is alive but has not answered inside the cold-start window; it is left running, reported as starting | `team daemon restart` |
 | `daemon.restarted` | `daemon` | 0 | the installed unit's daemon was stopped and that same unit started again, and the daemon it started answers the machine socket | `team daemon restart` |
 | `daemon.status` | `daemon` | 0 | the one-line health reading was printed: running, not running or unknown | `team daemon status` |
 | `daemon.stopped` | `daemon` | 0 | the daemon served until it was stopped | `team daemon run` |
@@ -297,6 +298,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.not-installed` | `daemon` | 1 | no user service unit is installed, so a restart had nothing to stop or start | `team daemon restart` |
 | `daemon.not-owner` | `daemon` | 1 | the caller may not install, restart or remove the machine daemon | `team daemon install` |
 | `daemon.restart-failed` | `daemon` | 1 | the system's service manager refused to start the installed unit again after stopping its daemon, so no daemon is running | `team daemon restart` |
+| `daemon.restart-refresh-failed` | `daemon` | 1 | the installed program changed since the last install and the restart could not refresh the runtime copy; the install the refresh ran said why and what it left running | `team daemon restart` |
 | `daemon.restart-rollback-failed` | `daemon` | 1 | the restarted daemon did not answer the health probe, and the daemon started again did not answer either, so no daemon is running | `team daemon restart` |
 | `daemon.restart-rolled-back` | `daemon` | 1 | the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers | `team daemon restart` |
 | `daemon.run-failed` | `daemon` | 1 | another start holds the machine lock, or the machine socket could not be bound | `team daemon run` |
@@ -393,6 +395,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `forget.missing` | `forget` | 1 | no team record matches an id | `team forget <id...>` |
 | `forget.refused` | `forget` | 1 | the forget was refused | `team forget <id...>` |
 | `forget.invocation` | `forget` | 2 | the invocation cannot be read | `team forget` |
+| `git.ran` | `git` | 0 | git or gh ran with the entity identity and exited 0 | `team git, team gh` |
+| `git.failed` | `git` | 1 | git or gh ran with the entity identity and exited with a failure | `team git, team gh` |
+| `git.identity` | `git` | 1 | the entity identity file is missing, unreadable, a link or writable by others; nothing ran | `team git, team gh` |
+| `git.no-entity` | `git` | 1 | no entity GitHub identity applies to this folder; nothing ran | `team git, team gh` |
+| `git.platform` | `git` | 1 | the token store is not available on this platform; nothing ran | `team git, team gh` |
+| `git.refused` | `git` | 1 | the git or gh command is one the entity identity never runs (a force push, a push to main or master, a branch delete or mirror; a merge, release, repository change, API write, or credential, secret, key or settings command); nothing ran | `team git, team gh` |
+| `git.token` | `git` | 1 | the GitHub token could not be read from the token store; nothing ran | `team git, team gh` |
+| `git.usage` | `git` | 2 | no git or gh arguments were given; the usage was printed | `team git, team gh` |
 | `grant.done` | `grant` | 0 | the authority was written or already matched — the team file's grant, or a standing grant record — or a write-free preview passed | `team grant lead --scope up,down` |
 | `grant.refused` | `grant` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team grant lead --capabilities gate,merge` |
 | `grant.invalid` | `grant` | 2 | the team file, the named seat or team, or the proposed authority record is invalid, unknown or cannot be read | `team grant @team --capabilities create` |

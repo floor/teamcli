@@ -151,35 +151,44 @@ function run(binary: string, args: string[], io: Io, env: Record<string, string>
 export async function runGitHub(tool: 'git' | 'gh', argv: string[], io: Io): Promise<number> {
   if (argv.length === 0) {
     io.stderr(USAGE);
+    // exit: git.usage
     return 2;
   }
   const home = io.env.HOME ?? '';
   const refused = tool === 'gh' ? ghRefusal(argv) : gitRefusal(argv[0]!, argv.slice(1), await currentBranch(io.cwd));
   if (refused !== null) {
     io.stderr(`team ${tool}: refused: ${refused}\n`);
+    // exit: git.refused
     return 1;
   }
   const entity = entityOf(home, io.cwd);
   if (entity === null) {
     io.stderr(`team ${tool}: no entity GitHub identity applies to this folder\n`);
+    // exit: git.no-entity
     return 1;
   }
   const id = identityFor(home, entity);
   if ('why' in id) {
     io.stderr(`team ${tool}: ${id.why}\n`);
+    // exit: git.identity
     return 1;
   }
   if (process.platform !== 'darwin') {
     io.stderr(`team ${tool}: the token's store is not available on this platform\n`);
+    // exit: git.platform
     return 1;
   }
   const read = await realSecurityRun(id.keychain);
   const key = read.ok ? keyOf(read.stdout) : { ok: false as const, reason: 'the lookup failed' };
   if (!key.ok) {
     io.stderr(`team ${tool}: the GitHub token could not be read (${key.reason})\n`);
+    // exit: git.token
     return 1;
   }
-  return run(tool, argv, io, childEnv(io, id, key.key));
+  const code = await run(tool, argv, io, childEnv(io, id, key.key));
+  // exit: git.ran
+  // exit: git.failed
+  return code === 0 ? 0 : 1;
 }
 
 const gitCommand: Command = (argv, io) => runGitHub('git', argv, io);

@@ -1901,6 +1901,13 @@
     {
       "code": 0,
       "command": "daemon",
+      "id": "daemon.restart-starting",
+      "meaning": "the installed unit was started again and its daemon is alive but has not answered inside the cold-start window; it is left running, reported as starting",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
       "id": "daemon.restarted",
       "meaning": "the installed unit's daemon was stopped and that same unit started again, and the daemon it started answers the machine socket",
       "trigger": "team daemon restart"
@@ -2036,6 +2043,13 @@
       "command": "daemon",
       "id": "daemon.restart-failed",
       "meaning": "the system's service manager refused to start the installed unit again after stopping its daemon, so no daemon is running",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-refresh-failed",
+      "meaning": "the installed program changed since the last install and the restart could not refresh the runtime copy; the install the refresh ran said why and what it left running",
       "trigger": "team daemon restart"
     },
     {
@@ -2709,6 +2723,62 @@
       "id": "forget.invocation",
       "meaning": "the invocation cannot be read",
       "trigger": "team forget"
+    },
+    {
+      "code": 0,
+      "command": "git",
+      "id": "git.ran",
+      "meaning": "git or gh ran with the entity identity and exited 0",
+      "trigger": "team git, team gh"
+    },
+    {
+      "code": 1,
+      "command": "git",
+      "id": "git.failed",
+      "meaning": "git or gh ran with the entity identity and exited with a failure",
+      "trigger": "team git, team gh"
+    },
+    {
+      "code": 1,
+      "command": "git",
+      "id": "git.identity",
+      "meaning": "the entity identity file is missing, unreadable, a link or writable by others; nothing ran",
+      "trigger": "team git, team gh"
+    },
+    {
+      "code": 1,
+      "command": "git",
+      "id": "git.no-entity",
+      "meaning": "no entity GitHub identity applies to this folder; nothing ran",
+      "trigger": "team git, team gh"
+    },
+    {
+      "code": 1,
+      "command": "git",
+      "id": "git.platform",
+      "meaning": "the token store is not available on this platform; nothing ran",
+      "trigger": "team git, team gh"
+    },
+    {
+      "code": 1,
+      "command": "git",
+      "id": "git.refused",
+      "meaning": "the git or gh command is one the entity identity never runs (a force push, a push to main or master, a branch delete or mirror; a merge, release, repository change, API write, or credential, secret, key or settings command); nothing ran",
+      "trigger": "team git, team gh"
+    },
+    {
+      "code": 1,
+      "command": "git",
+      "id": "git.token",
+      "meaning": "the GitHub token could not be read from the token store; nothing ran",
+      "trigger": "team git, team gh"
+    },
+    {
+      "code": 2,
+      "command": "git",
+      "id": "git.usage",
+      "meaning": "no git or gh arguments were given; the usage was printed",
+      "trigger": "team git, team gh"
     },
     {
       "code": 0,
