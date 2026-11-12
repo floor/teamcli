@@ -32,7 +32,7 @@ describe('test preload XDG_CONFIG_HOME isolation', () => {
     const originalBytes = Buffer.from('# ambient config outside the scene home\n[ui]\nfont_size = 14\n', 'utf8');
     writeFileSync(cfgFile, originalBytes, { mode: 0o600 });
 
-    const run = spawnSync(process.execPath, ['test', 'test/check-repair.test.ts'], {
+    const run = spawnSync(process.execPath, ['test', './test/check-repair.test.ts'], {
       cwd: REPO_ROOT,
       env: { ...process.env, XDG_CONFIG_HOME: base },
       encoding: 'utf8',
