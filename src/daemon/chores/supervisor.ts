@@ -1035,6 +1035,9 @@ function groupRow(
   };
 }
 
+/** At most one late-beat line a minute; the next line counts the late beats in between. */
+export const LATE_LINE_EVERY_MS = 60_000;
+
 export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
   const groups: Group[] = [];
   const inline = new Map<string, DaemonChoresState>();
@@ -1086,6 +1089,11 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
    *  daemon's own loop delivered late. The tick runs once per beat, so more than two intervals
    *  is one full beat late: a one-interval guard would trip on every on-time tick. */
   let lastTickMs: number | null = null;
+  /** The last late-beat line's instant, and the late beats since it that wrote none: a loaded
+   *  machine delivers most beats late, and one line per beat buried the log (4127 lines in a
+   *  morning on 2026-11-12). One line a minute carries the count of the beats it stands for. */
+  let lastLateLineMs: number | null = null;
+  let lateUnwritten = 0;
   return {
     tick(at: Date): void {
       const ms = at.getTime();
@@ -1095,10 +1103,15 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
       let work = '';
       try { work = input.workSinceBeat?.() ?? ''; }
       catch { work = 'diagnostic unavailable'; }
-      if (stalled) {
-        // The beat itself is the stall record for the main loop: it is logged once, with the
-        // load, and no child is judged on the silence this daemon could not hear.
-        input.log(`chores: the daemon beat arrived late, ${String(ms - (lastTickMs ?? ms))} ms after the previous one on a ${String(input.beatMs)} ms cadence; ${loadNote(input)}${work === '' ? '' : `; work wall (overlap/await included), longest first: ${work}`}`);
+      if (stalled && lastLateLineMs !== null && ms - lastLateLineMs < LATE_LINE_EVERY_MS) {
+        lateUnwritten += 1;
+      } else if (stalled) {
+        // The beat itself is the stall record for the main loop: it is logged with the load, and
+        // no child is judged on the silence this daemon could not hear.
+        const more = lateUnwritten === 0 ? '' : `; ${String(lateUnwritten)} more late beat${lateUnwritten === 1 ? '' : 's'} since the last such line`;
+        input.log(`chores: the daemon beat arrived late, ${String(ms - (lastTickMs ?? ms))} ms after the previous one on a ${String(input.beatMs)} ms cadence; ${loadNote(input)}${more}${work === '' ? '' : `; work wall (overlap/await included), longest first: ${work}`}`);
+        lastLateLineMs = ms;
+        lateUnwritten = 0;
       }
       lastTickMs = ms;
       for (const group of groups) tickGroup(input, group, at, stalled);
