@@ -3,7 +3,7 @@
 // scenes keep the project layout (`TEAM_HOOKS_HOME=project`, test/preload); these scenes set a
 // scratch machine folder of their own.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { cliHookLegacySettingsPath, cliHookSettingsPath, installCliHooks } from '../src/launch/cli-hook.ts';
@@ -47,6 +47,13 @@ describe('the seats\' settings files live in TeamCLI\'s machine folder', () => {
     expect(existsSync(join(dir, 'hooks'))).toBe(false);
     // The hooks' own state files stay in the project state folder, which the seat's sandbox grants.
     expect(readdirSync(join(dir, 'seat-state'))).toEqual([SESSION]);
+  });
+
+  test('the settings approve TeamCLI\'s own inbox server, and no other project server', () => {
+    const landed = installCliHooks(dir, SESSION, [{ name: 'worker', cli: 'claude-code', launch: CLAUDE }]);
+    const settings = JSON.parse(readFileSync(landed.worker!, 'utf8')) as { enabledMcpjsonServers?: string[]; enableAllProjectMcpServers?: boolean };
+    expect(settings.enabledMcpjsonServers).toEqual(['team-inbox']);
+    expect(settings.enableAllProjectMcpServers).toBeUndefined();
   });
 
   test('two projects never share a seat\'s file, and the name does not spell out the project path', () => {

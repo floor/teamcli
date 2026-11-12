@@ -385,6 +385,11 @@ export function cliHookSettings(
   hooks.Stop = stop;
   const document: Record<string, unknown> = { hooks };
   if (inbound !== undefined && inbound !== null) document.crossSessionInbound = inbound;
+  // A seat that starts in its own folder inside the project sees the project's `.mcp.json`, and
+  // Claude Code asked to approve its `team-inbox` server on every fresh launch (a consent dialog
+  // that stopped the seat, 2026-11-12). That server is TeamCLI's own inbox: the seat's settings
+  // approve exactly that one name, and no other project server.
+  document.enabledMcpjsonServers = ['team-inbox'];
   return `${JSON.stringify(document, null, 2)}\n`;
 }
 
