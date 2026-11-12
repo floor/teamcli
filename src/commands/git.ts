@@ -95,9 +95,25 @@ export function ghRefusal(args: readonly string[]): string | null {
   if (group === 'pr' && verb === 'merge') return 'gh pr merge is refused: a merge goes through its gate';
   if (group === 'repo' && ['delete', 'edit', 'rename', 'archive', 'create', 'fork'].includes(verb ?? '')) return `gh repo ${verb} is refused`;
   if (group === 'api') {
-    const method = args.find((arg, at) => (args[at - 1] === '-X' || args[at - 1] === '--method'))?.toUpperCase();
-    const writes = args.some((arg) => /^(-f|-F|--field|--raw-field|--input)$/.test(arg));
-    if ((method !== undefined && method !== 'GET') || writes) return 'gh api reads only (GET); a write goes through its own gh command';
+    // Every spelling gh takes counts (review finding, 2026-11-12): `-X POST`, `-XPOST`,
+    // `--method POST` and `--method=POST`; `-f`/`-F`/`--field`/`--raw-field`/`--input`, alone,
+    // with `=`, or a short flag with its value attached (`-ftitle=x`). Any field makes gh send a
+    // POST. GraphQL is always a POST and a mutation cannot be told from a query here: refused.
+    if (args.slice(1).some((arg) => arg === 'graphql' || /^\/?graphql$/.test(arg))) {
+      return 'gh api graphql is refused: it always posts, and a mutation cannot be told from a query';
+    }
+    const methods: string[] = [];
+    args.forEach((arg, at) => {
+      if ((arg === '-X' || arg === '--method') && args[at + 1] !== undefined) methods.push(args[at + 1]!);
+      const long = /^--method=(.*)$/.exec(arg);
+      if (long) methods.push(long[1]!);
+      const short = /^-X(.+)$/.exec(arg);
+      if (short) methods.push(short[1]!);
+    });
+    const writes = args.some((arg) => /^(--field|--raw-field|--input)(=.*)?$/.test(arg) || /^-[fF](.*)?$/.test(arg));
+    if (methods.some((method) => method.toUpperCase() !== 'GET') || writes) {
+      return 'gh api reads only (GET); a write goes through its own gh command';
+    }
   }
   return null;
 }
