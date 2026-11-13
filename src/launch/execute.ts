@@ -1984,6 +1984,9 @@ export async function executePlan(
                 // log, so this line is the log's only record that the resume fell back.
                 host.log(op.seat, 'its recorded conversation was not found by the CLI; launched a fresh one');
                 launchedCommands.set(op.seat, relaunch.command);
+                // A new launch asks its development-channels question again, and may be answered
+                // once more: the mark is per launch, not per seat.
+                channelDialogAnswered.delete(op.seat);
                 if (relaunch.sessionId !== undefined) launchSessions.set(op.seat, relaunch.sessionId);
                 else launchSessions.delete(op.seat);
                 shellBackSince = null;

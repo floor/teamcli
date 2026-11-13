@@ -911,13 +911,6 @@ function saidLine(read: CommandRead): string | null {
   return null;
 }
 
-/**
- * `team doctor --jules`: whether the Jules CLI, the owner's Google login, the GitHub link and this
- * project's repository are all in place, and which step is missing when they are not. Two reads —
- * `jules remote list --repo` (the login and the GitHub link answer in its status, the connected
- * repositories in its lines) and `git remote get-url origin` (which repository this project means)
- * — and nothing else: no login, no session, no API key, no write.
- */
 /** The temp-folder row: the daemon's recorded folder against the seats'. A seat's folder is
  *  this process's own when doctor runs in one of the terminal host's panes, where the seats' own
  *  environment is; otherwise it is the folder a pane `team up` starts gets. Nothing is reported
@@ -932,6 +925,13 @@ export function tempFolderFindings(sources: DoctorSources, caller: Caller | null
   return row === null ? [] : [row];
 }
 
+/**
+ * `team doctor --jules`: whether the Jules CLI, the owner's Google login, the GitHub link and this
+ * project's repository are all in place, and which step is missing when they are not. Two reads —
+ * `jules remote list --repo` (the login and the GitHub link answer in its status, the connected
+ * repositories in its lines) and `git remote get-url origin` (which repository this project means)
+ * — and nothing else: no login, no session, no API key, no write.
+ */
 export function doctorJulesFindings(root: string, sources: DoctorSources): Finding[] {
   const findings: Finding[] = [];
   if (!sources.onPath('jules')) {
