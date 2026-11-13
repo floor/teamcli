@@ -60,3 +60,18 @@ test('a file writable by others, or a link, is not read', () => {
   symlinkSync(linked, path);
   expect(launchAccountFor(home, 'acme', 'deepseek', undefined)).toBeNull();
 });
+
+// An entity's own secret file holds each key under a generic name: no entity's name is part of
+// it. The account may name its own; the Keychain entry beside it stays the owner's.
+test('an account carries its key\'s generic name: its own, else its provider\'s', () => {
+  write(FILE);
+  expect(launchAccountFor(home, 'acme', 'deepseek', undefined)?.secret).toBe('DEEPSEEK_API_KEY');
+  expect(launchAccountFor(home, 'acme', 'kimi', undefined)?.secret).toBe('KIMI_API_KEY');
+  expect(launchAccountFor(home, 'acme', 'kimi', undefined)?.keychain).toBe('kimi-api-key');
+  write(FILE.replace('    keychain: kimi-api-key\n', '    keychain: acme-kimi-key\n    secret: KIMI_CODING_KEY\n'));
+  const kimi = launchAccountFor(home, 'acme', 'kimi', undefined);
+  expect(kimi?.keychain).toBe('acme-kimi-key');
+  expect(kimi?.secret).toBe('KIMI_CODING_KEY');
+  write(FILE.replace('    keychain: kimi-api-key\n', '    keychain: kimi-api-key\n    secret: "two words"\n'));
+  expect(launchAccountFor(home, 'acme', 'kimi', undefined)).toBeNull();
+});

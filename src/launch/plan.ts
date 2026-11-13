@@ -1574,7 +1574,10 @@ export function upPlan(input: UpInput): Step[] {
       if (seat.launcher === 'claude-code' && input.home !== undefined && seat.vendor !== undefined && seat.vendor !== 'anthropic') {
         const account = launchAccountFor(input.home, input.team?.entity, seat.account, seat.vendor);
         if (account !== null) {
-          const store = input.secretStore !== undefined ? input.secretStore : systemSecretStore({ home: input.home });
+          const entity = input.team?.entity;
+          const store = input.secretStore !== undefined
+            ? input.secretStore
+            : systemSecretStore({ home: input.home, ...(typeof entity === 'string' && entity !== '' ? { entity } : {}) });
           const key = accountKeyCommand(account, store);
           if (!key.ok) {
             const why = `its provider key cannot be read: ${key.reason}`;
@@ -1639,9 +1642,14 @@ export function upPlan(input: UpInput): Step[] {
     // against the provider with an empty key. A line that names none is left byte for byte, and
     // the seat's record keeps the line as its file writes it.
     if (hasSecretWord(baseLine)) {
+      // The entity's own secrets: a store that keeps one file per entity opens this team's.
+      const entity = input.team?.entity;
       const store = input.secretStore !== undefined
         ? input.secretStore
-        : systemSecretStore(input.home === undefined ? {} : { home: input.home });
+        : systemSecretStore({
+          ...(input.home === undefined ? {} : { home: input.home }),
+          ...(typeof entity === 'string' && entity !== '' ? { entity } : {}),
+        });
       const filled = fillSecretWords(baseLine, store);
       if (!filled.ok) {
         const why = `its provider key cannot be read: ${filled.why}`;

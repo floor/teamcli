@@ -12,7 +12,11 @@ export type LaunchAccount = {
   name: string;
   provider: string;
   endpoint: string;
+  /** The key's entry on a store that keeps one set of entries for the machine. */
   keychain: string;
+  /** The key's generic name in the entity's own secret file: the account's `secret`, else the
+   *  provider's own (`providerSecret`). */
+  secret: string;
   defaultModel?: string;
   opusModel?: string;
   sonnetModel?: string;
@@ -29,6 +33,18 @@ export type LaunchAccount = {
 const VENDOR_ACCOUNT: Readonly<Record<string, string>> = { deepseek: 'deepseek', moonshot: 'kimi', kimi: 'kimi', zai: 'glm', glm: 'glm' };
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** The generic names a provider's key is kept under in an entity's own secret file, by the
+ *  provider and the account names seats already use. */
+const PROVIDER_SECRET: Readonly<Record<string, string>> = {
+  deepseek: 'DEEPSEEK_API_KEY', kimi: 'KIMI_API_KEY', moonshot: 'KIMI_API_KEY', glm: 'GLM_API_KEY', zai: 'GLM_API_KEY',
+};
+
+/** An account's generic key name when it names none: its provider's, else its own name's
+ *  `<NAME>_API_KEY`. No entity's name is ever part of it. */
+export function providerSecret(provider: string, name: string): string {
+  return PROVIDER_SECRET[provider] ?? PROVIDER_SECRET[name] ?? `${name.toUpperCase().replace(/[.-]/g, '_')}_API_KEY`;
+}
 const URL_WORD = /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/[A-Za-z0-9._~\/-]*)?$/;
 const MODEL_WORD = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]*$/;
 
@@ -89,7 +105,9 @@ function accountOf(name: string, raw: unknown): LaunchAccount | null {
   const endpoint = text(r.endpoint, URL_WORD);
   const keychain = text(r.keychain, NAME);
   if (provider === undefined || endpoint === undefined || keychain === undefined) return null;
-  const account: LaunchAccount = { name, provider, endpoint, keychain };
+  if (r.secret !== undefined && text(r.secret, NAME) === undefined) return null;
+  const secret = text(r.secret, NAME) ?? providerSecret(provider, name);
+  const account: LaunchAccount = { name, provider, endpoint, keychain, secret };
   const models: [keyof LaunchAccount, string][] = [
     ['defaultModel', 'default_model'], ['opusModel', 'opus_model'], ['sonnetModel', 'sonnet_model'],
     ['haikuModel', 'haiku_model'], ['fableModel', 'fable_model'], ['subagentModel', 'subagent_model'],

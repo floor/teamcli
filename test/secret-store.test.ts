@@ -26,7 +26,8 @@ function fakeRunner(answer: SecretRunResult): { calls: Call[]; runner: (command:
 }
 
 const HOME = '/home/owner';
-const FILE = `${HOME}/.config/sops/agents.env.sops`;
+// One file per entity: the entity is the file, never part of a key's name.
+const FILE = `${HOME}/.config/sops/acme.env.sops`;
 const KEY = `${HOME}/.config/sops/age/keys.txt`;
 const SOPS = `${HOME}/.local/bin/sops`;
 const VALUE = 'sk-fixture-0123456789';
@@ -41,6 +42,7 @@ function linux(runner: SecretStoreOptions['runner'], over: Partial<SecretStoreOp
     ...(runner === undefined ? {} : { runner }),
     env: over.env ?? { PATH: '/usr/bin:/bin', HOME },
     home: over.home ?? HOME,
+    ...('entity' in over ? (over.entity === undefined ? {} : { entity: over.entity }) : { entity: 'acme' }),
     isFile: (path) => files.has(path) || tools.has(path),
     isExecutable: (path) => tools.has(path),
   });
@@ -138,6 +140,7 @@ describe('the encrypted-dotenv adapter', () => {
     const store = linuxSecretStore({
       home: '',
       env: { HOME: 'relative/home' },
+      entity: 'acme',
       isFile: (path) => { asked.push(path); return false; },
       isExecutable: () => false,
       runner: fakeRunner({ ok: true, stdout: DOTENV }).runner,
@@ -192,10 +195,60 @@ describe('the encrypted-dotenv adapter', () => {
     const store = linux(undefined, {
       home: spaced,
       env: { PATH: '/usr/bin', HOME: spaced },
-      files: [`${spaced}/.config/sops/agents.env.sops`, `${spaced}/.config/sops/age/keys.txt`],
+      files: [`${spaced}/.config/sops/acme.env.sops`, `${spaced}/.config/sops/age/keys.txt`],
       tools: [`${spaced}/.local/bin/sops`],
     });
     expect(store.lookupCommand('deepseek-api-key').ok).toBe(false);
+  });
+});
+
+describe('one file per entity, generic names inside it', () => {
+  const ENTRIES = 'GITHUB_SEAT_TOKEN=github_pat_fixture0123\nKIMI_API_KEY=sk-kimi-fixture\nACME_GITHUB_TOKEN=github_pat_owner-entry\n';
+  const github = { keychain: 'acme-github-token', secret: 'GITHUB_SEAT_TOKEN', prefix: 'github_pat_' };
+
+  test('the entity names the file; another entity reads its own', async () => {
+    const acme = fakeRunner({ ok: true, stdout: ENTRIES });
+    await linux(acme.runner).read('kimi-api-key');
+    expect(acme.calls[0]!.args.at(-1)).toBe(`${HOME}/.config/sops/acme.env.sops`);
+    const beacon = fakeRunner({ ok: true, stdout: ENTRIES });
+    const file = `${HOME}/.config/sops/beacon.env.sops`;
+    await linux(beacon.runner, { entity: 'beacon', files: [file, KEY] }).read('kimi-api-key');
+    expect(beacon.calls[0]!.args.at(-1)).toBe(file);
+  });
+
+  test('with no entity and no override no file is opened, and nothing runs', async () => {
+    const fake = fakeRunner({ ok: true, stdout: ENTRIES });
+    const store = linux(fake.runner, { entity: undefined });
+    const reason = 'the system\'s secret store keeps one file per entity, and no entity applies here';
+    expect(await store.read('kimi-api-key')).toEqual({ ok: false, reason });
+    expect(store.lookupCommand('kimi-api-key')).toEqual({ ok: false, reason });
+    expect((await linux(fake.runner, { entity: '../acme' }).read('kimi-api-key')).ok).toBe(false);
+    expect(fake.calls).toHaveLength(0);
+    // The override still names its one file, whatever the entity.
+    const other = '/srv/secrets/team.env.sops';
+    const named = linux(fake.runner, { entity: undefined, files: [other, KEY], env: { PATH: '/usr/bin', HOME, TEAMCLI_SECRETS_FILE: other } });
+    expect(await named.read('kimi-api-key')).toEqual({ ok: true, value: 'sk-kimi-fixture' });
+  });
+
+  test('an entry\'s generic name is read, never the owner\'s machine-wide name', async () => {
+    expect(await linux(fakeRunner({ ok: true, stdout: ENTRIES }).runner).read(github)).toEqual({ ok: true, value: 'github_pat_fixture0123' });
+    const only = await linux(fakeRunner({ ok: true, stdout: 'ACME_GITHUB_TOKEN=github_pat_owner-entry\n' }).runner).read(github);
+    expect(only).toEqual({ ok: false, reason: 'the system\'s secret store holds no entry for it' });
+    const lookup = linux(undefined).lookupCommand({ keychain: 'kimi-owner-key', secret: 'KIMI_API_KEY' });
+    expect(lookup.ok && lookup.command.endsWith('| sed -n s/\\^KIMI_API_KEY=//p')).toBe(true);
+  });
+
+  test('a value under a generic name that does not start with its prefix is refused, never shown', async () => {
+    const classic = await linux(fakeRunner({ ok: true, stdout: 'GITHUB_SEAT_TOKEN=ghp_classic0123\n' }).runner).read(github);
+    expect(classic).toEqual({ ok: false, reason: 'its entry in the system\'s secret store does not start with github_pat_' });
+  });
+
+  test('the Keychain reads the owner\'s own entry, as it always has, and checks no prefix', async () => {
+    const fake = fakeRunner({ ok: true, stdout: 'ghp_classic0123\n' });
+    expect(await darwinSecretStore({ runner: fake.runner, entity: 'acme' }).read(github)).toEqual({ ok: true, value: 'ghp_classic0123' });
+    expect(fake.calls[0]!.args).toEqual(['find-generic-password', '-s', 'acme-github-token', '-w']);
+    expect(darwinSecretStore().lookupCommand({ keychain: 'kimi-owner-key', secret: 'KIMI_API_KEY' }))
+      .toEqual({ ok: true, command: '/usr/bin/security find-generic-password -s kimi-owner-key -w' });
   });
 });
 
@@ -203,7 +256,7 @@ describe('the store is chosen by platform', () => {
   test('darwin gets the Keychain, linux the encrypted file, any other platform none', () => {
     expect(systemSecretStore({ platform: 'darwin' })?.lookupCommand('kimi-api-key'))
       .toEqual({ ok: true, command: '/usr/bin/security find-generic-password -s kimi-api-key -w' });
-    const linuxStore = systemSecretStore({ platform: 'linux', home: HOME, env: { HOME }, isFile: () => true, isExecutable: (path) => path === SOPS });
+    const linuxStore = systemSecretStore({ platform: 'linux', home: HOME, env: { HOME }, entity: 'acme', isFile: () => true, isExecutable: (path) => path === SOPS });
     const lookup = linuxStore?.lookupCommand('kimi-api-key');
     expect(lookup?.ok).toBe(true);
     if (lookup?.ok) expect(lookup.command).toContain('KIMI_API_KEY=');
@@ -223,10 +276,10 @@ describe('the launch line\'s lookup, run by real shells', () => {
     const bin = join(base, 'bin');
     mkdirSync(bin);
     mkdirSync(join(base, '.config', 'sops', 'age'), { recursive: true });
-    writeFileSync(join(base, '.config', 'sops', 'agents.env.sops'), 'not read by the fake tool\n', { mode: 0o600 });
+    writeFileSync(join(base, '.config', 'sops', 'acme.env.sops'), 'not read by the fake tool\n', { mode: 0o600 });
     writeFileSync(join(base, '.config', 'sops', 'age', 'keys.txt'), 'not read by the fake tool\n', { mode: 0o600 });
     writeFileSync(join(bin, 'sops'), `#!/bin/sh\nprintf '%s' '${DOTENV}'\n`, { mode: 0o755 });
-    const lookup = linuxSecretStore({ home: base, env: { PATH: bin, HOME: base } }).lookupCommand('deepseek-api-key');
+    const lookup = linuxSecretStore({ home: base, env: { PATH: bin, HOME: base }, entity: 'acme' }).lookupCommand('deepseek-api-key');
     expect(lookup.ok).toBe(true);
     if (!lookup.ok) return;
     expect(shells.length).toBeGreaterThan(0);

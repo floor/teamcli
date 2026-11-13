@@ -15,7 +15,7 @@ function storeAnswering(answer: (name: string) => SecretLookup): SecretStore {
 const KEYCHAIN = systemSecretStore({ platform: 'darwin', runner: async () => { throw new Error('no store command runs'); } });
 const HOME = '/home/owner';
 const DOTENV = systemSecretStore({
-  platform: 'linux', home: HOME, env: { HOME, PATH: '/usr/bin' },
+  platform: 'linux', home: HOME, entity: 'acme', env: { HOME, PATH: '/usr/bin' },
   isFile: () => true, isExecutable: (path) => path === '/usr/bin/sops',
 });
 
@@ -67,7 +67,7 @@ describe('filling the secret words of a launch line', () => {
     if (!filled.ok) return;
     expect(filled.line).toContain(
       'ANTHROPIC_AUTH_TOKEN="$(SOPS_AGE_KEY_FILE=/home/owner/.config/sops/age/keys.txt /usr/bin/sops decrypt --input-type dotenv ' +
-      '--output-type dotenv /home/owner/.config/sops/agents.env.sops | sed -n s/\\^DEEPSEEK_API_KEY=//p)" ',
+      '--output-type dotenv /home/owner/.config/sops/acme.env.sops | sed -n s/\\^DEEPSEEK_API_KEY=//p)" ',
     );
     expect(filled.line).not.toContain('/usr/bin/security');
     expect(filled.line.endsWith(' claude --model deepseek-flash')).toBe(true);
