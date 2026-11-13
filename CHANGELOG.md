@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- TeamCLI ships four launchers, configured by the seat: `grok-build`, `claude-code`, `codex` and `antigravity`. A seat names the launcher and its model, version, vendor and effort; the launcher builds the line, so a seat no longer needs a script of its own. `claude-code` reads the entity's provider launch accounts, so a Claude Code seat can run another vendor's model; the provider key is a keychain lookup run by the pane's shell and never reaches a record, a log or the line.
+- A read-only Claude Code seat runs in Claude Code's sandbox in `dontAsk` mode, not with the permission bypass. A read-only Grok seat runs in `dontAsk` mode with only Read and `team` allowed. Codex and Antigravity readers run the builder line, because their sandboxes stop `team` itself; their access is stated as such.
+- `team git` and `team gh` run git and gh for a seat with the entity's GitHub identity, so no GitHub token reaches a seat on a shipped launcher. `gh api` writes are refused in every spelling gh accepts, and GraphQL is refused. General grants never admit either command.
+- `team swap <seat> <shipped launcher>` moves a seat onto a shipped launcher, with `--model`, `--version`, `--vendor` and `--effort`.
+- Seats on a launcher get their own seat folder (`worktrees/<project>/<team>/<seat>`), made at launch when missing. A seat may name its own `access` and its own `brief` (a path, `~` allowed). `team config set seats.<name> {map}` adds a seat.
+- A Grok seat takes typed wakes up to 1500 bytes (`typed_wake_max` in the profile); the daemon admits a typed wake up to the seat's measured limit.
+- The `model-drift` policy (entity, project or team) decides a send to a seat whose screen runs another model than its record: `rule` (the default) delivers, with a drift notice, only when the entity's model rule names the seat and allows the observed model, and otherwise refuses with nothing kept; `deliver` delivers every drift with a notice; `hold` refuses every drift until the seat is repaired.
+- `bun run test:fast` runs the whole suite in CI's shards at once and fails when a shard runs no tests.
+
+### Changed
+
+- Seats' generated settings files live in TeamCLI's machine folder (`~/.config/team/hooks/`), never in the project. A seat launched before the move keeps its socket route until its next launch. The settings approve TeamCLI's own inbox server and no other project server.
+- Claude Code seats take their rules as a file (`--append-system-prompt-file`, content-addressed under `~/.config/team/rules-text/`), not as text on the launch line.
+- A seat's record follows a new conversation in its own CLI process, and the seat's state moves with it.
+
+### Fixed
+
+- After a host restart, kept panes get their names and sidebar labels back; a seat relaunched at its bare shell is renamed after its launch; a Grok or Cursor pane started elsewhere is repaired in a new workspace; a provider seat on the claude-code launcher is launched again, not adopted.
+- A launch waits for a new pane's shell prompt before typing its line.
+- `team daemon restart` after a new build runs the installed program, waits for a daemon's cold start and never stops a live one; `team daemon install` says when it drops the unit's `--presence` or `--watch`. The daemon re-reads its team when a sender or recipient is new or a seat was stopped, and writes at most one late-beat line a minute.
+- No SSH reaches a seat on a shipped launcher, and only real read-only lines count as read-only.
+- A seat folder is read as its team's root only when the team owns that seat; a recorded worktree wins over a defaulted seat folder, and a defaulted folder stays out of the approved record.
+- Grok's folder trust dialog is read as a trust screen, not as ready; `grok-build` passes `--trust` and takes its model from the seat's version.
+- A paused team or seat is left out of the watch's can't-work notices.
+
 ## [0.5.21] - 2026-11-10
 
 ### Added
