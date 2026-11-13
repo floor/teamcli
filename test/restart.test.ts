@@ -3240,6 +3240,27 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toContain('worker: not resuming its recorded session (its launch line has no measured resume form)');
   });
 
+  test('a launch line that names its own conversation is said as a resume, never as a fresh start', async () => {
+    // Seen live: the record carried no conversation, the line ran `codex … resume <id>`, and the
+    // context line said "without passing the old transcript". The line says what it runs.
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_live',
+      launched: true,
+      launch: 'codex -m gpt-6.1-sol resume ses_pinned',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 100, foreground: [200] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).toContain('resume ses_pinned');
+    expect(io.out).toContain('and resumes conversation ses_pinned, named in its launch line');
+    expect(io.out).not.toContain('without passing the old transcript');
+  });
+
   test('a recorded launcher that already names the bound id resumes it unchanged', async () => {
     // No second resume word: the line's own selection is the one the record binds.
     const { fixture, run } = seeded({

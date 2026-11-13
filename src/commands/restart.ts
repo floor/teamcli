@@ -1286,9 +1286,14 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // and the field read it as one even when the resume was on the line. With nothing carried,
       // the line states the reason the run already gave, so the terminal never shows a silent
       // fresh start.
+      // A launch line that names a conversation of its own resumes that one whatever the record
+      // says: the line says so, never "without passing the old transcript".
+      const ownTarget = resumed === undefined ? namedResumeTarget(next.cli, planSeat.launch) : null;
       const context = resumed !== undefined
         ? `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace and resumes the recorded conversation ${plainLine(resumed)}`
-        : `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace without passing the old transcript${resumeNote === undefined ? '' : `; ${plainLine(resumeNote)}`}`;
+        : ownTarget !== null
+          ? `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace and resumes ${ownTarget === '' ? 'the conversation its launch line selects' : `conversation ${plainLine(ownTarget)}, named in its launch line`}${resumeNote === undefined ? '' : ` (the recorded one is not carried: ${plainLine(resumeNote.replace(/^not resuming its recorded conversation \((.*)\)$/, '$1'))})`}`
+          : `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace without passing the old transcript${resumeNote === undefined ? '' : `; ${plainLine(resumeNote)}`}`;
       noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; ${context}\n`);
       if (rechecked.unrecognised !== undefined) {
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
