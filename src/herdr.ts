@@ -1506,10 +1506,54 @@ export function focusAgent(target: string, session?: string): boolean {
 }
 
 export function workspaceClose(workspace: string, session?: string): boolean {
+  // The CLI processes in front of the workspace's shells, read before the close: a CLI that
+  // ignores the hangup outlives its pane as an orphan (seen 2026-11-13: four Codex processes
+  // reparented to launchd after restarts, one holding a seat's conversation so the relaunched
+  // seat could not open it).
+  const owned = (workspacePanes(workspace, session) ?? []).flatMap((pane) => paneProcesses(pane, session)?.foreground ?? []);
   const out = capture(['workspace', 'close', workspace], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body !== null && !isHerdrError(body);
+  const closed = body !== null && !isHerdrError(body);
+  if (closed && owned.length > 0) endOrphans(owned, parentPidOf, (pid) => process.kill(pid, 'SIGTERM'), sleepSync);
+  return closed;
+}
+
+/** Ends the processes this close owned that outlived it: each pid read in front of the closed
+ *  pane's shell and now reparented to pid 1. A pid that exited, or that still has its own parent,
+ *  is left alone. Waits up to two seconds for the hangup to work first. Returns the pids ended. */
+export function endOrphans(owned: readonly number[], parentOf: (pid: number) => number | null, end: (pid: number) => void, sleep: (ms: number) => void): number[] {
+  let left = [...new Set(owned)];
+  for (let waited = 0; waited < 2_000 && left.length > 0; waited += 250) {
+    sleep(250);
+    left = left.filter((pid) => parentOf(pid) !== null);
+  }
+  const ended: number[] = [];
+  for (const pid of left) {
+    if (parentOf(pid) !== 1) continue;
+    try {
+      end(pid);
+      ended.push(pid);
+    } catch {
+      // Gone between the read and the signal, or not ours to signal: nothing to end.
+    }
+  }
+  return ended;
+}
+
+/** A live process's parent pid, or null when it has exited. Reads `ps -o ppid=` only. */
+function parentPidOf(pid: number): number | null {
+  try {
+    const out = execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const parent = Number(out);
+    return out === '' || !Number.isInteger(parent) ? null : parent;
+  } catch {
+    return null;
+  }
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 // Stops a session, which herdr keeps listed as stopped.
