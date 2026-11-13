@@ -464,10 +464,25 @@ function gitSubcommand(args: readonly string[]): { sub: string | null; rest: str
 const LAUNCHCTL_READ = new Set(['list', 'print', 'blame']);
 
 function launchctlReadOnly(args: readonly string[]): boolean {
+  return firstWordIn(args, LAUNCHCTL_READ);
+}
+
+/** The `systemctl` and `loginctl` questions a seat may ask: the same diagnosis `launchctl list`
+ *  and `print` give on macOS. Anything else (enable, start, link, edit, enable-linger, …) installs
+ *  or changes a job or a session setting that outlives the seat. A flag's value is read as the
+ *  first word (`-p MainPID show`), which refuses: the guard leans to refusing, never to running. */
+const SYSTEMCTL_READ = new Set([
+  'status', 'show', 'cat', 'list-units', 'list-unit-files', 'list-timers', 'list-sockets',
+  'list-dependencies', 'is-active', 'is-enabled', 'is-failed', 'help',
+]);
+const LOGINCTL_READ = new Set(['list-sessions', 'list-users', 'show-session', 'show-user', 'session-status', 'user-status']);
+
+/** Whether the first word that is not a flag names one of the read-only subcommands. */
+function firstWordIn(args: readonly string[], read: ReadonlySet<string>): boolean {
   for (const arg of args) {
     if (arg === '--') return false;
     if (arg.startsWith('-')) continue;
-    return LAUNCHCTL_READ.has(arg);
+    return read.has(arg);
   }
   return false;
 }
@@ -720,7 +735,12 @@ function matchSegment(words: readonly string[], actions: readonly ActionsCommand
     if (launchctlReadOnly(args)) return null;
     return { rule: 'persistent-job', guidance: GUIDANCE['persistent-job'] };
   }
-  if (word === 'crontab') {
+  if (word === 'systemctl' || word === 'loginctl') {
+    // The Linux service manager: the same line as `launchctl` above.
+    if (firstWordIn(args, word === 'systemctl' ? SYSTEMCTL_READ : LOGINCTL_READ)) return null;
+    return { rule: 'persistent-job', guidance: GUIDANCE['persistent-job'] };
+  }
+  if (word === 'crontab' || word === 'systemd-run') {
     return { rule: 'persistent-job', guidance: GUIDANCE['persistent-job'] };
   }
   if (word === 'rm' && recursiveRm(args)) return { rule: 'rm-recursive', guidance: GUIDANCE['rm-recursive'] };
@@ -789,7 +809,8 @@ export function lineRunsGh(line: string): boolean {
  * What the guard says about one shell command line: null when it is allowed, or the class it
  * belongs to and the one line the model is told instead. A conservative set — chmod, chown,
  * sudo, a recursive rm, pkill and killall, a hard `kill`, dd and mkfs, shutdown and reboot,
- * launchctl other than `list`, `print` and `blame`, crontab, a download piped into a shell,
+ * launchctl other than `list`, `print` and `blame`, systemctl and loginctl other than their status
+ * and listing questions, systemd-run, crontab, a download piped into a shell,
  * `git push --force` (and `-f`),
  * `git reset --hard`, a destructive `git clean`, `git branch -D`, `npm publish`, an
  * Actions write outside the `actions-commands` policy, and deleting or dismissing a GitHub
