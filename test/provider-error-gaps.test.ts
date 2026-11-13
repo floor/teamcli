@@ -101,3 +101,25 @@ describe('both sentences in one window', () => {
     expect(readScreen('claude-code', `${LIMIT}\n${LOST}\n${claudeBox('')}`)).toEqual({ kind: 'provider error' });
   });
 });
+
+describe('a Codex conversation another app holds', () => {
+  // Seen live on codex-cli 0.167.0 (2026-11-13): another Codex process held the seat's
+  // conversation and the TUI drew this notice where the composer stands. The seat read "idle
+  // (screen not recognised)" for two days while every typed wake stayed pending.
+  const LOCKED = [
+    '• done-stop — typecheck passed; worktree left as-is.',
+    '',
+    '  Worked for 3m 30s • Nov 11 at 09:21',
+    '',
+    '■ This conversation is read-only or unavailable; no operation was sent.',
+    '',
+    '  🔒 This conversation is open in another app                                  r to retry',
+    '     Close it there and press R to continue here.',
+    '',
+    '  r retry   f fork   ←/esc command center   ^c/q exit   ^t transcript',
+  ].join('\n');
+
+  test('reads as blocked, never idle', () => {
+    expect(readScreen('codex', LOCKED)).toEqual({ kind: 'provider error' });
+  });
+});

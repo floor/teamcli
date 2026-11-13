@@ -261,6 +261,14 @@ screen:
         - 'Usage limit reached\. You(?:''|’)ve reached your usage limit\.'
       live: true
       at_composer: true
+  # A conversation another Codex process (or the desktop app) holds: the TUI draws this notice
+  # in place of the composer and sends nothing until it is closed there (seen live on
+  # codex-cli 0.167.0, 2026-11-13: a seat sat two days behind it reading "idle").
+  provider_error:
+    - all:
+        - 'This conversation is open in another app'
+        - 'Close it there and press R to continue here'
+      live: true
   working:
     - any: ['esc to interrupt']
   # A pane scrolled back over its transcript draws its own rows in the composer's place: either
