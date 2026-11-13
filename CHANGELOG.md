@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `team swap <seat> <shipped launcher>` moves a seat onto a shipped launcher, with `--model`, `--version`, `--vendor` and `--effort`.
 - Seats on a launcher get their own seat folder (`worktrees/<project>/<team>/<seat>`), made at launch when missing. A seat may name its own `access` and its own `brief` (a path, `~` allowed). `team config set seats.<name> {map}` adds a seat.
 - A Grok seat takes typed wakes up to 1500 bytes (`typed_wake_max` in the profile); the daemon admits a typed wake up to the seat's measured limit.
-- The `model-drift` policy (entity, project or team) decides a send to a seat whose screen runs another model than its record: `rule` (the default) delivers, with a drift notice, only when the entity's model rule names the seat and allows the observed model, and otherwise refuses with nothing kept; `deliver` delivers every drift with a notice; `hold` refuses every drift until the seat is repaired.
+- The `model-drift` policy (entity, project or team) decides a send to a seat whose screen runs another model than its record: `deliver` (the default) delivers every drift with a notice, so a seat whose model was changed on purpose stays reachable while its lead repairs the record; `rule` delivers only when the entity's model rule names the seat and allows the observed model, and otherwise refuses with nothing kept; `hold` refuses every drift until the seat is repaired.
 - `bun run test:fast` runs the whole suite in CI's shards at once and fails when a shard runs no tests.
 
 ### Changed

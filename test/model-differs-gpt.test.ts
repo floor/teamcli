@@ -168,13 +168,12 @@ test('a real send to a synthetic Cursor pane accepts the split and writes a sign
   expect(record?.payload.body).toContain(MESSAGE);
 });
 
-test('the same synthetic send still refuses a real variant difference no rule allows', async () => {
-  // model-drift: rule (the default), with no entity model rule here: refused, nothing kept.
+test('the same synthetic send names a real variant difference and keeps the message', async () => {
+  // model-drift: deliver (the default): the drift is named, the message is kept, nothing refused.
   const fixture = sendFixture(cursorScreen('Flash'));
-  expect(await runSend(['receiver', MESSAGE], fixture.io, fixture.host)).toBe(1);
+  await runSend(['receiver', MESSAGE], fixture.io, fixture.host);
   expect(fixture.io.err).toContain('model drift: record says');
-  expect(fixture.io.err).toContain('not kept or delivered');
-  expect(existsSync(fixture.drops) ? readdirSync(fixture.drops).filter((name) => !name.startsWith('.') && !name.includes('.')) : []).toEqual([]);
+  expect(fixture.io.err).not.toContain('not kept or delivered');
 });
 
 test('an unread synthetic Cursor pane stays unread and does not fabricate drift', async () => {

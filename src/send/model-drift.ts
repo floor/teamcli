@@ -27,15 +27,16 @@ type Episode = ModelDrift & { id: string; generation: string; at: string; lead: 
 /** The proposed observation is judged as a model, never as the file's old vendor word. */
 export type ModelDriftMode = 'rule' | 'deliver' | 'hold';
 
-/** The `model-drift` policy for the receiving team (entity, project, team levels), `rule` when
- *  the chain cannot be read or names none. */
+/** The `model-drift` policy for the receiving team (entity, project, team levels), `deliver` when
+ *  the chain cannot be read or names none: a seat whose model changed on purpose (the owner's
+ *  `/model`) must stay reachable while its lead repairs the record (2026-11-13). */
 export function modelDriftMode(home: string, root: string, team: TeamFile): ModelDriftMode {
   try {
     const chain = resolvePolicyChain(readPolicyChain({ home, teamRoot: root, team }), { upToLevel: 'team' });
     const value = chain.ok ? chain.policies['model-drift']?.value : undefined;
-    return value === 'deliver' || value === 'hold' ? value : 'rule';
+    return value === 'rule' || value === 'hold' ? value : 'deliver';
   } catch {
-    return 'rule';
+    return 'deliver';
   }
 }
 

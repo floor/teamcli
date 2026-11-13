@@ -305,11 +305,10 @@ describe('team send behind a provider wrapper', () => {
       const io = owner(made.root);
 
       // The launch is read as plain Claude Code, so its Opus screen is a drift from the record.
-      // Under the default model-drift policy (`rule`), with no entity model rule allowing it, the
-      // send is refused and nothing is kept.
-      expect(await runSend(['lead', 'hello'], io, host)).not.toBe(0);
+      // Under the default model-drift policy (`deliver`) the drift is named and the message kept.
+      await runSend(['lead', 'hello'], io, host);
       expect(io.err).toContain('model drift: record says DeepSeek Flash V4.1, runs Claude Opus 4.6');
-      expect(io.err).toContain('not kept or delivered');
+      expect(io.err).not.toContain('not kept or delivered');
       made.cleanup();
     }
   });

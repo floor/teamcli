@@ -2316,7 +2316,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     name: 'model-drift',
     kind: 'advised',
     levels: ['entity', 'project', 'team'],
-    defaultValue: 'rule',
+    defaultValue: 'deliver',
     gateLifting: false,
     lowerLevelChooses: true,
     parseValue: (raw: unknown) => (raw === 'rule' || raw === 'deliver' || raw === 'hold' ? raw : null),

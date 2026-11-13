@@ -174,16 +174,16 @@ function registerLeadWith(made: World, host: Fake, signing: { model: string; ver
   });
 }
 
-/** Model drift under the default `model-drift: rule` policy: these worlds declare no entity
- *  model rule, so nothing permits the drifted model and the send is refused before anything is
- *  kept — no record in the recipient's inbox, nothing typed — with the drift named and the repair
- *  (team restart). `deliver` and `hold` have their own scenes (test/model-drift-policy.test.ts). */
+/** Model drift under the default `model-drift: deliver` policy (2026-11-13): the drift is named
+ *  and the message is kept in the recipient's inbox, never refused; nothing is typed while the
+ *  screen contradicts the record. `rule` and `hold` have their own scenes
+ *  (test/model-drift-policy.test.ts). */
 function expectNoHeldNotice(made: World, io: TestIo): void {
   const dir = dropDir(made.dir, 'lead');
   const records = existsSync(dir) ? readdirSync(dir).filter((name) => !name.includes('.')) : [];
-  expect(records).toEqual([]);
-  expect(io.err).toContain('no entity model rule allows this model for the seat');
-  expect(io.err).toContain('not kept or delivered');
+  expect(records.length).toBeGreaterThan(0);
+  expect(io.err).toContain('model drift: record says');
+  expect(io.err).not.toContain('not kept or delivered');
 }
 
 // A path, an `env` prefix, or quotes spell the CLI's own binary; no launcher there selects a
