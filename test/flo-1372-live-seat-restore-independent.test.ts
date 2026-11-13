@@ -898,9 +898,10 @@ describe('independent restore sweep and conversation-store boundaries', () => {
     const baseWorkspacePanes = raceHarness.launch.workspacePanes!;
     raceHarness.launch.workspacePanes = (session, workspace) => {
       execRecheckCalls += 1;
-      // Check 1 is seatPlan; Check 2 is the pre-buildPlan lock recheck; on Check 3 (guardRestore
-      // inside executePlan before workspace creation) the recorded pane reappears.
-      if (execRecheckCalls >= 3) {
+      // Checks 1–2 are the two seat plans (the restore plans the seat twice to carry an in-place
+      // adoption); Check 3 is the pre-buildPlan lock recheck; on Check 4 (guardRestore inside
+      // executePlan before workspace creation) the recorded pane reappears.
+      if (execRecheckCalls >= 4) {
         raceHarness.seats.get('seat-1')!.inPaneList = true;
       }
       return baseWorkspacePanes(session, workspace);
