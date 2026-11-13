@@ -50,7 +50,10 @@ const MACHINE_ONLY = new Set(['usage', 'daemon']);
  *  it elsewhere): on a machine with an owner seat it starts the owner page and waits for Ctrl-C,
  *  which timed the census out on every owner's Mac and never on CI. It reads no team file, so
  *  the sentence cannot come from it. */
-const FOREGROUND = new Set(['owner-seat serve']);
+// `start` onboards any folder, a plain one included, as the owner: in process it would write
+// the machine's own registry and wake its daemon (homedir() is fixed at process start, so no
+// scratch HOME reaches it). It never prints the no-repository sentence; its own scenes cover it.
+const FOREGROUND = new Set(['owner-seat serve', 'start']);
 
 const OFFER = 'or pass --file';
 const NO_REPO = 'not inside a git repository';
