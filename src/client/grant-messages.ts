@@ -50,6 +50,11 @@ const EN = {
   'card.scope.changes': 'Team {team} · {change}',
   'card.scope.changes.many': 'Team {team} · {changes}',
   'card.scope.development-mode': 'This Mac · all teams',
+  // A request carried from another machine (src/client/owner-carry.ts) names that machine beside
+  // its team, so the owner never reads it as one for the machine she answers on.
+  'card.scope.team.machine': 'Team {team} on {machine} · no permission change',
+  'card.scope.changes.many.machine': 'Team {team} on {machine} · {changes}',
+  'card.scope.development-mode.machine': 'Machine {machine} · all teams',
   'card.scope.always': 'always allows this, until revoked',
   'card.scope.always.base': '{base} · always allows this, until revoked',
   'card.scope.deny': 'refused, nothing changes',

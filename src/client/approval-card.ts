@@ -179,32 +179,46 @@ function questionOf(action: string, who: readonly string[], what: string, reason
 
 /** The scope line: the team plus what changes, or that no permission changes. A bundled request
  *  names every change it carries; the machine-wide development-mode switch names the machine. */
-function scopeOf(actions: readonly string[], team: string): string {
-  if (actions.length === 1 && actions[0] === 'development-mode') return msg('card.scope.development-mode');
+function scopeOf(actions: readonly string[], team: string, machine?: string): string {
+  if (actions.length === 1 && actions[0] === 'development-mode') {
+    return machine === undefined ? msg('card.scope.development-mode') : msg('card.scope.development-mode.machine', { machine });
+  }
   const changes = [...new Set(actions.filter((action) => CHANGED.has(action)).map((action) => msg(`card.change.${action}` as MessageId)))];
-  if (changes.length === 0) return msg('card.scope.team', { team });
-  return msg('card.scope.changes.many', { team, changes: changes.join('; ') });
+  if (changes.length === 0) return machine === undefined ? msg('card.scope.team', { team }) : msg('card.scope.team.machine', { team, machine });
+  return machine === undefined
+    ? msg('card.scope.changes.many', { team, changes: changes.join('; ') })
+    : msg('card.scope.changes.many.machine', { team, machine, changes: changes.join('; ') });
+}
+
+/** The machine a carried request names, as the card shows it: its display name, cleaned of
+ *  anything that is not a plain name. A request made where it is answered names none. */
+function machineOf(params: Pick<OwnerActionParams, 'machine'>): string | undefined {
+  const name = params.machine?.name;
+  if (typeof name !== 'string') return undefined;
+  const plain = name.replace(ESCAPE_SEQUENCE, '').replace(/[^A-Za-z0-9.-]/g, '').slice(0, 63);
+  return plain === '' ? 'another machine' : plain;
 }
 
 /** The kinds whose answer changes something beyond the team's own running state. */
 const CHANGED: ReadonlySet<string> = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant']);
 
 /** One owner-action request, as the owner reads it before answering. */
-export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by' | 'requesters' | 'reason' | 'words'>): ApprovalCard {
+export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by' | 'requesters' | 'reason' | 'words' | 'machine'>): ApprovalCard {
   const what = params.actions.map((action) => msg(`card.what.${action}` as MessageId));
   const who = askers(params);
+  const machine = machineOf(params);
   if (params.actions.length === 1) {
     const action = params.actions[0]!;
     return {
       title: titleOf(action, what[0]!, params.words?.[action]),
       question: questionOf(action, who, what[0]!, params.reason, params.words?.[action]),
-      scope: scopeOf(params.actions, params.team),
+      scope: scopeOf(params.actions, params.team, machine),
     };
   }
   return {
     title: msg('card.title.several', { actions: sentence(inOrder(what)) }),
     question: questionOf('several', who, inOrder(what), params.reason, undefined),
-    scope: scopeOf(params.actions, params.team),
+    scope: scopeOf(params.actions, params.team, machine),
   };
 }
 

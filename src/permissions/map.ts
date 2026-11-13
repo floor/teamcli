@@ -304,6 +304,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'it serves the owner page on 127.0.0.1 behind a per-run token; every act on it needs an owner-device passkey or Touch ID signature',
     },
+    'owner-seat:export': {
+      kind: 'any-caller',
+      why: 'an agent may start it, but the export is written only once the owner signs it on the owner\'s device; it carries the seat\'s public keys and no private key',
+    },
+    'owner-seat:pin': {
+      kind: 'owner-only',
+      why: 'the first pin is the owner\'s, from a terminal outside the terminal host on a machine with no pin yet (trust on first use); a changed seat is pinned only from a newer export signed by a signer already pinned there',
+    },
     setup: {
       kind: 'any-caller',
       why: 'an agent may start it, but nothing is written until the owner signs the charter; the owner-device signature is the authority',
@@ -517,6 +525,18 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'removing an always rule is the owner\'s, from a terminal outside herdr or by an owner-seat answer for that revoke',
       terminal: { who: 'the owner', where: 'a terminal outside herdr' },
+    },
+    'approvals:export': {
+      kind: 'any-caller',
+      why: 'it writes a waiting request of a machine whose owner seat is pinned to a file; the request grants nothing until the owner signs an answer on the machine that holds the signers',
+    },
+    'approvals:sign': {
+      kind: 'any-caller',
+      why: 'an agent may start it, but the answer is written only once the owner signs it (on the owner\'s device, or with a passkey); the request it answers runs only on the machine it names',
+    },
+    'approvals:answer': {
+      kind: 'any-caller',
+      why: 'it records an answer carried from another machine, and only one that verifies against this machine\'s pinned owner seat and is bound to a request of this machine; the command still runs with --approval and is checked again there',
     },
     forget: {
       kind: 'owner-only',

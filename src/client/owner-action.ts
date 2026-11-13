@@ -28,6 +28,8 @@ import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
 import { answerCard, cardPrompt, ownerActionCard } from './approval-card.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
 import { answerDeadline, deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type AnswerWindow, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
+import { machineBindingOf, readOwnerPin, requestMachineProblem, validMachineBinding, verifyPinnedOwnerAnswer, type MachineBinding } from './owner-pin.ts';
+import { ownerPinPresent } from './owner-pin-path.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 
 export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-migrate', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget', 'team-config', 'team-general-grant', 'development-mode'] as const;
@@ -52,6 +54,10 @@ export type OwnerActionParams = {
   requested_by: string;
   /** Every caller folded into one card. Set only when more than one asked, and part of the hash then. */
   requesters?: string[];
+  /** The machine the request was made on, when its owner seat is pinned from another machine
+   *  (src/client/owner-pin.ts). Part of the hash, so the owner's answer is bound to that machine
+   *  and runs nowhere else. A machine with a local owner names none, and hashes as before. */
+  machine?: MachineBinding;
 };
 export type OwnerActionRecord = {
   request_id: string;
@@ -96,6 +102,7 @@ export function ownerActionHash(p: OwnerActionParams): string {
     body.words = words;
   }
   if (p.requesters !== undefined) body.requesters = [...p.requesters].sort();
+  if (p.machine !== undefined) body.machine = { id: p.machine.id, name: p.machine.name };
   // `reason` is not hashed on purpose: the owner's answer signs the actions, arguments, folder,
   // team and HEAD, and the asker's own words about why must not change what that signature covers.
   return createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex');
@@ -237,6 +244,9 @@ function recordFrom(inputs: readonly OwnerActionRequestInput[], now: Date, home:
   const requesters = [...new Set(inputs.map((input) => input.requestedBy))].sort();
   // The first reason given names why the card was drawn; an asker who gave none leaves it out.
   const reason = inputs.map((input) => input.reason?.replace(/\s+/g, ' ').trim()).find((why) => why !== undefined && why !== '');
+  // A request on a machine whose owner seat is pinned names that machine; a merged card keeps the
+  // machine its first request named.
+  const machine = prior?.params.machine ?? machineBindingOf(home) ?? undefined;
   const params: OwnerActionParams = {
     kind: 'owner-action',
     actions,
@@ -248,6 +258,7 @@ function recordFrom(inputs: readonly OwnerActionRequestInput[], now: Date, home:
     ...(reason === undefined ? {} : { reason }),
     requested_by: requesters.length === 1 ? requesters[0]! : requesters.join(', '),
     ...(requesters.length > 1 ? { requesters } : {}),
+    ...(machine !== undefined ? { machine } : {}),
   };
   return {
     request_id: prior?.request_id ?? `oa_${randomBytes(12).toString('hex')}`,
@@ -420,12 +431,24 @@ export function readOwnerActionRecord(home: string, id: string): OwnerActionReco
   try {
     const path = join(actionRequestsFolder(home), `${id}.json`);
     if (!lstatSync(path).isFile()) return `request ${id} is not a plain file`;
-    const record = JSON.parse(readFileSync(path, 'utf8')) as OwnerActionRecord;
-    if (record.request_id !== id || record.params?.kind !== 'owner-action') return `request ${id} is not an owner-seat request`;
+    return ownerActionRecordOf(JSON.parse(readFileSync(path, 'utf8')), id);
+  } catch {
+    return `no owner-seat request ${id} can be read`;
+  }
+}
+
+/** One owner-action record read from anywhere — the requests folder, or a file carried from
+ *  another machine — whole and bound to its own hash, or why not. */
+export function ownerActionRecordOf(raw: unknown, id: string): OwnerActionRecord | string {
+  if (!OWNER_ACTION_ID_PATTERN.test(id)) return `"${id}" is not an owner-seat request id`;
+  try {
+    const record = raw as OwnerActionRecord;
+    if (record === null || typeof record !== 'object' || record.request_id !== id || record.params?.kind !== 'owner-action') return `request ${id} is not an owner-seat request`;
     const actions: unknown = record.params.actions;
     if (!Array.isArray(actions) || actions.length === 0 || !actions.every((action) => typeof action === 'string' && (OWNER_ACTIONS as readonly string[]).includes(action))) {
       return `request ${id} names an action this build does not know`;
     }
+    if (record.params.machine !== undefined && !validMachineBinding(record.params.machine)) return `request ${id} names a machine this build cannot read`;
     if (ownerActionHash(record.params) !== record.params_sha256) return `request ${id}'s parameters do not match its hash`;
     return record;
   } catch {
@@ -433,8 +456,19 @@ export function readOwnerActionRecord(home: string, id: string): OwnerActionReco
   }
 }
 
+/**
+ * One signed answer, verified and bound to `record`. On a machine whose owner seat is pinned from
+ * another machine, the pin is the only key source (src/client/owner-pin.ts) and a pin that cannot
+ * be read admits nothing; anywhere else, the local owner seat and its credential store, as before.
+ */
+export function boundOwnerActionAnswer(home: string, signed: SignedOwnerAnswer, record: OwnerActionRecord, store: OwnerSeatKeyStore, now: Date): { ok: true; answer: OwnerSeatAnswer; signer: string } | { ok: false; why: string } {
+  return boundAnswer(home, signed, record, store, now);
+}
+
 function boundAnswer(home: string, signed: SignedOwnerAnswer, record: OwnerActionRecord, store: OwnerSeatKeyStore, now: Date): { ok: true; answer: OwnerSeatAnswer; signer: string } | { ok: false; why: string } {
-  const verified = verifyOwnerAnswer(home, signed, store, now);
+  const pin = readOwnerPin(home);
+  if (pin.kind === 'refused') return { ok: false, why: `${pin.why}; no owner-seat answer is accepted on this machine` };
+  const verified = pin.kind === 'pinned' ? verifyPinnedOwnerAnswer(pin, signed) : verifyOwnerAnswer(home, signed, store, now);
   if (!verified.ok) return verified;
   const a = verified.answer;
   if (a.kind !== 'owner-action' || a.request_id !== record.request_id || a.params_sha256 !== record.params_sha256) return { ok: false, why: `the owner-seat answer is not bound to request ${record.request_id} and its parameters` };
@@ -479,7 +513,10 @@ export function approveOwnerAction(
     if (heldAnswer(home, path, record, store, now)) return { ok: false, why: `request ${id} was already answered` };
     if (!replaceFile(path, text)) return { ok: false, why: 'the answer could not be written' };
   }
-  if (choice === 'always') {
+  // A request carried from another machine is answered here and runs there: no rule is kept on
+  // this machine for it, and the machine it runs on keeps none yet either, so `always` admits
+  // that one request once.
+  if (choice === 'always' && record.params.machine === undefined) {
     mkdirSync(actionApprovalsFolder(home), { recursive: true, mode: 0o700 });
     const rulePath = join(actionApprovalsFolder(home), `${id}.json`);
     const ruleText = `${JSON.stringify({ ...signed.signed, params: record.params }, null, 2)}\n`;
@@ -499,6 +536,75 @@ function heldAnswer(home: string, path: string, record: OwnerActionRecord, store
   }
 }
 
+/** The instant `record` stops accepting an answer, as every reader of the requests folder compares it. */
+export function ownerActionDeadline(home: string, record: OwnerActionRecord, store: OwnerSeatKeyStore, now: Date): number {
+  return answerDeadline(home, actionRequestsFolder(home), record.request_id, windowOf(record), store, now, OWNER_ACTION_TTL_MS);
+}
+
+/** The signed answer the requests folder holds for `record`, when one verifies and is bound to it. */
+export function heldOwnerActionAnswer(home: string, record: OwnerActionRecord, store: OwnerSeatKeyStore, now: Date): SignedOwnerAnswer | null {
+  const path = join(actionRequestsFolder(home), `${record.request_id}.seat-answer.json`);
+  if (!heldAnswer(home, path, record, store, now)) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as SignedOwnerAnswer;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Records a request carried from another machine, so the owner answers it here as any other: on
+ * the owner page, or with `team approvals sign` (one Touch ID card). The record is kept exactly as
+ * it came, never merged: a second copy of the same request is the same card, and a different
+ * request under the same id is refused. The card goes to the owner seat inbox once.
+ */
+export function recordForeignOwnerAction(home: string, record: OwnerActionRecord, now: Date = new Date()): { ok: true; fresh: boolean; text: string } | { ok: false; why: string } {
+  if (record.params.machine === undefined) return { ok: false, why: `request ${record.request_id} names no machine; only a request carried from another machine is recorded here` };
+  mkdirSync(actionRequestsFolder(home), { recursive: true, mode: 0o700 });
+  const path = join(actionRequestsFolder(home), `${record.request_id}.json`);
+  const text = `Request ${record.request_id} from machine ${record.params.machine.name}: ${ownerActionSummary(record.params)} Authorized? oui, always, or non.`;
+  const written = writeExclusive(path, `${JSON.stringify(record, null, 2)}\n`);
+  if (written === 'failed') return { ok: false, why: 'the request could not be recorded' };
+  if (written === 'exists') {
+    const held = readOwnerActionRecord(home, record.request_id);
+    const same = typeof held !== 'string' && held.params_sha256 === record.params_sha256 && held.created === record.created && held.expires_at === record.expires_at;
+    if (!same) return { ok: false, why: `a different request ${record.request_id} is already recorded here; nothing was changed` };
+    return { ok: true, fresh: false, text };
+  }
+  deliverToOwnerSeat(home, { kind: 'owner-action-confirmation', request_id: record.request_id, params_sha256: record.params_sha256, text, summary: record.params, at: now.toISOString() });
+  presentOwnerRequest(home);
+  return { ok: true, fresh: true, text };
+}
+
+/**
+ * Records an answer carried from the machine that holds the owner's signers, for a request of this
+ * machine. The answer must verify against this machine's key source and be bound to the request;
+ * it is written once: an answer already held that verifies is never replaced, and a request
+ * already run is never answered again. Expiry and the machine the request names are the caller's
+ * checks, made before this one.
+ */
+export function recordCarriedOwnerAnswer(home: string, record: OwnerActionRecord, signed: SignedOwnerAnswer, store: OwnerSeatKeyStore, now: Date): { ok: true; answer: OwnerSeatAnswer; signer: string } | { ok: false; why: string } {
+  const id = record.request_id;
+  const bound = boundAnswer(home, signed, record, store, now);
+  if (!bound.ok) return bound;
+  let used: string | undefined;
+  try {
+    used = readdirSync(actionRequestsFolder(home)).find((name) => name.startsWith(`${id}.used-`));
+  } catch {
+    return { ok: false, why: 'the requests folder cannot be read' };
+  }
+  if (used !== undefined) return { ok: false, why: `request ${id} was already used: an approval is single-use` };
+  const text = `${JSON.stringify(signed, null, 2)}\n`;
+  const path = join(actionRequestsFolder(home), `${id}.seat-answer.json`);
+  const written = writeExclusive(path, text);
+  if (written === 'failed') return { ok: false, why: 'the answer could not be written' };
+  if (written === 'exists') {
+    if (heldAnswer(home, path, record, store, now)) return { ok: false, why: `request ${id} was already answered` };
+    if (!replaceFile(path, text)) return { ok: false, why: 'the answer could not be written' };
+  }
+  return bound;
+}
+
 export type OwnerActionRule = { rule_id: string; actions: OwnerAction[]; scope: string; team: string; signer: string; created: string };
 
 /** Every `always` rule whose owner-signer signature verifies now, binds its parameters, and is inside the approval-rule-ttl. */
@@ -511,6 +617,9 @@ export function listOwnerActionRules(home: string, store: OwnerSeatKeyStore, now
   }
   const rules: OwnerActionRule[] = [];
   const ignored: string[] = [];
+  // A machine whose owner seat is pinned keeps no standing rule yet: every action there runs on an
+  // answer to its own request, bound to that machine. A rule copied onto it admits nothing.
+  if (ownerPinPresent(home)) return { rules: [], ignored: names.map((name) => name.slice(0, -5)) };
   for (const name of names) {
     const id = name.slice(0, -5);
     try {
@@ -519,6 +628,8 @@ export function listOwnerActionRules(home: string, store: OwnerSeatKeyStore, now
       const file = JSON.parse(readFileSync(path, 'utf8')) as SignedOwnerAnswer & { params: OwnerActionParams };
       const p = file.params;
       if (p === undefined || p.kind !== 'owner-action') throw new Error('params');
+      // A rule for a request of another machine never stands here.
+      if (p.machine !== undefined) throw new Error('machine');
       const record: OwnerActionRecord = { request_id: id, params: p, params_sha256: ownerActionHash(p), created: '', expires_at: '' };
       const bound = boundAnswer(home, file, record, store, now);
       const a = file.owner_seat_answer;
@@ -554,6 +665,10 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
   const record = readOwnerActionRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
   const p = record.params;
+  // The machine first: a request runs only on the machine it names, and a machine whose owner
+  // seat is pinned runs no request that names none.
+  const elsewhere = requestMachineProblem(home, p.machine, id);
+  if (elsewhere !== null) return { ok: false, why: elsewhere };
   if (!p.actions.includes(ask.action)) return { ok: false, why: `request ${id} does not approve ${ask.action} (it names ${p.actions.join(', ')})` };
   if (p.root !== canonicalRoot(ask.root)) return { ok: false, why: `request ${id} is for ${p.root}, not this repository` };
   if (p.team !== ask.team) return { ok: false, why: `request ${id} is for team "${p.team}", not "${ask.team}"` };

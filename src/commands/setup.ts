@@ -29,6 +29,7 @@ import {
   type CharterLifetimes,
 } from '../charter/body.ts';
 import { readCharter, writeCharter, type CharterRead } from '../charter/store.ts';
+import { ownerPinPresent } from '../client/owner-pin-path.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { OWNER_PAGE_RP_ID } from '../security/owner-page.ts';
 
@@ -78,6 +79,9 @@ async function setupOutcome(argv: string[], rawIo: Io, options: SetupOptions): P
     return outcome;
   };
   if (args.error !== undefined || args.rest.length > 0) return fail(args.error ?? `unexpected "${args.rest[0]}"\n${USAGE}`, 'invocation');
+  // A machine whose owner seat is pinned holds no owner signer: no key is made here and no passkey
+  // is recorded here, since neither could be confirmed by the owner on this machine.
+  if (ownerPinPresent(home)) return fail("this machine's owner seat is pinned from another machine; the charter is signed on the machine that holds the owner's signers, and nothing was written");
   const choice = signerChoice(args.values.signer);
   if (choice === null) return fail('--signer is touch-id (or mac) or passkey (or iphone); the owner chooses in this step, and this run does not sign', 'invocation');
 

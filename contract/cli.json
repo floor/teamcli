@@ -459,6 +459,57 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--from",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "answer",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team approvals answer --from <file> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "it records an answer carried from another machine, and only one that verifies against this machine's pinned owner seat and is bound to a request of this machine; the command still runs with --approval and is checked again there"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
               "name": "--general",
               "repeatable": false,
               "takesValue": true
@@ -504,6 +555,63 @@
           "who": {
             "gate": "any-caller",
             "why": "the details read one recorded request and its audit entries and write nothing; they print what the card deliberately leaves out"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--out",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "export",
+          "positionals": [
+            {
+              "name": "id",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team approvals export <id> --out <file> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "it writes a waiting request of a machine whose owner seat is pinned to a file; the request grants nothing until the owner signs an answer on the machine that holds the signers"
           }
         },
         {
@@ -625,6 +733,81 @@
             },
             "why": "removing an always rule is the owner's, from a terminal outside herdr or by an owner-seat answer for that revoke"
           }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--answer",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--assertion",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--from",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--out",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--signer",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "sign",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "an agent may start it, but the answer is written only once the owner signs it (on the owner's device, or with a passkey); the request it answers runs only on the machine it names"
+          }
         }
       ],
       "usage": [
@@ -632,7 +815,10 @@
         "team approvals details <id> [--json]",
         "team approvals revoke <id...> [--json]",
         "team approvals revoke <id...> --request [--reason <text>] [--json]",
-        "team approvals revoke <id...> --approval <request-id> [--json]"
+        "team approvals revoke <id...> --approval <request-id> [--json]",
+        "team approvals export <id> --out <file> [--json]",
+        "team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]",
+        "team approvals answer --from <file> [--json]"
       ],
       "who": {
         "gate": "any-caller",
@@ -4635,6 +4821,120 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--out",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--signer",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "export",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team owner-seat export --out <file> [--signer <name>] [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "an agent may start it, but the export is written only once the owner signs it on the owner's device; it carries the seat's public keys and no private key"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--from",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--name",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "pin",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team owner-seat pin --from <file> [--name <machine>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the first pin is the owner's, from a terminal outside the terminal host on a machine with no pin yet (trust on first use); a changed seat is pinned only from a newer export signed by a signer already pinned there"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
               "name": "--days",
               "repeatable": false,
               "takesValue": true
@@ -4865,7 +5165,9 @@
         "team owner-seat status [--json]",
         "team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>] [--policy-entity <entity>]",
         "team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]",
-        "team owner-seat serve [--port <port>]"
+        "team owner-seat serve [--port <port>]",
+        "team owner-seat export --out <file> [--signer <name>] [--json]",
+        "team owner-seat pin --from <file> [--name <machine>] [--json]"
       ],
       "who": {
         "gate": "any-caller",
