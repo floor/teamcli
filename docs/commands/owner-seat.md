@@ -14,9 +14,13 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
     team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>] [--policy-entity <entity>]
     team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]
     team owner-seat serve [--port <port>]
+    team owner-seat export --out <file> [--signer <name>] [--json]
+    team owner-seat pin --from <file> [--name <machine>] [--json]
 
 - `status` (the default): the seat, its signers and the security-profile line. A relaxed profile
-  prints `SECURITY PROFILE: RELAXED: …` in capitals.
+  prints `SECURITY PROFILE: RELAXED: …` in capitals. On a machine whose owner seat is pinned it
+  names the pinned seat, its fingerprint and this machine, and says that a terminal here is not
+  the owner.
 - `setup`: creates the Secure Enclave key, registers the seat and asks for one Touch ID to confirm
   it. The same prompt covers the entity policies named with `--owner-signers` and
   `--grant-emission` (written at `--policy-entity`, default the seat's entity). A cancelled prompt
@@ -29,6 +33,39 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   The page asks `/api/state` every two seconds, so a request recorded while it is open appears
   on that page. A command that records a request does not open a browser. Refused while no
   owner seat is registered.
+- `export`: on the machine that holds the signers, writes the seat's public signer records — each
+  device key's public key, each passkey's public key, credential id and relying party — and the
+  names the `owner-signers` policy accepts, to a new file. No private key is in it. One
+  confirmation on the owner's device signs it (by an accepted device key; `--signer` names one
+  when there are several), and the card and the output show its fingerprint.
+- `pin`: on a machine that holds no owner signer (a headless server), pins that export. The
+  export must verify under a signer it names, and this machine must have no owner seat of its
+  own. The first pin is trust on first use: this machine believes the first export its owner
+  gives it, from a terminal on this machine outside the terminal host, and it prints the same
+  fingerprint so the owner compares the two. It makes this machine's record: a random id and a
+  name (`--name`, default this machine's own name). Pinning the same seat again changes nothing;
+  a changed seat (a passkey added, a key replaced) is pinned only from a newer export signed by a
+  signer already pinned here, whoever runs the command. A pin that cannot be read is never
+  replaced by this command.
+
+## A machine whose owner seat is pinned
+
+- **A terminal there is not the owner**, with a terminal or without one: any agent that opens a
+  shell on the account would otherwise count as the owner. No mode, policy or variable changes
+  this, and dev mode lifts no gate for it. Seats in their own panes are placed as before.
+- **Owner-only actions run on the owner's signed answer.** The command records its request
+  (`--request`), and the request names this machine inside the signed parameters. An agent
+  carries it to the signer machine and the answer back (`team approvals export`, `sign`,
+  `answer`); the command then runs with `--approval <id>`. An answer is checked against the
+  pinned keys, is bound to one request of this machine, expires with the request, and is spent
+  once. A request that names no machine, or another machine, is refused here; the signer machine
+  never runs a request that names another machine.
+- **No owner signer is made here.** `team owner-seat setup` and `team setup` are refused, and no
+  `always` rule is kept here yet: `always` admits the one request once.
+- **The limit of this step.** The pin and the machine record sit in this account's config folder.
+  A process of the account can move them aside, which puts the machine back under the old rule;
+  a later step keeps them where seats cannot write. Commands that have no `--request` door
+  (`team daemon install`, `team grant`) are refused from a terminal here until they have one.
 
 ## Flags
 
@@ -43,14 +80,20 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
 | `--days` | 1-30 | on `profile`: the expiry, in days |
 | `--reason` | text | on `profile`: recorded in the profile and the audit |
 | `--port` | port | on `serve`: the local port (0 picks a free one) |
-| `--json` | — | on `status`: one JSON document |
+| `--out` | file | on `export`: the new file the export is written to (never over an existing file) |
+| `--from` | file | on `pin`: the export to pin |
+| `--name` | name | on `pin`: this machine's name on the owner's cards, at the first pin (lower case, digits, dots, dashes) |
+| `--json` | — | on `status`, `export` and `pin`: one JSON document |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## What it reads and writes
 
 `~/.config/team/owner-seat.json` (the seat), `~/.config/team-owner-seat/` (the helper and its
 Secure Enclave key handles), `~/.config/team/security-profile.json` (the signed profile),
-`security-profile.proposal.json` beside it, and the append-only `security-profile.log`.
+`security-profile.proposal.json` beside it, and the append-only `security-profile.log`. On a
+pinned machine: `~/.config/team/owner-seat-pin.json` (the pinned export, its fingerprint and the
+fingerprint it replaced) and `~/.config/team/machine.json` (this machine's id and name). The
+export, the pin and the re-pin are logged in `security-profile.log`.
 
 ## Exit codes
 
