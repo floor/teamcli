@@ -97,6 +97,9 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/caller.ts',
       'src/process-tools-adapter.ts',
       'src/herdr.ts',
+      // Ends processes a closed pane left behind (the service manager's reaper).
+      'src/orphan-reaper.ts',
+      'src/temp-folders.ts',
       'src/child.ts',
       'src/entities.ts',
       'src/grant.ts',
@@ -136,6 +139,8 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/registry',
       'src/release',
       'src/security',
+      // Reads the machine's secrets (Keychain, the encrypted entity file).
+      'src/secrets',
       'src/send',
       'src/settings',
       'src/signing',
