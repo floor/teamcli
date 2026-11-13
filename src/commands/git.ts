@@ -1,23 +1,24 @@
 // `team git` and `team gh`: the only doors from a seat to GitHub. The entity's GitHub token stays
-// in the keychain and out of every seat: TeamCLI reads it for the one command it runs, hands it to
-// that `git` or `gh` process alone, and checks the command against the team's rules first (no
-// force push, no push to a trunk, no merge, release or credential command). Local git (commit,
-// branch, diff, log) needs no token and stays plain `git`.
+// in the system's secret store and out of every seat: TeamCLI reads it for the one command it
+// runs, hands it to that `git` or `gh` process alone, and checks the command against the team's
+// rules first (no force push, no push to a trunk, no merge, release or credential command). Local
+// git (commit, branch, diff, log) needs no token and stays plain `git`. The store is the
+// platform's own (src/secrets/store.ts); the identity names the token's entry, never the token.
 import { spawn } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Command, Io } from '../io.ts';
 import { loadTeamFile } from '../file/load.ts';
-import { keyOf, realSecurityRun } from '../release/keychain.ts';
+import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { parseYaml, toValue } from '../yaml.ts';
 
 export const USAGE = `Usage: team git <arguments>
 
 Runs git push, fetch or pull against GitHub with the entity's GitHub identity
 (~/.config/team/entities/<entity>/identity.yaml); any other git command is refused. The token is
-read from the keychain for this one command and given to that process only; the seat never holds
-it. Refused before anything runs: a force push, a push to main or master, and a push that deletes
-a branch or mirrors. team gh does the same for the gh CLI.
+read from the system's secret store for this one command and given to that process only; the
+seat never holds it. Refused before anything runs: a force push, a push to main or master, and a
+push that deletes a branch or mirrors. team gh does the same for the gh CLI.
 
 Exits with the command's own code, 1 when it is refused or the identity cannot be read, 2 when
 the invocation can't be read.
@@ -163,8 +164,15 @@ function run(binary: string, args: string[], io: Io, env: Record<string, string>
   });
 }
 
+/** The command's injectable seams: the secret store the token is read from (null: this platform
+ *  has none) and the run of the tool itself. Production reads the system's store and spawns. */
+export type GitHubSources = {
+  store?: SecretStore | null;
+  run?: (binary: string, args: string[], io: Io, env: Record<string, string>) => Promise<number>;
+};
+
 /** Shared by `team git` and `team gh`: refuse, read the identity and the token, run. */
-export async function runGitHub(tool: 'git' | 'gh', argv: string[], io: Io): Promise<number> {
+export async function runGitHub(tool: 'git' | 'gh', argv: string[], io: Io, sources: GitHubSources = {}): Promise<number> {
   if (argv.length === 0) {
     io.stderr(USAGE);
     // exit: git.usage
@@ -189,19 +197,21 @@ export async function runGitHub(tool: 'git' | 'gh', argv: string[], io: Io): Pro
     // exit: git.identity
     return 1;
   }
-  if (process.platform !== 'darwin') {
+  // The token's store is the platform's own: a platform with no adapter refuses here, after every
+  // non-secret prerequisite is known and before anything is read.
+  const store = sources.store !== undefined ? sources.store : systemSecretStore({ env: io.env, home });
+  if (store === null) {
     io.stderr(`team ${tool}: the token's store is not available on this platform\n`);
     // exit: git.platform
     return 1;
   }
-  const read = await realSecurityRun(id.keychain);
-  const key = read.ok ? keyOf(read.stdout) : { ok: false as const, reason: 'the lookup failed' };
+  const key = await store.read(id.keychain);
   if (!key.ok) {
     io.stderr(`team ${tool}: the GitHub token could not be read (${key.reason})\n`);
     // exit: git.token
     return 1;
   }
-  const code = await run(tool, argv, io, childEnv(io, id, key.key));
+  const code = await (sources.run ?? run)(tool, argv, io, childEnv(io, id, key.value));
   // exit: git.ran
   // exit: git.failed
   return code === 0 ? 0 : 1;

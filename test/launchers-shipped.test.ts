@@ -1,6 +1,13 @@
 // The launchers TeamCLI ships: one per vendor CLI, configured by the seat's role and effort.
-import { describe, expect, test } from 'bun:test';
-import { isShippedLauncher, shippedClaudeSettings, shippedEnv, shippedLauncher, shippedLauncherIsReadOnly, shippedLauncherNames } from '../src/launchers/shipped.ts';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { validateTeamFile } from '../src/file/validate.ts';
+import { formatPlan, upPlan, type UpSeat } from '../src/launch/plan.ts';
+import { accountKeyCommand, isShippedLauncher, shippedClaudeSettings, shippedEnv, shippedLauncher, shippedLauncherIsReadOnly, shippedLauncherNames } from '../src/launchers/shipped.ts';
+import { NO_SECRET_STORE, systemSecretStore, type SecretLookup, type SecretStore } from '../src/secrets/store.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { discover, resolveLaunch } from '../src/launchers/resolve.ts';
 
 test('grok-build ships, and an unknown name does not', () => {
@@ -92,6 +99,43 @@ test('claude-code on a provider takes its words from the launch account, the key
   expect(shippedEnv('grok-build', { vendor: 'deepseek', account })).toEqual([]);
 });
 
+describe('the key word is the machine store\'s own lookup', () => {
+  const account = { name: 'deepseek', provider: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', keychain: 'deepseek-api-key', defaultModel: 'deepseek-flash' };
+  const tokenOf = (words: string[]) => words.find((word) => word.startsWith('ANTHROPIC_AUTH_TOKEN='));
+  const DARWIN_WORD = 'ANTHROPIC_AUTH_TOKEN="$(/usr/bin/security find-generic-password -s deepseek-api-key -w)"';
+
+  test('on the Keychain the word is byte for byte the one it has always been', () => {
+    expect(tokenOf(shippedEnv('claude-code', { vendor: 'deepseek', account }))).toBe(DARWIN_WORD);
+    const key = accountKeyCommand(account, systemSecretStore({ platform: 'darwin' }));
+    expect(key.ok).toBe(true);
+    if (key.ok) expect(tokenOf(shippedEnv('claude-code', { vendor: 'deepseek', account, keyCommand: key.command }))).toBe(DARWIN_WORD);
+  });
+
+  test('on the encrypted dotenv store the word runs that store\'s lookup, one double-quoted word with nothing nested', () => {
+    const home = '/home/owner';
+    const store = systemSecretStore({ platform: 'linux', home, env: { HOME: home, PATH: '/usr/bin' }, isFile: () => true, isExecutable: (path) => path === '/usr/bin/sops' });
+    const key = accountKeyCommand(account, store);
+    expect(key.ok).toBe(true);
+    if (!key.ok) return;
+    const word = tokenOf(shippedEnv('claude-code', { vendor: 'deepseek', account, keyCommand: key.command }));
+    expect(word).toBe(
+      'ANTHROPIC_AUTH_TOKEN="$(SOPS_AGE_KEY_FILE=/home/owner/.config/sops/age/keys.txt /usr/bin/sops decrypt --input-type dotenv ' +
+      '--output-type dotenv /home/owner/.config/sops/agents.env.sops | sed -n s/\\^DEEPSEEK_API_KEY=//p)"',
+    );
+    expect(word).not.toContain('/usr/bin/security');
+    expect(word?.slice('ANTHROPIC_AUTH_TOKEN="'.length, -1)).not.toMatch(/["']/);
+  });
+
+  test('a machine whose store has none for the entry gives the reason, never a word', () => {
+    expect(accountKeyCommand(account, null)).toEqual({ ok: false, reason: NO_SECRET_STORE });
+    const unset = systemSecretStore({ platform: 'linux', home: '/home/owner', env: { HOME: '/home/owner' }, isFile: () => false, isExecutable: () => false });
+    expect(accountKeyCommand(account, unset)).toEqual({ ok: false, reason: 'the system\'s secret store is not set up on this machine' });
+    const paid = { ...account, keychain: 'anthropic-api-key' };
+    const set = systemSecretStore({ platform: 'linux', home: '/home/owner', env: { HOME: '/home/owner' }, isFile: () => true, isExecutable: () => true });
+    expect(accountKeyCommand(paid, set).ok).toBe(false);
+  });
+});
+
 describe('the Codex and Antigravity launchers', () => {
   test('a Codex builder runs its model and effort with no approval and full access', () => {
     const line = shippedLauncher('codex', { role: 'builder', model: 'GPT Sol', version: '6.1', effort: 'high' })!.argv;
@@ -120,4 +164,73 @@ test('only the launchers that emit a read-only line count as read-only (review f
   expect(shippedLauncherIsReadOnly('claude-code', 'tester')).toBe(true);
   expect(shippedLauncherIsReadOnly('codex', 'reviewer')).toBe(false);
   expect(shippedLauncherIsReadOnly('antigravity', 'tester')).toBe(false);
+});
+
+describe('a provider seat\'s launch plan takes its key word from the machine\'s store', () => {
+  const made: string[] = [];
+  afterEach(() => discardFixtures(made.splice(0)));
+
+  const TEAM = `format: 1
+project: acme
+entity: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "4.0"
+    launch: claude
+    launcher: claude-code
+`;
+
+  function planWith(store: SecretStore | null): string {
+    const home = mkdtempSync(join(tmpdir(), 'shipped-key-plan-'));
+    made.push(home);
+    const entity = join(home, '.config', 'team', 'entities', 'acme');
+    mkdirSync(entity, { recursive: true });
+    writeFileSync(join(entity, 'accounts.yaml'), [
+      'accounts:',
+      '  deepseek:',
+      '    provider: deepseek',
+      '    endpoint: https://api.deepseek.com/anthropic',
+      '    keychain: deepseek-api-key',
+      '    default_model: deepseek-flash',
+      '',
+    ].join('\n'), { mode: 0o600 });
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error(`refused: ${JSON.stringify(checked.errors)}`);
+    const seat: UpSeat = {
+      name: 'lead', cli: 'claude-code', launch: 'claude', launcher: 'claude-code', vendor: 'deepseek', role: 'coordinator',
+      model: 'DeepSeek Flash', version: '4.0', cwd: '.', label: 'lead · coordinator', displayAgent: 'DeepSeek Flash 4.0 default',
+      repairLine: '`team down` then `team up` (to restart the whole team)', stopped: false, rules: '',
+    };
+    return formatPlan(upPlan({
+      root: '/work/acme', session: 'acme', sessionRunning: true, seats: [seat], watchAlive: true, watchLabel: 'Watch · acme',
+      home, team: checked.team, secretStore: store,
+    }));
+  }
+
+  /** A store whose lookup answers `answer` for every name, and reads nothing. */
+  function storeAnswering(answer: SecretLookup): SecretStore {
+    return { read: async () => ({ ok: false, reason: 'not read in a plan' }), lookupCommand: () => answer };
+  }
+
+  test('the line the pane runs carries the store\'s own lookup', () => {
+    const plan = planWith(storeAnswering({ ok: true, command: 'fixture-store print deepseek-api-key' }));
+    expect(plan).toContain('ANTHROPIC_AUTH_TOKEN="$(fixture-store print deepseek-api-key)"');
+    expect(plan).not.toContain('/usr/bin/security');
+  });
+
+  test('a store with no lookup for the entry refuses the seat before any workspace is made', () => {
+    const plan = planWith(storeAnswering({ ok: false, reason: 'the system\'s secret store is not set up on this machine' }));
+    expect(plan).toContain('lead: would refuse: its provider key cannot be read: the system\'s secret store is not set up on this machine');
+    expect(plan).not.toContain('ANTHROPIC_AUTH_TOKEN');
+    expect(plan).not.toContain('workspace create');
+    expect(planWith(null)).toContain(`lead: would refuse: its provider key cannot be read: ${NO_SECRET_STORE}`);
+  });
 });

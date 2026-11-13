@@ -4,9 +4,12 @@
 // the options the launcher exposes; they live in the team record and go through `team config`.
 import type { LauncherDefinition } from './types.ts';
 import type { LaunchAccount } from './accounts.ts';
+import { keychainLookupCommand } from '../secrets/store-darwin.ts';
+import { NO_SECRET_STORE, type SecretLookup, type SecretStore } from '../secrets/store.ts';
 
-/** What a seat may ask of a shipped launcher. */
-export type ShippedOptions = { role?: string; access?: 'read' | 'write'; effort?: string; version?: string; vendor?: string; model?: string; account?: LaunchAccount };
+/** What a seat may ask of a shipped launcher. `keyCommand` is the machine store's own command
+ *  that prints the account's key (`accountKeyCommand`); absent, it is the Keychain's lookup. */
+export type ShippedOptions = { role?: string; access?: 'read' | 'write'; effort?: string; version?: string; vendor?: string; model?: string; account?: LaunchAccount; keyCommand?: string };
 
 /** The seat roles that only read: they get the CLI's own denials for writes, edits and git. */
 const READ_ONLY_ROLES: ReadonlySet<string> = new Set(['reviewer', 'tester', 'assistant']);
@@ -164,12 +167,22 @@ const SHIPPED: Readonly<Record<string, (options: ShippedOptions) => LauncherDefi
   antigravity,
 };
 
+/** The command a provider seat's pane runs to print its account's key: the machine's secret
+ *  store's own lookup of the account's entry (src/secrets/store.ts), or why this machine's store
+ *  has none, so the launch refuses the seat before any workspace is made rather than starting it
+ *  with an empty key. Nothing is read here; the command names the entry only. */
+export function accountKeyCommand(account: LaunchAccount, store: SecretStore | null): SecretLookup {
+  if (store === null) return { ok: false, reason: NO_SECRET_STORE };
+  return store.lookupCommand(account.keychain);
+}
+
 /** Shell words a shipped launcher sets in front of its CLI, as `env` assignments; empty when it
  *  needs none. For a provider, everything comes from the entity's launch account
- *  (specs/accounts-and-gates.md §3.3). A key is never a value here: the word is a keychain lookup
- *  of the account's item, run by the pane's shell at start, so the secret never passes through
- *  TeamCLI, its records or its logs. It is one double-quoted word with nothing nested inside, so
- *  the shell and TeamCLI's own line reader split the line the same way. */
+ *  (specs/accounts-and-gates.md §3.3). A key is never a value here: the word is the secret
+ *  store's lookup of the account's entry (`keyCommand`), run by the pane's shell at start, so the
+ *  secret never passes through TeamCLI, its records or its logs. It is one double-quoted word with
+ *  nothing nested inside, so the shell and TeamCLI's own line reader split the line the same way;
+ *  every store's lookup is written to need no quote of its own. */
 export function shippedEnv(name: string | undefined, options: ShippedOptions): string[] {
   if (name !== 'claude-code') return [];
   const words: string[] = [];
@@ -181,7 +194,7 @@ export function shippedEnv(name: string | undefined, options: ShippedOptions): s
   if (!/^[A-Za-z0-9][A-Za-z0-9._:\[\]-]*$/.test(model)) return words;
   words.push(
     `ANTHROPIC_BASE_URL=${account.endpoint}`,
-    `ANTHROPIC_AUTH_TOKEN="$(/usr/bin/security find-generic-password -s ${account.keychain} -w)"`,
+    `ANTHROPIC_AUTH_TOKEN="$(${options.keyCommand ?? keychainLookupCommand(account.keychain)})"`,
     `ANTHROPIC_MODEL=${model}`,
     `ANTHROPIC_DEFAULT_OPUS_MODEL=${account.opusModel ?? model}`,
     `ANTHROPIC_DEFAULT_SONNET_MODEL=${account.sonnetModel ?? model}`,

@@ -931,6 +931,7 @@
     "test/seats-devmode.test.ts": 0,
     "test/seats-handle-lifetime-boundaries.test.ts": 1,
     "test/seats-registry-signing.test.ts": 5,
+    "test/secret-store.test.ts": 0,
     "test/security-profile-init.test.ts": 2,
     "test/security-profile.test.ts": 0,
     "test/send-address.test.ts": 1,

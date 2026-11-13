@@ -1,24 +1,17 @@
-// The one credential seam of `team release check`: the Keychain lookup the Linear check is built
-// on. The read is injected everywhere it matters — production wires the real facility through
-// `realSecurityRun`, and no test ever runs it. The service name is the only argument the system
-// tool ever sees; the key is taken from its standard output, is never echoed, is never an
-// argument, an environment variable or input to any process, and reaches exactly one place: the
-// Authorization header of the single Linear request (src/release/checks.ts).
-import { spawn } from 'node:child_process';
+// The one credential seam of `team release check` and `team broker`: the Keychain lookup the
+// Linear check is built on. The lookup itself is the secret store's Keychain adapter
+// (src/secrets/store-darwin.ts); this file is the contract's shape around it. The read is injected
+// everywhere it matters — production wires the real facility through `realSecurityRun`, and no
+// test ever runs it. The service name is the only argument the system tool ever sees; the key is
+// taken from its standard output, is never echoed, is never an argument, an environment variable
+// or input to any process, and reaches exactly one place: the Authorization header of the single
+// Linear request (src/release/checks.ts).
+import { keyOf, type KeyResult, type SecurityRun } from '../secrets/store-darwin.ts';
 
-export type KeyResult = { ok: true; key: string } | { ok: false; reason: string };
+export { KEYCHAIN_TIMEOUT_MS, keyOf, realSecurityRun, type KeyResult, type SecurityRun } from '../secrets/store-darwin.ts';
 
 /** The key reader the command receives: a service name in, a key or a generic failure out. */
 export type KeyReader = (service: string) => Promise<KeyResult>;
-
-/** The system call itself, so a test can stand in for it without ever running it. */
-export type SecurityRun = (service: string) => Promise<{ ok: true; stdout: string } | { ok: false }>;
-
-/** The lookup's deadline: at expiry the lookup is terminated and reads unknown. */
-export const KEYCHAIN_TIMEOUT_MS = 5000;
-
-/** A bound on what the lookup may print before it is cut off: a key is a short ASCII string. */
-const STDOUT_CAP = 4096;
 
 /**
  * The Keychain read as the contract shapes it: the macOS facility only (no substitute store on
@@ -34,48 +27,4 @@ export function keychainReader(platform: string, interactive: boolean, runSecuri
     if (!out.ok) return { ok: false, reason: 'the lookup failed' };
     return keyOf(out.stdout);
   };
-}
-
-/** The production wiring of the one lookup, with its deadline. Never run by a test. */
-export const realSecurityRun: SecurityRun = (service) =>
-  new Promise((resolve) => {
-    let stdout = '';
-    let done = false;
-    const finish = (result: { ok: true; stdout: string } | { ok: false }) => {
-      if (done) return;
-      done = true;
-      clearTimeout(deadline);
-      resolve(result);
-    };
-    const child = spawn('/usr/bin/security', ['find-generic-password', '-s', service, '-w'], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const deadline = setTimeout(() => {
-      child.kill();
-      finish({ ok: false });
-    }, KEYCHAIN_TIMEOUT_MS);
-    child.stdout.on('data', (chunk: Buffer | string) => {
-      stdout += chunk;
-      if (stdout.length > STDOUT_CAP) {
-        child.kill();
-        finish({ ok: false });
-      }
-    });
-    child.on('error', () => finish({ ok: false }));
-    child.on('close', (code) => finish(code === 0 ? { ok: true, stdout } : { ok: false }));
-  });
-
-/**
- * The key as the contract reads it: exactly one trailing line feed removed, then one or more
- * ASCII bytes 0x21 through 0x7e. Empty or any other output is a failure before any request is
- * formed. The output is never echoed into the failure.
- */
-export function keyOf(stdout: string): KeyResult {
-  const key = stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
-  if (key.length === 0) return { ok: false, reason: 'the lookup printed nothing' };
-  for (let index = 0; index < key.length; index++) {
-    const code = key.charCodeAt(index);
-    if (code < 0x21 || code > 0x7e) return { ok: false, reason: 'the lookup printed an illegal key' };
-  }
-  return { ok: true, key };
 }

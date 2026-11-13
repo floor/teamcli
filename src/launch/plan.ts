@@ -21,8 +21,9 @@ import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
 import { discover } from '../launchers/resolve.ts';
-import { shippedEnv, shippedLauncher, shippedLauncherIsReadOnly } from '../launchers/shipped.ts';
+import { accountKeyCommand, shippedEnv, shippedLauncher, shippedLauncherIsReadOnly } from '../launchers/shipped.ts';
 import { launchAccountFor, type LaunchAccount } from '../launchers/accounts.ts';
+import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { identityFor } from '../commands/git.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
 import { getRelativeDirOps } from '../send/drop-retention.ts';
@@ -771,6 +772,9 @@ export interface UpInput {
   resolveLaunch?: boolean;
   /** Launcher homes for seats that name a launcher. */
   launcherDiscovery?: Discovery;
+  /** The secret store a provider seat's key word is looked up in. Injected by a test that must
+   *  not read the machine; absent, the system's own store (null: this platform has none). */
+  secretStore?: SecretStore | null;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -1562,10 +1566,24 @@ export function upPlan(input: UpInput): Step[] {
         ...(seat.model === undefined ? {} : { model: seat.model }),
         ...(seat.vendor === undefined ? {} : { vendor: seat.vendor }),
       };
-      // A Claude Code seat on another provider takes its entity's launch account.
+      // A Claude Code seat on another provider takes its entity's launch account. Its key word is
+      // the machine's secret store's own lookup of the account's entry; a store that has none on
+      // this machine refuses the seat here, before any workspace is created, rather than starting
+      // it against the provider with an empty key.
       if (seat.launcher === 'claude-code' && input.home !== undefined && seat.vendor !== undefined && seat.vendor !== 'anthropic') {
         const account = launchAccountFor(input.home, input.team?.entity, seat.account, seat.vendor);
-        if (account !== null) (shippedOptions as { account?: LaunchAccount }).account = account;
+        if (account !== null) {
+          const store = input.secretStore !== undefined ? input.secretStore : systemSecretStore({ home: input.home });
+          const key = accountKeyCommand(account, store);
+          if (!key.ok) {
+            const why = `its provider key cannot be read: ${key.reason}`;
+            steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`, do: { do: 'refuse', seat: seat.name, why } });
+            continue;
+          }
+          const provider = shippedOptions as { account?: LaunchAccount; keyCommand?: string };
+          provider.account = account;
+          provider.keyCommand = key.command;
+        }
       }
       const shipped = shippedLauncher(seat.launcher, shippedOptions);
       const decided = resolvedCommand({
