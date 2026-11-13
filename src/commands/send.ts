@@ -30,6 +30,7 @@ import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, holderText, seatLockHolder, seatLockPath, type LockHolder } from '../launch/seat-lock.ts';
 import { LOG_FILE, readState, updateState, type SeatState } from '../state.ts';
 import { wakeMarkAt, wakePath } from '../send/wake-marker.ts';
+import { cliHookStatePath, reportedModel } from '../launch/cli-hook.ts';
 
 /** How long a real send waits for the daemon's typed-wake child to report: a walk that types and
  *  sees the working screen takes a few seconds; one the guards refuse answers at once. */
@@ -43,7 +44,7 @@ import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor, type TypedWake } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
-import { getAgent, readAgents, recordAgentSessionWhen, recordProvenAgentAddress, type Agent } from '../registry/agents.ts';
+import { getAgent, readAgents, updateAgent, recordAgentSessionWhen, recordProvenAgentAddress, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { findTeams, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { crossTeamsFor } from '../send/cross-teams.ts';
@@ -1716,10 +1717,29 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   let recipientDrift: ModelDrift | undefined;
   let repairedRecipient: string | undefined;
   let repairedObservation: SeatModelObservation | undefined;
-  const registeredTarget = readAgents(host.home).find((agent) =>
+  let registeredTarget = readAgents(host.home).find((agent) =>
     agent.reach.team === teamIdOf(to.root) && agent.reach.seat === to.seat &&
     agent.reach.session === to.session && agent.lifecycle !== 'retired'
   );
+  // The seat's CLI reports its own model (Claude Code's SessionStart and PostModelSwitch hooks,
+  // written beside its state file). A reported model the entity rule allows, under the default
+  // `deliver` drift policy, becomes the record's: a /model switch the owner made is followed,
+  // not flagged on every send (2026-11-13). `rule` and `hold` keep the record as it is.
+  if (registeredTarget !== undefined && receiving.ok) {
+    const statePath = cliHookStatePath(to.dir, to.session, to.seat);
+    const reported = statePath === null ? null : reportedModel(statePath, registeredTarget.cli);
+    if (reported !== null && modelDiffers(reported, registeredTarget.signing)
+      && observedModelRefusal({ name: to.seat, role: registeredTarget.signing.role }, reported, readEntityModelRule(host.home, receiving.team)) === null
+      && modelDriftMode(host.home, to.root, receiving.team) === 'deliver') {
+      const was = `${registeredTarget.signing.model} ${registeredTarget.signing.version}`;
+      try {
+        registeredTarget = updateAgent(host.home, registeredTarget.id, { signing: { model: reported.model, version: reported.version } });
+        logLine(dir, 'send', who, `${to.seat}: its record follows the model its CLI reports: ${reported.model} ${reported.version} (was ${was})`, host.now());
+      } catch {
+        // An unwritable record keeps the older reading: the drift check below still runs.
+      }
+    }
+  }
   const preflightLive = findAgent(host, to.session, to.seat);
   const driftFence = captureModelDriftFence({ dir: to.dir, root: to.root, home: host.home, session: to.session, seat: to.seat }, registeredTarget);
   const preflightScreen = preflightLive.ok ? host.native.paneText?.(to.session, preflightLive.pane) : undefined;

@@ -109,7 +109,7 @@ describe('what a run plans and what it installs', () => {
     const settings = JSON.parse(readFileSync(landed.worker!, 'utf8')) as {
       hooks: Record<string, { hooks: { type: string; command: string }[] }[]>;
     };
-    expect(Object.keys(settings.hooks).sort()).toEqual(['Stop', 'UserPromptSubmit']);
+    expect(Object.keys(settings.hooks).sort()).toEqual(['PostModelSwitch', 'SessionStart', 'Stop', 'UserPromptSubmit']);
     const start = settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command ?? '';
     const stop = settings.hooks.Stop?.[0]?.hooks[0]?.command ?? '';
     expect(start).toContain('"state":"working"');

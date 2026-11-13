@@ -22,7 +22,7 @@
 // stdin — no session id, no transcript path, no environment.
 import { shippedClaudeSettings } from '../launchers/shipped.ts';
 import {
-  closeSync, constants, fchmodSync, lstatSync, lutimesSync, mkdirSync, openSync, readSync, realpathSync,
+  closeSync, constants, fchmodSync, lstatSync, lutimesSync, mkdirSync, openSync, readFileSync, readSync, realpathSync,
   renameSync, unlinkSync, writeSync, type Stats,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -210,6 +210,34 @@ export function cliWatcher(cli: string, launch: string, hookInstalled = true): C
  *  exclusively in the same folder (the rename never crosses a filesystem and cannot land on a
  *  planted link); the mode comes from the hook's own umask, and the command reads nothing from
  *  its stdin. */
+/** Where a seat's CLI writes the model it reports itself: beside its state file. */
+export function reportedModelPath(statePath: string): string {
+  return join(dirname(statePath), 'model.json');
+}
+
+/** The hook command that keeps the CLI's own word on its model: Claude Code's SessionStart
+ *  (`model`) and PostModelSwitch (`to_model`) payloads, written whole and atomically. The seat
+ *  reports; TeamCLI reads it (`reportedModel`) instead of reading the model off the screen. */
+export function modelReportCommand(statePath: string): string {
+  const target = reportedModelPath(statePath);
+  return `umask 077; f=$(mktemp ${shellQuote(`${target}.new.XXXXXX`)}) && cat > "$f" && mv -f "$f" ${shellQuote(target)}`;
+}
+
+/** The model the seat's CLI last reported, as the profile spells it, or null when no report is
+ *  there, it cannot be read, or its id is not one the CLI's profile knows (a provider id behind a
+ *  wrapper reads null and keeps the older reading). */
+export function reportedModel(statePath: string, cli: string): { model: string; version: string } | null {
+  try {
+    const raw = JSON.parse(readFileSync(reportedModelPath(statePath), 'utf8')) as { model?: unknown; to_model?: unknown };
+    const id = typeof raw.to_model === 'string' ? raw.to_model : typeof raw.model === 'string' ? raw.model : null;
+    if (id === null || !/^[A-Za-z0-9._:\[\]-]{1,120}$/.test(id)) return null;
+    // A context-size suffix (`claude-opus-5-5[1m]`) is the same model.
+    return profileFor(cli)?.modelOf(`${cli} --model ${id.replace(/\[[^\]]*\]$/, '')}`) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function hookCommand(statePath: string, state: 'working' | 'idle'): string {
   return `umask 077; f=$(mktemp ${shellQuote(`${statePath}.new.XXXXXX`)}) && printf '{"state":"${state}","since":"%s"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$f" && mv -f "$f" ${shellQuote(statePath)}`;
 }
@@ -383,6 +411,11 @@ export function cliHookSettings(
   }
   hooks.UserPromptSubmit = start;
   hooks.Stop = stop;
+  // The CLI's own word on its model, at session start and at every /model switch (2026-11-13: a
+  // lead the owner switched with /model kept its old model on record and every send carried a
+  // drift notice). Written beside the state file; nothing here reads the screen.
+  hooks.SessionStart = [{ hooks: [{ type: 'command', command: modelReportCommand(statePath) }] }];
+  hooks.PostModelSwitch = [{ hooks: [{ type: 'command', command: modelReportCommand(statePath) }] }];
   const document: Record<string, unknown> = { hooks };
   if (inbound !== undefined && inbound !== null) document.crossSessionInbound = inbound;
   // A seat that starts in its own folder inside the project sees the project's `.mcp.json`, and
