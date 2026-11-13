@@ -2,7 +2,8 @@
 
 Runs the `gh` CLI with the entity's GitHub identity, for a seat that holds no GitHub credential of
 its own: opening and commenting on pull requests and issues, reading runs, starting a workflow.
-The token is read from the keychain for this one command and handed only to the `gh` process.
+The token is read from the system's secret store for this one command and handed only to the `gh`
+process; [`team git`](git.md) says which store that is on each platform.
 
 Refused before anything runs: `gh auth`, `secret`, `ssh-key`, `gpg-key`, `variable`, `config`,
 `alias`, `extension`, `codespace` and `release`; `gh pr merge`; `gh repo delete`, `edit`,
