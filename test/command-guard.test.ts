@@ -354,7 +354,7 @@ describe('the settings file and the launch line', () => {
     expect(command).toContain(`--session ${SESSION}`);
     expect(command).toContain(`--seat ${SEAT}`);
     // The state and drop hooks are still there, unchanged beside the guard.
-    expect(Object.keys(settings.hooks).sort()).toEqual(['PreToolUse', 'Stop', 'UserPromptSubmit']);
+    expect(Object.keys(settings.hooks).sort()).toEqual(['PostModelSwitch', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
   });
 
   test('the installed command itself answers a chmod with a deny in one shot: the pane never waits', () => {
