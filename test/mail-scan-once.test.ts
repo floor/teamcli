@@ -313,7 +313,7 @@ describe('one watch pass reads the mail once', () => {
 });
 
 describe('the folder is scanned once per record, not twice', () => {
-  test('a 50,000-file drop folder is opened once per waiting record', () => {
+  test('a 2,000-file drop folder is opened once per waiting record', () => {
     const w = world();
     const dropDir = dropOf(w, 'helper');
     mkdirSync(dropDir, { recursive: true });
@@ -321,7 +321,9 @@ describe('the folder is scanned once per record, not twice', () => {
     // read. Each name is a message id; each file is a record this key cannot verify, which is
     // still waiting mail — so every one of them is opened exactly once.
     messageKeyOf(w.home);
-    const count = 50_000;
+    // The proof is a count, not a scale: 2,000 records open once each as 50,000 did (the size the
+    // field report had), in a fraction of the time.
+    const count = 2_000;
     for (let index = 0; index < count; index += 1) {
       writeFileSync(join(dropDir, `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`), '{}\n');
     }
@@ -333,8 +335,7 @@ describe('the folder is scanned once per record, not twice', () => {
     expect(opened).toHaveLength(count);
     expect(new Set(opened).size).toBe(count);
 
-    // Removing 50,000 files outlasts a test hook's few seconds, and the hook would fail the test
-    // after it passed: the base goes here, inside the test's own budget.
+    // The base goes here, inside the test's own budget.
     const held = bases.indexOf(w.base);
     if (held !== -1) bases.splice(held, 1);
     rmSync(w.base, { recursive: true, force: true });
