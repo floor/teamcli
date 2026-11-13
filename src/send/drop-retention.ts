@@ -1360,7 +1360,9 @@ export function* dropRetirementSteps(
     if (sendDropsProblem !== null) return fail(`${sendDropsDir}: ${sendDropsProblem}`);
 
     if (atFfi === null) {
-      return fail('relative directory-descriptor moves (openat/renameat) are unavailable on this runtime');
+      return fail(process.versions.bun === undefined
+        ? 'relative directory-descriptor moves (openat/renameat) are unavailable: this Node needs --experimental-ffi'
+        : 'relative directory-descriptor moves (openat/renameat) are unavailable on this runtime');
     }
 
     const agentsStep = openRootDirNoFollow(agentsDir);

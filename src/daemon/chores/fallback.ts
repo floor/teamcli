@@ -22,7 +22,11 @@ import {
   type SweepRootResult,
 } from '../fallback-sweep.ts';
 import type { ChoresPass } from './child.ts';
+
 import type { ChoresChildConfig } from './protocol.ts';
+
+/** Drop-store refusals this process has already said. */
+const SAID_DROP_REFUSALS = new Set<string>();
 
 /** The notes a host's log should carry for one finished root, in the daemon's own words. A
  *  skipped root names why and stops there; counts appear only when a pass has some. */
@@ -55,7 +59,14 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
   }
   if (drops !== null) {
     if (drops.refused !== null) {
-      notes.push(`drop store: refused (${drops.refused})`);
+      // The same refusal every pass is one fact, not a stream: said once per process and reason
+      // (2026-11-13: one line every 30 s for a runtime that cannot archive). Archiving only moves
+      // mail already read; delivery and the inbox are unaffected.
+      const said = `drop store: archiving read mail is off (${drops.refused}); delivery and the inbox are unaffected`;
+      if (!SAID_DROP_REFUSALS.has(said)) {
+        SAID_DROP_REFUSALS.add(said);
+        notes.push(said);
+      }
     } else if (drops.reclaimed.length > 0) {
       notes.push(
         `drop store: archived ${String(drops.archived.length)}, reclaimed ${String(drops.reclaimed.length)}`,
