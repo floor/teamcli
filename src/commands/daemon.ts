@@ -20,7 +20,7 @@
 // machine with no broker handler never falls back to the old per-clone broker.
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
@@ -1414,6 +1414,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       home,
       roots,
       ...(reaper === null ? {} : { reaper }),
+      // The folder this process answers for its temporary files: the send endpoint looks for a
+      // Claude Code seat's session socket under it, and `team doctor` compares it with the seats'.
+      tempDir: tmpdir(),
       ...(fromRegistry ? {
         rootsFromRegistry: true,
         runningRoots: () => runningRegistryRoots(readTeams(home), home).map((one) => one.root),

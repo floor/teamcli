@@ -159,6 +159,10 @@ export type StartMachineDaemonInput = {
   /** The process this user's orphans are handed to besides pid 1, read at the start
    *  (src/orphan-reaper.ts) and kept in the state record for every later reader. */
   reaper?: ReaperRecord | null;
+  /** The temporary folder this process answers (`os.tmpdir()`), kept in the state record so
+   *  `team doctor` can compare it with the seats'. The send endpoint looks for a Claude Code
+   *  seat's session socket under it. */
+  tempDir?: string;
   version: string;
   /** The packaged commit this build was installed from; null or absent in a source checkout. */
   gitHead?: string | null;
@@ -901,6 +905,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
       ...(mailboxRouter === null ? {} : { mailbox: { heartbeatAt: mailboxRouter.state().heartbeatAt } }),
       ...(input.reaper === undefined || input.reaper === null ? {} : { reaper: input.reaper }),
+      ...(input.tempDir === undefined ? {} : { tempDir: input.tempDir }),
     }));
   }, 'sync');
 

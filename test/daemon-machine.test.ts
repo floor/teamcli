@@ -1314,6 +1314,8 @@ describe('team daemon status, install, uninstall and run', () => {
     // A manual start under no service manager reads none of its own.
     expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
     expect(seen.map((input) => input.reaper)).toEqual([{ pid: 1116, start: 812 }, undefined, undefined]);
+    // The folder this process answers for its temporary files rides with it, for `team doctor`.
+    expect(seen.map((input) => input.tempDir)).toEqual([tmpdir(), tmpdir(), tmpdir()]);
   });
 
   test('run hosts a watch only when --watch is given; --watch belongs to run or install', async () => {

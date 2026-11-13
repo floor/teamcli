@@ -209,6 +209,8 @@ export type DaemonState = {
   /** The process this user's orphans are handed to, besides pid 1, read at the daemon's start
    *  (src/orphan-reaper.ts). Absent on a daemon that has none to record, and in older records. */
   reaper?: ReaperRecord;
+  /** The temporary folder the daemon answers, written at its start; absent in older records. */
+  tempDir?: string;
 };
 
 export type DaemonStateRead =
@@ -308,6 +310,8 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     roots,
     ...(mailbox === undefined ? {} : { mailbox }),
     ...(reaper === undefined ? {} : { reaper }),
+    ...(typeof record.tempDir === 'string' && record.tempDir.startsWith('/') && record.tempDir.length <= 4096
+      ? { tempDir: record.tempDir } : {}),
   };
 }
 

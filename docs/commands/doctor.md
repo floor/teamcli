@@ -40,6 +40,15 @@ Every line it prints is cleaned first: escape sequences, control characters and 
 characters carried by the team file, a pane or a CLI's own output are removed, so a value can
 never move the cursor, paint the terminal or open a second line.
 
+When the machine daemon runs, one line compares its temporary folder with the seats'. A Claude
+Code seat listens for cross-session sends on a socket under its own temporary folder, and the
+daemon looks for that socket under the daemon's folder alone. The daemon's folder is the one it
+recorded at its start; the seats' is read from doctor's own process when doctor runs in one of the
+terminal host's panes, and is otherwise the folder a pane started by `team up` gets (the terminal
+host's server starts with no temporary folder named). One folder is `ok`; two are a `warn`
+naming both, since the daemon's sends then reach such a seat by a later leg; a daemon that
+recorded none (an older build) is a `note`. On every platform. A focused report does not carry it.
+
 A hold on the team ([team hold](hold.md)) is the last `note` line before the summary:
 `hold: <reason>`, or `hold until <instant>: <reason>`, naming `team hold --release` as what clears
 it. It is a note: the summary's counts do not move, and no exit changes. A hold past its `until`
