@@ -28,6 +28,7 @@ import { LINEAR_URL } from '../src/release/checks.ts';
 import type { Fetch, RequestOptions } from '../src/release/http.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 
 const SESSION = 'broker-evidence';
 const PROJECT = '01234567-89ab-cdef-0123-456789abcdef';
@@ -448,9 +449,5 @@ try {
   } catch {
     /* the session stop owns the process */
   }
-  try {
-    execFileSync('/usr/bin/trash', [base], { stdio: 'ignore' });
-  } catch {
-    /* the dir is left if trash refuses it */
-  }
+  try { discardFixtures([base], { quiet: true }); } catch { /* the dir is left if it cannot be moved */ }
 }

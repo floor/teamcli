@@ -2,7 +2,6 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { runUsage } from '../src/commands/usage.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { payingPoolOf } from '../src/information/machine-accounts.ts';
@@ -16,6 +15,7 @@ import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { approvalOf } from '../src/approve/approval.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 
 const NOW = Date.parse('2026-10-16T10:00:00Z');
 let home: string;
@@ -51,7 +51,7 @@ seats:
 `);
 });
 // Fixture trash can outlast Bun's five-second hook budget; keep cleanup mandatory and bounded.
-afterEach(() => { if (process.platform === 'darwin') execFileSync('/usr/bin/trash', [home]); }, 15_000);
+afterEach(() => discardFixtures([home]), 15_000);
 
 function sources(): WatchSources {
   // Daemon-only watch persists readings in the hosted pass; a hand-run watch only reports status.

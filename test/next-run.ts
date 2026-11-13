@@ -16,6 +16,7 @@ import { runPlan } from '../src/commands/plan.ts';
 import { findRoot } from '../src/file/load.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 
 const SESSION = 'next-evidence';
 
@@ -233,5 +234,5 @@ try {
   try { execFileSync('herdr', ['session', 'stop', SESSION], { stdio: 'ignore' }); } catch { /* already stopped */ }
   try { execFileSync('herdr', ['session', 'delete', SESSION], { stdio: 'ignore' }); } catch { /* already gone */ }
   try { server?.kill(); } catch { /* the session stop owns the process */ }
-  try { execFileSync('/usr/bin/trash', [base], { stdio: 'ignore' }); } catch { /* the dir is left if trash refuses it */ }
+  try { discardFixtures([base], { quiet: true }); } catch { /* the dir is left if it cannot be moved */ }
 }

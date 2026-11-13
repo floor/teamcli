@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { approvalOf } from '../src/approve/approval.ts';
 import { approveOwnerAction, createOwnerActionRequest, type OwnerAction } from '../src/client/owner-action.ts';
@@ -29,7 +29,7 @@ import { emptySession, readState, updateState } from '../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { keyOf, signDomain } from '../src/store/keys.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
-import { fixtureBase, gitEnv, testIo } from './helpers.ts';
+import { fixtureBase, fixtureScratchRoot, gitEnv, testIo } from './helpers.ts';
 import { fakeOwnerStore, seatOwner } from './helpers/owner-seat.ts';
 
 const NOW = () => new Date('2026-11-09T10:00:00Z');
@@ -38,7 +38,7 @@ const made: string[] = [];
 beforeEach(() => setHerdrRun(() => { throw new Error('no real terminal host in these scenes'); }));
 afterEach(() => {
   setHerdrRun(null);
-  discardFixtures(made.splice(0), { roots: [dirname(process.env.TEAMCLI_TEST_SCRATCH ?? '')] });
+  discardFixtures(made.splice(0), { roots: [fixtureScratchRoot()] });
 });
 
 function teamText(home: string, root: string, name: string, callerLeads: boolean): string {

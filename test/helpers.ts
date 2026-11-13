@@ -430,10 +430,14 @@ export function gitEnv(): NodeJS.ProcessEnv {
  * error, never silently used. Callers create what they need under the returned folder and remove
  * it themselves.
  */
+export function fixtureScratchRoot(): string {
+  const named = process.env.TEAMCLI_TEST_SCRATCH;
+  return resolve(named !== undefined && named !== '' ? named : join(homedir(), '.cache', 'teamcli-tests'));
+}
+
 export function fixtureBase(prefix: string): string {
   const checkout = resolve(import.meta.dir, '..');
-  const named = process.env.TEAMCLI_TEST_SCRATCH;
-  const root = resolve(named !== undefined && named !== '' ? named : join(homedir(), '.cache', 'teamcli-tests'));
+  const root = fixtureScratchRoot();
   mkdirSync(root, { recursive: true });
   const real = realpathSync(root);
   const temp = realpathSync(tmpdir());
