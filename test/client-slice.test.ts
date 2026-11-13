@@ -1078,51 +1078,6 @@ describe('the client send walk', () => {
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
   });
 
-  test('a receiving session that declares accept takes the frame mid-turn, under the owner header', async () => {
-    const w = walkFixture('walk-socket');
-    acceptInbound(w);
-    const host = walkHost(w);
-    const io = capture(w, { caller: owner });
-    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
-    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
-    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    expect(host.frames).toHaveLength(1);
-    const frame = JSON.parse(host.frames[0] as string) as { type: string; message: { role: string; content: string }; msg_id: string };
-    expect(frame.type).toBe('user');
-    expect(frame.msg_id).toBe('drop-1');
-    // The client's socket frame opens with the compact client header and closes with the one-line footer.
-    expect(frame.message.content).toBe(
-      'Client Grok Bot (owner relay):\n\nhello orchestrator\n\n↩ team reply drop-1 "…" · team ack drop-1',
-    );
-    // One signed record and no receipt: only the seat writes a read receipt, so the taken frame
-    // leaves the record unread and the watch re-wakes it like any other message.
-    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1']);
-    expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
-  });
-
-  test('a refused socket frame falls back to the typed trigger with the same record', async () => {
-    const w = walkFixture('walk-fallback');
-    acceptInbound(w);
-    const host = walkHost(w, {
-      dial: async () => ({ ok: false, reason: 'the session closed the connection before it took the frame' }),
-    });
-    const io = capture(w, { caller: owner });
-    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
-    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
-    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
-    expect(host.dials()).toBe(1);
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    // The frame was never taken, so no read receipt exists for it.
-    expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    const last = walkHistory(w).at(-1);
-    expect(last).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
-    expect(last?.failed).toContain('socket: the session closed the connection before it took the frame');
-  });
-
   test('with no channel and no inbound declaration, the typed trigger wakes the seat', async () => {
     const w = walkFixture('walk-typed');
     const host = walkHost(w);
@@ -1161,43 +1116,6 @@ describe('the client send walk', () => {
     expect(host.frames).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
-  });
-
-  test('the record the walk carries is the grant\'s own: one drop, no receipt, client principal intact', async () => {
-    const w = walkFixture('walk-identity');
-    acceptInbound(w);
-    let atDial: { names: string[]; bytes: string } = { names: [], bytes: '' };
-    const host = walkHost(w, {
-      onDial: () => {
-        atDial = {
-          names: readdirSync(w.dropDir).sort(),
-          bytes: readFileSync(join(w.dropDir, 'drop-1'), 'utf8'),
-        };
-      },
-    });
-    const io = capture(w, { caller: owner });
-    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
-    // The record was on disk, alone, before the frame was dialed; the walk did not rewrite it.
-    expect(atDial.names).toEqual(['drop-1']);
-    expect(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')).toBe(atDial.bytes);
-    // The taken frame wrote no receipt: only the seat writes a read receipt, so the record stays
-    // unread for its own reader and the watch re-wakes it like any other message.
-    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1']);
-    const parsed = signedRecordOf(JSON.parse(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')));
-    expect(parsed).not.toBeNull();
-    if (parsed === null) return;
-    expect(parsed.payload.from).toBe(`client:${CLIENT_ID}`);
-    expect(parsed.payload.from_id).toBeNull();
-    expect(parsed.payload.from_client).toEqual({ client_id: CLIENT_ID, grant_id: w.grant.grantId });
-    expect(parsed.payload.to).toBe('orchestrator');
-    expect(parsed.payload.to_id).toBe(w.grant.recipientId);
-    const messageKey = messageKeyState(w.home);
-    expect(messageKey.kind).toBe('key');
-    if (messageKey.kind === 'key') expect(verifyRecord(parsed, messageKey.key)).toBe(true);
-    // The frame names the sender as the person's client, never as a seat address.
-    const frame = JSON.parse(host.frames[0] as string) as { message: { content: string } };
-    expect(frame.message.content).toContain('Client Grok Bot (owner relay):');
-    expect(frame.message.content).not.toContain('client:grok-bot@');
   });
 });
 

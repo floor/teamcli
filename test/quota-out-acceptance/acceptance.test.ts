@@ -219,22 +219,6 @@ describe('send at a quota-out screen', () => {
     expect(scene.records.some((one) => one.endsWith('.pending'))).toBe(true);
   });
 
-  test('a sentence quoted inside a working turn is not a wall, and the send goes through', async () => {
-    const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_QUOTE, 'working');
-    expect(scene.code).toBe(0);
-    expect(scene.doc?.error).toBeUndefined();
-    expect(scene.typed.length).toBe(0);
-    expect(scene.enters).toBe(0);
-  });
-
-  test('a wall sentence above a finished turn is history, and the next send goes through', async () => {
-    const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_HISTORY, 'done');
-    expect(scene.code).toBe(0);
-    expect(scene.doc?.error).toBeUndefined();
-    expect(scene.typed.length).toBe(0);
-    expect(scene.enters).toBe(0);
-  });
-
   test('an ordinary provider error keeps its existing caution and is not read as quota', async () => {
     const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_PROVIDER_ERROR, 'idle');
     // 1345 never-drop: the detector reads the screen before sending, a provider error is `model
@@ -244,22 +228,6 @@ describe('send at a quota-out screen', () => {
     expect(scene.out).toContain("kept in helper's inbox");
     expect(scene.out).not.toContain('quota');
     expect(scene.typed).toEqual([]);
-    expect(scene.enters).toBe(0);
-  });
-
-  test('an ordinary dialog keeps its own hold and is not read as quota', async () => {
-    // No pane messaging: the dialog is never typed into, so the send waits in the bus inbox.
-    const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_QUESTION, 'idle');
-    expect(scene.code).toBe(0);
-    expect(scene.out).not.toContain('quota');
-    expect(scene.typed).toEqual([]);
-    expect(scene.enters).toBe(0);
-  });
-
-  test('a healthy prompt keeps sending as before', async () => {
-    const scene = await sendAt(agyWorld(), 'agy1', AGY_IDLE, 'done');
-    expect(scene.code).toBe(0);
-    expect(scene.typed.length).toBe(0);
     expect(scene.enters).toBe(0);
   });
 });

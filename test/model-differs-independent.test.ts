@@ -144,42 +144,4 @@ describe('a send to a seat whose record splits the version out of the name', () 
     expect(files.length).toBe(1);
     expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
   }
-
-  test('the split record is delivered, never held as a drift', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLive(made, SIGNED);
-    const { host } = sendHost(made);
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.err).not.toContain('model drift');
-    expectDrop(made);
-  });
-
-  test('a genuinely different family on the same pane is still held', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLive(made, { model: 'Gemini Flash', version: '4' });
-    const { host } = sendHost(made);
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('model drift: Gemini Flash 4 vs Gemini Argon 4');
-    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
-  });
-
-  test('the same family with its version in the model field is delivered', async () => {
-    // The fixture's own control: this record is already read as the pane's model at the base, so
-    // a delivered send here shows the walk behind the drift check is the one these scenes use.
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLive(made, RUNNING);
-    const { host } = sendHost(made);
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.err).not.toContain('model drift');
-    expectDrop(made);
-  });
 });

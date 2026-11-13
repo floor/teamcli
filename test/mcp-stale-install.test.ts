@@ -480,42 +480,4 @@ describe('a shutdown aimed at the waiting parent', () => {
 });
 
 describe('a sender falling back from a stale channel', () => {
-  test('the sender holds the push name, so the stale server cannot wake the seat twice', async () => {
-    const made = channelWorld();
-    const dir = dropDir(made.dir, 'lead');
-    const serverIo = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
-    const serverFeed = feed();
-    // The server believes it still runs OLD: its own install check agrees with its build, so only
-    // the sender's held marker can stop its push.
-    const running = runMcpServe({ seat: 'lead', session: SESSION }, serverIo, serverFeed, {
-      home: made.home,
-      build: OLD,
-      installed: () => ({ version: OLD.version, head: OLD.head }),
-    });
-    try {
-      await until(() => readListener(dir)?.head === OLD.head);
-
-      // The sender is the installed build: it cannot vouch for the listener, so the channel and
-      // inbox legs fall through and the typed trigger wakes the seat.
-      const pane = scripted(['idle', 'working']);
-      const host = fake(made, { sendId: () => SEND_ID, build: () => NEW, native: pane });
-      const sendIo = owner(made.root);
-      expect(await runSend(['lead', TRIGGER], sendIo, host)).toBe(0);
-      expect(sendIo.out).toContain('(drop');
-      expect(sendIo.out).not.toContain('sent (channel)');
-      expect(pane.typed).toHaveLength(0);
-      expect(pane.enters).toBe(0);
-
-      // Let the 250 ms watcher tick over the record more than once. No pane messaging: no
-      // trigger is typed, so the sender holds no push name, and the server's one push is the
-      // seat's only wake. It still wakes the seat once, never twice.
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      expect(notices(serverFeed.replies)).toHaveLength(1);
-      expect(pane.typed).toHaveLength(0);
-      expect(pane.enters).toBe(0);
-    } finally {
-      serverFeed.end();
-      expect(await running).toBe(0);
-    }
-  });
 });

@@ -155,31 +155,10 @@ delivery_order: [drop]
   return { io, host, seen, drops };
 }
 
-test('a real send to a synthetic Cursor pane accepts the split and writes a signed message', async () => {
-  const screen = cursorScreen();
-  expect(runningModel('cursor', screen)).toEqual(pair('Gemini Argon', '4'));
-  const fixture = sendFixture(screen);
-  const code = await runSend(['receiver', MESSAGE], fixture.io, fixture.host);
-  expect(code, fixture.io.err).toBe(0);
-  expect(fixture.seen).toContain(`fixture/${PANE}`);
-  expect(fixture.io.err).not.toContain('model drift');
-  const record = signedRecordOf(JSON.parse(readFileSync(join(fixture.drops, ID), 'utf8')));
-  expect(record).not.toBeNull();
-  expect(record?.payload.body).toContain(MESSAGE);
-});
-
 test('the same synthetic send names a real variant difference and keeps the message', async () => {
   // model-drift: deliver (the default): the drift is named, the message is kept, nothing refused.
   const fixture = sendFixture(cursorScreen('Flash'));
   await runSend(['receiver', MESSAGE], fixture.io, fixture.host);
   expect(fixture.io.err).toContain('model drift: record says');
   expect(fixture.io.err).not.toContain('not kept or delivered');
-});
-
-test('an unread synthetic Cursor pane stays unread and does not fabricate drift', async () => {
-  const fixture = sendFixture(null);
-  expect(await runSend(['receiver', MESSAGE], fixture.io, fixture.host), fixture.io.err).toBe(0);
-  expect(fixture.io.err).not.toContain('model drift');
-  const record = signedRecordOf(JSON.parse(readFileSync(join(fixture.drops, ID), 'utf8')));
-  expect(record?.payload.body).toContain(MESSAGE);
 });

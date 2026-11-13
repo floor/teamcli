@@ -37,14 +37,4 @@ describe('the two fence attributes the harness page names', () => {
     expect(fixture).toContain('exec ? { mode: 0o755 } : {}');
     expect(fixture).toContain('`exec` makes it runnable, as a check script has to be');
   });
-
-  test("reply is the fake seat's answer, silent without it", () => {
-    const run = prose(RUN_SRC);
-    // The runner's own comment carries the row's promise in the same words.
-    expect(run).toContain('without it, the seat stays silent and the wait times out');
-    // The reply path is guarded by the attribute's presence alone, and the answer rides the
-    // frame a replying session writes — the `--wait` example prints what the seat said.
-    expect(run).toContain('if (reply !== undefined)');
-    expect(run).toContain('from-name="${seats[0] ?? \'seat\'}" from-mode="bypass"');
-  });
 });

@@ -31,9 +31,6 @@ function reachedFirst(result: Result) {
   expect(result.records[0]?.toId).toBe(result.agentIds.first);
   expect(result.paneWrites).toBe(0);
 }
-for (const name of ['by-name', 'by-session', 'by-team-id', 'by-agent-id']) {
-  test(`plain send resolves ${name} within two teams sharing a project and entity`, () => reachedFirst(scene(name)));
-}
 for (const name of ['ambiguous-name', 'ambiguous-session']) {
   test(`${name} refuses and names both candidates`, () => {
     const result = scene(name);

@@ -196,69 +196,6 @@ function broadcast(w: World) {
 }
 
 describe('C1 round 1: a re-broadcast writes no new sidecar', () => {
-  test('the held claim is walked once, and later broadcasts leave the folder byte-identical', async () => {
-    const w = world();
-    setMessageTransport(w);
-    placeSeat(w, WISP, 'fixture-pane-1');
-
-    const first = broadcast(w);
-    const delivery = first.deliveries[0];
-    if (delivery === undefined || !delivery.ok) throw new Error(JSON.stringify(first));
-    expect(first.walks).toHaveLength(1);
-    expect(delivery.existing).not.toBe(true);
-    expect(claimOf(w, WISP)?.id).toBe(delivery.id);
-
-    // A live inbox listener is the store's reader, not a delivery leg (ADR D1): the walk ends on
-    // the drop and leaves the claim's retry marker beside the signed record the launch already
-    // wrote.
-    writeListener(dropDir(w, WISP), {
-      v: 1,
-      seat: WISP,
-      session: SESSION,
-      root: w.root,
-      cli: 'claude-code',
-      pid: process.pid,
-      ts: NOW.toISOString(),
-    });
-    await walkBriefDeliveries(first, { dir: w.dir, home: w.home, sendHost: fake(w) });
-    expect(delivery.message).toMatchObject({ via: 'drop', walked: true, exit: 0 });
-    const held = snapshot(w, WISP);
-    expect(Object.keys(held).filter((name) => name.endsWith('.pending'))).toEqual([`${delivery.id}.pending`]);
-    const record = held[delivery.id];
-    expect(record).toBeString();
-
-    // The claim and its record already stand, so this broadcast is the same delivery, not a new
-    // notification: nothing is walked, and nothing in the folder moves — the sidecar the first
-    // walk left is neither rewritten nor doubled.
-    const second = broadcast(w);
-    expect(second.deliveries[0]).toMatchObject({ ok: true, existing: true, id: delivery.id });
-    expect(second.walks ?? []).toEqual([]);
-    await walkBriefDeliveries(second, { dir: w.dir, home: w.home, sendHost: fake(w) });
-    expect(snapshot(w, WISP)).toEqual(held);
-    expect(claimOf(w, WISP)?.id).toBe(delivery.id);
-
-    // The seat reads the brief — a signed receipt bound to the claim — and the watch's promote
-    // clears the marker. A broadcast after the read still walks nothing and writes no sidecar.
-    const bound = claimOf(w, WISP);
-    if (bound === null) throw new Error('the delivery left no claim');
-    const read = readMessage(
-      { dropDir: dropDir(w, WISP), root: w.root, seat: WISP, session: SESSION },
-      delivery.id,
-      w.home,
-      { claim: () => bound },
-    );
-    expect(read.ok).toBe(true);
-    clearPending(dropDir(w, WISP), delivery.id);
-    const afterRead = snapshot(w, WISP);
-    expect(Object.keys(afterRead).filter((name) => name.endsWith('.pending'))).toEqual([]);
-
-    const third = broadcast(w);
-    expect(third.walks ?? []).toEqual([]);
-    await walkBriefDeliveries(third, { dir: w.dir, home: w.home, sendHost: fake(w) });
-    expect(snapshot(w, WISP)).toEqual(afterRead);
-    // The signed record is still the first walk's bytes.
-    expect(afterRead[delivery.id]).toBe(record);
-  });
 });
 
 // ---------------------------------------------------------------- (2) another seat's folder

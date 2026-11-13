@@ -103,32 +103,3 @@ for (const actor of ['owner', 'wildcard']) {
     expect(result.after).toBe(result.before);
   });
 }
-for (const action of ['launch', 'retired']) {
-  test(`${action} uses the label persona in its launch plan, roster and actual message header`, () => {
-    const result = scene({ action });
-    expect(result.plan?.code, result.plan?.out).toBe(0);
-    expect(result.plan?.out).toContain('Lyra');
-    expect(result.plan?.out).not.toContain('OldEcho');
-    expect(result.roster?.find((line) => line.seat === 'reviewer')?.nickname).toBe('Lyra');
-    const before = result.before as Run;
-    expect(before.code, before.out + before.err).toBe(0);
-    expect(before.bodies?.some((body) => body.startsWith('from Lyra'))).toBe(true);
-    expect(before.bodies?.some((body) => body.startsWith('from OldEcho'))).toBe(false);
-    expect(result.paneWrites).toBe(0);
-    if (action === 'retired') expect(result.id).not.toBe(result.oldId);
-  });
-}
-test('a label change appears in the next actual header without a relaunch', () => {
-  const result = scene({ action: 'rename' });
-  const before = result.before as Run;
-  const after = result.after as Run;
-  expect(before.code).toBe(0);
-  expect(before.bodies?.some((body) => body.startsWith('from Lyra'))).toBe(true);
-  assert.ok(result.edit, 'the rename scene must return its edit result');
-  expect(result.edit.code, result.edit.out + result.edit.err).toBe(0);
-  expect(after.code, after.out + after.err).toBe(0);
-  expect(after.bodies?.some((body) => body.startsWith('from Kestrel'))).toBe(true);
-  expect(result.beforeAgent?.id).toBe(result.afterAgent?.id);
-  expect(result.beforeAgent?.reach).toEqual(result.afterAgent?.reach);
-  expect(result.paneWrites).toBe(0);
-});

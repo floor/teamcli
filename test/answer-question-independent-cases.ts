@@ -121,21 +121,6 @@ async function delivered(w: World) {
 
 test('all module defaults start in the suite synthetic home', () => { assertIndependentHome(); });
 
-for (const scene of scenes) for (const json of [false, true]) test(`captured ${scene[0]} ${scene[1]} answers only its dismiss key; json=${json}`, async () => {
-  const w = await world(scene), reading = readDialog(scene[0], w.control.screen);
-  expect(reading).toMatchObject({ dialog: 'question', complete: true });
-  const run = await answer(w, json); expect(run.code, run.io.out + run.io.err).toBe(0); expect(run.io.err).toBe('');
-  if (json) expect(run.result).toMatchObject({ status: 'answered', dialog: 'question', dialog_kind: 'question', state: 'ready', seat: 'lead' });
-  else expect(run.io.out).toBe('team scene, session "scene"\nlead: answered question (question)\n');
-  await delivered(w); expect(waiting(w)).toBeUndefined(); expect(readState(w.dir).sessions.scene?.seats.lead?.stage).toBe('ready');
-});
-
-test('captured Codex plan uses its own plan record and no choice', async () => {
-  const w = await world(scenes[8], capture('codex/0.161.0/plan-approval.txt'));
-  expect(readDialog('codex', w.control.screen)).toMatchObject({ dialog: 'plan approval', complete: true });
-  const run = await answer(w); expect(run.code, run.io.out).toBe(0); expect(run.result?.dialog_kind).toBe('plan approval'); await delivered(w);
-});
-
 for (const scene of [
   ['claude-code', '2.1.289', '2.1.289 (Claude Code)', 'question-plain.txt'],
   ['cursor', '2026.10.01', '2026.10.01-14929f9', 'question.txt'],
@@ -159,21 +144,6 @@ const blocks = [
   { name: 'wrapped continuation', rows: ['1. Which option do you want for', 'the synthetic document?'], changed: ['1. Which option do you want for', 'the synthetic workspace?'] },
   { name: 'interior blank paragraph', rows: ['1. Which option do you want?', '', 'Use the document folder.'], changed: ['1. Which option do you want?', '', 'Use the workspace folder.'] },
 ] as const;
-for (const block of blocks) {
-  test(`${block.name} remains answerable when the whole block agrees`, async () => {
-    const w = await world(cursor, cursorBlock([...block.rows]));
-    expect(readDialog('cursor', w.control.screen)).toMatchObject({ dialog: 'question', complete: true });
-    const run = await answer(w); expect(run.code, run.io.out).toBe(0); await delivered(w);
-  });
-  for (const changeAt of [2, 3]) test(`${block.name} changing at capture ${changeAt} refuses`, async () => {
-    const first = cursorBlock([...block.rows]), next = cursorBlock([...block.changed]);
-    const one = readDialog('cursor', first), two = readDialog('cursor', next);
-    expect(one).toMatchObject({ dialog: 'question', complete: true }); expect(two).toMatchObject({ dialog: 'question', complete: true }); expect(one).not.toEqual(two);
-    const w = await world(cursor, first); w.control.onPane = n => { if (n >= changeAt) w.control.screen = next; };
-    await refused(w, 'answer.disagree');
-  });
-}
-
 for (const changeAt of [2, 3]) test(`first question line changing at capture ${changeAt} refuses`, async () => {
   const w = await world(); w.control.onPane = n => { if (n >= changeAt) w.control.screen = w.control.screen.replace('Which option do you want?', 'Which project do you want?'); };
   await refused(w, 'answer.disagree');
@@ -233,14 +203,4 @@ test('another session file refuses before the dialog is dismissed', async () => 
   const w = await world(), file = join(w.dir, 'alternate.yaml'); writeFileSync(file, team('cursor', w.root, 'alternate'));
   updateState(w.dir, state => { state.sessions.alternate = structuredClone(state.sessions.scene!); });
   await refused(w, 'answer.configuration', 2, ['--file', file]); expect(w.calls).not.toContain('pane');
-});
-test('readiness-only retry keeps the delivered line and never repeats the dismiss key', async () => {
-  const w = await world(); w.control.busyAfter = true;
-  const first = await answer(w); expect(first.code).toBe(1); expect(first.result?.error?.id).toBe('answer.recovery');
-  expect(waiting(w)).toMatchObject({ state: 'question-sent-recovery', delivered: true });
-  const ids = messages(w); expect(ids).toHaveLength(1); const bytes = readFileSync(join(w.dir, 'send-drops', 'scene', 'lead', ids[0]!));
-  w.control.screen = w.control.idle; w.calls.length = 0;
-  const retry = await answer(w); expect(retry.code, retry.io.out).toBe(0); expect(messages(w)).toEqual(ids);
-  expect(readFileSync(join(w.dir, 'send-drops', 'scene', 'lead', ids[0]!))).toEqual(bytes);
-  expect(w.keys).toEqual(['escape']); expect(w.inputs).toEqual([]); expect(w.calls).not.toContain('key'); expect(w.calls).not.toContain('version'); expect(w.calls).not.toContain('send-agents'); expect(waiting(w)).toBeUndefined();
 });

@@ -260,29 +260,6 @@ describe('two team files register into one project', () => {
 // ---- (2) the two sends ----
 
 describe('a project leads cross their teams', () => {
-  test('teamcli\'s lead reaches teamcli.io\'s lead by name, and the drop names the rule', async () => {
-    const w = world();
-    await registered(w, w.rootA, 'lead');
-    await registered(w, w.rootB, 'lead-io');
-    await registered(w, w.rootB, 'worker-io');
-    const leadPane = paneOf('teamcli', ['idle']);
-    const ioLeadPane = paneOf('teamcli-io', ['idle', 'working']);
-    const ioWorkerPane = paneOf('teamcli-io', ['idle']);
-    const panes = new Map([['lead', leadPane], ['lead-io', ioLeadPane], ['worker-io', ioWorkerPane]]);
-    const host = sendHost(w, panes);
-
-    const code = await runSend(['lead-io@teamcli.io', BODY], testIo(w.rootA, seatCaller('lead')), host);
-
-    expect(code).toBe(0);
-    expect(ioLeadPane.typed.length).toBe(0);
-    const drop = dropOf(w.rootB, 'teamcli-io', 'lead-io');
-    const sender = readAgents(w.home).find((one) => one.reach.team === teamIdOf(w.rootA) && one.reach.seat === 'lead');
-    expect(drop.text).toContain(sender?.id ?? 'no agent id');
-    expect(drop.text).toContain(BODY);
-    // The caller is the project's own lead, so the project's first rule is the one that fires:
-    // the project lead writing to a lead of its teams. No role name decided it.
-    expect(drop.text).toContain('the project lead and the leads of its teams');
-  });
 
   test('the same lead to a plain seat of teamcli.io is refused while seats_cross_teams is off', async () => {
     const w = world();

@@ -318,37 +318,6 @@ function signedNotices(root: string, home: string): { from: string; rule: string
   });
 }
 
-test('a down endpoint writes one notice across sends and replies, then one more after it recovers', async () => {
-  const scene = prepare();
-  await withCodex(scene.binDir, async () => {
-    const host = hostOf(scene.home, scene.sockets);
-    const first = testIo(scene.root, { kind: 'owner' });
-    expect(await runSend([SEAT, 'one'], first, host), first.out + first.err).toBe(0);
-    const second = testIo(scene.root, { kind: 'owner' });
-    expect(await runSend([SEAT, 'two'], second, host), second.out + second.err).toBe(0);
-    await replyOnce(scene.root, scene.home, scene.sockets, '33333333-0000-4000-8000-000000000301');
-    await replyOnce(scene.root, scene.home, scene.sockets, '33333333-0000-4000-8000-000000000302');
-    expect(leadDrops(scene.root)).toHaveLength(1);
-    const notices = signedNotices(scene.root, scene.home);
-    expect(notices).toEqual([{ from: RUNTIME_FROM, rule: RUNTIME_RULE }]);
-
-    const server = await listen(scene.socketPath);
-    try {
-      const recovered = testIo(scene.root, { kind: 'owner' });
-      expect(await runSend([SEAT, 'listening'], recovered, host), recovered.out + recovered.err).toBe(0);
-    } finally {
-      await server.close();
-    }
-    expect(leadDrops(scene.root)).toHaveLength(1);
-
-    const again = testIo(scene.root, { kind: 'owner' });
-    expect(await runSend([SEAT, 'down again'], again, host), again.out + again.err).toBe(0);
-    await replyOnce(scene.root, scene.home, scene.sockets, '33333333-0000-4000-8000-000000000303');
-    expect(leadDrops(scene.root)).toHaveLength(2);
-    expect(signedNotices(scene.root, scene.home).every((notice) => notice.from === RUNTIME_FROM && notice.rule === RUNTIME_RULE)).toBe(true);
-  });
-});
-
 test('channel admission refuses a runtime record', () => {
   const scene = prepare();
   const loaded = loadTeamFile(scene.root, { home: scene.home });

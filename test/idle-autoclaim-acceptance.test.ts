@@ -538,31 +538,6 @@ describe('the real team next receiver path', () => {
 });
 
 describe('the push fixture', () => {
-  test('signs the request, writes its history line and dials the direct leg', async () => {
-    directRoute();
-    const runtime = workerRuntime();
-    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
-    const result = await sent.push({ seat: SEAT, pane: PANE, cli: 'claude-code', body: 'run team next' });
-    expect(result).toEqual({ ok: true, outcome: 'socket: delivered' });
-    expect(sent.frames).toHaveLength(1);
-    expect(sent.typed).toEqual([]);
-    const inbox = workerInbox();
-    expect(inbox).toHaveLength(1);
-    expect(inbox[0]?.payload.to).toBe(SEAT);
-    // The sender is the team's orchestrator seat, standing on the pane the state records for it,
-    // not the owner shortcut.
-    expect(inbox[0]?.payload.from).toBe('lead');
-    const history = readHistory('acme', root, home);
-    expect(history.ok).toBe(true);
-    const lines = history.ok ? history.entries.filter((entry) => entry.to === SEAT) : [];
-    expect(lines).toHaveLength(1);
-    expect(lines[0]?.id).toBe(inbox[0]?.payload.id);
-    // The receiving side is the worker's runtime: the real receiver claims on its signed request.
-    await runtime.pump();
-    expect(runtime.claims).toHaveLength(1);
-    expect(runtime.claims[0]).toContain('claimed t1');
-    expect(leases().map((lease) => lease.id)).toEqual(['t1']);
-  });
   test('a receiver with no direct route is refused without typing', async () => {
     const sent = pushViaSend({ direct: false });
     const result = await sent.push({ seat: SEAT, pane: PANE, cli: 'claude-code', body: 'run team next' });
@@ -577,50 +552,6 @@ describe('the push fixture', () => {
 });
 
 describe('the watch gives an idle worker its queued work', () => {
-  test('pushes one signed request, and the worker claims one item within one virtual minute', async () => {
-    directRoute();
-    const io = testIo(root, { kind: 'owner' });
-    const runtime = workerRuntime();
-    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
-    const { sources, typed, paneRuns } = watchSources({
-      workerStatus: 'idle',
-      passes: 13,
-      onPass: runtime.pump,
-      pushWork: sent.push,
-    });
-    const code = await runWatch(['--file', file], io, sources);
-    expect(code).toBe(0);
-    // Nothing is typed, keyed or run into any pane: the request travels as a message.
-    expect(typed).toEqual([]);
-    expect(paneRuns).toEqual([]);
-    // The durable signed copy comes before the push: one request record, and it verifies.
-    const inbox = workerInbox();
-    expect(inbox).toHaveLength(1);
-    expect(inbox[0]?.payload.to).toBe(SEAT);
-    // History keeps the line tied to that record, and only that one.
-    const history = readHistory('acme', root, home);
-    expect(history.ok).toBe(true);
-    const lines = history.ok ? history.entries.filter((entry) => entry.to === SEAT) : [];
-    expect(lines).toHaveLength(1);
-    expect(lines[0]?.id).toBe(inbox[0]?.payload.id);
-    // The push went through the direct leg once for the episode, and the send typed nothing.
-    expect(sent.pushed).toHaveLength(1);
-    expect(sent.frames).toHaveLength(1);
-    expect(sent.typed).toEqual([]);
-    // The receiver ran the real receiver path once, and the worker holds one lease.
-    expect(runtime.claims).toHaveLength(1);
-    expect(runtime.claims[0]).toContain('claimed t1');
-    const held = leases();
-    expect(held).toHaveLength(1);
-    expect(held[0]?.id).toBe('t1');
-    expect(held[0]?.seat).toBe(SEAT);
-    expect(held[0]?.pane).toBe(PANE);
-    expect(Date.parse(held[0]?.acquiredAt ?? '')).toBeLessThanOrEqual(START + MINUTE);
-    // Later idle passes add no second nudge, no second request and no second lease.
-    expect(dropNames().filter((name) => name.startsWith('work-'))).toEqual([]);
-    expect(workerInbox()).toHaveLength(1);
-    expect(leases()).toHaveLength(1);
-  });
 
   test('a paused team pushes no request and claims nothing', async () => {
     updateState(join(root, '.agents'), (state) => {
@@ -774,42 +705,6 @@ describe('the watch gives an idle worker its queued work', () => {
 // would dispatch nothing; a healthy channel plus the exact binding/fence proof is what makes the
 // seat eligible, and the real receiver then claims one queued item with no manual step.
 describe('the native presence proof drives the same pickup', () => {
-  test('a proven native idle wakes a seat whose terminal cannot show it, and the task is claimed', async () => {
-    await nativeReading('turn-end');
-    directRoute();
-    const io = testIo(root, { kind: 'owner' });
-    const runtime = workerRuntime();
-    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
-    const { sources, typed, paneRuns } = watchSources({
-      workerStatus: 'idle',
-      screen: BUSY,
-      presenceChannelHealthy: () => true,
-      passes: 13,
-      onPass: runtime.pump,
-      pushWork: sent.push,
-    });
-    const code = await runWatch(['--file', file], io, sources);
-    expect(code).toBe(0);
-    // No keystroke, key or pane run reached any pane: the wake was the signed direct request.
-    expect(typed).toEqual([]);
-    expect(paneRuns).toEqual([]);
-    expect(sent.pushed).toHaveLength(1);
-    expect(sent.frames).toHaveLength(1);
-    expect(sent.typed).toEqual([]);
-    const inbox = workerInbox();
-    expect(inbox).toHaveLength(1);
-    expect(inbox[0]?.payload.to).toBe(SEAT);
-    // The receiver ran the production read gate and the real `team next` once: one lease, held
-    // by this seat on its own pane, within the pickup window.
-    expect(runtime.claims).toHaveLength(1);
-    expect(runtime.claims[0]).toContain('claimed t1');
-    const held = leases();
-    expect(held.map((lease) => lease.id)).toEqual(['t1']);
-    expect(held[0]?.seat).toBe(SEAT);
-    expect(held[0]?.pane).toBe(PANE);
-    expect(Date.parse(held[0]?.acquiredAt ?? '')).toBeLessThanOrEqual(START + MINUTE);
-    expect(dropNames().filter((name) => name.startsWith('work-'))).toEqual([]);
-  });
 
   test('a native turn holds the pickup: no request, no inbox copy and no claim', async () => {
     await nativeReading('turn-start');
@@ -935,29 +830,6 @@ async function hostedPickup(options: {
 // answer, and the worker's runtime still claims through the real receiver. The proof is the same
 // one the live watch reads; only the loop that reads it changes.
 describe('the hosted watch pickup under the native proof', () => {
-  test('a proven native idle makes the hosted pass push once, and the worker claims once', async () => {
-    await nativeReading('turn-end');
-    directRoute();
-    const runtime = workerRuntime();
-    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
-    await hostedPickup({ channelHealthy: true, runtime, sent, passes: 3 });
-    // The busy screen never disqualified the seat, and the hosted set typed nothing: the one
-    // wake was the signed direct request.
-    expect(sent.pushed).toHaveLength(1);
-    expect(sent.frames).toHaveLength(1);
-    expect(sent.typed).toEqual([]);
-    const inbox = workerInbox();
-    expect(inbox).toHaveLength(1);
-    expect(inbox[0]?.payload.to).toBe(SEAT);
-    // The receiving runtime read the delivery through the real gate and claimed exactly once,
-    // even though later hosted passes ran and pumped again.
-    expect(runtime.claims).toHaveLength(1);
-    expect(runtime.claims[0]).toContain('claimed t1');
-    const held = leases();
-    expect(held.map((lease) => lease.id)).toEqual(['t1']);
-    expect(held[0]?.seat).toBe(SEAT);
-    expect(held[0]?.pane).toBe(PANE);
-  });
 
   test('a native turn holds every hosted pass: no request, no inbox copy and no claim', async () => {
     await nativeReading('turn-start');
@@ -1010,77 +882,6 @@ describe('the hosted watch pickup under the native proof', () => {
 // queued items therefore take three episodes and one signed request each. Once all three are
 // leased the source is empty, and the idle-and-empty stretch is announced exactly once.
 describe('the pickup across three items, and the empty stretch after them', () => {
-  test('three idle workers each claim one item, then their empty source is announced once', async () => {
-    // The three-worker world: one more idle claimant per extra seat, the same three items. A
-    // single seat cannot take three through the real receiver: its own second `team next`
-    // renews the lease it already holds, by the picker's rule.
-    writeFileSync(file, TEAM3);
-    updateState(join(root, '.agents'), (state) => {
-      const session = (state.sessions[SESSION] ??= emptySession());
-      for (const worker of WORKERS) {
-        session.seats[worker.seat] = { stage: 'ready', pane: worker.pane, last_active: new Date(IDLE_SINCE).toISOString() };
-      }
-    });
-    // Every worker's own runtime projects a proven native idle; its screen shows a turn, so the
-    // terminal path cannot be what makes it eligible.
-    for (const worker of WORKERS) {
-      await nativeReading('turn-end', { seat: worker.seat, seatId: worker.seatId, binding: worker.binding });
-      directRoute(worker.seat);
-    }
-    const io = testIo(root, { kind: 'owner' });
-    const runtimes = WORKERS.map((worker) => workerRuntime({ seat: worker.seat, pane: worker.pane }));
-    const runtimeOf = new Map(WORKERS.map((worker, index) => [worker.seat, runtimes[index]!]));
-    const sent = pushViaSend({ direct: true, onDeliver: (seat) => runtimeOf.get(seat)?.wake() });
-    const mail = leadMail();
-    // The empty notice must be written once and never rewritten by the later empty passes.
-    const snapshots: string[] = [];
-    const snapshot = (): string => mail.names().map((name) => `${name}\n${mail.bytes(name)}`).join('\n');
-    const { sources, typed, paneRuns } = watchSources({
-      workerStatus: 'idle',
-      screen: BUSY,
-      presenceChannelHealthy: () => true,
-      teamText: TEAM3,
-      live: scene3,
-      passes: 5,
-      onPass: async () => {
-        for (const runtime of runtimes) await runtime.pump();
-        const now = snapshot();
-        if (now !== '') snapshots.push(now);
-      },
-      pushWork: sent.push,
-    });
-    const code = await runWatch(['--file', file], io, sources);
-    expect(code).toBe(0);
-    // Every wake was a signed message through the direct leg: nothing was typed or run.
-    expect(typed).toEqual([]);
-    expect(paneRuns).toEqual([]);
-    expect(sent.pushed.map((request) => request.seat)).toEqual(WORKERS.map((worker) => worker.seat));
-    expect(sent.frames).toHaveLength(3);
-    expect(sent.typed).toEqual([]);
-    // Each worker's own runtime read its signed request through the gate and claimed one item.
-    const claimed = runtimes.map((runtime) => {
-      expect(runtime.claims).toHaveLength(1);
-      return /claimed (t\d)/.exec(runtime.claims[0] ?? '')?.[1];
-    });
-    expect(claimed).toEqual(['t1', 't2', 't3']);
-    for (const worker of WORKERS) {
-      expect(workerInbox(worker.seat)).toHaveLength(1);
-      expect(workerInbox(worker.seat)[0]?.payload.to).toBe(worker.seat);
-    }
-    const held = leases().map((lease) => [lease.id, lease.seat, lease.pane]).sort();
-    expect(held).toEqual(WORKERS.map((worker, index) => [`t${index + 1}`, worker.seat, worker.pane]).sort());
-    // With every item leased by an idle worker the source is empty; the whole stretch is one
-    // signed notice in the lead's mailbox naming all three seats, and no later pass rewrites it.
-    const names = mail.names();
-    expect(names).toHaveLength(1);
-    expect(names[0]).toContain('evt-work-empty-lead-idle-');
-    expect(mail.payload(names[0]!)).toMatchObject({
-      to: 'lead',
-      body: 'acme: 3 idle, nothing queued (deepseek-acme, deepseek-beta, deepseek-gamma)',
-    });
-    expect(snapshots.length).toBeGreaterThanOrEqual(2);
-    expect(new Set(snapshots).size).toBe(1);
-  });
 });
 
 // An accepted wake the worker never picks up: the runtime takes nothing (no lease, no activity

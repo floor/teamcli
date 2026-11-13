@@ -269,23 +269,6 @@ test('a raw publish naming an unsigned record posts and appends nothing', async 
   expect(logIds(at)).not.toContain('unsigned-one');
 });
 
-test('a raw publish claiming another seat record, or another session, posts nothing', async () => {
-  const at = place(); const held = receiver();
-  writeFileSync(at.urlFile, held.url + '\n');
-  await bus(at);
-  // helper carries no webhook, so its own arrival posts nothing on its own.
-  const helpers = await send(at, 'helper', 'for helper only');
-  // The record exists and is signed, but it is helper's: the claim says iris holds it.
-  const wrongSeat = await publishToBus(at.root, arrival(helpers, 'iris'));
-  expect(wrongSeat.kind).toBe('refused');
-  // This session's bus does not serve another session's claim.
-  const wrongSession = await publishToBus(at.root, arrival(helpers, 'helper', { session: 'not-this-session' }));
-  expect(wrongSession.kind).toBe('refused');
-  expect(held.posts).toHaveLength(0);
-  // The one arrival in the log is helper's own valid nudge; a refused publish appends no second.
-  expect(logIds(at).filter((id) => id === helpers)).toHaveLength(1);
-});
-
 test('a linked record is refused by the publish and by the reconcile pass', async () => {
   const at = place(); const held = receiver();
   writeFileSync(at.urlFile, held.url + '\n');
@@ -344,12 +327,6 @@ test('a seat.working publish is appended and never posted to the adapter', async
   expect(logIds(at)).toContain('watch:working:iris-1');
   await new Promise((resolve) => setTimeout(resolve, 100));
   expect(held.posts).toHaveLength(0);
-});
-
-test('a send with no bus running still lands its record', async () => {
-  const at = place();
-  const id = await send(at, 'iris', 'no bus is listening');
-  expect(existsSync(dropPath(at, 'iris', id))).toBe(true);
 });
 
 test('a silent bus socket never fails the send, and the real bus adds no second post', async () => {

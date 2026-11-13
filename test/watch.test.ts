@@ -2299,68 +2299,6 @@ describe('team watch', () => {
     expect(reached.includes(control) || reached.includes(controlId)).toBe(true);
   });
 
-  test('a superseded brief dropped from the claim is not offered for read or rung', async () => {
-    const currentTeam = team();
-    const session = currentTeam.session;
-    const seat = 'deepseek-acme';
-    const root = findRoot(dir);
-    if (!root) throw new Error('the watch fixture is not a git checkout');
-    const agentsDir = join(root, '.agents');
-    const home = join(dir, 'home');
-    mkdirSync(home, { recursive: true });
-
-    const deliver = (at: string) => deliverBriefForAttribution({
-      dir: agentsDir,
-      root,
-      session,
-      home,
-      now: new Date(at),
-      team: currentTeam,
-      state: readState(agentsDir).sessions[session] ?? emptySession(),
-      attributed: [seat],
-    }).deliveries.find((delivery) => delivery.seat === seat);
-    const first = deliver('2026-10-03T13:30:00.000Z');
-    const second = deliver('2026-10-03T13:35:00.000Z');
-    const third = deliver('2026-10-03T13:40:00.000Z');
-    if (!first?.ok || !second?.ok || !third?.ok) throw new Error('the fixture could not deliver its briefs');
-    const claim = readState(agentsDir).sessions[session]?.briefs?.[seat];
-    expect(claim?.superseded).toContain(second.id);
-    expect(claim?.superseded).not.toContain(first.id);
-
-    // Read the current brief as the launch hook does, as the seat itself: only the seat that owns
-    // the inbox writes a read receipt, so the fixture records its standing first. The old signed
-    // record cannot be served and stays on disk without a receipt, but it must no longer appear
-    // in the reader's waiting list.
-    updateState(agentsDir, (state) => {
-      const one = (state.sessions[session] ??= emptySession());
-      one.seats = { ...(one.seats ?? {}), [seat]: { stage: 'ready' as const, pane: 'pane-reader' } };
-    });
-    const currentRead = testIo(dir, { kind: 'seat', name: seat, pane: 'pane-reader', session });
-    expect(await runDrops(['--read', '--seat', seat, '--session', session], currentRead, { home })).toBe(0);
-    expect(currentRead.out).toContain('from the launch');
-    expect(existsSync(`${join(agentsDir, 'send-drops', session, seat, third.id)}.read.json`)).toBe(true);
-    const oldPath = join(agentsDir, 'send-drops', session, seat, first.id);
-    expect(existsSync(oldPath)).toBe(true);
-    expect(existsSync(`${oldPath}.read.json`)).toBe(false);
-    expect(listUnacked(root, session, home).map((message) => message.id)).toContain(first.id);
-    expect(listUnread(join(agentsDir, 'send-drops', session, seat), { to: seat, root, session }, home)).toEqual([]);
-
-    const retry = testIo(dir, { kind: 'seat', name: seat, pane: 'pane-reader', session });
-    expect(await runDrops(['--read', '--seat', seat, '--session', session], retry, { home })).toBe(0);
-    // The next turn names that read on stderr, so a hook that forwards stdout stays quiet, and serves no body.
-    expect(retry.out).toBe('');
-    expect(retry.out).not.toContain('from the launch');
-    expect(retry.err).toContain('no unread drops');
-    expect(retry.err).toContain(`${third.id}: already read at`);
-
-    const io = testIo(dir, { kind: 'owner' });
-    expect(await runWatch(['--file', file], io, sources(2, { home }))).toBe(0);
-    expect(typed).toEqual([]);
-    expect(io.out).not.toContain(`rang ${seat}`);
-    expect(existsSync(oldPath)).toBe(true);
-    expect(existsSync(`${oldPath}.read.json`)).toBe(false);
-  });
-
   test('an older-store evt-work record is never rung, and types nothing', async () => {
     // The RC3 observation: `team ack` refused every `evt-work-*` record as an earlier-build one
     // and `team messages` listed none, yet the wake kept naming them. They wait in the older

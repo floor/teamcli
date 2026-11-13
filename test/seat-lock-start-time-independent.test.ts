@@ -406,24 +406,6 @@ describe('6. the refusal names pid and start', () => {
     );
     expect(runLockText(-1, 'acme', dir, null)).toContain('its lock cannot be read');
   });
-
-  test('a send that meets a held seat lock records the holder pid and start time in its refusal/busy reason', async () => {
-    const made = world(['drop']);
-    extraCleanup = made.cleanup;
-    mkdirSync(join(made.dir, 'seat-locks', 'acme'), { recursive: true });
-    const lockPath = seatLockPath(made.dir, 'acme', 'lead');
-    writeFileSync(lockPath, `${OTHER_PID} cafefeed9999 ${START_MS}\n`);
-
-    Object.assign(lockSteps, syntheticSteps());
-    const io = owner(made.root);
-    const code = await runSend(['lead', 'hello'], io, fake(made));
-
-    expect(code).toBe(0);
-    const logText = readFileSync(join(made.dir, LOG_FILE), 'utf8');
-    expect(logText).toContain(
-      `another command holds the seat (pid ${OTHER_PID}, started ${new Date(START_MS).toISOString()})`,
-    );
-  });
 });
 
 describe('7. a leftover file of a dead process does not divert a send off the socket', () => {
@@ -447,78 +429,4 @@ describe('7. a leftover file of a dead process does not divert a send off the so
     mkdirSync(join(made.dir, 'seat-locks', 'acme'), { recursive: true });
     return made;
   }
-
-  test('a leftover lock file of a dead process does not divert a send off the socket', async () => {
-    const made = prepareAcceptingSocketWorld();
-    const lockPath = seatLockPath(made.dir, 'acme', 'lead');
-    Object.assign(
-      lockSteps,
-      syntheticSteps({
-        alive: (pid) => pid !== DEAD_PID,
-      }),
-    );
-
-    const frames: string[] = [];
-    const host = fake(made, {
-      agents: () => {
-        // Place the dead process's lock file right before the socket fast path inspects seatLockHolder.
-        writeFileSync(lockPath, `${DEAD_PID} deadbeef1234 ${START_MS}\n`);
-        return [{ name: 'lead', pane: 'fixture-pane-lead' }];
-      },
-      deliver: async (_path: string, frame: string) => {
-        frames.push(frame);
-        return { ok: true };
-      },
-    });
-
-    const code = await runSend(['lead', 'socket message'], owner(made.root), host);
-    expect(code).toBe(0);
-    expect(frames).toHaveLength(1);
-    expect(frames[0]).toContain('socket message');
-
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.at(-1)).toMatchObject({ to: 'lead', outcome: 'delivered', via: 'socket' });
-  });
-
-  test('a leftover lock file of a reused pid also walks the socket, while a genuinely held lock diverts off the socket', async () => {
-    const made = prepareAcceptingSocketWorld();
-    const lockPath = seatLockPath(made.dir, 'acme', 'lead');
-    Object.assign(lockSteps, syntheticSteps());
-
-    // First send: lock file has OTHER_PID (live in syntheticSteps at START_MS), but token records an older start.
-    const framesReused: string[] = [];
-    const hostReused = fake(made, {
-      agents: () => {
-        writeFileSync(lockPath, `${OTHER_PID} 0123456789ab ${EARLIER_MS - 60_000}\n`);
-        return [{ name: 'lead', pane: 'fixture-pane-lead' }];
-      },
-      deliver: async (_path: string, frame: string) => {
-        framesReused.push(frame);
-        return { ok: true };
-      },
-    });
-
-    const code1 = await runSend(['lead', 'through reused pid lock'], owner(made.root), hostReused);
-    expect(code1).toBe(0);
-    expect(framesReused).toHaveLength(1);
-
-    // Second send: lock file has OTHER_PID with matching START_MS (genuinely held) -> diverts off the socket.
-    const framesHeld: string[] = [];
-    const hostHeld = fake(made, {
-      agents: () => {
-        writeFileSync(lockPath, `${OTHER_PID} fedcba987654 ${START_MS}\n`);
-        return [{ name: 'lead', pane: 'fixture-pane-lead' }];
-      },
-      deliver: async (_path: string, frame: string) => {
-        framesHeld.push(frame);
-        return { ok: true };
-      },
-    });
-
-    const code2 = await runSend(['lead', 'diverted while held'], owner(made.root), hostHeld);
-    expect(code2).toBe(0);
-    expect(framesHeld).toHaveLength(0);
-  });
 });

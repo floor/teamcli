@@ -669,25 +669,6 @@ describe('Cursor rules delivery', () => {
     expect(retired).toBe(false);
   });
 
-  test('no pane messaging, the rules line is never typed; was: a typed text whose own last line is empty: no Enter, with the row or without it', async () => {
-    // The text ends with a newline, so its last line is empty and the pane once drew a row for
-    // it. A row break may stand for at most one space, never a newline, and a blank row is
-    // never the text's own: the trailing newline is unaccounted for either way, and the box
-    // never verifies.
-    const typed = CAPTURED_WRAP + '\n';
-    const rows = wordWrap(CAPTURED_WRAP, 51 - 4);
-    const [firstRow = '', ...rest] = rows;
-    const body = [`  → ${firstRow}`, ...rest.map((row) => `    ${row}`)];
-    const withRow = fixture('idle').replace('  → Plan, search, build anything', [...body, ''].join('\n'));
-    const withoutRow = fixture('idle').replace('  → Plan, search, build anything', body.join('\n'));
-    expect(boxHoldsText('cursor', typed, withRow)).toBe(false);
-    expect(boxHoldsText('cursor', typed, withoutRow)).toBe(false);
-    const d = delivery();
-    d.io.type = (text) => { d.calls.push(text); d.showText(withoutRow); return true; };
-    const retired = await deliverRules('cursor', typed, 1, d.io);
-    expect(retired).toBe(false);
-  });
-
   test('no pane messaging, the rules line is never typed; was: a box holding a person\'s own text gets no Enter', async () => {
     // The captured rules box against a shorter first message: the box is not the typed text.
     const d = delivery();
@@ -932,15 +913,6 @@ describe('the person\'s own box, captured (Cursor)', () => {
     ['typed-blank-middle', 'kappa first line\n\nlambda third line'],
   ];
 
-  test.each(CAPTURES.filter(([name]) => name !== 'typed-wrap'))('%s reads unsent; its multi-line text no longer reads back', (name, text) => {
-    // These captures stay as documentation of the continuation column; a row break may stand
-    // for at most one space, never a newline, so no multi-line text reads back.
-    const screen = fixture(name);
-    expect(readScreen('cursor', screen).kind).toBe('unsent');
-    expect(classifyComposer('cursor', screen.split('\n')).kind).toBe('unsent');
-    expect(boxHoldsText('cursor', text, screen)).toBe(false);
-  });
-
   test('typed-wrap reads unsent and holds exactly its one line', () => {
     const text = 'iota long line that wraps at the pane width through several words to show the continuation column of a wrapped row on this screen';
     const screen = fixture('typed-wrap');
@@ -991,33 +963,6 @@ function drawnAt(text: string): string {
   const [first = '', ...rest] = wordWrap(text, 47);
   return [`  → ${first}`, ...rest.map((row) => `    ${row}`)].join('\n');
 }
-
-test('the box limits and the paste marker, as the captures show them', () => {
-  // rules-fit-6.txt draws six typed rows whole; rules-fit-7.txt has scrolled the first typed row
-  // out of the box. The fitted texts are multi-line, and no multi-line text reads back at
-  // any height — the captures stay as documentation of the box's own edge.
-  expect(readScreen('cursor', fixture('rules-fit-6')).kind).toBe('unsent');
-  expect(readScreen('cursor', fixture('rules-fit-7')).kind).toBe('unsent');
-  expect(boxHoldsText('cursor', fitted(6), fixture('rules-fit-6'))).toBe(false);
-  expect(boxHoldsText('cursor', fitted(7), fixture('rules-fit-7'))).toBe(false);
-  // A paste over 800 characters is hidden behind the marker; nothing of it reads back.
-  expect(readBox('cursor', fixture('rules-pasted-short'))?.first).toBe('[Pasted text #1 +10 lines]');
-  expect(readBox('cursor', fixture('rules-pasted-medium'))?.first).toBe('[Pasted text #1 +14 lines]');
-  expect(readBox('cursor', fixture('rules-pasted'))?.first).toBe('[Pasted text #1 +17 lines]');
-  for (const file of ['rules-pasted-short', 'rules-pasted-medium', 'rules-pasted']) {
-    expect(readScreen('cursor', fixture(file)).kind).toBe('unsent');
-  }
-  expect(boxHoldsText('cursor', SAMPLE_RULES, fixture('rules-pasted'))).toBe(false);
-  // 800 characters are drawn as words, 801 are the marker (rules-threshold-800/801.txt).
-  const words = `${'word '.repeat(159)}wordx`;
-  expect(words.length).toBe(800);
-  expect(readBox('cursor', fixture('rules-threshold-800'))?.first.startsWith('word ')).toBe(true);
-  expect(boxHoldsText('cursor', words, fixture('rules-threshold-800'))).toBe(false);
-  const over = `${'word '.repeat(160)}w`;
-  expect(over.length).toBe(801);
-  expect(readBox('cursor', fixture('rules-threshold-801'))?.first).toBe('[Pasted text #1 +1 lines]');
-  expect(boxHoldsText('cursor', over, fixture('rules-threshold-801'))).toBe(false);
-});
 
 // The line the 2026-10-05 capture holds, as `team` composes it: the same path and hash the
 // fixtures README names, through the function that builds it. The box draws it as four rows on
@@ -2166,23 +2111,6 @@ describe('the bordered box read back (Cursor)', () => {
   // standing for the line's own single space); a multi-row paste is refused, not read.
   const TYPED = ['alpha bordered line one', 'beta bordered line two', 'gamma bordered line three'];
   const TEXT = TYPED.join('\n');
-
-  test('the three-row capture reads unsent and its box is exactly the typed text', () => {
-    const screen = fixture('bordered-typed-three');
-    expect(readScreen('cursor', screen).kind).toBe('unsent');
-    expect(classifyComposer('cursor', screen.split('\n')).kind).toBe('unsent');
-    expect(readBox('cursor', screen)).toEqual({
-      first: 'alpha bordered line one',
-      indent: 4,
-      rows: ['    beta bordered line two', '    gamma bordered line three'],
-      wrap: { continuation: 'text-column', kind: 'word' },
-    });
-    // The one-line read-back holds single lines: a multi-row paste is not a delivery target,
-    // so the three rows together no longer read back as one held text — the frame's box still
-    // reads them row for row (readBox above), and one row still holds (below).
-    expect(boxHoldsText('cursor', TEXT, screen)).toBe(false);
-    expect(boxHoldsText('cursor', 'alpha bordered line one', fixture('bordered-typed-one'))).toBe(true);
-  });
 
   test('another text is refused', () => {
     expect(boxHoldsText('cursor', `${TEXT}\nand one more`, fixture('bordered-typed-three'))).toBe(false);

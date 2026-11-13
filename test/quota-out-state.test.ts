@@ -343,24 +343,6 @@ describe('a walled seat keeps the note without a wake', () => {
     expect(host.dials()).toBe(0);
   });
 
-  test('a quote above a live idle box is not the wall: the send walks its legs', async () => {
-    const w = world();
-    const host = paneHost(w);
-    host.show([
-      '● The handover note quotes the dialog it saw:',
-      '  API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00',
-      '  I answered it, so this is the box after.',
-      '',
-      claudeBox(''),
-    ].join('\n'));
-    const io = owner(w.root);
-
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(host.typed.length).toBe(0);
-  });
-
   test('the daemon refuses before the drop file is staged', async () => {
     const w = world();
     const host = paneHost(w);

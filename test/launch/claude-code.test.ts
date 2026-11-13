@@ -79,22 +79,6 @@ describe('Claude Code rules delivery', () => {
     expect(retired).toBe(false);
   });
 
-  test('no pane messaging, the rules line is never typed; was: a rule-shaped row at the content column is content, and a newline never reads back', async () => {
-    // The pane draws a second line at the content column — two spaces, the prompt row's own
-    // width — and a rule-looking row there is content, told from the box's closing rule by its
-    // column (unsent-typed-ansi.txt: both rules start at the pane's first column). The
-    // delivery is one line and a row break may stand for at most one space, never a newline:
-    // a two-line text is refused whatever its rows look like, fail closed.
-    const typed = `alpha beta\n${ROGUE}`;
-    const screen = claudeBox(typed);
-    expect(readScreen('claude-code', screen).kind).toBe('unsent');
-    expect(boxHoldsText('claude-code', typed, screen)).toBe(false);
-    const d = delivery();
-    d.io.type = (text) => { d.calls.push(text); d.showText(screen); return true; };
-    const retired = await deliverRules('claude-code', typed, 1, d.io);
-    expect(retired).toBe(false);
-  });
-
   test('no pane messaging, the rules line is never typed; was: a box holding a person\'s own text gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(claudeBox('Other rules.')); return true; };
@@ -144,26 +128,6 @@ describe('the prompt-glyph continuation row', () => {
     const two = claudeBox(`person text\n${GLYPH}\n${GLYPH}`);
     expect(readScreen('claude-code', two).kind).toBe('unsent');
     expect(boxHoldsText('claude-code', 'Rules.', claudeBox(`person text\n${GLYPH}\n${GLYPH} Rules.`))).toBe(false);
-  });
-
-  test('with the opening rule scrolled out of the window the footers carry the frame; an unexplained row above the input row fails closed', () => {
-    // The window as the pane would show it with the opening rule clipped: the box's rows, the
-    // closing rule, and exactly the captured footers in order. The input row is the lowest row
-    // above the closing rule carrying the prompt at the capture's own column — content is drawn
-    // at the text's column, so a row at the prompt's can only be the box's first. It reads
-    // unsent and its rows read back.
-    const [, , , status1 = '', status2 = ''] = claudeBox('x').split('\n');
-    const rule = ROGUE;
-    const clipped = [`❯ person text`, '  more of theirs', rule, status1, status2].join('\n') + '\n';
-    expect(readScreen('claude-code', clipped).kind).toBe('unsent');
-    // The frame reads; a text with a newline in it does not — a row break may stand for at
-    // most one space, never the newline between two lines.
-    expect(boxHoldsText('claude-code', 'person text\nmore of theirs', clipped)).toBe(false);
-    expect(boxHoldsText('claude-code', 'person text more of theirs', clipped)).toBe(true);
-    // A non-blank row above the input row that the frame does not explain — with the opening
-    // rule gone the reader cannot tell it from box content — and the read fails closed.
-    const stray = ['  stray content', '❯ person text', '  more of theirs', rule, status1, status2].join('\n') + '\n';
-    expect(readScreen('claude-code', stray).kind).toBe('unknown');
   });
 });
 

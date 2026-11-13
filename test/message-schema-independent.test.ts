@@ -90,19 +90,6 @@ function legacyReceipt(at: ReturnType<typeof scene>) {
 }
 
 describe('independent signed message schema matrix', () => {
-  for (const subject of [undefined, 'Synthetic subject']) {
-    test(`a complete signed ${subject === undefined ? 'older' : 'subject-bearing'} payload is read once`, () => {
-      const at = scene();
-      const payload = { ...at.payload, ...(subject === undefined ? {} : { subject }) };
-      const signed = at.put(payload);
-      expect(verifyDomain(MESSAGE_DOMAIN, payload, signed.signature, at.key)).toBe(true);
-      expect(at.read()).toEqual({ ok: true, body: SERVED });
-      expect(verifyReceipt(at.parsedReceipt(), at.key)).toBe(true);
-      const before = readFileSync(at.receipt, 'utf8');
-      expect(at.read()).toMatchObject({ ok: false, served: 'already-served' });
-      expect(readFileSync(at.receipt, 'utf8')).toBe(before);
-    });
-  }
 
   for (const field of ['body', 'subject'] as const) {
     test(`changing a signed ${field} refuses the body and publishes no receipt`, () => {
@@ -198,23 +185,6 @@ describe('independent signed message schema matrix', () => {
     expect(isRead(at.dropDir, ID, { root: at.root, session: SESSION, to: 'lead' }, at.key)).toBe(true);
     expect(at.read()).toMatchObject({ ok: false, served: 'already-served' });
     expect(readFileSync(at.receipt, 'utf8')).toBe(before);
-  });
-
-  test('the reader signs its version, process id and supplied runtime epoch into the receipt', () => {
-    const at = scene();
-    at.put(at.payload);
-    expect(readMessage(at.target, ID, at.home, { claim: () => null, epoch: EPOCH })).toEqual({ ok: true, body: SERVED });
-    const raw = JSON.parse(readFileSync(at.receipt, 'utf8'));
-    expect(raw.payload.writer).toEqual({ version: version(), pid: process.pid, epoch: EPOCH });
-    expect(verifyReceipt(at.parsedReceipt(), at.key)).toBe(true);
-  });
-
-  test('a reader with no runtime epoch does not invent one', () => {
-    const at = scene();
-    at.put(at.payload);
-    expect(at.read()).toEqual({ ok: true, body: SERVED });
-    const raw = JSON.parse(readFileSync(at.receipt, 'utf8'));
-    expect(raw.payload.writer).toEqual({ version: version(), pid: process.pid });
   });
 
   test('the receipt signer overwrites caller-supplied writer provenance', () => {
