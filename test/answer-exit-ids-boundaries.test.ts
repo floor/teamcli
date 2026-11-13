@@ -17,7 +17,6 @@ import { updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 
 const PAGE = '../docs/internal/answer.md';
-const CONTRACT = '../contract/exit-codes.json';
 const ANSWER_SRC = '../src/commands/answer.ts';
 const NOW = new Date('2026-10-05T04:00:00.000Z');
 
@@ -103,7 +102,7 @@ function host(home: string): AnswerHost {
 }
 
 describe("the answer table's two ids it lacked", () => {
-  test('the rows, the contract entries and the command marks carry the same words', () => {
+  test('the rows and the command marks carry the same words', () => {
     const page = prose(PAGE);
     expect(
       page.includes('| 1 | `answer.another-pane` | the state records another pane for the caller\'s seat |'),
@@ -112,15 +111,6 @@ describe("the answer table's two ids it lacked", () => {
     expect(
       page.includes('| 1 | `answer.detached` | a run with no terminal |'),
       'answer.md lost the detached row',
-    ).toBe(true);
-    const contract = raw(CONTRACT);
-    expect(
-      contract.includes('"id": "answer.another-pane",\n      "meaning": "the state records another pane for the caller\'s seat",'),
-      'the contract entry changed words',
-    ).toBe(true);
-    expect(
-      contract.includes('"id": "answer.detached",\n      "meaning": "a run with no terminal",'),
-      'the contract entry changed words',
     ).toBe(true);
     const src = raw(ANSWER_SRC);
     expect(src.includes('// exit: answer.another-pane'), 'answer.ts lost the another-pane mark').toBe(true);

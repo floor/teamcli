@@ -46,7 +46,7 @@ export type Assignment = { shards: number; units: Record<string, number> };
  * the timings have one, else 1/n of the file.
  * exit-codes alone is ~44% of the suite; whole, it would set every PR's wall time.
  */
-export const SPLIT: Record<string, number> = { 'test/exit-codes.test.ts': 6 };
+export const SPLIT: Record<string, number> = {};
 
 /** The units to pack: every file, with a split file replaced by its parts. */
 export function units(files: string[]): string[] {

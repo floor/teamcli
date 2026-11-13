@@ -241,7 +241,6 @@ const KNOWN_SERIAL_FILES = new Set([
   'src/index.ts',
   'src/output/schema.ts',
   'contract/cli.json',
-  'contract/exit-codes.json',
   'package.json',
 ]);
 

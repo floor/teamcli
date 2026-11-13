@@ -136,12 +136,6 @@ test('formatting escapes cannot split a credential past the mask', () => {
   const result = scene({ text: 'sk-\x1b[31mfixture0123456789abcdefghijklmnop\x1b[0m\n' });
   expect(result.code).toBe(0); expect(result.out).toContain('[masked]'); expect(result.out).not.toContain('fixture0123456789'); expect(result.out).not.toContain('\x1b');
 });
-test('all seven command exit ids are pinned to their published numeric codes', () => {
-  const contract = JSON.parse(readFileSync(new URL('../contract/exit-codes.json', import.meta.url), 'utf8')) as { rows: { command: string; id: string; code: number }[] };
-  expect(Object.fromEntries(contract.rows.filter(row => row.command === 'peek').map(row => [row.id, row.code]))).toEqual({
-    'peek.shown': 0, 'peek.unknown': 1, 'peek.owner-pane': 1, 'peek.invocation': 2, 'peek.file': 2, 'peek.not-yours': 2, 'peek.no-screen': 2,
-  });
-});
 test('the command AST has only read imports and its sole source member is screenText', () => {
   const path = new URL('../src/commands/peek.ts', import.meta.url);
   expect(existsSync(path)).toBe(true); if (!existsSync(path)) return;

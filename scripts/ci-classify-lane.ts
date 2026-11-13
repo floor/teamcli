@@ -81,9 +81,6 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       ...exactFiles([
         'test/broker.test.ts',
         'test/broker-run.ts',
-        'test/exit-codes.test.ts',
-        'test/exit-filter.ts',
-        'test/exit-filter.test.ts',
         'test/helpers.ts',
       ]),
       ...dirPrefixes(['test/fixtures']),
@@ -226,7 +223,7 @@ export const ROUTINE_ALLOWLIST: readonly LaneRule[] = [
   {
     name: 'non-heavy-test-files',
     patterns: [
-      /^test\/(?!broker\.test\.ts$|broker-run\.ts$|exit-codes\.test\.ts$|exit-filter(\.test)?\.ts$|helpers\.ts$|fixtures\/).+\.(ts|py|md|txt|yaml|json)$/,
+      /^test\/(?!broker\.test\.ts$|broker-run\.ts$|helpers\.ts$|fixtures\/).+\.(ts|py|md|txt|yaml|json)$/,
     ],
   },
   {

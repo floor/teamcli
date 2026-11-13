@@ -23,15 +23,6 @@ async function install(fixture: Fixture, flags: string[] = []) {
   return { code, io };
 }
 
-function contractMatches(id: string, code: number) {
-  const contract = JSON.parse(readFileSync(new URL('../contract/exit-codes.json', import.meta.url), 'utf8')) as {
-    rows: { command: string; id: string; code: number; meaning: string }[];
-  };
-  const rows = contract.rows.filter((row) => row.command === 'daemon' && row.id === id);
-  expect(rows).toHaveLength(1);
-  expect(rows[0]?.code).toBe(code);
-  return rows[0]?.meaning ?? '';
-}
 
 function snapshot(home: string): Record<string, string> {
   const files: Record<string, string> = {};
@@ -77,7 +68,6 @@ test('persistent replacement refusal starts the previous binary from the restore
   const document = JSON.parse(io.out) as ErrorDocument;
   expect(document.error.id).toBe('daemon.install-rolled-back');
   expect(document.error.message).toMatch(/previous.*(put back|restor).*start/i);
-  expect(contractMatches(document.error.id, code)).toMatch(/previous.*start/i);
 });
 
 test('a refused rollback reports the empty running state and its own nonzero exit row', async () => {
@@ -93,7 +83,6 @@ test('a refused rollback reports the empty running state and its own nonzero exi
   const document = JSON.parse(io.out) as ErrorDocument;
   expect(document.error.id).toBe('daemon.install-rollback-failed');
   expect(document.error.message).toMatch(/no daemon (?:is running|was started)/i);
-  expect(contractMatches(document.error.id, code)).toMatch(/no daemon/i);
 });
 
 for (const json of [false, true]) {

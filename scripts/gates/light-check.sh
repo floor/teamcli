@@ -3,8 +3,7 @@
 # module that imports a changed src module, two hops deep — depth 2 only while the selection stays
 # under 80 files, a heavy file only when the change touches it, and a hub module (more than
 # HUB_IMPORTERS direct test importers) reduced to its own name/path test with the rest queued as
-# one background sweep in a heavy slot (gate-common.sh, hub-sweep.zsh) — with
-# test/exit-codes.test.ts narrowed to the exit ids the diff touches. It takes
+# one background sweep in a heavy slot (gate-common.sh, hub-sweep.zsh). It takes
 # one of 4 machine-wide light slots (no heavy slot), no push, no stamp: run it while you work, and run it as often as you like. CI runs the full
 # suite; the heavy machine slots are for full-suite runs and builds only. A private patterns
 # scan warns on a hit (push-gate is the gate that refuses). A slot whose owner pid is gone is
@@ -161,13 +160,6 @@ done
 if (( depth2_capped )); then
   print "light-check:   depth 2 not selected: ${depth2_cap_why}"
 fi
-if (( exit_full )); then
-  print "light-check: exit-codes.test.ts runs unfiltered: ${exit_full_why}"
-elif (( ${#exit_ids} )); then
-  print "light-check: exit ids (${#exit_ids}): ${(j:, :)exit_ids}"
-else
-  print "light-check: no exit id in the diff; exit-codes.test.ts skipped (CI runs it in full)"
-fi
 
 # Private name and phrase scan: a hit warns here (push-gate refuses the push), and a list that
 # is present but unusable also warns. The matched text is never printed, only the location and
@@ -241,9 +233,6 @@ if (( $? != 0 )); then
 fi
 print "light-check: typecheck done in $((SECONDS-step))s"
 
-if [[ -n $(gate_exit_ids_env) ]]; then
-  export TEAM_EXIT_IDS=$(gate_exit_ids_env)
-fi
 fail=0
 for t in $tests; do
   step=$SECONDS

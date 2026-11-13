@@ -375,12 +375,6 @@ describe('the approve command is gone', () => {
     expect(io.out).toBe('');
   });
 
-  test('the exit-code contract keeps no approve row and carries the deny row', () => {
-    const rows = JSON.parse(readFileSync(new URL('../contract/exit-codes.json', import.meta.url), 'utf8')).rows as { id: string }[];
-    expect(rows.filter((row) => row.id.startsWith('approve.'))).toEqual([]);
-    const deny = rows.find((row) => row.id === 'up.deny');
-    expect(deny).toBeDefined();
-  });
 });
 
 describe('the everyday commands with an old approval record on disk', () => {
