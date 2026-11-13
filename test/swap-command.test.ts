@@ -19,7 +19,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { beginSession } from '../src/sessions/registry.ts';
 import { askCheckpoint } from '../src/checkpoint/checkpoint.ts';
 import { readState } from '../src/state.ts';
-import { systemSecretStore } from '../src/secrets/store.ts';
+import { SECRET_ABSENT, systemSecretStore, type SecretRead, type SecretStore } from '../src/secrets/store.ts';
 import type { Screen } from '../src/watch/screen.ts';
 import { CLAUDE_IDLE, claudeBox, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -637,6 +637,48 @@ describe('team swap to another vendor of the same CLI', () => {
     // The one-time command ends at the prompt flag: nothing follows it, so no secret is in the
     // words and nothing is read from stdin.
     expect(doc.error.message).toMatch(/add-generic-password -s glm-api-key -a "\$USER" -w$/);
+  });
+
+  // Where the profile's own check does not run (no Keychain tool on the machine), the system's
+  // secret store for the team's entity answers, for the vendor the swap targets alone.
+  test('off the profile\'s own check, the system\'s secret store answers, and an absent item names the store', async () => {
+    place();
+    setRule('*=!anthropic');
+    const asked: unknown[] = [];
+    const store = (answer: SecretRead): SecretStore => ({
+      read: async (name) => { asked.push(name); return answer; },
+      lookupCommand: () => ({ ok: false, reason: 'not asked in a queue' }),
+    });
+    const present = await swap(['queue', 'lead', '--to', 'zai:glm-5.3'], OWNER, {
+      profileCheckRuns: false, secretStore: store({ ok: true, value: 'never-shown' }),
+    });
+    expect(present.code, present.err).toBe(0);
+    expect(queue().lead!.to.launch).toContain('ANTHROPIC_AUTH_TOKEN={secret:glm-api-key}');
+    expect(present.out + present.err).not.toContain('never-shown');
+    expect(asked).toEqual(['glm-api-key']);
+  });
+
+  test('off the profile\'s own check, an absent or unreadable item refuses with no add command', async () => {
+    place();
+    setRule('*=!anthropic');
+    const store = (answer: SecretRead): SecretStore => ({
+      read: async () => answer,
+      lookupCommand: () => ({ ok: false, reason: 'not asked in a queue' }),
+    });
+    const absent = await swap(['queue', 'lead', '--to', 'zai:glm-5.3'], OWNER, {
+      profileCheckRuns: false, secretStore: store({ ok: false, reason: SECRET_ABSENT }),
+    });
+    expect(absent.code).toBe(1);
+    expect(absent.err).toContain('this machine\'s secret store holds no "glm-api-key" entry for the vendor "zai"');
+    expect(absent.err).not.toContain('add-generic-password');
+    const unread = await swap(['queue', 'lead', '--to', 'zai:glm-5.3'], OWNER, {
+      profileCheckRuns: false, secretStore: store({ ok: false, reason: 'the system\'s secret store could not be opened' }),
+    });
+    expect(unread.code).toBe(1);
+    expect(unread.err).toContain('could not be read');
+    const none = await swap(['queue', 'lead', '--to', 'zai:glm-5.3'], OWNER, { profileCheckRuns: false, secretStore: null });
+    expect(none.code).toBe(1);
+    expect(queue()).toEqual({});
   });
 
   test('an unreadable credential store refuses, never queues', async () => {

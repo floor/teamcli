@@ -25,7 +25,7 @@ import { accessSync, constants, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { realSecretRun, SECRET_NAME } from './run.ts';
-import type { SecretLookup, SecretName, SecretRead, SecretStore, SecretStoreOptions } from './store.ts';
+import { SECRET_ABSENT, type SecretLookup, type SecretName, type SecretRead, type SecretStore, type SecretStoreOptions } from './store.ts';
 
 /** The decrypt's deadline: at expiry it is terminated and the read fails. */
 export const STORE_TIMEOUT_MS = 10_000;
@@ -73,7 +73,7 @@ export function envNameOf(name: string): Found<{ env: string }> {
 export function entryOf(text: string, env: string): Found<{ value: string }> {
   const prefix = `${env}=`;
   const lines = text.split('\n').filter((line) => line.startsWith(prefix));
-  if (lines.length === 0) return { ok: false, reason: 'the system\'s secret store holds no entry for it' };
+  if (lines.length === 0) return { ok: false, reason: SECRET_ABSENT };
   if (lines.length > 1) return { ok: false, reason: 'the system\'s secret store holds that entry more than once' };
   const value = lines[0]!.slice(prefix.length);
   if (value.length === 0) return { ok: false, reason: 'its entry in the system\'s secret store is empty' };

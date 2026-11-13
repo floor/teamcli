@@ -68,6 +68,10 @@ export type SecretStoreOptions = {
   isExecutable?: (path: string) => boolean;
 };
 
+/** The reason a store gives when it holds no entry by the name asked: a caller may tell an absent
+ *  entry from a store that could not answer by this sentence alone. */
+export const SECRET_ABSENT = 'the system\'s secret store holds no entry for it';
+
 /** The sentence a command says when this platform has no secret-store adapter. */
 export const NO_SECRET_STORE = 'the system\'s secret store is not available on this platform';
 

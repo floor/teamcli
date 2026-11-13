@@ -34,7 +34,8 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import { modelRuleAllows, modelRuleSentence } from '../policy/model-rule.ts';
-import { credentialProbeFor, type CredentialProbe } from '../profiles/credentials.ts';
+import { credentialProbeFor, profileCheckRuns, storeCredentialState, type CredentialProbe } from '../profiles/credentials.ts';
+import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { profileFor } from '../profiles/index.ts';
 import type { Profile } from '../profiles/profile.ts';
 import { mayReadTeam } from '../read-gate.ts';
@@ -100,6 +101,13 @@ export type SwapCommandOptions = {
   /** Whether the machine holds a vendor's credential item. Injected by tests; absent, the
    *  profile's own attribute-only check runs against this machine's store. */
   credentialProbe?: CredentialProbe;
+  /** The system's secret store a vendor's item is looked for in when the profile's own check
+   *  does not run on this machine. Injected by tests; absent, the system's own for the team's
+   *  entity. */
+  secretStore?: SecretStore | null;
+  /** Whether the profile's own check runs on this machine. Injected by tests; absent, whether its
+   *  program is an executable here. */
+  profileCheckRuns?: boolean;
 };
 
 function resolveNow(now: Date | (() => Date) | undefined): Date {
@@ -203,7 +211,7 @@ export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOpt
     readArgs(argv, ['file', 'model', 'version', 'vendor', 'effort'], ['dry-run', 'json']);
     return runPresetSwap(argv, rawIo, options);
   }
-  const executed = execute(argv, rawIo, options);
+  const executed = await execute(argv, rawIo, options);
   const outcome = typeof executed === 'string' ? executed : await performRun(executed);
   if (outcome === 'invocation') {
     return 2; // exit: swap.invocation
@@ -258,7 +266,7 @@ export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOpt
 
 type Sub = 'view' | 'rule' | 'queue' | 'now' | 'cancel' | 'run';
 
-function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcome | RunPlan {
+async function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Promise<Outcome | RunPlan> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
   const words = positionalsOf(argv);
@@ -554,8 +562,10 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   }
 
   const profile = profileFor(seat.cli) ?? null;
-  const probe = options.credentialProbe ?? probeOnThisMachine(profile);
-  const choice = choose(sub, listing, root, seat, args.values.to, profile, probe);
+  const machine = options.credentialProbe !== undefined
+    ? { probe: options.credentialProbe, addFor: undefined }
+    : await probeOnThisMachine(profile, args.values.to, options, { home, entity: team.entity ?? null });
+  const choice = choose(sub, listing, root, seat, args.values.to, profile, machine.probe, machine.addFor);
   if (choice.kind === 'unchanged') {
     refuse(rawIo, io, json, 'swap.unchanged', choice.message, null, notice, null);
     return 'unchanged';
@@ -802,6 +812,7 @@ function choose(
   to: string | undefined,
   profile: Profile | null,
   probe: CredentialProbe,
+  addFor?: (item: string) => string | null,
 ): Choice {
   if (sub === 'queue' && to !== undefined) {
     const want = parseTarget(to);
@@ -817,7 +828,9 @@ function choose(
           repair: null,
         };
       }
-      const plan = planVendorSwap(profile, seat, vendor.name, want.model, probe);
+      const plan = addFor === undefined
+        ? planVendorSwap(profile, seat, vendor.name, want.model, probe)
+        : planVendorSwap(profile, seat, vendor.name, want.model, probe, addFor);
       if (!plan.ok) return { kind: 'target', message: plainText(plan.why), repair: plan.repair };
       return { kind: 'recipe', donor: null, recipe: plan.recipe };
     }
@@ -858,13 +871,30 @@ export function queuedRowProblem(
   return `${first.line === undefined ? '' : `line ${first.line}: `}${first.message}`;
 }
 
-/** The profile's own attribute-only credential check, run on this machine. A profile with no
- *  declared check answers `unavailable`: nothing asked it, and a vendor move never runs without
- *  a store to prove the item in. */
-function probeOnThisMachine(profile: Profile | null): CredentialProbe {
+/** Whether this machine holds a vendor's item. Where the profile's own attribute-only check runs,
+ *  it answers, and a refusal prints the profile's add command, as before. Elsewhere the system's
+ *  secret store for the team's entity answers, for the one vendor this swap targets, and a refusal
+ *  names the store instead of a command. A profile with no declared check answers `unavailable`:
+ *  nothing asked it, and a vendor move never runs without a store to prove the item in. */
+async function probeOnThisMachine(
+  profile: Profile | null,
+  to: string | undefined,
+  options: SwapCommandOptions,
+  context: { home: string; entity: string | null },
+): Promise<{ probe: CredentialProbe; addFor: ((item: string) => string | null) | undefined }> {
   const credentials = profile?.credentials ?? null;
-  if (credentials === null) return () => 'unavailable';
-  return credentialProbeFor(credentials, userInfo().username);
+  if (credentials === null) return { probe: () => 'unavailable', addFor: undefined };
+  if (options.profileCheckRuns ?? profileCheckRuns(credentials)) {
+    return { probe: credentialProbeFor(credentials, userInfo().username), addFor: undefined };
+  }
+  const want = to === undefined ? null : parseTarget(to);
+  const vendor = want === null || typeof want === 'string' ? null : vendorTargetOf(profile, want.cli);
+  if (vendor === null) return { probe: () => 'unavailable', addFor: () => null };
+  const store = options.secretStore !== undefined
+    ? options.secretStore
+    : systemSecretStore({ home: context.home, ...(context.entity === null || context.entity === '' ? {} : { entity: context.entity }) });
+  const state = await storeCredentialState(store, vendor.credential);
+  return { probe: (item) => (item === vendor.credential ? state : 'unavailable'), addFor: () => null };
 }
 
 /** The one sentence a refused caller reads; the placement is named, never the exact step. */
