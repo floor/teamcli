@@ -1,6 +1,5 @@
 // The local full-suite test step. A timer inside Bun cannot interrupt a synchronous test loop,
-// so each file runs in a child with a wall-clock bound enforced by this parent. The existing
-// split units keep their TEAM_EXIT_PART selector, as they do in the shard runner.
+// so each file runs in a child with a wall-clock bound enforced by this parent.
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { units } from './ci-shard-tests.ts';
@@ -22,10 +21,8 @@ export function runTestFiles(testUnits: readonly string[], options: {
   const log = options.log ?? console.error;
   let status = 0;
   for (const unit of testUnits) {
-    const [file, part] = unit.split('#') as [string, string | undefined];
-    const env = { ...(options.env ?? process.env) };
-    delete env.TEAM_EXIT_PART;
-    if (part !== undefined) env.TEAM_EXIT_PART = part;
+    const file = unit;
+    const env = options.env ?? process.env;
     log(`Test file: ${unit}`);
     const ran = spawnSync(process.execPath, ['test', '--timeout', '30000', resolve(options.root ?? ROOT, file)], {
       cwd: options.root ?? ROOT,

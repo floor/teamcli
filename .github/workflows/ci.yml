@@ -162,8 +162,7 @@ jobs:
           MODE: ${{ steps.select.outputs.mode }}
           TESTS: ${{ steps.select.outputs.tests }}
           SHARD: ${{ matrix.shard }}
-        # Duration-weighted split (scripts/ci-shard-tests.ts, timings in scripts/ci-test-timings.json):
-        # a unit is a file, or `<file>#<i>/<n>`, part i of a file split with TEAM_EXIT_PART.
+        # Duration-weighted split (scripts/ci-shard-tests.ts, timings in scripts/ci-test-timings.json).
         run: |
           if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(src/broker/|src/commands/broker\.ts$|test/broker(-run|\.test)\.ts$)'; then
             export TEAM_NIGHTLY_STRESS=1
@@ -172,21 +171,7 @@ jobs:
           mine="$(bun scripts/ci-shard-tests.ts --shard "$SHARD" --shards 6)"
           if [ -z "$mine" ]; then echo "No tests in this shard."; exit 0; fi
           echo "Shard $SHARD runs: $mine"
-          files=""
-          parts=""
-          for t in $mine; do
-            case "$t" in
-              *#*) parts="$parts $t" ;;
-              *) files="$files $t" ;;
-            esac
-          done
-          status=0
-          if [ -n "$files" ]; then bun test $files || status=1; fi
-          for p in $parts; do
-            echo "Part ${p#*#} of ${p%%#*}"
-            TEAM_EXIT_PART="${p#*#}" bun test "./${p%%#*}" || status=1
-          done
-          exit $status
+          bun test $mine
 
   macos-tests:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
@@ -318,8 +303,7 @@ jobs:
       # The full suite is split by the checked-in assignment
       # (scripts/ci-shard-assignment.json), not recomputed at run time: a unit keeps its shard
       # when a test file is added, and --check refuses a test file that belongs to no shard.
-      # A unit is a file, or `<file>#<i>/<n>`, part i of a SPLIT file run with TEAM_EXIT_PART.
-      # Each run's JUnit report becomes `##[unit]<unit> <ms>` lines in this job's log, which is
+      # Each run's JUnit report becomes `##[unit]<file> <ms>` lines in this job's log, which is
       # what `ci-shard-tests.ts --record` reads back into scripts/ci-test-timings.json.
       # The live-herdr tests skip themselves: TEAM_LIVE_UP is not set here.
       - name: Run the full suite (shard ${{ matrix.shard }} of 6)
@@ -346,23 +330,8 @@ jobs:
           mine="$(bun scripts/ci-shard-tests.ts --assigned --shard "$SHARD" --shards 6)"
           if [ -z "$mine" ]; then echo "No tests in this shard."; exit 0; fi
           echo "Shard $SHARD runs: $mine"
-          files=""
-          parts=""
-          for t in $mine; do
-            case "$t" in
-              *#*) parts="$parts $t" ;;
-              *) files="$files $t" ;;
-            esac
-          done
-          status=0
           junit="$RUNNER_TEMP/junit.xml"
-          if [ -n "$files" ]; then
-            bun test --reporter=junit --reporter-outfile="$junit" $files || status=1
-            bun scripts/ci-shard-tests.ts --junit "$junit"
-          fi
-          for p in $parts; do
-            echo "Part ${p#*#} of ${p%%#*}"
-            TEAM_EXIT_PART="${p#*#}" bun test "./${p%%#*}" --reporter=junit --reporter-outfile="$junit" || status=1
-            bun scripts/ci-shard-tests.ts --junit "$junit" --label "$p"
-          done
+          status=0
+          bun test --reporter=junit --reporter-outfile="$junit" $mine || status=1
+          bun scripts/ci-shard-tests.ts --junit "$junit"
           exit $status

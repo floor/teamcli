@@ -2,17 +2,16 @@
 // Splits the test files over shards by recorded duration, so one shard no longer gets most of the
 // time (round-robin by position put exit-codes and broker on the same shard as hundreds of others).
 //
-//   bun scripts/ci-shard-tests.ts --shard 1 --shards 6 [tests...]   one shard's units, space-separated
-//     (a unit is a test file, or `<file>#<i>/<n>`: part i of n of a SPLIT file)
+//   bun scripts/ci-shard-tests.ts --shard 1 --shards 6 [tests...]   one shard's test files, space-separated
 //   bun scripts/ci-shard-tests.ts --plan --shards 6 [tests...]      every shard with its estimate (stderr)
 //   bun scripts/ci-shard-tests.ts --assigned --shard 1 --shards 6   one shard of the checked-in assignment
 //   bun scripts/ci-shard-tests.ts --assigned --plan                 the checked-in assignment with estimates
 //   bun scripts/ci-shard-tests.ts --check                           fail unless every tracked test is assigned once
 //   bun scripts/ci-shard-tests.ts --write                           drop deleted units, append new ones, move none
 //   bun scripts/ci-shard-tests.ts --rebalance [--shards 6]          rewrite the assignment by recorded duration
-//   bun scripts/ci-shard-tests.ts --run 1/6                         run one shard locally, files then parts
+//   bun scripts/ci-shard-tests.ts --run 1/6                         run one shard locally
 //   bun scripts/ci-shard-tests.ts --record <log> [log...]           merge timings from shard job logs of one system
-//   bun scripts/ci-shard-tests.ts --junit <report.xml> [--label <unit>]  print a run's unit times for --record
+//   bun scripts/ci-shard-tests.ts --junit <report.xml>             print a run's file times for --record
 //
 // With no test arguments, the list is read from $TESTS. A full suite (MODE=full, or TESTS=full)
 // with no files named on the command line reads the checked-in assignment
@@ -40,19 +39,9 @@ export type Plan = { files: string[]; ms: number }[];
 
 export type Assignment = { shards: number; units: Record<string, number> };
 
-/**
- * Files run as several parts, each in its own process with `TEAM_EXIT_PART=<i>/<n>` (see
- * test/exit-filter.ts): one unit `<file>#<i>/<n>` per part, weighing its own recorded time when
- * the timings have one, else 1/n of the file.
- * exit-codes alone is ~44% of the suite; whole, it would set every PR's wall time.
- */
-export const SPLIT: Record<string, number> = {};
-
-/** The units to pack: every file, with a split file replaced by its parts. */
+/** The units to pack: every test file once. */
 export function units(files: string[]): string[] {
-  return [...new Set(files)].flatMap((f) =>
-    SPLIT[f] ? Array.from({ length: SPLIT[f]! }, (_, i) => `${f}#${i}/${SPLIT[f]}`) : [f],
-  );
+  return [...new Set(files)];
 }
 
 export function readTimings(path = TIMINGS): Record<string, number> {
@@ -74,14 +63,7 @@ export function weights(files: string[], timings: Record<string, number>, size: 
     .filter((r) => Number.isFinite(r))
     .sort((a, b) => a - b);
   const rate = rates.length ? rates[Math.floor(rates.length / 2)]! : 0.1;
-  const one = (f: string) => Math.max(1, timings[f] ?? Math.round(size(f) * rate));
-  return new Map(
-    files.map((u) => {
-      const [f, part] = u.split('#') as [string, string | undefined];
-      // A part's own recorded time first (part 0 carries the whole-repo checks), else 1/n of the file.
-      return [u, Math.max(1, timings[u] ?? (part ? Math.round(one(f) / Number(part.split('/')[1])) : one(f)))];
-    }),
-  );
+  return new Map(files.map((f) => [f, Math.max(1, timings[f] ?? Math.round(size(f) * rate))]));
 }
 
 /**
@@ -97,10 +79,7 @@ export const UNTIMED_MS = 3850;
 export function assignmentWeights(files: string[], timings: Record<string, number>, size: (f: string) => number = sizeOf): Map<string, number> {
   const w = weights(files, timings, size);
   for (const u of new Set(files)) {
-    const [file, part] = u.split('#') as [string, string | undefined];
-    if (timings[u] !== undefined || timings[file] !== undefined) continue;
-    const share = part ? UNTIMED_MS / Number(part.split('/')[1]) : UNTIMED_MS;
-    w.set(u, Math.max(w.get(u) ?? 0, Math.round(share)));
+    if (timings[u] === undefined) w.set(u, Math.max(w.get(u) ?? 0, UNTIMED_MS));
   }
   return w;
 }
@@ -159,8 +138,7 @@ export function appendUnits(base: Assignment, want: string[], weight: Map<string
 
 /**
  * What `--check` refuses: a tracked test file the assignment does not reach, a unit whose file is
- * not a tracked test, a split file placed whole or split into the wrong number of parts, a shard
- * number outside the count, an empty shard, and a unit named twice in the file (the JSON parser
+ * not a tracked test, a shard number outside the count, an empty shard, and a unit named twice in the file (the JSON parser
  * keeps only the last, so the duplicate would silently drop an assignment).
  */
 export function assignmentProblems(assignment: Assignment, tracked: string[], raw?: string): string[] {
@@ -170,26 +148,14 @@ export function assignmentProblems(assignment: Assignment, tracked: string[], ra
   }
   const trackedSet = new Set(tracked);
   for (const [unit, shard] of Object.entries(assignment.units)) {
-    const [file, part] = unit.split('#') as [string, string | undefined];
-    if (!trackedSet.has(file)) problems.push(`${unit}: its file is not a tracked test; run --write to drop it`);
-    if (part !== undefined) {
-      const m = /^(\d+)\/(\d+)$/.exec(part);
-      const count = SPLIT[file];
-      if (!m) problems.push(`${unit}: a part is written <i>/<n>`);
-      else if (!trackedSet.has(file)) { /* named above: the file is not a tracked test */ }
-      else if (count === undefined) problems.push(`${unit}: the file is not split, so it cannot be assigned as a part`);
-      else if (count !== Number(m[2])) problems.push(`${unit}: the file is split into ${count} part(s), not ${m[2]}`);
-      else if (Number(m[1]) >= count) problems.push(`${unit}: part ${m[1]} is outside 0..${count - 1}`);
-    } else if (SPLIT[file]) {
-      problems.push(`${unit}: the file is split into ${SPLIT[file]} parts and cannot be assigned whole`);
-    }
+    if (!trackedSet.has(unit)) problems.push(`${unit}: its file is not a tracked test; run --write to drop it`);
     if (!Number.isInteger(shard) || shard < 0 || shard >= assignment.shards) {
       problems.push(`${unit}: shard ${shard} is outside 0..${assignment.shards - 1}`);
     }
   }
   if (raw) {
     const named = new Map<string, number>();
-    for (const m of raw.matchAll(/"([^"]+\.(?:test|spec)\.ts(?:#\d+\/\d+)?)":/g)) named.set(m[1]!, (named.get(m[1]!) ?? 0) + 1);
+    for (const m of raw.matchAll(/"([^"]+\.(?:test|spec)\.ts)":/g)) named.set(m[1]!, (named.get(m[1]!) ?? 0) + 1);
     for (const [unit, count] of named) {
       if (count > 1) problems.push(`${unit}: named ${count} times in the file, so all but one assignment is silently dropped`);
     }
@@ -277,39 +243,21 @@ export function shardUnits(assignment: Assignment, shard: number): string[] {
 }
 
 /**
- * Per-unit wall time from a CI job log of `bun test`, in two forms:
- * - `##[unit]<unit> <ms>`, printed by --junit from a run's JUnit report. A shard log carries one
- *   per file it ran, and one per split part (`<file>#<i>/<n>` when --label names it).
- * - one `##[group]<file>:` per file, closed by `Ran N tests`; a `Part <i>/<n> of <file>` line
- *   before a group names a split unit. This is the older instrumented-run form.
+ * Per-file wall time from a CI job log of `bun test`: the `##[unit]<file> <ms>` lines --junit
+ * prints from a run's JUnit report, one per file the shard ran.
  * Several logs merge by summing, so pass the shard logs of one system, not both.
  */
 export function timingsFromLog(log: string): Record<string, number> {
-  const direct: Record<string, number> = {};
-  const marks: { at: number; unit: string | null }[] = [];
-  let part: { file: string; at: string } | null = null;
-  for (const line of log.split('\n')) {
-    const d = /##\[unit\](test\/\S+?\.(?:test|spec)\.ts(?:#\d+\/\d+)?) (\d+)/.exec(line);
-    if (d) { direct[d[1]!] = (direct[d[1]!] ?? 0) + Number(d[2]); continue; }
-    const p = /Part (\d+\/\d+) of (\S+?\.(?:test|spec)\.ts)/.exec(line);
-    if (p) { part = { file: p[2]!, at: p[1]! }; continue; }
-    const m = /(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z (?:##\[group\](test\/\S+?\.(?:test|spec)\.ts):|.*\bRan \d+ tests)/.exec(line);
-    if (m) {
-      let unit = m[2] ?? null;
-      if (unit !== null && part !== null && part.file === unit) { unit = `${unit}#${part.at}`; part = null; }
-      marks.push({ at: Date.parse(`${m[1]!.slice(0, 23)}Z`), unit });
-    }
-  }
   const out: Record<string, number> = {};
-  for (let i = 0; i + 1 < marks.length; i++) {
-    const unit = marks[i]!.unit;
-    if (unit) out[unit] = (out[unit] ?? 0) + Math.max(0, marks[i + 1]!.at - marks[i]!.at);
+  for (const line of log.split('\n')) {
+    const d = /##\[unit\](test\/\S+?\.(?:test|spec)\.ts) (\d+)/.exec(line);
+    if (d) out[d[1]!] = (out[d[1]!] ?? 0) + Number(d[2]);
   }
-  return Object.fromEntries(Object.entries({ ...out, ...direct }).sort(([a], [b]) => (a < b ? -1 : 1)));
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => (a < b ? -1 : 1)));
 }
 
-/** A unit path: a test file, or one split part of a file. */
-const UNIT_PATH = /^test\/\S+?\.(?:test|spec)\.ts(?:#\d+\/\d+)?$/;
+/** A unit path: a test file. */
+const UNIT_PATH = /^test\/\S+?\.(?:test|spec)\.ts$/;
 
 /**
  * A unit's measured time in a JUnit report. Bun nests a suite per top-level describe under the
@@ -320,10 +268,9 @@ const UNIT_PATH = /^test\/\S+?\.(?:test|spec)\.ts(?:#\d+\/\d+)?$/;
  * first one and silently dropping the rest. A suite whose name is not a unit path and whose file
  * attribute is not one either stays under that name, and the caller refuses it.
  */
-export function unitTimesFromJunit(xml: string, label?: string): Record<string, number> {
+export function unitTimesFromJunit(xml: string): Record<string, number> {
   const times: Record<string, number> = {};
   const covered = new Set<string>();
-  let sum = 0;
   const rows: { name: string; file?: string; ms: number }[] = [];
   for (const m of xml.matchAll(/<testsuite\s[^>]*>/g)) {
     const tag = m[0];
@@ -333,10 +280,7 @@ export function unitTimesFromJunit(xml: string, label?: string): Record<string, 
     if (name === undefined || seconds === undefined) continue;
     rows.push({ name, ...(file === undefined ? {} : { file }), ms: Math.max(1, Math.round(Number(seconds) * 1000)) });
   }
-  const add = (unit: string, ms: number): void => {
-    if (label === undefined) times[unit] = (times[unit] ?? 0) + ms;
-    else sum += ms;
-  };
+  const add = (unit: string, ms: number): void => { times[unit] = (times[unit] ?? 0) + ms; };
   for (const row of rows) {
     if (!UNIT_PATH.test(row.name)) continue;
     covered.add(row.name);
@@ -355,7 +299,6 @@ export function unitTimesFromJunit(xml: string, label?: string): Record<string, 
     }
     add(row.name, row.ms);
   }
-  if (label !== undefined) times[label] = sum;
   return times;
 }
 
@@ -392,7 +335,7 @@ function usage(): never {
   console.error('       bun scripts/ci-shard-tests.ts --check | --write | --rebalance [--shards <n>]');
   console.error('       bun scripts/ci-shard-tests.ts --run <i>/<n>');
   console.error('       bun scripts/ci-shard-tests.ts --record <log> [log...]');
-  console.error('       bun scripts/ci-shard-tests.ts --junit <report.xml> [--label <unit>]');
+  console.error('       bun scripts/ci-shard-tests.ts --junit <report.xml>');
   process.exit(2);
 }
 
@@ -405,8 +348,7 @@ if (import.meta.main) {
   if (junitAt >= 0) {
     const path = a[junitAt + 1];
     if (path === undefined || path.startsWith('--')) usage();
-    const label = get('--label');
-    const times = unitTimesFromJunit(readFileSync(path, 'utf8'), label);
+    const times = unitTimesFromJunit(readFileSync(path, 'utf8'));
     for (const [unit, ms] of Object.entries(times)) {
       if (!UNIT_PATH.test(unit)) {
         console.error(`ci:shard: --junit read '${unit}', which is not a unit path`);
@@ -494,24 +436,11 @@ if (import.meta.main) {
     const weight = assignmentWeights(mine, readTimings());
     const ms = mine.reduce((sum, unit) => sum + (weight.get(unit) ?? 0), 0);
     console.error(`shard ${index} of ${shards}: ${mine.length} units, ~${(ms / 1000).toFixed(1)}s (estimate from scripts/ci-test-timings.json)`);
-    const files = mine.filter((unit) => !unit.includes('#'));
-    const parts = mine.filter((unit) => unit.includes('#'));
-    let status = 0;
-    if (files.length) {
-      // `./` makes each a path: a bare `test/x.test.ts` is a name filter, and in a checkout that
-      // holds nested seat worktrees it also ran their copies.
-      const ran = spawnSync('bun', ['test', ...files.map((file) => `./${file}`)], { cwd: ROOT, stdio: 'inherit' });
-      if (ran.status !== 0) status = 1;
-    }
-    for (const part of parts) {
-      const [file, at] = part.split('#') as [string, string];
-      console.error(`Part ${at} of ${file}`);
-      const ran = spawnSync('bun', ['test', `./${file}`], {
-        cwd: ROOT, stdio: 'inherit', env: { ...process.env, TEAM_EXIT_PART: at },
-      });
-      if (ran.status !== 0) status = 1;
-    }
-    process.exit(status);
+    if (mine.length === 0) process.exit(0);
+    // `./` makes each a path: a bare `test/x.test.ts` is a name filter, and in a checkout that
+    // holds nested seat worktrees it also ran their copies.
+    const ran = spawnSync('bun', ['test', ...mine.map((file) => `./${file}`)], { cwd: ROOT, stdio: 'inherit' });
+    process.exit(ran.status === 0 ? 0 : 1);
   }
 
   if (has('--assigned')) {

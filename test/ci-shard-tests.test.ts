@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTestFiles } from '../scripts/ci-test-files.ts';
@@ -38,22 +38,6 @@ test('the full-suite parent stops a spinning file, names it, and still runs the 
   }
 }, 5_000);
 
-test('the full-suite runner preserves split selectors without leaking one into the next file', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ci-file-parts-'));
-  try {
-    const seen = join(root, 'parts.jsonl');
-    const source = `import { test } from 'bun:test'; import { appendFileSync } from 'node:fs'; test('records part', () => appendFileSync(${JSON.stringify(seen)}, JSON.stringify(process.env.TEAM_EXIT_PART ?? null) + '\\n'));\n`;
-    writeFileSync(join(root, 'part.test.ts'), source);
-    writeFileSync(join(root, 'whole.test.ts'), source);
-    expect(runTestFiles(['part.test.ts#2/6', 'whole.test.ts'], {
-      root, stdio: 'pipe', log: () => {}, env: { ...process.env, TEAM_EXIT_PART: '5/6' },
-    })).toBe(0);
-    expect(readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line))).toEqual(['2/6', null]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 test('every unit lands in exactly one shard, longest first to the lightest', () => {
   const files = ['t/a', 't/b', 't/c', 't/d', 't/e'];
   const w = new Map([['t/a', 50], ['t/b', 40], ['t/c', 30], ['t/d', 20], ['t/e', 10]]);
@@ -74,8 +58,6 @@ test('an untimed unit weighs the measured average when the assignment is made, n
   const w = assignmentWeights(['test/new.test.ts', 'test/old.test.ts'], { 'test/old.test.ts': 1200 }, (f) => sizes[f] ?? 0);
   expect(w.get('test/new.test.ts')).toBe(UNTIMED_MS);
   expect(w.get('test/old.test.ts')).toBe(1200);
-  const part = assignmentWeights(['test/exit-codes.test.ts#1/6'], {}, () => 0);
-  expect(part.get('test/exit-codes.test.ts#1/6')).toBe(Math.round(UNTIMED_MS / 6));
 });
 
 test('the packed plan is checked in as a sorted unit-to-shard map', () => {
@@ -149,23 +131,6 @@ test('--record reads the unit lines a shard log prints from its JUnit report', (
   expect(times['test/b.test.ts']).toBe(10);
 });
 
-test('--record still reads the older group form and attributes a part to its unit', () => {
-  const groups = timingsFromLog([
-    '2026-11-02T12:00:00.0000000Z ##[group]test/a.test.ts:',
-    '2026-11-02T12:00:01.0000000Z ##[group]test/b.test.ts:',
-    '2026-11-02T12:00:04.0000000Z Ran 2 tests across 2 files. [4.00s]',
-  ].join('\n'));
-  expect(groups['test/a.test.ts']).toBe(1000);
-  expect(groups['test/b.test.ts']).toBe(3000);
-
-  const part = timingsFromLog([
-    '2026-11-02T12:00:00.0000000Z Part 1/4 of test/exit-codes.test.ts',
-    '2026-11-02T12:00:00.1000000Z ##[group]test/exit-codes.test.ts:',
-    '2026-11-02T12:00:05.0000000Z Ran 3 tests across 1 file. [4.90s]',
-  ].join('\n'));
-  expect(part['test/exit-codes.test.ts#1/4']).toBe(4900);
-});
-
 const JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="bun test" tests="2" assertions="0" failures="0" skipped="0" time="2.0">
   <testsuite name="test/a.test.ts" file="test/a.test.ts" tests="1" assertions="0" failures="0" skipped="0" time="1.234" hostname="host">
@@ -176,9 +141,8 @@ const JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
   </testsuite>
 </testsuites>`;
 
-test('a JUnit report gives each file its suite time, and a label the sum for a split part', () => {
+test('a JUnit report gives each file its suite time', () => {
   expect(unitTimesFromJunit(JUNIT)).toEqual({ 'test/a.test.ts': 1234, 'test/b.test.ts': 500 });
-  expect(unitTimesFromJunit(JUNIT, 'test/exit-codes.test.ts#0/4')).toEqual({ 'test/exit-codes.test.ts#0/4': 1734 });
   const subMs = `<testsuite name="test/fast.test.ts" time="0.000100"></testsuite>`;
   expect(unitTimesFromJunit(subMs)).toEqual({ 'test/fast.test.ts': 1 });
   expect(weights(['test/fast.test.ts'], { 'test/fast.test.ts': 0 }, () => 100).get('test/fast.test.ts')).toBe(1);
@@ -300,9 +264,6 @@ const NESTED_JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
 
 test('a nested describe suite is not a second unit and does not add its time again', () => {
   expect(unitTimesFromJunit(NESTED_JUNIT)).toEqual({ 'test/live-delivery-rebind-independent.test.ts': 1500 });
-  expect(unitTimesFromJunit(NESTED_JUNIT, 'test/live-delivery-rebind-independent.test.ts#0/1')).toEqual({
-    'test/live-delivery-rebind-independent.test.ts#0/1': 1500,
-  });
   const unnamed = `<testsuite name="not a unit path" time="1.0"></testsuite>`;
   expect(unitTimesFromJunit(unnamed)).toEqual({ 'not a unit path': 1000 });
 });
@@ -317,7 +278,4 @@ test('describe rows without the outer suite add up under their file', () => {
   // Whatever runner wrote the report, no describe row may mark its file covered: with no outer
   // suite, the file's time is the describes' sum, and one describe must not hide the others.
   expect(unitTimesFromJunit(DESCRIBES_ONLY_JUNIT)).toEqual({ 'test/future-runner.test.ts': 1500 });
-  expect(unitTimesFromJunit(DESCRIBES_ONLY_JUNIT, 'test/future-runner.test.ts#0/1')).toEqual({
-    'test/future-runner.test.ts#0/1': 1500,
-  });
 });
