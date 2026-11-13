@@ -269,7 +269,7 @@ exit 0
 $ team swap --run ; echo "exit $?"
 claude-keeper: input box: empty
 claude-keeper: turn: not working (free)
-claude-keeper: context: workspace close ends the pane; relaunch runs "claude --model deepseek-flash" in a new workspace without passing the old transcript
+claude-keeper: context: relaunch runs "claude --model deepseek-flash" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript
 claude-keeper: stopped
 claude-keeper: ready
 claude-keeper: its screen doesn't show a model this version knows; not checked

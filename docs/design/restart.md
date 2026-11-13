@@ -127,7 +127,7 @@ An idle seat holding unsent text is restarted, not refused. The run, in order:
    ```
    <seat>: input box: holds unsent text, copied to <path> and pasted back once the new pane is ready
    <seat>: turn: not working (unsent)
-   <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace <resume words>
+   <seat>: context: relaunch runs "<launch>" in a new workspace <resume words>
    ```
 4. Closes the old workspace without typing into it — the copied text is what waits for the new
    pane, so no exit sequence is typed over it — and relaunches as usual.
@@ -159,7 +159,7 @@ Whenever `team restart` closes a running or exited pane, it first prints three l
 ```
 <seat>: input box: empty | holds unsent text | holds unsent text, copied to <path> and pasted back once the new pane is ready | not read (the screen is not recognised)
 <seat>: turn: not working (<state>) | mid-turn (working)
-<seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace <resume words>
+<seat>: context: relaunch runs "<launch>" in a new workspace <resume words>
 ```
 
 `<launch>` is the line the relaunch runs, never the bare declaration: a conversation resume the
