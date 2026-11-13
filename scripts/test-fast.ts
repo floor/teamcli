@@ -7,10 +7,11 @@
 //
 //   bun scripts/test-fast.ts [--out <folder>]
 //
-// Exits 1 when any shard failed or ran no tests, 0 otherwise.
+// Exits 1 when any shard failed or ran no tests, or the machine's registry changed; 0 otherwise.
 import { spawn } from 'node:child_process';
-import { createWriteStream, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -19,6 +20,11 @@ const at = process.argv.indexOf('--out');
 const out = at === -1 ? mkdtempSync(join(tmpdir(), 'team-test-fast-')) : resolve(process.argv[at + 1]!);
 mkdirSync(out, { recursive: true });
 const started = Date.now();
+// The machine's own registry must come out of a run as it went in: a scene that writes it reaches
+// the owner's real teams (2026-11-13: a census registered ten scratch folders as running teams).
+const REGISTRY = ['teams.yaml', 'projects.yaml', 'entities.yaml'].map((name) => join(homedir(), '.config', 'team', name));
+const fingerprint = (): string => REGISTRY.map((path) => (existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex') : '-')).join(' ');
+const registryBefore = fingerprint();
 
 const runs = Array.from({ length: assignment.shards }, (_, index) => new Promise<{ index: number; code: number; log: string }>((done) => {
   const log = join(out, `shard-${index}.log`);
@@ -47,4 +53,6 @@ const seconds = Math.round((Date.now() - started) / 1000);
 console.log(`test:fast: ${pass} pass, ${fail} fail, ${skip} skip across ${assignment.shards} shards in ${seconds}s; logs in ${out}`);
 for (const line of failures) console.log(line);
 for (const line of silent) console.log(line);
-process.exit(silent.length > 0 || results.some((result) => result.code !== 0) ? 1 : 0);
+const registryChanged = fingerprint() !== registryBefore;
+if (registryChanged) console.log(`test:fast: the machine's registry changed during the run (${REGISTRY.join(', ')}): a test, or a live command run meanwhile, wrote the owner's real teams`);
+process.exit(silent.length > 0 || registryChanged || results.some((result) => result.code !== 0) ? 1 : 0);
