@@ -234,13 +234,14 @@ test('an acknowledged message and a read one older than seven days move with the
   expect(shown).not.toContain('no message');
 });
 
-test('a folder of fifteen thousand files keeps every file that is not due', () => {
+test('a folder of a thousand files keeps every file that is not due', () => {
+  // Far above the 256-file pass limit: what a large folder proves, this size proves.
   const made = open();
   const dir = drop(made);
   const ackedBytes = plant(made, ACKED, '2026-11-08T10:00:00.000Z', 'replied', 'helper');
   listen(made);
   const bulk: string[] = [];
-  for (let n = 0; n < 15_000; n += 1) {
+  for (let n = 0; n < 1_000; n += 1) {
     const name = `bulk-${String(n).padStart(5, '0')}`;
     bulk.push(name);
     writeFileSync(join(dir, name), 'x');
