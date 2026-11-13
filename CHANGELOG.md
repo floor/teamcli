@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Claude Code seat reports its own model at session start and at every `/model` switch (two hooks in its settings); a model the entity rule allows becomes the seat's record, so a model the owner switched no longer carries a drift notice on every send.
+- The model-drift notice to a lead names the lead's team by id: a project with two teams no longer makes it ambiguous.
+
 ## [0.5.22] - 2026-11-13
 
 ### Added
