@@ -1035,6 +1035,9 @@ const RESTART_STEPS: readonly string[] = [
   'nothing is written: the definition, its checkouts and its opt-ins stay the last install\'s',
 ];
 
+/** What an install says when the service manager stops this user's services at logout. */
+const STOPS_AT_LOGOUT = 'the system\'s service manager stops this daemon when this user\'s last login session ends; it keeps running after logout only once the owner lets this user\'s services run without a login session (a setting of the system, which this install does not change)';
+
 /** The command that writes and starts a unit when a restart leaves no daemon: an install is the
  *  whole recovery, and naming each checkout keeps the rerun's hosted set the owner's choice. */
 const RESTART_REPAIR = 'run `team daemon install --root <folder>` with each checkout to host';
@@ -1713,6 +1716,13 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   // still names stays where it is. A failed or rolled-back install above never reaches
   // this line, so the old daemon and the old folders stay a consistent pair.
   const migration = runRuntimeMigrationStep(targetHome, named.roots, false, manager, sources);
+  // A daemon the service manager stops at logout is not the machine daemon a headless machine
+  // needs: the owner reaching it over a remote shell would lose it at every disconnect. The
+  // install never changes that setting itself, so it says so — in neutral words here, with the
+  // adapter's own account in the log.
+  if (installed.stopsAtLogout !== undefined) {
+    appendDaemonLog(targetHome, `install: ${installed.stopsAtLogout.detail}`, sources.now?.() ?? new Date());
+  }
   if (parsed.json) {
     writeJson(io, 'team.daemon-install', {
       format: 1,
@@ -1727,6 +1737,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       // The removal is never silent: a structured run says it in a field, a plain run below in
       // a sentence.
       ...(installed.droppedAuthorization === true ? { dropped_authorization: true } : {}),
+      ...(installed.stopsAtLogout !== undefined ? { stops_at_logout: true } : {}),
       runtime_migration: migration,
     });
   } else {
@@ -1735,6 +1746,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     );
     if (installed.droppedAuthorization === true) {
       io.stdout('team daemon: the earlier unit named a client key or a general grant; this unit was rewritten without either\n');
+    }
+    if (installed.stopsAtLogout !== undefined) {
+      io.stdout(`team daemon: ${STOPS_AT_LOGOUT}\n`);
     }
     for (const line of runtimeMigrationLines(migration)) io.stdout(`team daemon: ${line}\n`);
   }

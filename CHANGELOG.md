@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `team git`, `team gh` and a provider seat's key read the system's secret store, on Linux as on macOS. On Linux the store is the encrypted dotenv file `~/.config/sops/agents.env.sops` (sops with the machine's age key; `TEAMCLI_SECRETS_FILE` names another absolute path), and an entry is read under its env form: `deepseek-api-key` is `DEEPSEEK_API_KEY`. The pay-per-use names `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` are never read. A provider seat whose key the machine's store cannot look up is refused before its workspace is made. On macOS nothing changes: the Keychain lookup and the launch line are the ones they were.
+- `team daemon install`, `restart` and `uninstall` work on Linux: the machine daemon runs as the user's systemd user service, with the same retained runtime copy, bounded load retries, rollback and start admission as on macOS. On an account that does not linger, the install says the daemon stops at logout; an administrator's `loginctl enable-linger <user>` keeps it running on a headless server.
 
 ### Fixed
 

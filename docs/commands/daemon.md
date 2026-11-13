@@ -135,6 +135,15 @@ is still on disk, where it is kept; the `--json` refusal carries the same comman
 `repair`. `--dry-run` prints what it would do, including those steps, and writes nothing:
 `… would install …; nothing was written`.
 
+Where the service manager stops a user's services when that user's last login session ends, an
+install that succeeds also prints `team daemon: the system's service manager stops this daemon
+when this user's last login session ends; it keeps running after logout only once the owner lets
+this user's services run without a login session (a setting of the system, which this install
+does not change)`, and `--json` carries `stops_at_logout: true`; the daemon log names the setting.
+The install never changes it, because changing it takes the system's administrator: on a
+headless machine reached over a remote shell, the owner turns it on once, so the daemon outlives
+a disconnect. A machine whose setting cannot be read gets no such line.
+
 `restart` stops the daemon the service manager holds under the installed unit and loads that same
 unit again. It writes nothing: the definition, its checkouts and its opt-ins are the last install's,
 so a restart never changes which checkouts are hosted. It prints `team daemon: restarted; the
@@ -389,7 +398,8 @@ lane. A moved guard folder prints the exact `guard_dir` line to re-approve and t
 migration is reported moved, not complete until `team check` shows the new path. A dry
 run prints the same lines as would-move and moves nothing.
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
-`installed`, `unit_path`, `program`, `roots` and `runtime_migration` (`install`), or `unit_path` and `removed`
+`installed`, `unit_path`, `program`, `roots` and `runtime_migration` (`install`, with
+`stops_at_logout: true` when the service manager stops the daemon at logout), or `unit_path` and `removed`
 (`uninstall`). A dry run's `install` document also carries `steps`: the neutral sentences the
 plain dry run prints, so a script sees the same stop, retry and rollback plan. `restart --json`
 prints `team.daemon-restart` with `command`, `dry_run`, `restarted` and `unit_path`; its dry run

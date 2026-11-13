@@ -365,6 +365,7 @@
     "test/daemon-runtime-copy.test.ts": 5,
     "test/daemon-runtime-migration.test.ts": 5,
     "test/daemon-s1a-authority-coverage.test.ts": 1,
+    "test/daemon-service-linux.test.ts": 0,
     "test/daemon-service-rollback.test.ts": 4,
     "test/daemon-stall-load.test.ts": 0,
     "test/daemon-start-admission-independent.test.ts": 4,
