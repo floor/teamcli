@@ -50,6 +50,7 @@
     "e2e": "bun scripts/e2e.ts",
     "build": "bun scripts/build.ts",
     "pack": "bun scripts/pack.ts",
+    "test:scale": "TEAM_SCALE_TESTS=1 bun test ./test/bus-cold-read-slice.test.ts ./test/presence-cold-scan-independent.test.ts ./test/mcp-channel-server.test.ts",
     "conformance": "bun scripts/conformance.ts --impl \"node dist/cli.js conformance-adapter\"",
     "coverage": "bun scripts/coverage.ts",
     "coverage:check": "bun scripts/coverage.ts --check",
