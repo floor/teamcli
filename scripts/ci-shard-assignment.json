@@ -995,6 +995,7 @@
     "test/reply-walks-native.test.ts": 3,
     "test/reply.test.ts": 4,
     "test/repo-visibility.test.ts": 2,
+    "test/reported-model.test.ts": 0,
     "test/resolve-launch-flag-independent.test.ts": 0,
     "test/resolve-launch-wiring-independent.test.ts": 3,
     "test/restart-checkpoint.test.ts": 1,
