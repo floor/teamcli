@@ -2157,6 +2157,8 @@ function hostOf(input: {
     agentList: launch.agents,
     workspacePanes: launch.workspacePanes ? (s, workspace) => launch.workspacePanes!(s, workspace) : undefined,
     classify: (_name, pane, cli) => launchKind(readScreen(cli, launch.paneText(session, pane) ?? undefined).kind),
+    // The one dialog a launch answers itself (src/launch/channel-dialog.ts).
+    channelDialogKey: (_name, pane) => launch.pressEnter?.(session, pane) ?? false,
     paneText: (_name, pane) => launch.paneText(session, pane),
     foreground: (_name, pane) => launch.foreground(session, pane),
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,

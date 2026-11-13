@@ -38,7 +38,8 @@ import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
-import { withoutChannel } from '../mcp/channel.ts';
+import { channelLaunchEnabled, withoutChannel } from '../mcp/channel.ts';
+import { channelDialogAnswerLine, channelDialogFor, teamInboxChannel } from './channel-dialog.ts';
 import { prepareChannelConfig } from '../mcp/launch-config.ts';
 import { featureDialog, featureDialogClose } from './reboot.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
@@ -149,6 +150,16 @@ export type Host = {
   typeText?(session: string, pane: string, text: string): boolean | Promise<boolean>;
   /** Presses Enter in the pane, straight after `typeText`. False when the key was not sent. */
   pressEnter?(session: string, pane: string): boolean | Promise<boolean>;
+  /**
+   * Whether the wait after a launch answers Claude Code's development-channels dialog for the
+   * team's own inbox channel on the seat's own pane (src/launch/channel-dialog.ts). On unless this
+   * says `leave`: the owner delegated that one answer, on every platform. No other dialog is
+   * ever answered by a launch.
+   */
+  channelDialog?: 'answer' | 'leave';
+  /** The one key that answers that dialog: Enter, which confirms its marked first option.
+   *  Absent: `pressEnter`, where the host has it; a host with neither answers nothing. */
+  channelDialogKey?(session: string, pane: string): boolean | Promise<boolean>;
   /** The live key exit, for a CLI whose TUI takes no exit text: the profile's keys, pressed at
    *  the seat's idle screen only; see `ExitKeys`. Present where a seat can be stopped. */
   pressKeys?(session: string, pane: string, cli: string, keys: readonly string[]): ExitKeys | Promise<ExitKeys>;
@@ -958,6 +969,9 @@ export async function executePlan(
   // The seats this run launched: only a launch carries rules; a seat already running is never
   // typed into to give it them.
   const launchedThisRun = new Set<string>();
+  // The seats whose development-channels dialog this run's wait has already answered: a second
+  // showing in the same launch is never answered, and the wait stops at it as at any dialog.
+  const channelDialogAnswered = new Set<string>();
   const finishReady = (seat: string) => {
     ready.add(seat);
     const verdict = relaunched.get(seat);
@@ -1015,6 +1029,36 @@ export async function executePlan(
     seats: () => host.seatStates?.(session) ?? null,
     workspacePanes: (workspace) => host.workspacePanes?.(session, workspace) ?? null,
   });
+
+  /**
+   * Answers Claude Code's development-channels dialog on a seat this run just launched, at most
+   * once per seat: only with the host's answer on, only for a claude-code line this run ran with
+   * the development-channels flag naming the team's inbox, only on the seat's own pane — one the
+   * agent list can be read for and names for no other seat, with the seat's CLI in front — and
+   * only when the screen is exactly that dialog for exactly that channel. Enter confirms its
+   * marked first option. Every answer is logged; true when the key went.
+   */
+  const answerChannelDialog = async (seat: string, cli: string, pane: string, processNames: readonly string[]): Promise<boolean> => {
+    if ((host.channelDialog ?? 'answer') !== 'answer' || cli !== 'claude-code') return false;
+    const key = host.channelDialogKey ?? host.pressEnter;
+    if (channelDialogAnswered.has(seat) || host.paneText === undefined || key === undefined) return false;
+    const launched = launchedCommands.get(seat);
+    if (launched === undefined || !channelLaunchEnabled(launched)) return false;
+    const channel = teamInboxChannel();
+    if (!channelDialogFor(host.paneText(session, pane), channel)) return false;
+    const agents = host.agentList?.(session) ?? null;
+    if (agents === null || agents.some((agent) => agent.pane === pane && agent.name !== null && agent.name !== seat)) return false;
+    if (!reportedLiveAgent(host.foreground?.(session, pane) ?? null, processNames)) return false;
+    if (!guardRestore(seat)) return false;
+    channelDialogAnswered.add(seat);
+    if (!(await key.call(host, session, pane))) {
+      host.log(seat, `its development-channels dialog for ${channel} was not answered: the key was not sent`);
+      return false;
+    }
+    host.log(seat, channelDialogAnswerLine(channel));
+    hold(seat, `${seat}: ${channelDialogAnswerLine(channel)}\n`);
+    return true;
+  };
 
   /** The identity a dialog is judged by, and the one a refused close writes back: the identity
    *  this run recorded when it launched the seat — its records' own, where an earlier run left
@@ -1891,6 +1935,13 @@ export async function executePlan(
           }
           const kind = host.classify(session, here.pane, op.cli);
           last = kind;
+          // Claude Code's development-channels question, on a line this run launched with the
+          // team's inbox channel: the one dialog a launch answers (src/launch/channel-dialog.ts).
+          if (kind !== 'idle' && kind !== 'working' && await answerChannelDialog(op.seat, op.cli, here.pane, processNames)) {
+            await sharedSleep(pollMs);
+            if (stopped || closing()) break;
+            continue;
+          }
           // The first frames are the pane text. Grok draws `sandbox could not be applied` there
           // (the same words it writes to stderr). Seen once, the wait stops before any key.
           if (op.cli === 'grok') {
