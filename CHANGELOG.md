@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `team daemon install`, `restart` and `uninstall` work on Linux: the machine daemon runs as the user's systemd user service, with the same retained runtime copy, bounded load retries, rollback and start admission as on macOS. On an account that does not linger, the install says the daemon stops at logout; an administrator's `loginctl enable-linger <user>` keeps it running on a headless server.
+
 ### Fixed
 
 - A Claude Code seat reports its own model at session start and at every `/model` switch (two hooks in its settings); a model the entity rule allows becomes the seat's record, so a model the owner switched no longer carries a drift notice on every send.
