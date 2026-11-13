@@ -21,12 +21,12 @@ import { readDaemonState } from '../src/daemon/state.ts';
 /** The timed scene runs under the short temp folder, where a bun child starts quickly. */
 const BASE = shortSocketBase();
 
-// The restore door binds the child to the parent the system's service manager records. A
-// platform whose product build has no service-manager adapter (src/daemon/service.ts offers the
-// darwin one alone) has no such anchor: the real entry refuses there, before it spends its
-// token. The scenes below assert that documented refusal on such a platform — the child exits 2,
-// the token is still there, and no pass line or state change appears — and the pass itself on
-// the primary platform.
+// The restore door binds the child to the parent the system's service manager records. The
+// scenes plant the darwin adapter's unit and a shim of its manager alone, so on another platform
+// the child's own adapter finds no unit of the daemon and records no job: the real entry refuses
+// there, before it spends its token. The scenes below assert that documented refusal on such a
+// platform — the child exits 2, the token is still there, and no pass line or state change
+// appears — and the pass itself on the primary platform.
 const offDarwin = process.platform !== 'darwin';
 const SERVICE_REFUSAL = "team daemon: the system's service manager records no running machine daemon\n";
 
