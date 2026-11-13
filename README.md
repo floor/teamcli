@@ -14,7 +14,7 @@ It is early and herdr only. Every command `team --help` lists is here. Bun 1.4 o
 
 ```sh
 npm install -g team
-team --version # 0.5.21
+team --version # 0.5.22
 ```
 
 ## Your first team in five minutes

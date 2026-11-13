@@ -7,7 +7,7 @@ work, and you stay the one who decides. A project's team lives in `.agents/team.
 the model each one runs, the rules it follows, the folders it may touch; `team init`, or an agent,
 writes it for you. The commands check that file against the machine and start and watch the team.
 The live file is what they read. It runs the team in
-[herdr](https://herdr.dev), and Node 22 or later runs it.
+[herdr](https://herdr.dev), and Bun 1.4 or later runs it.
 
 ## What's new in 0.5.21
 
@@ -52,7 +52,7 @@ The first release since 0.3.5, and the first on npm since it. The full list is i
 
 ```sh
 npm install -g team
-team --version # 0.5.21
+team --version # 0.5.22
 ```
 
 The launcher `@teamcli/cli` installs the same tool:
@@ -76,7 +76,7 @@ the file stays private to your clone (it goes in `.git/info/exclude`, never `.gi
 
 ## What it needs
 
-- Node 22 or later, and [herdr](https://herdr.dev), the terminal multiplexer the team runs in.
+- Bun 1.4 or later, and [herdr](https://herdr.dev), the terminal multiplexer the team runs in.
 - Each seat's CLI, installed and signed in: Claude Code, Codex, Cursor, Antigravity or Grok. `team doctor`
   says what is missing; `team doctor --login` checks the sign-ins read-only.
 - The owner's terminal, outside herdr, for `up`: it reads the processes above the

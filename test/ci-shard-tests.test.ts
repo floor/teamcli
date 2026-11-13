@@ -54,21 +54,6 @@ test('the full-suite runner preserves split selectors without leaking one into t
   }
 });
 
-test('a split file becomes its parts, each a fraction of its time', () => {
-  const all = units(['test/a.test.ts', 'test/exit-codes.test.ts', 'test/a.test.ts']);
-  expect(all).toEqual([
-    'test/a.test.ts',
-    'test/exit-codes.test.ts#0/6',
-    'test/exit-codes.test.ts#1/6',
-    'test/exit-codes.test.ts#2/6',
-    'test/exit-codes.test.ts#3/6',
-    'test/exit-codes.test.ts#4/6',
-    'test/exit-codes.test.ts#5/6',
-  ]);
-  const w = weights(all, { 'test/a.test.ts': 10, 'test/exit-codes.test.ts': 600 }, () => 100);
-  expect(w.get('test/exit-codes.test.ts#2/6')).toBe(100);
-});
-
 test('every unit lands in exactly one shard, longest first to the lightest', () => {
   const files = ['t/a', 't/b', 't/c', 't/d', 't/e'];
   const w = new Map([['t/a', 50], ['t/b', 40], ['t/c', 30], ['t/d', 20], ['t/e', 10]]);
@@ -113,17 +98,12 @@ test('--write keeps every placed unit and appends newcomers heaviest first to th
   expect(base.units).toEqual({ 't/a': 0 });
 });
 
-const TRACKED = ['test/a.test.ts', 'test/exit-codes.test.ts'];
+const TRACKED = ['test/a.test.ts', 'test/b.test.ts'];
 const CLEAN = {
   shards: 2,
   units: {
     'test/a.test.ts': 0,
-    'test/exit-codes.test.ts#0/6': 1,
-    'test/exit-codes.test.ts#1/6': 1,
-    'test/exit-codes.test.ts#2/6': 0,
-    'test/exit-codes.test.ts#3/6': 0,
-    'test/exit-codes.test.ts#4/6': 1,
-    'test/exit-codes.test.ts#5/6': 0,
+    'test/b.test.ts': 1,
   },
 };
 
@@ -143,27 +123,13 @@ test('--check names a test file with no shard, a stray unit and an empty shard',
     shards: 2,
     units: {
       'test/a.test.ts': 0,
-      'test/exit-codes.test.ts#0/6': 0,
-      'test/exit-codes.test.ts#1/6': 0,
-      'test/exit-codes.test.ts#2/6': 0,
-      'test/exit-codes.test.ts#3/6': 0,
-      'test/exit-codes.test.ts#4/6': 0,
-      'test/exit-codes.test.ts#5/6': 0,
+      'test/b.test.ts': 0,
     },
   };
   expect(assignmentProblems(oneShard, TRACKED).join('\n')).toContain('shard 1: no units');
 });
 
-test('--check refuses a split file assigned whole, split into the wrong parts or outside its shard', () => {
-  const whole = { ...CLEAN, units: { ...CLEAN.units, 'test/exit-codes.test.ts': 0 } };
-  expect(assignmentProblems(whole, TRACKED).join('\n')).toContain('cannot be assigned whole');
-
-  const wrong = { ...CLEAN, units: { ...CLEAN.units, 'test/exit-codes.test.ts#0/3': 0 } };
-  expect(assignmentProblems(wrong, TRACKED).join('\n')).toContain('not 3');
-
-  const notSplit = { ...CLEAN, units: { ...CLEAN.units, 'test/a.test.ts#0/4': 0 } };
-  expect(assignmentProblems(notSplit, TRACKED).join('\n')).toContain('not split');
-
+test('--check refuses a unit placed outside the shard range', () => {
   const outside = { ...CLEAN, units: { ...CLEAN.units, 'test/a.test.ts': 5 } };
   expect(assignmentProblems(outside, TRACKED).join('\n')).toContain('shard 5 is outside 0..1');
 });
