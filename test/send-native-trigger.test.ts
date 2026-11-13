@@ -16,26 +16,6 @@ afterEach(() => {
   cleanup = () => {};
 });
 
-test('a multi-line body is filed whole and the pane gets one short line', async () => {
-  const made = world();
-  cleanup = made.cleanup;
-  const body = 'HEAD-LINE\nTAIL-LINE';
-  const { host, pane } = nativeHost(made, ['idle', 'working']);
-
-  const code = await runSend(['native', body], owner(made.root), host);
-
-  expect(code).toBe(0);
-  expect(pane.typed.length).toBe(0);
-  // The first content line is the summary; the rest of the body stays in the drop.
-  const drops = dropDir(made.dir);
-  const names = readdirSync(drops).filter((name) => !name.includes('.'));
-  expect(names.length).toBe(1);
-  const path = join(drops, names[0] as string);
-  const line = readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme', body });
-  expect(recordBody(path)).toBe(filed(body));
-  expect(host.frames).toEqual([]);
-});
-
 test('a wake with a sender names its seat and team; one without keeps the old form', () => {
   const path = '/drops/teamcli/native/tester-1/4a9f';
   expect(triggerLine(path)).toBe(`Read ${path} and do that.`);

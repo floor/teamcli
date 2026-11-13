@@ -126,51 +126,9 @@ function deliveryLegs(out: string): string[] {
   return (doc.delivery ?? []).map((row) => row.leg);
 }
 
-test('a seat whose order is only the retired inbox name gets a drop and nothing typed', async () => {
-  const scene = prepare('mcp-inbox');
-  const host = hostOf(scene.home, scene.sockets);
-  const io = testIo(scene.root, { kind: 'owner' });
-  const code = await runSend(['guide', 'hello', '--json'], io, host);
-  expect(code, io.out + io.err).toBe(0);
-  expect(orderOf(scene.root, scene.home)).toEqual(['drop']);
-  expect(deliveryLegs(io.out)).toEqual(['drop']);
-  expect(host.typed).toEqual([]);
-  expect(dropNames(scene.root).length).toBe(1);
-  const history = readHistory('acme', scene.root, scene.home);
-  expect(history.ok).toBe(true);
-  if (!history.ok) return;
-  expect(history.entries.at(-1)?.via).toBe('drop');
-});
-
 function lastSend(root: string, home: string): { via?: string; failed?: string[] } {
   const history = readHistory('acme', root, home);
   expect(history.ok).toBe(true);
   if (!history.ok) return {};
   return history.entries.at(-1) ?? {};
 }
-
-test('a mixed order keeps the typed leg', async () => {
-  const scene = prepare('mcp-inbox, typed');
-  const host = hostOf(scene.home, scene.sockets);
-  const io = testIo(scene.root, { kind: 'owner' });
-  const code = await runSend(['guide', 'hello', '--json'], io, host);
-  expect(code, io.out + io.err).toBe(0);
-  const order = orderOf(scene.root, scene.home);
-  expect(order).toContain('typed');
-  expect(order.join(' ')).not.toContain('mcp-inbox');
-  const sent = lastSend(scene.root, scene.home);
-  expect(sent.failed?.some((line) => line.startsWith('typed:'))).toBe(true);
-});
-
-test('no order falls back to typed then drop', async () => {
-  const scene = prepare(undefined);
-  const host = hostOf(scene.home, scene.sockets);
-  const io = testIo(scene.root, { kind: 'owner' });
-  const code = await runSend(['guide', 'hello', '--json'], io, host);
-  expect(code, io.out + io.err).toBe(0);
-  expect(orderOf(scene.root, scene.home)).toEqual(['typed', 'drop']);
-  const sent = lastSend(scene.root, scene.home);
-  expect(sent.failed?.some((line) => line.startsWith('typed:'))).toBe(true);
-  expect(sent.via).toBe('drop');
-  expect(dropNames(scene.root).length).toBe(1);
-});

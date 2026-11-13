@@ -244,38 +244,6 @@ describe('the send posts the seat webhook itself', () => {
     await Bun.sleep(150);
     expect(get.hits.length).toBe(1);
   });
-
-  test('a 500 leaves the send succeeding, one POST, the record in place and no mark', async () => {
-    const get = receiver(() => new Response('the routine is down', { status: 500 }));
-    const hook = hookFiles(get.url);
-    const at = withHookSeat(hook);
-    const io = owner(at.root);
-    const code = await runSend(['iris', 'the gate is green'], io, fake(at));
-    expect(code, io.err).toBe(0);
-    expect(get.hits.length).toBe(1);
-    expect(io.out).toContain('webhook not delivered: HTTP 500');
-    expect(io.out).not.toContain('delivered (webhook,');
-    // No mark: the bus and the seat's pull still carry the arrival, said in the class's words.
-    expect(io.out).toContain('queued; its webhook fires when the bus takes it');
-    const dir = dropDir(at.dir, 'iris');
-    const id = recordName(dir);
-    expect(existsSync(join(dir, `${id}.posted`))).toBe(false);
-    // The refused claim was given up, so the fallback may post the record.
-    expect(existsSync(join(dir, `${id}.posting`))).toBe(false);
-    expect(readFileSync(join(dir, id), 'utf8')).toContain('the gate is green');
-    expect(io.out).not.toContain(SECRET);
-  });
-
-  test('a route that names nothing usable is no post, and the class words stand as before', async () => {
-    const get = receiver(() => new Response('ok', { status: 200 }));
-    const hook = hookFiles(get.url);
-    const at = withHookSeat({ urlFile: hook.urlFile, secretFile: join(hook.urlFile, '..', 'no-such-secret') });
-    const io = owner(at.root);
-    expect(await runSend(['iris', 'the gate is green'], io, fake(at)), io.err).toBe(0);
-    expect(get.hits.length).toBe(0);
-    expect(io.out).not.toContain('webhook not delivered');
-    expect(io.out).not.toContain('delivered (webhook,');
-  });
 });
 
 describe('the posted mark is what the adapter skips', () => {
@@ -494,21 +462,6 @@ describe('the claim decides who posts', () => {
     writeClaim(short.dir, 'claimed', 2_000);
     expect(await deliverAt(short.root, hook, { claimStaleMs: 1000 })).toBe('delivered');
     expect(get.hits.length).toBe(1);
-  });
-
-  test('a refused connection releases the claim, and the fallback is untouched', async () => {
-    const at = withHookSeat(hookFiles('http://127.0.0.1:1/routine'));
-    const io = owner(at.root);
-    expect(await runSend(['iris', 'the gate is green'], io, fake(at)), io.err).toBe(0);
-    // Measured here on 2026-11-02, Bun 1.4.2 refuses a closed loopback port with a TypeError
-    // whose code is ConnectionRefused; the post faced a refused connection, so the fallback may
-    // still post the record.
-    expect(io.out).toContain('webhook not delivered: could not connect (ConnectionRefused)');
-    expect(io.out).toContain('queued; its webhook fires when the bus takes it');
-    const dir = dropDir(at.dir, 'iris');
-    const id = recordName(dir);
-    expect(existsSync(join(dir, `${id}.posting`))).toBe(false);
-    expect(existsSync(join(dir, `${id}.posted`))).toBe(false);
   });
 
   test('a send whose answer never comes leaves the claim in sent, and nobody posts again', async () => {

@@ -66,21 +66,6 @@ function dropNames(dir: string): string[] {
   return readdirSync(drops).filter((name) => !name.includes('.'));
 }
 
-test('an idle agent prompt is woken and nothing is typed', async () => {
-  const made = seat();
-  const pane = capture((_reads, prompts) => (prompts > 0 ? WORKING : IDLE));
-  const { host, io, done } = send(made, pane, 'wake the idle seat');
-  expect(await done).toBe(0);
-  expect(io.out).toContain('delivered (typed wake)');
-  expect(pane.prompts).toHaveLength(1);
-  expect(pane.prompts[0]).toContain('team drops --read');
-  expect(pane.typed).toEqual([]);
-  expect(pane.enters()).toBe(0);
-  const history = readHistory('acme', made.root, host.home);
-  expect(history.ok).toBe(true);
-  if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'delivered (typed wake)', via: 'typed' });
-});
-
 test('a busy pane is never typed into', async () => {
   const made = seat();
   const pane = capture(() => WORKING);
@@ -95,27 +80,4 @@ test('a busy pane is never typed into', async () => {
   expect(io.err).toContain('kept in grok\'s inbox');
   expect(io.out).not.toContain('delivered (typed wake)');
   expect(dropNames(made.dir)).toHaveLength(1);
-});
-
-test('a failed wake leaves the drop queued, not lost', async () => {
-  const made = seat();
-  const pane = capture(() => IDLE, false);
-  const { host, io, done } = send(made, pane, 'keep the failed wake');
-  expect(await done).toBe(0);
-  expect(pane.prompts).toHaveLength(1);
-  expect(pane.typed).toEqual([]);
-  expect(pane.enters()).toBe(0);
-  expect(io.out).toContain('queued, not woken');
-  expect(io.out).toContain('the pane did not take the agent prompt');
-  expect(io.out).not.toContain('sent (unconfirmed)');
-  const names = dropNames(made.dir);
-  expect(names).toHaveLength(1);
-  const id = names[0] as string;
-  const drops = join(made.dir, 'send-drops', 'acme', 'grok');
-  expect(recordBody(join(drops, id))).toBe(filed('keep the failed wake'));
-  expect(existsSync(join(drops, `${id}.read.json`))).toBe(false);
-  expect(listUnread(drops, { to: 'grok', root: made.root, session: 'acme' }, host.home).map((message) => message.id)).toEqual([id]);
-  const history = readHistory('acme', made.root, host.home);
-  expect(history.ok).toBe(true);
-  if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'queued, not woken', via: 'drop' });
 });

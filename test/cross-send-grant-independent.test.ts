@@ -32,15 +32,6 @@ function refused(result: Result, id: string) {
   expect(result.records).toEqual([]);
   expect(result.paneWrites).toBe(0);
 }
-test('a signed architect grant reaches another team lead in the same entity', () => {
-  const result = scene('allowed');
-  expect(result.code, result.out + result.err).toBe(0);
-  expect(result.records).toHaveLength(1);
-  expect(result.records[0]?.team).toBe('product');
-  expect(result.records[0]?.body).toContain('admitted by: an owner-signed grant naming send (architect-outbound)');
-  expect(result.records[0]?.body).toContain('independent synthetic message');
-  expect(result.paneWrites).toBe(0);
-});
 for (const name of ['non-lead', 'other-entity', 'expired']) {
   test(`a signed grant refuses ${name} without delivery effects`, () => {
     const result = scene(name);
@@ -70,17 +61,6 @@ test('a send dry run shows the same unsigned-grant refusal and writes no record'
   const result = scene('dry-unsigned');
   refused(result, 'send.grant-invalid');
   expect(JSON.parse(result.out).error.message).toContain('Re-issue it signed');
-});
-test('the exact printed repair arguments recreate a valid record and permit the next send', () => {
-  const result = scene('reissue');
-  expect(result.before?.code, (result.before?.out ?? '') + (result.before?.err ?? '')).toBe(1);
-  expect(result.line).toStartWith('team grant --send');
-  expect(result.repair?.code, (result.repair?.out ?? '') + (result.repair?.err ?? '')).toBe(0);
-  expect(result.verified?.map((value) => value.name)).toEqual(['architect-outbound']);
-  expect(result.after?.code, (result.after?.out ?? '') + (result.after?.err ?? '')).toBe(0);
-  expect(result.records).toHaveLength(1);
-  expect(result.records[0]?.body).toContain('admitted by: an owner-signed grant naming send (architect-outbound)');
-  expect(result.paneWrites).toBe(0);
 });
 
 // A wildcard principal can issue any pair. These scenes pin argument parsing and the

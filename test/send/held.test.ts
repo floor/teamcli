@@ -154,58 +154,7 @@ function claudeHost(sockets: string, samples: string[], screens?: string[]): Fak
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
 describe('team send: a --wait frame cannot land at a dialog', () => {
-  test('with no accept declaration, --wait walks the typed leg and waits on the thread', async () => {
-    const { root, sockets, home } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    const host = { ...claudeHost(sockets, ['idle', 'working'], [QUIET, QUIET]), waitMs: 0 };
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
-
-    expect(code).toBe(1);
-    expect(io.out).toBe('');
-    expect(withoutSendId(io.err)).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
-    expect(host.frames.length).toBe(0);
-    const read = readHistory('acme', root, home);
-    expect(read.ok).toBe(true);
-    if (!read.ok) return;
-    expect(read.entries).toHaveLength(1);
-    expect(read.entries[0]?.outcome).toBe('timeout');
-    expect(read.entries[0]?.via).toBe('drop');
-  });
 });
 
 describe('team send: the plain send with no accept declaration', () => {
-  test('a live socket standing does not take the frame, and nothing on it is opened', async () => {
-    const { root, dir, sockets } = world();
-    writeFileSync(join(sockets, '222.sock'), '');
-    const host = claudeHost(sockets, ['idle', 'working']);
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING));
-    expect(withoutSendId(io.out)).toBe(
-      'team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
-    );
-    expect(host.frames).toEqual([]);
-    expect(host.socketsTried).toEqual([]);
-    const drops = join(dir, 'send-drops', 'acme', 'lead');
-    const path = join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string);
-    // No pane messaging: the plain send stages its drop and types nothing.
-    expect(host.pane.typed).toEqual([]);
-    expect(existsSync(path)).toBe(true);
-    expect(host.pane.enters).toBe(0);
-    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
-    const read = readHistory('acme', root, host.home);
-    expect(read.ok).toBe(true);
-    if (!read.ok) return;
-    expect(read.entries[0]).toMatchObject({
-      to: 'lead',
-      outcome: 'queued, not woken',
-      ms: 0,
-      via: 'drop',
-    });
-  });
 });

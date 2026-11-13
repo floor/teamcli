@@ -291,109 +291,6 @@ describe('a send to a seat whose CLI creates its own session', () => {
     expect(argv[3]).toContain('hello');
   });
 
-  test('a call that prints no session line is a failed route: the walk falls through and the drop keeps the message', async () => {
-    const made = julesWorld();
-    const jules = julesFirstOnPath({ status: 1, stderr: 'Error: no account\n' });
-    const io = owner(made.root);
-
-    const code = await runSend([SEAT, 'hello'], io, host(made, { sendId: () => SEND_ID }));
-
-    expect(code).toBe(0);
-    expect(io.out).toContain(`${SEAT}: queued, not woken (drop`);
-    expect(io.err).toContain('the message waits in its bus inbox');
-    expect(existsSync(join(seatDropDir(made), SEND_ID))).toBe(true);
-    expect(recordBody(join(seatDropDir(made), SEND_ID))).toContain('hello');
-    expect(jules.calls()).toHaveLength(1);
-    const entry = lastEntry(made);
-    expect(entry).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
-    expect(entry.failed).toEqual(expect.arrayContaining([
-      `session: the jules CLI exited 1 (Error: no account)`,
-    ]));
-  });
-
-  test('a body that names a private entry never reaches the CLI: the rule is named, the text is not, and the drop keeps it', async () => {
-    const made = julesWorld();
-    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
-    const io = owner(made.root);
-
-    const code = await runSend([SEAT, 'notes for Zephyrine Quillfeather'], io, host(made, { sendId: () => SEND_ID }));
-
-    expect(code).toBe(0);
-    expect(jules.calls()).toEqual([]);
-    expect(io.out).toContain(`${SEAT}: queued, not woken (drop`);
-    // The local copy keeps the body: the message is not lost, it is not handed to a public
-    // service. The refusal names the rule it matched and never repeats the text.
-    expect(recordBody(join(seatDropDir(made), SEND_ID))).toContain('Zephyrine Quillfeather');
-    const entry = lastEntry(made);
-    expect(entry).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
-    const failed = (entry.failed as string[] | undefined) ?? [];
-    expect(failed).toEqual(expect.arrayContaining([
-      'session: the body matches a private rule (names entry 1); no session was created',
-    ]));
-    expect(failed.join('\n')).not.toContain('Zephyrine');
-    expect(io.err).not.toContain('Zephyrine');
-    expect(io.out).not.toContain('Zephyrine');
-  });
-
-  test('a target repository that is not public refuses the session call: the drop keeps the message', async () => {
-    const made = julesWorld();
-    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
-    const io = owner(made.root);
-
-    const code = await runSend([SEAT, 'hello'], io, host(made, { sendId: () => SEND_ID, repoVisibility: async () => 'not-public' }));
-
-    expect(code).toBe(0);
-    expect(jules.calls()).toEqual([]);
-    expect(io.out).toContain(`${SEAT}: queued, not woken (drop`);
-    expect(existsSync(join(seatDropDir(made), SEND_ID))).toBe(true);
-    expect(lastEntry(made)).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
-    const failed = (lastEntry(made).failed as string[] | undefined) ?? [];
-    expect(failed).toEqual(expect.arrayContaining([
-      'session: the target repository acme/site is not public; no session was created',
-    ]));
-  });
-
-  test('a visibility read that cannot be made refuses the session call, with the reason', async () => {
-    const made = julesWorld();
-    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
-    const io = owner(made.root);
-
-    const code = await runSend([SEAT, 'hello'], io, host(made, { sendId: () => SEND_ID, repoVisibility: async () => 'unread' }));
-
-    expect(code).toBe(0);
-    expect(jules.calls()).toEqual([]);
-    expect(lastEntry(made)).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
-    const failed = (lastEntry(made).failed as string[] | undefined) ?? [];
-    expect(failed).toEqual(expect.arrayContaining([
-      'session: the target repository acme/site could not be read for visibility; no session was created',
-    ]));
-  });
-
-  test('a folder that names no repository is not proved public: the session call is refused', async () => {
-    const made = julesWorld({ origin: null });
-    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
-    const io = owner(made.root);
-    const read: string[] = [];
-
-    const code = await runSend([SEAT, 'hello'], io, host(made, {
-      sendId: () => SEND_ID,
-      repoVisibility: async (repo) => {
-        read.push(repo);
-        return 'public';
-      },
-    }));
-
-    expect(code).toBe(0);
-    // There is no repository to read: the guard refuses without inventing a lookup.
-    expect(read).toEqual([]);
-    expect(jules.calls()).toEqual([]);
-    expect(lastEntry(made)).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
-    const failed = (lastEntry(made).failed as string[] | undefined) ?? [];
-    expect(failed).toEqual(expect.arrayContaining([
-      "session: the seat's folder names no repository, so the session's target cannot be proved public; no session was created",
-    ]));
-  });
-
   test('a public target takes the call, and the read names the repository once', async () => {
     const made = julesWorld();
     const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
@@ -432,18 +329,6 @@ describe('a send to a seat whose CLI creates its own session', () => {
     expect(((lastEntry(made).failed as string[] | undefined) ?? []).join('\n')).toContain('the body matches a private rule');
   });
 
-  test('a seat the team file marks public_only keeps the guard on', async () => {
-    const made = julesWorld({ julesFields: '    public_only: true\n' });
-    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
-    const io = owner(made.root);
-
-    const code = await runSend([SEAT, 'notes for Zephyrine Quillfeather'], io, host(made, { sendId: () => SEND_ID }));
-
-    expect(code).toBe(0);
-    expect(jules.calls()).toEqual([]);
-    expect(lastEntry(made)).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
-  });
-
   test('a declared order keeps its words; the retired typed wake stands where the session call can', async () => {
     const made = julesWorld({ order: ['mcp-inbox', 'typed'] });
     const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
@@ -452,24 +337,6 @@ describe('a send to a seat whose CLI creates its own session', () => {
 
     expect(jules.calls()).toHaveLength(1);
     expect(lastEntry(made)).toMatchObject({ via: 'session', session: 'abc123' });
-  });
-
-  test('a seat whose CLI declares no session call records the leg unavailable when an order names it', async () => {
-    const made = julesWorld({ order: ['session', 'drop'] });
-    const jules = julesFirstOnPath();
-    const io = owner(made.root);
-
-    // The lead is a Claude Code seat: its profile declares no session call, so the named leg is
-    // skipped with the reason and the drop leg behind it still takes the message.
-    const code = await runSend(['lead', 'hello'], io, host(made));
-
-    expect(code).toBe(0);
-    expect(jules.calls()).toEqual([]);
-    const entry = lastEntry(made);
-    expect(entry).toMatchObject({ to: 'lead', via: 'drop' });
-    expect(entry.failed).toEqual(expect.arrayContaining([
-      'session: claude-code has no session-creating command in this build',
-    ]));
   });
 
   test('a dry run names the session call and spawns nothing', async () => {

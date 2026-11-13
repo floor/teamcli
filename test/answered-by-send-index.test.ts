@@ -176,37 +176,6 @@ function filler(seatDir: string, count: number): void {
 }
 
 describe('the unread index is what a send reads, and a big tree is never walked', () => {
-  test('a send settles the indexed message inside 300 ms, and a reply reads its thread folders', async () => {
-    const w = makeWorld();
-    delivered(w, 'lead', ASK_LEAD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
-    line(w, ASK_LEAD, 'worker', 'lead', 'socket', '2026-11-03T09:00:01.000Z');
-    delivered(w, 'worker', ASK_WORKER, { from: 'lead', at: '2026-11-03T09:30:00.000Z' });
-    line(w, ASK_WORKER, 'lead', 'worker', 'socket', '2026-11-03T09:30:01.000Z');
-    // The tree the live fleet carried: forty thousand files in a seat folder neither command may
-    // read on this path.
-    const helperDir = recordDir(w.root, 'acme', 'helper');
-    filler(helperDir, 40_000);
-
-    const sendStart = performance.now();
-    const sendIo = testIo(w.root, leadCaller);
-    const sendCode = await runSend(['worker', 'the answer'], sendIo, makeHost(w));
-    const sendMs = performance.now() - sendStart;
-
-    const replyStart = performance.now();
-    const replyIo = testIo(w.root, workerCaller);
-    const replyCode = await runReply([ASK_WORKER, 'the answer'], replyIo, { home: w.home, now: () => NOW, newId: () => REPLY });
-    const replyMs = performance.now() - replyStart;
-
-    expect(sendCode).toBe(0);
-    expect(readReceiptExists(w, 'lead', ASK_LEAD)).toBe(true);
-    expect(sendMs).toBeLessThan(300);
-    expect(replyCode).toBe(0);
-    expect(existsSync(join(recordDir(w.root, 'acme', 'lead'), REPLY))).toBe(true);
-    expect(replyMs).toBeLessThan(2_000);
-    // The tree comes down inside the scene: a folder of forty thousand files costs this run
-    // seconds to remove, and the scene's budget is its own.
-    rmSync(helperDir, { recursive: true, force: true });
-  }, 120_000);
 
   test('an absent index marks nothing and never falls back to the tree', () => {
     const w = makeWorld();

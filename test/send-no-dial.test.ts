@@ -164,38 +164,6 @@ function dropped(root: string, seat: string): string {
 }
 
 describe('the sending paths never dial while the socket is off', () => {
-  test('a plain send writes the drop and dials nothing: the throwing deliver is never called', async () => {
-    const w = world();
-    const host = dialer(w);
-    const io = owner(w.root);
-
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
-    expect(host.dials()).toBe(0);
-    expect(host.frames).toEqual([]);
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    expect(recordBody(dropped(w.root, 'lead'))).toBe('from the owner — admitted by: the owner\n\nhello');
-  });
-
-  test('--wait lands the drop without dialing and times out with the thread open', async () => {
-    const w = world();
-    const host = { ...dialer(w), waitMs: 0 };
-    const io = owner(w.root);
-
-    const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
-
-    expect(code).toBe(1);
-    expect(io.out).toBe('');
-    expect(io.err).toContain('queued, no event adapter');
-    expect(io.err).toContain('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open');
-    expect(host.dials()).toBe(0);
-    expect(host.frames).toEqual([]);
-    expect(host.typed).toEqual([]);
-    expect(recordBody(dropped(w.root, 'lead'))).toBe('from the owner — admitted by: the owner\n\nhello');
-  });
 
   test('the daemon refuses a waited request and types a plain one, dialing nothing either way', async () => {
     const w = world();

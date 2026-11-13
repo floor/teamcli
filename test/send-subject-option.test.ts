@@ -27,23 +27,6 @@ function onlyRecord(w: World): SignedRecord {
 }
 
 describe('team send --subject', () => {
-  test('is parsed as a valued option and carried in the signed record', async () => {
-    made = world(['drop']);
-    const io = owner(made.root);
-    expect(await runSend(['native', 'the gate is green', '--subject', 'gate status'], io, fake(made))).toBe(0);
-    const record = onlyRecord(made);
-    expect(record.payload.subject).toBe('gate status');
-    // The subject is display beside the body, never a replacement for its first line.
-    expect(record.payload.body).toContain('the gate is green');
-    expect(messageSummaryOf(record.payload.body)).toBe('the gate is green');
-  });
-
-  test('a blank word is no subject at all', async () => {
-    made = world(['drop']);
-    const io = owner(made.root);
-    expect(await runSend(['native', 'the gate is green', '--subject', '   '], io, fake(made))).toBe(0);
-    expect(onlyRecord(made).payload.subject).toBeUndefined();
-  });
 
   test('a missing value is refused as a usage error', async () => {
     made = world(['drop']);

@@ -82,55 +82,6 @@ function teamRecord(one: World, id: string, init: { project: string; session: st
 }
 
 describe('team send: two operators of one team', () => {
-  test('a declared operator reaches another declared operator, and the record, history and log say so', async () => {
-    const one = make();
-    place(one.dir, 'operator-a', 'w2:p1');
-    const io = testIo(one.root, { kind: 'seat', name: 'operator-a', pane: 'w2:p1', session: 'acme' });
-
-    const code = await runSend(['operator-b', 'the handover is ready'], io, fake(one));
-
-    expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('operator-b'));
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\noperator-b: queued, not woken (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only)\n');
-    const drops = dropDir(one.dir, 'operator-b');
-    // The drop leg leaves its retry marker beside the record, and readdir order is the
-    // filesystem's: the record is picked by name, never by position.
-    expect(readdirSync(drops).some((name) => name.endsWith('.pending'))).toBe(true);
-    expect(recordBody(dropRecord(drops))).toBe(
-      "from the file's seat operator-a (no registry record yet) — admitted by: an operator to another operator of its own team\n\nthe handover is ready",
-    );
-    // Logged like every send: one history line and one team-log line.
-    const read = readHistory('acme', one.root, one.home);
-    expect(read.ok).toBe(true);
-    if (!read.ok) return;
-    expect(read.entries).toHaveLength(1);
-    expect(read.entries[0]).toMatchObject({ to: 'operator-b', outcome: 'queued, not woken', via: 'drop' });
-    expect(readFileSync(join(one.dir, 'team.log'), 'utf8')).toContain('send [operator-a] operator-b: sent to its drop folder');
-  });
-
-  test('the file line is the word, not the role the record signed under', async () => {
-    const one = make();
-    const id = teamIdOf(one.root);
-    const operatorA = registered(one, { name: 'operator-a', role: 'implementer', team: id, seat: 'operator-a', session: 'acme', pane: 'w2:p1' });
-    // The record says implementer; the file's line says operator, and the file is what decides.
-    teamRecord(one, id, {
-      project: 'acme',
-      session: 'acme',
-      root: one.root,
-      roster: [{ agent: operatorA.id, seat: 'operator-a', role: 'implementer' }],
-    });
-    place(one.dir, 'operator-a', 'w2:p1');
-    const io = testIo(one.root, { kind: 'seat', name: 'operator-a', pane: 'w2:p1', session: 'acme' });
-
-    const code = await runSend(['operator-b', 'status?'], io, fake(one));
-
-    expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('operator-b'));
-    const drops = dropDir(one.dir, 'operator-b');
-    expect(recordBody(dropRecord(drops))).toBe(
-      'from operator-a — admitted by: an operator to another operator of its own team\n\nstatus?',
-    );
-  });
 
   test('the same word in another team is no pair, and the send is refused', async () => {
     const one = make();

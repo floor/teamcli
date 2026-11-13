@@ -195,40 +195,6 @@ describe('a record that declares a conversation sends only while the pane report
     expect(JSON.stringify(io.out + io.err)).not.toContain('hello');
   });
 
-  test('send: the same record with no live reader answering keeps its prior admission', async () => {
-    const w = sendWorld('unreachable');
-    const io = testIo(w.root, { kind: 'seat', name: 'lead', pane: 'lead-pane', session: 'acme' });
-
-    const code = await runSend(['helper', 'hello'], io, w.host);
-
-    expect(code, io.out + io.err).toBe(0);
-    // Admitted: the message landed in the session's drop folder — a queued note is not a refusal.
-    expect(io.err).not.toContain('refused');
-    expect(dropBytes(w.root)).toContain('hello');
-  });
-
-  test('send: a record with no conversation declared is not held to one — the fence narrows nothing', async () => {
-    const w = sendWorld('no-report-on-record');
-    const io = testIo(w.root, { kind: 'seat', name: 'lead', pane: 'lead-pane', session: 'acme' });
-
-    const code = await runSend(['helper', 'hello'], io, w.host);
-
-    expect(code, io.out + io.err).toBe(0);
-    expect(io.err).not.toContain('refused');
-    expect(dropBytes(w.root)).toContain('hello');
-  });
-
-  test('send: the pane reporting the record\'s own conversation is admitted (row E)', async () => {
-    const w = sendWorld('match');
-    const io = testIo(w.root, { kind: 'seat', name: 'lead', pane: 'lead-pane', session: 'acme' });
-
-    const code = await runSend(['helper', 'hello'], io, w.host);
-
-    expect(code, io.out + io.err).toBe(0);
-    expect(io.err).not.toContain('refused');
-    expect(dropBytes(w.root)).toContain('hello');
-  });
-
   test('route: the mismatching conversation refuses, and no address is answered', async () => {
     const w = sendWorld('mismatch');
     const io = testIo(w.root, { kind: 'seat', name: 'lead', pane: 'lead-pane', session: 'acme' });

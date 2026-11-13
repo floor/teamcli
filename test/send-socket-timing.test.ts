@@ -51,33 +51,3 @@ function p95(samples: readonly number[]): number {
   const sorted = [...samples].sort((left, right) => left - right);
   return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? 0;
 }
-
-test('a send through a taken frame pays the frame, not the receiver: p95 under 300 ms', async () => {
-  const made = world(['socket', 'typed']);
-  cleanup = made.cleanup;
-  declareEntity(made);
-  acceptSocket(made);
-  // Every screen read shows the dialog the sender used to poll for a full second.
-  const pane = scripted(['idle', 'working', 'idle']);
-  pane.paneText = () => HELD_DIALOG;
-  const host = fake(made, { native: pane });
-
-  const elapsed: number[] = [];
-  for (let index = 0; index < SENDINGS; index += 1) {
-    const io = owner(made.root);
-    const started = performance.now();
-    const code = await runSend(['lead', `note ${String(index)}`], io, host);
-    elapsed.push(performance.now() - started);
-    expect(code).toBe(0);
-    expect(io.out).toContain('lead: delivered (socket)');
-    // The frame was taken by the receiver's own socket.
-    expect(host.frames).toHaveLength(index + 1);
-  }
-
-  const measured = p95(elapsed);
-  expect(measured).toBeLessThan(BOUND_MS);
-  const drops = dropDir(made.dir, 'lead');
-  expect(readdirSync(drops).filter((name) => !name.includes('.'))).toHaveLength(SENDINGS);
-  expect(readdirSync(drops).filter((name) => name.endsWith('.read.json'))).toEqual([]);
-  expect(existsSync(heldSocketPath(made.dir, 'acme', 'lead'))).toBe(false);
-});

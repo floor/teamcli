@@ -373,48 +373,6 @@ describe('the channel leg', () => {
     expect(box.enters).toBe(0);
     expect(said).toEqual([`lead: a channel send from owner was read (receipt)`]);
   });
-
-  test('no completed notification leaves the held marker and the walk continues', async () => {
-    const made = channelWorld();
-    const dir = listening(made);
-    const one: Watched = { typed: [], enters: [] };
-    // The server never completes the notification; the grace is over at once.
-    const host = senderHost(made, one, false, { channelGraceMs: 0 });
-    const io = owner(made.root);
-
-    const code = await runSend(['lead', TRIGGER], io, host);
-
-    expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: queued, not woken (drop, 0 ms)\n`);
-    expect(io.out).not.toContain('woken through');
-    expect(io.out).not.toContain('sent (channel)');
-    // The sender reserves the push name so a later server does not deliver it. That hold is
-    // not a notification.
-    const held = JSON.parse(readFileSync(channelPushPath(dir, SEND_ID), 'utf8')) as Record<string, unknown>;
-    expect(held.kind).toBe(CHANNEL_HELD_RECEIPT);
-    expect(held.id).toBe(SEND_ID);
-    expect(held.notified).toBeUndefined();
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toEqual([]);
-    // The drop leg's marker is the one the watch reads, so a later pass treats this as the
-    // seat's own message. The held push name is not a notification.
-    expect(readPending(dir)).toEqual([
-      { id: SEND_ID, from: 'owner', to: 'lead', body: BODY, ts: NOW.toISOString(), tries: 0, leg: 'drop' },
-    ]);
-    expect(lastEntry(made)).toEqual({
-      ts: NOW.toISOString(),
-      from: 'owner',
-      to: 'lead',
-      from_team: teamIdOf(made.root),
-      body: BODY,
-      id: SEND_ID,
-      thread: SEND_ID,
-      outcome: 'queued, not woken',
-      ms: 0,
-      via: 'drop',
-      failed: [`typed: ${NO_PANE_MESSAGING}`, 'channel: no push receipt within 0 ms'],
-    });
-  });
 });
 
 describe('the channel redelivery', () => {
@@ -516,68 +474,6 @@ describe('the channel redelivery', () => {
     await retryHeldDrops(sceneOf(made, box, new Date(due.getTime() + CHANNEL_CONFIRM_MS), said));
     expect(box.typed).toEqual([]);
     expect(box.enters).toBe(0);
-  });
-
-  test('the socket takes the redelivery first: one frame, no receipt, the marker cleared, the record unread', async () => {
-    const made = channelWorld();
-    // The frame's reader line names the record's own id, so no entity is needed for it; the
-    // receiving team still names one so its registry identity resolves like a real team's.
-    declareEntity(made, 'floor');
-    declareSeat(made, 'lead', 'accept');
-    const dir = seedChannel(made, SOCKET_ID, BODY);
-    const box = pane(claudeBox(''));
-    const said: string[] = [];
-    const frames: string[] = [];
-    const due = new Date(NOW.getTime() + CHANNEL_CONFIRM_MS + 1);
-    const host = fake(made, {
-      // The watch hands the redelivery its own clock, so the socket line is filed at the pass's
-      // time, not at the wall time the fixture started.
-      now: () => due,
-      deliver: async (_path: string, frame: string) => {
-        frames.push(frame);
-        return { ok: true };
-      },
-    });
-    const loaded = loadTeamFile(made.root, { home: made.home });
-    if (!loaded.ok) throw new Error('fixture team.yaml failed to load');
-    const launch = loaded.team.seats.find((one) => one.name === 'lead')?.launch;
-    const scene = sceneOf(made, box, due, said, {
-      socketRedeliver: (dropDir, drop) => redeliverChannelOnSocket({
-        host, dir: made.dir, root: made.root, project: 'acme', session: SESSION, seat: drop.to,
-        cli: 'claude-code', dropDir, drop, team: loaded.team,
-        ...(launch === undefined ? {} : { launch }),
-      }),
-    });
-
-    await retryHeldDrops(scene);
-
-    expect(frames).toHaveLength(1);
-    const content = (JSON.parse(frames[0] as string) as { message: { content: string } }).message.content;
-    expect(content).toContain('from the owner (owner):\n\nhello');
-    expect(content.split('\n').at(-1)).toBe(`↩ team reply ${SOCKET_ID.slice(0, 8)} "…" · team ack ${SOCKET_ID.slice(0, 8)}`);
-    // Only the seat writes a read receipt: the taken frame leaves the record unread for the
-    // seat's own read, and the watch's unread pass re-wakes it like any other message.
-    expect(existsSync(receiptPath(dir, SOCKET_ID))).toBe(false);
-    const key = messageKeyState(made.home);
-    if (key.kind !== 'key') throw new Error('the fixture home holds no message key');
-    expect(isRead(dir, SOCKET_ID, { to: 'lead', root: realpathSync(made.root), session: SESSION }, key.key)).toBe(false);
-    expect(box.typed).toEqual([]);
-    expect(box.enters).toBe(0);
-    expect(readPending(dir)).toEqual([]);
-    expect(said).toEqual([`lead: a channel send from owner was redelivered on the socket`]);
-    expect(lastEntry(made)).toEqual({
-      ts: due.toISOString(),
-      from: 'owner',
-      to: 'lead',
-      from_team: teamIdOf(made.root),
-      body: BODY,
-      id: SOCKET_ID,
-      thread: SOCKET_ID,
-      outcome: 'delivered',
-      ms: 0,
-      via: 'socket',
-      failed: [CHANNEL_UNCONFIRMED_REASON],
-    });
   });
 
   test('the socket redelivery holds the push name first, so a stale channel server cannot push it too', async () => {

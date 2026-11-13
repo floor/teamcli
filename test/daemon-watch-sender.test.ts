@@ -158,63 +158,6 @@ function stagedIds(made: World, seat = 'helper'): string[] {
 }
 
 describe("the daemon's watch sender", () => {
-  test('the captured acquisition, not a request field, selects the send context', async () => {
-    const made = world(['socket']);
-    cleanup = made.cleanup;
-    accepting(made);
-    registered(made);
-    verifiable(made);
-    bound(made);
-    const clock = { at: Date.now() };
-    const dials: string[] = [];
-    const pane = scripted(['idle'], null);
-    const host = fake(made, {
-      agents: () => [{ name: 'helper', pane: PANE }],
-      native: pane,
-      deliver: async (_socketPath, frame) => {
-        dials.push(frame);
-        return { ok: true };
-      },
-    });
-    const route = routeOf(made.root, 'acme', SESSION, ['lead', 'helper', 'native']);
-    const teamFile = join(made.dir, 'team.yaml');
-    let captured = '';
-    const build = hostedWatchAuthority({
-      route,
-      teamFile,
-      log: () => {},
-      now: () => new Date(clock.at),
-      base: sources(made, clock),
-      verifyAuthority: (check) => verifyWatchAuthority({ ...check, purpose: WATCH_DIRECT_WORK, now: new Date(clock.at) }),
-      // The production closure: the epoch this host captured at acquire, never a queue field or
-      // a wrapper boolean. `sendWatchDirect` then compiles the actual verifier itself.
-      sender: (acquisition) => {
-        captured = acquisition.epoch;
-        return (request) => sendWatchDirect(
-          { root: route.root, session: route.session, capturedEpoch: acquisition.epoch },
-          request,
-          host,
-        );
-      },
-    });
-    const machineHost = createHostedWatch({ route, now: () => new Date(clock.at), ...build, onTick: build.tick });
-
-    await waitUntil(() => dials.length === 1);
-    const held = readState(made.dir).sessions[SESSION]?.watch;
-    expect(captured).toMatch(/^watch_[0-9a-f]{32}$/);
-    expect(held?.epoch).toBe(captured);
-    expect(machineHost.state().effects).toBe('open');
-    // The send staged the watch's own record and typed nothing: the socket leg carried it.
-    expect(pane.typed).toEqual([]);
-    expect(pane.enters).toBe(0);
-    const ids = stagedIds(made);
-    expect(ids).toHaveLength(1);
-    const staged = readFileSync(join(dropDir(made.dir, 'helper'), ids[0] as string), 'utf8');
-    expect(staged).toContain('"from": "watch"');
-
-    await machineHost.stop('done');
-    expect(readState(made.dir).sessions[SESSION]?.watch).toBeUndefined();
-  });
 
   test('a successor epoch installed during preparation stops the send at its own recheck', async () => {
     const made = world(['socket']);

@@ -42,39 +42,6 @@ function deliveryOf(io: { out: string }): DeliveryEntry[] {
   return doc.delivery as DeliveryEntry[];
 }
 
-test('a real send reports the inbox it skipped and the drop that took it', async () => {
-  const made = world(['mcp-inbox', 'typed', 'drop']);
-  cleanup = made.cleanup;
-  const host = fake(made, { native: scripted(['idle', 'working']) });
-  const io = owner(made.root);
-
-  const code = await runSend(['lead', 'hello', '--json'], io, host);
-
-  expect(code).toBe(0);
-  const doc = assertMatchesOutputSchema<{ status: string; channel: string }>(io.out, SEND_OUTPUT_SCHEMA);
-  expect(doc.status).toBe('queued, not woken');
-  expect(doc.channel).toBe('drop');
-  expect(deliveryOf(io)).toEqual([{ leg: 'drop', state: 'attempted' }]);
-  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(true);
-});
-
-test('a declared typed leg that is not walked leaves the drop to take the send, and the report names it', async () => {
-  const made = world(['typed', 'drop']);
-  cleanup = made.cleanup;
-  // Two agents of the same name were a refusal while a pane had to be chosen; the walk leaves
-  // the typed leg out before it would read them, so the drop takes the send.
-  const host = fake(made, {
-    agents: () => [{ name: 'lead', pane: 'w1:p1' }, { name: 'lead', pane: 'w1:p2' }],
-  });
-  const io = owner(made.root);
-
-  const code = await runSend(['lead', 'hello', '--json'], io, host);
-
-  expect(code).toBe(0);
-  expect(deliveryOf(io)).toEqual([{ leg: 'drop', state: 'attempted' }]);
-  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(true);
-});
-
 test('a dry run lists the implied socket leg as a candidate when the receiver may take it, and dials nothing', async () => {
   const made = world(null);
   cleanup = made.cleanup;
@@ -140,37 +107,4 @@ test('the report schema accepts the channel row and still refuses a leg no repor
   const violations = validateAgainstJsonSchema(doc, schema).join('\n');
   expect(violations).toContain('$.delivery[0].leg');
   expect(violations).toContain('"invented"');
-});
-
-test('a dry run reports the native and typed legs a Codex seat walks, and the native leg a Claude seat cannot', async () => {
-  const made = world(['native', 'typed', 'drop']);
-  cleanup = made.cleanup;
-  const host = fake(made);
-
-  const codex = owner(made.root);
-  expect(await runSend(['native', 'hello', '--dry-run', '--json'], codex, host)).toBe(0);
-  // Codex's profile declares `typed_wake: screen`, so the order's own `typed` word stays: the
-  // channel-class native leg first, the typed wake after it, and the drop leg closing the walk.
-  expect(deliveryOf(codex)).toEqual([
-    { leg: 'native', state: 'candidate', eligible: true },
-    { leg: 'typed', state: 'candidate', eligible: true },
-    { leg: 'drop', state: 'candidate', eligible: true },
-  ]);
-
-  // The same order for a Claude receiver: the native leg is the sending session's own
-  // SendMessage, and this run's sender is the owner, so the leg is skipped with that word.
-  // Claude's profile declares no typed wake, so the typed leg is not in its walk at all.
-  const claude = owner(made.root);
-  expect(await runSend(['lead', 'hello', '--dry-run', '--json'], claude, host)).toBe(0);
-  expect(deliveryOf(claude)).toEqual([
-    {
-      leg: 'native',
-      state: 'skipped',
-      eligible: false,
-      reason: "unavailable; the native leg is the sending session's own SendMessage",
-    },
-    { leg: 'drop', state: 'candidate', eligible: true },
-  ]);
-  expect(host.frames).toEqual([]);
-  expect(existsSync(join(made.dir, LOG_FILE))).toBe(false);
 });

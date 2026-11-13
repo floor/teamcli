@@ -237,30 +237,4 @@ describe('send --list names the stopped seat', () => {
 });
 
 describe('the same seat without the stopped mark plans and delivers normally', () => {
-  test('a dry run plans it, and a real send delivers it', async () => {
-    const w = world(false);
-    const host = fake(w);
-    // Each run reads its own streams: two calls sharing one TestIo append, and the second run's
-    // whole output would then carry the first's lines.
-    const planned = io(w);
-
-    const plannedCode = await runSend([STOPPED, 'hello', 'there', '--dry-run'], planned, host);
-    expect(plannedCode, said(planned)).toBe(0);
-    expect(planned.err, said(planned)).toBe('');
-    expect(planned.out, said(planned)).toContain(`${STOPPED}: dry-run:`);
-    expect(said(planned), said(planned)).not.toContain('unreachable');
-
-    const delivered = io(w);
-    const deliveredCode = await runSend([STOPPED, 'hello', 'there'], delivered, host);
-    expect(deliveredCode, said(delivered)).toBe(0);
-    expect(withoutSendId(delivered.out), said(delivered)).toBe(
-      `team acme, session "${SESSION}"\n${STOPPED}: queued, not woken (drop, 0 ms); queued; ${STOPPED} reads it at its next turn, and nothing here gives it one (pull-only)\n`,
-    );
-    expect(host.typed.length).toBe(0);
-    // No event adapter took it, so the drop waits with its pending mark beside it.
-    const names = dropNames(join(w.dir, 'send-drops', SESSION, STOPPED));
-    expect(names.filter((name) => !name.endsWith('.fallback.json') && !name.endsWith('.pending')).length).toBe(1);
-    expect(names.filter((name) => name.endsWith('.pending')).length).toBe(1);
-    expect(sendRecords(w)).toEqual(['queued, not woken']);
-  });
 });

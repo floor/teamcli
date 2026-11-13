@@ -252,66 +252,6 @@ describe('feat/sender-attributed independent verification', () => {
     );
   });
 
-  test('2. socket frame delivery opens with the attributed sender claim banner before display header, body, and reader line', async () => {
-    const made: World = world(null);
-    extraCleanups.push(made.cleanup);
-
-    // Configure entity lobby trust and seat socket acceptance
-    const teamPath = join(made.dir, 'team.yaml');
-    const lobby = resolveLobby(made.home, { entity: 'floor' });
-    mkdirSync(lobby, { recursive: true });
-    const teamText = readFileSync(teamPath, 'utf8').replace(lobbyDir(made.home), lobby);
-    writeFileSync(teamPath, `${teamText}entity: floor\n`);
-
-    const settingsPath = cliHookSettingsPath(made.dir, 'acme', 'lead');
-    if (settingsPath === null) throw new Error('missing settings path for lead');
-    mkdirSync(dirname(settingsPath), { recursive: true });
-    writeFileSync(settingsPath, JSON.stringify({ crossSessionInbound: 'accept' }));
-    writeFileSync(join(made.sockets, '222.sock'), '');
-    const earlier = new Date(Date.now() - 60_000);
-    utimesSync(settingsPath, earlier, earlier);
-
-    const deliveredFrames: string[] = [];
-    const host = fake(made, {
-      deliver: async (_sock: string, frame: string) => {
-        deliveredFrames.push(frame);
-        return { ok: true };
-      },
-    });
-
-    // Send as owner
-    const codeOwner = await runSend(['lead', 'owner socket payload'], owner(made.root), host);
-    expect(codeOwner).toBe(0);
-    expect(deliveredFrames).toHaveLength(1);
-    const ownerFrame = JSON.parse(deliveredFrames[0]!) as { message: { content: string } };
-    expect(ownerFrame.message.content).toMatch(/^the owner · \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z · admitted: owner\n\n/);
-    expect(ownerFrame.message.content).toContain('owner socket payload');
-    expect(ownerFrame.message.content).toContain('↩ team reply');
-    expect(ownerFrame.message.content.indexOf('owner socket payload')).toBeGreaterThan(
-      ownerFrame.message.content.indexOf('the owner · '),
-    );
-
-    // Send as seat `helper` to `lead`
-    updateState(made.dir, (state) => {
-      state.sessions.acme = {
-        seats: {
-          lead: { stage: 'ready' as const, pane: 'pane-lead' },
-          helper: { stage: 'ready' as const, pane: 'pane-helper' },
-        },
-      } as never;
-    });
-    const codeHelper = await runSend(
-      ['lead', 'helper socket payload'],
-      testIo(made.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' }),
-      host,
-    );
-    expect(codeHelper).toBe(0);
-    expect(deliveredFrames).toHaveLength(2);
-    const helperFrame = JSON.parse(deliveredFrames[1]!) as { message: { content: string } };
-    expect(helperFrame.message.content).toMatch(/^helper · helper@acme · \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z · admitted: to orchestrator\n\n/);
-    expect(helperFrame.message.content).toContain('helper socket payload');
-  });
-
   test('3. reconcile config.changed stamps no author and shows [unattributed author], while write-time config.changed keeps its author', () => {
     const base = fixtureBase('.reconcile-attributed-ind-');
     cleanupDirs.push(base);

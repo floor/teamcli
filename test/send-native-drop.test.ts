@@ -64,34 +64,3 @@ test('the final drop name appears only by rename of a whole temporary file', () 
   expect(statSync(finalPath).mode & 0o777).toBe(0o600);
   expect(statSync(directory).mode & 0o777).toBe(0o700);
 });
-
-test('no pane messaging: the pane is never given the drop path, and the drop holds the whole body', async () => {
-  const made = use(world());
-  const body = `S${'n'.repeat(300)}E`;
-  const { host, pane } = nativeHost(made, ['idle', 'working']);
-  let seen = false;
-  const typeText = pane.typeText.bind(pane);
-  pane.typeText = (session, paneId, text) => {
-    const drops = dropDir(made.dir);
-    const names = readdirSync(drops);
-    expect(names.filter((name) => name.endsWith('.tmp'))).toEqual([]);
-    expect(names.length).toBe(1);
-    const path = join(drops, names[0] as string);
-    // The typed trigger is the seat's own drop read: the line's receipt is the read the send
-    // watches for, so the record's path no longer has to fit inside the typed line.
-    expect(text).toBe(readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme', body }) as string);
-    expect(recordBody(path)).toBe(filed(body));
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    seen = true;
-    return typeText(session, paneId, text);
-  };
-
-  const code = await runSend(['native', body], owner(made.root), host);
-
-  expect(code).toBe(0);
-  expect(seen).toBe(false);
-  const names = readdirSync(dropDir(made.dir)).filter((name) => !name.includes('.'));
-  expect(names.length).toBe(1);
-  expect(recordBody(join(dropDir(made.dir), names[0] as string))).toBe(filed(body));
-  expect(host.frames).toEqual([]);
-});

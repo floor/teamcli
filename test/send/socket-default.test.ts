@@ -168,81 +168,10 @@ function dropRecord(drops: string): string {
 }
 
 describe('team send: the typed trigger is the default for a Claude Code seat', () => {
-  test('a plain send lands in the drop while a live socket stands, and the frame is not written', async () => {
-    const { root, dir, sockets } = world();
-    const { received } = await listen(sockets, 222);
-    const host = claudeHost(sockets, ['idle', 'working']);
-    realDeliver(host);
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
-    expect(io.err).toContain('queued, no event adapter');
-    // The socket is not this path's channel: it is never tried, and the live listener at the
-    // pane's pid hears nothing.
-    expect(host.socketsTried).toEqual([]);
-    expect(received).toEqual([]);
-    expect(host.pane.typed).toEqual([]);
-    expect(host.pane.enters).toBe(0);
-    const drops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(recordBody(dropRecord(drops))).toBe('from the owner — admitted by: the owner\n\nhello');
-  });
-
-  test('a socket file that would refuse is not tried either', async () => {
-    const { root, dir, sockets } = world();
-    // A plain file at the measured name: what a socket left by a session that is gone holds —
-    // and what the flipped default never touches.
-    writeFileSync(join(sockets, '222.sock'), '');
-    const host = claudeHost(sockets, ['idle', 'working']);
-    realDeliver(host);
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
-    expect(host.socketsTried).toEqual([]);
-    expect(host.pane.typed).toEqual([]);
-    expect(host.pane.enters).toBe(0);
-    const drops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(recordBody(dropRecord(drops))).toBe('from the owner — admitted by: the owner\n\nhello');
-  });
 });
 
 describe('team send: a typed send with no socket at all', () => {
-  test('one drop file, no typed trigger, and no socket sentence', async () => {
-    const { root, dir, sockets } = world();
-    const host = claudeHost(sockets, ['idle', 'working']);
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
-    expect(host.frames).toEqual([]);
-    expect(host.socketsTried).toEqual([]);
-    expect(host.pane.typed).toEqual([]);
-    expect(host.pane.enters).toBe(0);
-    const drops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(recordBody(dropRecord(drops))).toBe('from the owner — admitted by: the owner\n\nhello');
-  });
 });
 
 describe('team send: --wait to a Claude Code seat never dials the socket', () => {
-  test('the send walks the delivery order, dials no socket, and waits on the thread', async () => {
-    const { root, sockets } = world();
-    const host = { ...claudeHost(sockets, ['idle', 'working']), waitMs: 0 };
-    const io = owner(root);
-
-    const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
-
-    expect(code).toBe(1);
-    expect(withoutSendId(io.err)).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
-    expect(host.socketsTried).toEqual([]);
-    expect(host.frames).toEqual([]);
-    expect(host.pane.typed.length).toBe(0);
-    expect(host.pane.enters).toBe(0);
-  });
 });

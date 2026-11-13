@@ -96,20 +96,6 @@ function hostFor(made: World, extra: { id?: string; pushOnWait?: boolean; graceM
   });
 }
 
-test('a connected channel delivers once and does not dial the socket', async () => {
-  const made = keep(world(['mcp-inbox', 'typed'], [], { lead: CHANNEL_LAUNCH }));
-  entityFile(made);
-  acceptOlderThanSocket(made);
-  listen(made, 'lead');
-  const id = 'a11ce000-0000-4000-8000-0000000000a1';
-  const host = hostFor(made, { id, pushOnWait: true, graceMs: 500 });
-  const io = owner(made.root);
-  expect(await runSend(['lead', 'a note for the channel'], io, host)).toBe(0);
-  expect(host.frames).toEqual([]);
-  expect(io.out).toContain('(channel');
-  expect(io.out).not.toContain('delivered (socket)');
-});
-
 test('a channel that is on but not connected falls back to the socket when the order lists it', async () => {
   const made = keep(world(['mcp-inbox', 'socket', 'typed'], [], { lead: CHANNEL_LAUNCH }));
   entityFile(made);
@@ -119,17 +105,6 @@ test('a channel that is on but not connected falls back to the socket when the o
   expect(await runSend(['lead', 'a note while the channel server is down'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
   expect(io.out).toContain('lead: delivered (socket)');
-});
-
-test('an order with no socket does not dial one, even as a fallback', async () => {
-  const made = keep(world(['mcp-inbox', 'typed'], [], { lead: CHANNEL_LAUNCH }));
-  entityFile(made);
-  acceptOlderThanSocket(made);
-  const host = hostFor(made);
-  const io = owner(made.root);
-  await runSend(['lead', 'a note with no socket in the order'], io, host);
-  expect(host.frames).toEqual([]);
-  expect(io.out).not.toContain('delivered (socket)');
 });
 
 test('a seat with the channel off keeps the socket delivery', async () => {

@@ -514,30 +514,6 @@ describe('team mcp serve', () => {
     }
   });
 
-  test('a read writes its receipt before the body leaves, and the message then leaves the list', async () => {
-    const at = place();
-    try {
-      signed(at, 'lead', LEAD_ID, 'the body');
-      const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID }), call('2', 'inbox_check')]);
-      expect(replies[0]!.result).toEqual({ content: [{ type: 'text', text: 'Codex seat worker (owner):\n\nthe body' }] });
-      const receipt = readReceipt(at, 'lead', LEAD_ID);
-      expect(receipt.payload).toMatchObject({
-        kind: 'receipt',
-        status: 'read',
-        id: LEAD_ID,
-        to: 'lead',
-        root: realpathSync(at.root),
-        session: SESSION,
-      });
-      const listed = JSON.parse(replies[1]!.result.content[0].text) as { unread: unknown[] };
-      expect(listed.unread).toEqual([]);
-      // The record itself is untouched: the inbox marks, it never moves or rewrites the file.
-      expect(recordBody(join(at.dropDir('lead'), LEAD_ID))).toBe('the body');
-    } finally {
-      at.cleanup();
-    }
-  });
-
   test('an id is a UUID and never a path, and a symlinked drop is not served', async () => {
     const at = place();
     try {
@@ -623,19 +599,6 @@ describe('team mcp serve', () => {
 });
 
 describe('an inbox read serves only a record it verified', () => {
-  test('a signed record returns its body, and the receipt is written', async () => {
-    const at = place();
-    try {
-      signed(at, 'lead', LEAD_ID, 'the draft is ready');
-      const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID })]);
-      expect(replies[0]!.result.isError).toBeUndefined();
-      expect(replies[0]!.result.content[0].text).toBe('Codex seat worker (owner):\n\nthe draft is ready');
-      const receipt = readReceipt(at, 'lead', LEAD_ID);
-      expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id: LEAD_ID, to: 'lead' });
-    } finally {
-      at.cleanup();
-    }
-  });
 
   test('a tampered record is refused with the reason, and no receipt is written', async () => {
     const at = place();

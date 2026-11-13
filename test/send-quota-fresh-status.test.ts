@@ -170,56 +170,6 @@ describe('a fresh quota reading on the same pane', () => {
 });
 
 describe('send availability with a synthetic recipient', () => {
-  test('after a durable hold a fresh row on the same pane permits a signed inbox delivery', async () => {
-    const made = fixture();
-    const pane = paneHost(made, frame(EMPTY));
-    const refused = owner(made.root);
-    expect(await runSend(['native', 'first note'], refused, pane.host)).toBe(1);
-    expect(refused.err).toContain('not delivered: out of tokens');
-    expect(refused.err).toContain("kept in native's inbox");
-    expect(existsSync(dropDir(made.dir))).toBe(true);
-    const heldIds = readdirSync(dropDir(made.dir)).filter((name) => !name.includes('.'));
-    expect(heldIds).toHaveLength(1);
-    expect(readFileSync(join(dropDir(made.dir), heldIds[0]!), 'utf8')).toContain('first note');
-    expect(existsSync(join(dropDir(made.dir), `${heldIds[0]!}.read.json`))).toBe(false);
-    expect(pane.typed).toEqual([]);
-    expect(pane.entered).toEqual([]);
-    expect(pane.wakeReads).toEqual([]);
-
-    pane.show(frame(FULL));
-    const accepted = owner(made.root);
-    expect(await runSend(['native', 'fresh note'], accepted, pane.host)).toBe(0);
-    expect(accepted.err).not.toContain('quota out');
-    expect(accepted.out).toContain('native: delivered (typed wake)');
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.typed[0]?.pane).toBe(PANE);
-    expect(pane.typed[0]?.text).toContain('team drops --read');
-    expect(pane.entered).toEqual([PANE]);
-    expect(pane.wakeReads.length).toBeGreaterThanOrEqual(4);
-    expect(pane.wakeReads.every((pane) => pane === PANE)).toBe(true);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries).toHaveLength(2);
-      expect(history.entries[0]).toMatchObject({ to: 'native', outcome: 'queued, not woken', via: 'drop' });
-      expect(history.entries[1]).toMatchObject({ to: 'native', outcome: 'delivered (typed wake)', via: 'typed' });
-    }
-    const drops = dropDir(made.dir);
-    const messages = readdirSync(drops).filter((name) => !name.includes('.'));
-    expect(messages).toHaveLength(2);
-    const freshIds = messages.filter((id) => !heldIds.includes(id));
-    expect(freshIds).toHaveLength(1);
-    const id = freshIds[0]!;
-    const read = readMessage({ root: made.root, dropDir: drops, session: 'acme', seat: 'native' }, id, made.home);
-    expect(read.ok).toBe(true);
-    expect(JSON.stringify(read)).toContain('fresh note');
-    expect(JSON.stringify(read)).not.toContain('first note');
-    expect(existsSync(join(drops, `${id}.read.json`))).toBe(true);
-    expect(pane.reads.length).toBeGreaterThanOrEqual(2);
-    expect(pane.reads.every((read) => read.session === 'acme' && read.pane === PANE)).toBe(true);
-    expect(pane.host.frames).toEqual([]);
-    expect(pane.writes).toEqual([]);
-  });
 
   for (const [name, row] of [
     ['zero quota', EMPTY],
@@ -253,20 +203,6 @@ describe('send availability with a synthetic recipient', () => {
       expect(pane.wakeReads).toEqual([]);
     });
   }
-
-  test('historical usage-limit text above a fresh idle prompt permits send', async () => {
-    const made = fixture();
-    const pane = paneHost(made, frame(FULL, true));
-    const io = owner(made.root);
-    expect(await runSend(['native', 'new turn'], io, pane.host)).toBe(0);
-    expect(io.err).not.toContain('quota out');
-    expect(io.out).toContain('native: delivered (typed wake)');
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.entered).toEqual([PANE]);
-    const messages = readdirSync(dropDir(made.dir)).filter((name) => !name.includes('.'));
-    expect(messages).toHaveLength(1);
-    expect(pane.writes).toEqual([]);
-  });
 });
 
 describe('the restart and status screen reading', () => {

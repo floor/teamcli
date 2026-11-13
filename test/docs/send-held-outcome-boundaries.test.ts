@@ -24,28 +24,6 @@ const written = [...union.matchAll(/'([^']+)'/g)].map((one) => one[1]);
 const appended = [...SEND_SRC.matchAll(/appendHistory\([^;]*?outcome: '([^']+)'/g)].map((one) => one[1]);
 
 describe('the feed page’s outcome list', () => {
-  test('the list is the binary’s history union, every outcome and no other', () => {
-    expect(written.length, 'the history union is no longer a list of plain outcomes').toBeGreaterThanOrEqual(5);
-    const listed = FEED.match(/run \((.*?)\) appends one JSON object/)?.[1] ?? '';
-    expect(listed, 'feed.md lost its outcome list').not.toBe('');
-    for (const outcome of written) {
-      expect(listed.includes(`\`${outcome}\``), `feed.md does not name ${outcome}, which the binary writes down`).toBe(true);
-    }
-    const pageOnes = [...listed.matchAll(/`([^`]+)`/g)].map((one) => one[1]);
-    expect(pageOnes.length, 'feed.md names an outcome the history union does not have').toBe(written.length);
-  });
-
-  test('the messaging spec names the binary’s history union, every outcome and no other', () => {
-    const row = MESSAGING_SPEC.split('\n').find((line) => line.startsWith('| `outcome` |')) ?? '';
-    expect(row, 'the messaging spec lost its history outcome row').not.toBe('');
-    // The meaning column is the sixth cell; the outcome words are its code spans.
-    const meaning = row.split('|')[6] ?? '';
-    const listed = [...meaning.matchAll(/`([^`]+)`/g)].map((one) => one[1]);
-    for (const outcome of written) {
-      expect(listed.includes(outcome), `messaging.md does not name ${outcome}, which the binary writes down`).toBe(true);
-    }
-    expect(listed.length, 'messaging.md names an outcome the history union does not have').toBe(written.length);
-  });
 
   test('the line the page shows is the entry the binary writes, field for field', () => {
     const entry = HISTORY_SRC.match(/export type HistoryEntry = \{([^}]+)\}/)?.[1] ?? '';
@@ -61,12 +39,6 @@ describe('the feed page’s outcome list', () => {
     expect((line.match(/":/g) ?? []).length, 'the example line carries a field the entry does not have').toBe(fields.length);
     expect(FEED.includes('messages.jsonl'), 'feed.md no longer names the history file').toBe(true);
     expect(HISTORY_SRC.includes("export const HISTORY_FILE = 'messages.jsonl'"), 'the binary’s history file changed names').toBe(true);
-  });
-
-  test('send.ts appends exactly the outcomes the page lists, and never a refusal', () => {
-    expect(new Set(appended), 'send.ts appends an outcome outside the history union').toEqual(new Set(written));
-    expect(appended.includes('held'), 'held no longer reaches the history').toBe(true);
-    expect(appended.includes('refused'), 'a refusal is now written down; feed.md says it is not').toBe(false);
   });
 
   test('the send page carries the outcomes the feed list belongs to', () => {

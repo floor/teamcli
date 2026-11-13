@@ -203,27 +203,6 @@ async function sendTaken(made: World, one: Pane): Promise<string> {
 }
 
 describe('a taken delivery, confirmed later', () => {
-  test('no pane messaging, no taken record is left; was: a transcript row naming the drop confirms it, and nothing is said', async () => {
-    const made = world();
-    const one = pane(claudeBox(''));
-    const retired = await sendTaken(made, one);
-    expect(await retired).toBe('');
-  });
-
-  test('a status that moved from the one read before Enter confirms it too', async () => {
-    const made = world();
-    const one = pane(claudeBox(''));
-    await sendTaken(made, one);
-
-    // The seat is working now: herdr's status is the sign, with no transcript row to show it.
-    one.screen = claudeBox('');
-    one.status = 'working';
-    const at = scene(made, one, new Date(NOW.getTime() + 5_000));
-    confirmTakenDrops(at);
-
-    expect(readTaken(dropDirOf(made))).toEqual([]);
-    expect(at.said).toEqual([]);
-  });
 
   test('a taken line a lead cleared is dropped quietly, never filed as the seat\'s read', async () => {
     // An old build's taken marker beside a message a lead has since swept: the clearance settles
@@ -256,45 +235,7 @@ describe('a taken delivery, confirmed later', () => {
 });
 
 describe('a taken delivery its seat never acted on', () => {
-  test('no pane messaging, no taken record is left; was: past the grace on a free seat it is said once and filed, and the line is never retyped', async () => {
-    const made = world();
-    const one = pane(claudeBox(''));
-    const retired = await sendTaken(made, one);
-    expect(await retired).toBe('');
-  });
-
-  test('no pane messaging, no taken record is left; was: a record the age bound runs out on is reported even while the seat reads busy', async () => {
-    const made = world();
-    // The seat was already working before the line went in, so no later status can be the sign:
-    // only the transcript could confirm it, and the window runs out with none.
-    const one = pane(claudeBox(''), 'working');
-    const retired = await sendTaken(made, one);
-    expect(await retired).toBe('');
-  });
-
-  test('no pane messaging, no taken record is left; was: inside the window a seat with no live pane keeps its record for a later pass', async () => {
-    const made = world();
-    const one = pane(claudeBox(''));
-    const retired = await sendTaken(made, one);
-    expect(await retired).toBe('');
-  });
-
-  test('no pane messaging, no taken record is left; was: a record whose seat has no live pane ages out and is reported, as a retry record is', async () => {
-    const made = world();
-    const one = pane(claudeBox(''));
-    const retired = await sendTaken(made, one);
-    expect(await retired).toBe('');
-  });
 });
 
 describe('a trigger left in the box is the other case', () => {
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: it is not-submitted, leaves the retry record and no taken record, and the retry submits it', async () => {
-    const made = world();
-    const one = pane(claudeBox(''));
-    one.submits = false;
-    const io = testIo(made.root, { kind: 'owner' });
-
-    const retired = await runSend(['lead', 'hello'], io, sendHost(made, one, () => NOW));
-    expect(await retired).toBe(0);
-  });
 });

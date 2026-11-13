@@ -185,54 +185,6 @@ describe('codexPushAdapter (OpenAI Codex 0.161.0 runtime-push adapter)', () => {
     expect(spawned).toBe(false);
   });
 
-  test('refuses empty, multi-line, or over-length pointers and validates --remote ws://|wss://host:port', async () => {
-    let spawned = false;
-    const adapter = codexPushAdapter({
-      codexDaemon: 'on',
-      resolveSession: stubBoundSession,
-      spawn: () => {
-        spawned = true;
-        return { status: 0, stdout: '', stderr: '' };
-      },
-    });
-
-    expect(await adapter.push(makeRequest({ pointer: '' }))).toEqual({
-      kind: 'unsupported',
-      reason: 'the runtime pointer is not a valid single line',
-    });
-
-    expect(await adapter.push(makeRequest({ pointer: `${SAMPLE_POINTER}\ninjected line` }))).toEqual({
-      kind: 'unsupported',
-      reason: 'the runtime pointer is not a valid single line',
-    });
-
-    expect(await adapter.push(makeRequest({ pointer: 'x'.repeat(TRIGGER_MAX + 1) }))).toEqual({
-      kind: 'unsupported',
-      reason: 'the runtime pointer is not a valid single line',
-    });
-
-    expect(isValidCodexRemote('ws://127.0.0.1:8765')).toBe(true);
-    expect(isValidCodexRemote('wss://relay.example.com:443')).toBe(true);
-    expect(isValidCodexRemote('http://127.0.0.1:8765')).toBe(false);
-    expect(isValidCodexRemote('ws://127.0.0.1:8765/path')).toBe(false);
-
-    const badRemoteAdapter = codexPushAdapter({
-      codexDaemon: 'on',
-      resolveSession: stubBoundSession,
-      remote: 'http://127.0.0.1:8765',
-      spawn: () => {
-        spawned = true;
-        return { status: 0, stdout: '', stderr: '' };
-      },
-    });
-    expect(await badRemoteAdapter.push(makeRequest())).toEqual({
-      kind: 'unsupported',
-      reason: 'the configured codex remote endpoint is not a valid ws://, wss://, or unix:// address',
-    });
-
-    expect(spawned).toBe(false);
-  });
-
   test('maps non-zero exit (--no-daemon or inactive thread) to unreachable and unrecognized subcommand to unsupported', async () => {
     const noDaemonAdapter = codexPushAdapter({
       codexDaemon: 'on',

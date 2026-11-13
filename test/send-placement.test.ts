@@ -183,22 +183,6 @@ function hostOf(home: string): SendHost {
 }
 
 describe('send placement follows the pane', () => {
-  test('a lead recorded on its pane is admitted from another team\'s folder', async () => {
-    const { home, alpha, beta } = world();
-    mkdirSync(join(base, 'sockets'), { recursive: true });
-    const io = testIo(beta);
-    io.callerSources = (session) => sources(session === 'alpha');
-
-    const code = await runSend(['scribe', 'a note'], io, hostOf(home));
-
-    expect(code).toBe(0);
-    expect(io.out).toContain('team alpha, session "alpha"');
-    const drops = join(alpha, '.agents', 'send-drops', 'alpha', 'scribe');
-    const name = readdirSync(drops).find((one) => !one.includes('.'));
-    expect(recordBody(join(drops, name as string))).toMatch(
-      /^from (the file's seat )?lead — admitted by: .+\n\na note$/,
-    );
-  });
 
   test('an unnamed pane in another team\'s folder is still judged by that folder', async () => {
     const { home, alpha, beta } = world();

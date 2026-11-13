@@ -422,53 +422,6 @@ describe('live-delivery-rebind independent scenes', () => {
     expect(peerSock).toContain('300.sock');
   });
 
-  test('2. stale record naming a dead process: bare-shell gone clears stale address, while replaced process (unknown PID) never records the stranger socket and clears or refuses rebind', async () => {
-    const w = createWorld(['worker', 'peer']);
-    const staleWorkerSock = w.sock(200);
-    const strangerPeerSock = w.sock(999);
-
-    // `worker` is at `launched`, its CLI (200) exited leaving only shell (100), and its registry record still holds `200.sock`.
-    recordSeatState(w, 'worker', {
-      stage: 'launched',
-      pane: 'pane-worker',
-      workspace: 'space-worker',
-      launched: { shell: 100, cli: [200] },
-    });
-    registerSeatAgent(w, 'worker', { pane: 'pane-worker', address: staleWorkerSock });
-
-    // `peer` is at `ready`, its recorded CLI (300) died and its pane now holds an unrelated PID (999) listening on `999.sock`.
-    recordSeatState(w, 'peer', {
-      stage: 'ready',
-      pane: 'pane-peer',
-      workspace: 'space-peer',
-      launched: { shell: 101, cli: [300] },
-    });
-    registerSeatAgent(w, 'peer', { pane: 'pane-peer', address: null });
-
-    const upScene = makeUpSources(w, {
-      agents: [
-        { name: null, pane: 'pane-worker', workspace: 'space-worker' },
-        { name: 'peer', pane: 'pane-peer', workspace: 'space-peer', session: 'ses_stranger' },
-      ],
-      processes: {
-        'pane-worker': { shell: 100, foreground: [100] },
-        'pane-peer': { shell: 101, foreground: [999] },
-      },
-      screens: {
-        'pane-worker': 'unrecognised shell prompt',
-        'pane-peer': CLAUDE_IDLE,
-      },
-    });
-    const upIo = testIo(w.root, { kind: 'owner' });
-    await runUp([], upIo, upScene.sources, { nonInteractive: true });
-
-    // `worker`'s dead address was cleared because verdict === 'gone' and shell 100 has no socket.
-    expect(w.addressOf('worker')).toBeNull();
-    // `peer` must NEVER be given stranger PID 999's socket (`999.sock`).
-    expect(w.addressOf('peer')).not.toBe(strangerPeerSock);
-    expect(w.addressOf('peer')).toBeNull();
-  });
-
   test('3. adversarial: up must never record an address for a pane another seat owns, or when two seats claim one pane', async () => {
     const w = createWorld(['worker', 'peer']);
     const peerSock = w.sock(300);

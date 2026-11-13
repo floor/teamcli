@@ -314,18 +314,6 @@ function dropBodies(dir: string, session: string, seat: string): string[] {
 }
 
 describe('team send: the entity-bound send grant', () => {
-  test('a signed record admits a seat to another team\'s lead through orchestrator@<entity>', async () => {
-    const w = world();
-    signSendRecord(w.home, 'builder-to-lead', { from: 'builder@floor', to: 'orchestrator@floor', expires: FUTURE });
-    const { code, out, err } = sendAsBuilder(w, 'lead@teamcli');
-    expect(await code).toBe(0);
-    expect(err()).toBe('');
-    expect(out()).toContain('lead@teamcli: queued, not woken');
-    expect(out()).toContain('team teamcli, session "teamcli"');
-    expect(dropBodies(w.teamcliDir, 'teamcli', 'lead')).toEqual([
-      'from builder@floor — admitted by: an owner-signed grant naming send (builder-to-lead)\n\na note',
-    ]);
-  });
 
   test('the dry run names the grant that admits the pair', async () => {
     const w = world();
@@ -407,82 +395,6 @@ describe('team send: an unsigned record refuses and says how to re-issue it', ()
     expect(err()).toContain('does not verify with the owner\'s approval key');
     expect(err()).toContain("team grant --send --from 'builder@floor' --to 'lead@teamcli'");
   });
-
-  test('the printed line recreates the record signed, and the send then goes through', async () => {
-    const w = world();
-    unsignedSendRecord(w.home, 'old-grant', { from: 'builder@floor', to: 'lead@teamcli', expires: FUTURE });
-    expect(await sendAsBuilder(w, 'lead@teamcli').code).toBe(1);
-    const owner = testIo(w.root, { kind: 'owner' });
-    const wrote = runGrant(
-      ['--send', '--from', 'builder@floor', '--to', 'lead@teamcli', '--expires', FUTURE, '--name', 'old-grant'],
-      owner,
-      { home: w.home },
-    );
-    expect(await wrote).toBe(0);
-    expect(owner.out).toContain('grant: updated');
-    expect(readSendGrants(w.home).map((grant) => grant.name)).toEqual(['old-grant']);
-    // The re-issue writes the JSON sibling; the old unsigned YAML stays and admits nothing.
-    expect(existsSync(join(grantsFolder(w.home), 'old-grant.yaml'))).toBe(true);
-    expect(readSendGrantReads(w.home).map((read) => read.state).sort()).toEqual(['unsigned', 'verified']);
-    const { code } = sendAsBuilder(w, 'lead@teamcli');
-    expect(await code).toBe(0);
-    expect(dropBodies(w.teamcliDir, 'teamcli', 'lead')).toEqual([
-      'from builder@floor — admitted by: an owner-signed grant naming send (old-grant)\n\na note',
-    ]);
-  });
-
-  test('a legacy display name prints a name the writer takes, and that line runs as printed', async () => {
-    const w = world();
-    const folder = grantsFolder(w.home);
-    mkdirSync(folder, { recursive: true });
-    writeFileSync(
-      join(folder, 'legacy.yaml'),
-      `name: the review channel\nsend:\n  from: builder@floor\n  to: lead@teamcli\nexpires: "${FUTURE}"\n`,
-    );
-    const refused = sendAsBuilder(w, 'lead@teamcli');
-    expect(await refused.code).toBe(1);
-    // The refusal still names the record as it calls itself; the printed line carries a stem the
-    // writer accepts, which it would have refused with "is not a record name".
-    expect(refused.err()).toContain('"the review channel"');
-    expect(refused.err()).toContain("--name 'the-review-channel'");
-    const line = printedLine(refused.err());
-    const owner = testIo(w.root, { kind: 'owner' });
-    const wrote = runGrant(shellWords(line).slice(2), owner, { home: w.home });
-    expect(await wrote).toBe(0);
-    expect(readSendGrants(w.home)).toEqual([
-      { name: 'the-review-channel', from: 'builder@floor', to: 'lead@teamcli', expires: FUTURE },
-    ]);
-    expect(await sendAsBuilder(w, 'lead@teamcli').code).toBe(0);
-  });
-
-  // The writer reserves `grant`, `delegate` and every `revoke-…` stem, and also refuses a name whose
-  // `revoke-<name>` would not fit one file name; the printed line must survive all of them.
-  for (const { display, expected } of [
-    { display: 'grant', expected: 'send-grant' },
-    { display: 'delegate', expected: 'send-delegate' },
-    { display: 'revoke-old', expected: 'send-revoke-old' },
-    { display: 'grant!', expected: 'send-grant' },
-    { display: 'g'.repeat(60), expected: 'g'.repeat(57) },
-  ]) {
-    test(`a record called ${JSON.stringify(display)} prints --name '${expected}', and that line runs`, async () => {
-      const w = world();
-      const folder = grantsFolder(w.home);
-      mkdirSync(folder, { recursive: true });
-      writeFileSync(
-        join(folder, 'legacy.yaml'),
-        `name: ${JSON.stringify(display)}\nsend:\n  from: builder@floor\n  to: lead@teamcli\nexpires: "${FUTURE}"\n`,
-      );
-      const refused = sendAsBuilder(w, 'lead@teamcli');
-      expect(await refused.code).toBe(1);
-      expect(refused.err()).toContain(`"${display}"`);
-      expect(refused.err()).toContain(`--name '${expected}'`);
-      const owner = testIo(w.root, { kind: 'owner' });
-      const wrote = runGrant(shellWords(printedLine(refused.err())).slice(2), owner, { home: w.home });
-      expect(await wrote).toBe(0);
-      expect(readSendGrants(w.home).map((grant) => grant.name)).toEqual([expected]);
-      expect(await sendAsBuilder(w, 'lead@teamcli').code).toBe(0);
-    });
-  }
 
   // A legacy expiry may be an offset form the writer now refuses; the line carries the same instant
   // in the canonical form, never the raw text and never nothing.

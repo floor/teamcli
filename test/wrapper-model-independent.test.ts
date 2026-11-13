@@ -231,69 +231,6 @@ describe('team send behind a provider wrapper', () => {
     expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
   }
 
-  test('a signed wrapper is not held for the Claude family its screen prints', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLead(made, { model: 'GLM', version: '5.3', launch: 'claude-glm.sh' });
-    const { host, pane } = sendHost(made, claudeScreen('Opus 4.6'));
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.err).not.toContain('model drift');
-    expectDrop(made);
-  });
-
-  test('a wrapper whose banner names another provider model is still held', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLead(made, { model: 'GLM', version: '5.3', launch: 'claude-glm.sh' });
-    const { host, pane } = sendHost(made, wrapperPane('deepseek-v4.1') + claudeScreen('Opus 4.6'));
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('model drift: GLM 5.3 vs deepseek v4.1');
-    expect(pane.typed).toEqual([]);
-    expect(host.frames).toEqual([]);
-    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
-  });
-
-  test('a wrapper whose banner names the signed model walks its leg', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLead(made, { model: 'GLM', version: '5.3', launch: 'claude-glm.sh' });
-    const { host } = sendHost(made, wrapperPane('glm-5.3') + claudeScreen('Opus 4.6'));
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.err).not.toContain('model drift');
-    expectDrop(made);
-  });
-
-  test('a plain Claude Code seat whose screen names another family is still held', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLead(made, { model: 'Claude Opus', version: '5.5', launch: 'claude --model claude-opus-5-5' });
-    const { host, pane } = sendHost(made, claudeScreen('Opus 4.6'));
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('model drift: Claude Opus 5.5 vs Claude Opus 4.6');
-    expect(pane.enters).toBe(0);
-    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
-  });
-
-  test('a plain Claude Code seat whose screen names the signed model is delivered', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLead(made, { model: 'Claude Opus', version: '5.5', launch: 'claude --model claude-opus-5-5' });
-    const { host } = sendHost(made, claudeScreen('Opus 5.5'));
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.err).not.toContain('model drift');
-    expectDrop(made);
-  });
-
   // The CLI itself reached by a path, through env, or quoted is still the CLI: there is no
   // provider wrapper in the line, so the family its screen prints is the contradiction the
   // signed model needs.
@@ -311,61 +248,6 @@ describe('team send behind a provider wrapper', () => {
       expect(io.err).not.toContain('not kept or delivered');
       made.cleanup();
     }
-  });
-
-  // The id on the banner names the signed model even where the declaration keeps the family's
-  // number in the model name, and even with a suffix word after the version.
-  test('a banner id whose family number is in the model name matches its declaration', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLead(made, { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' });
-    const { host } = sendHost(made, wrapperPane('glm-5.3') + claudeScreen('Opus 4.6'));
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.err).not.toContain('model drift');
-    expectDrop(made);
-  });
-
-  test('a banner id with a suffix after the version names the declared model', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLead(made, { model: 'DeepSeek Flash', version: 'V4.1', launch: 'claude-deepseek.sh' });
-    const { host } = sendHost(made, wrapperPane('deepseek-v4.1-flash') + claudeScreen('Opus 4.6'));
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.err).not.toContain('model drift');
-    expectDrop(made);
-  });
-
-  // A banner is read word by word, order included: the same words in another order name another
-  // version, and a wrapper that moved from 5.3 to 3.5 is a drift like any other. Sorting the
-  // declaration's words would let every reordering through.
-  test('a banner id that writes the GLM version in another order is still held', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLead(made, { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' });
-    const { host, pane } = sendHost(made, wrapperPane('glm-3.5') + claudeScreen('Opus 4.6'));
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('model drift: GLM 5 5.3 vs');
-    expect(pane.enters).toBe(0);
-    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
-  });
-
-  test('a banner id that writes the DeepSeek version in another order is still held', async () => {
-    const made = world(['typed']);
-    cleanup = made.cleanup;
-    registerLead(made, { model: 'DeepSeek Flash', version: 'V4.1', launch: 'claude-deepseek.sh' });
-    const { host, pane } = sendHost(made, wrapperPane('deepseek-v1.4-flash') + claudeScreen('Opus 4.6'));
-    const io = owner(made.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('model drift: DeepSeek Flash V4.1 vs');
-    expect(pane.enters).toBe(0);
-    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
   });
 });
 

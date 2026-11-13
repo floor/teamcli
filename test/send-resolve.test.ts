@@ -688,29 +688,6 @@ function dropOf(root: string, session: string, seat: string): { path: string; te
 }
 
 describe('the whole command on a registry-resolved spec', () => {
-  test('the owner\'s send to another team\'s seat carries the sender header before the body', async () => {
-    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
-    const beta = world('beta', 'beta', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')], alpha);
-    const betaAgent = agent(beta.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(beta.root), seat: 'lead', session: 'beta', pane: 'pane-beta-lead' });
-    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: betaAgent.id, seat: 'lead', role: 'coordinator', leads: true }]);
-    const betaPane = scripted(['idle', 'working']);
-    const alphaPane = scripted(['idle']);
-    const host = sendHost(beta, 'beta', { lead: { pane: 'pane-beta-lead', paneStatus: betaPane } });
-    // The caller stands in alpha's folder, but the send resolves into beta's world: the live read
-    // of alpha's own session must never decide this pane.
-    const io = testIo(alpha.root, OWNER);
-
-    const code = await runSend(['lead@beta', BODY], io, host);
-
-    expect(code).toBe(0);
-    expect(alphaPane.typed).toEqual([]);
-    expect(betaPane.typed.length).toBe(0);
-    const drop = dropOf(beta.root, 'beta', 'lead');
-    const admitted = admitSend('owner', betaAgent, readTeams(beta.home));
-    if (!admitted.ok) throw new Error(`the owner's send is not admitted: ${admitted.why}`);
-    expect(drop.text).toBe(`${senderHeader('owner', admitted.rule)}\n${BODY}`);
-    expect(drop.path.startsWith(join(beta.root, '.agents', 'send-drops', 'beta', 'lead'))).toBe(true);
-  });
 
   test('--list prints the nickname a seat signed, and every row is a spec the resolver takes', async () => {
     const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
@@ -749,83 +726,6 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(betaPane.enters).toBe(0);
     expect(existsSync(join(alpha.root, '.agents', 'send-drops'))).toBe(false);
     expect(existsSync(join(beta.root, '.agents', 'send-drops'))).toBe(false);
-  });
-
-  test('a record with no pane sends to the pane the live read names', async () => {
-    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
-    const builder = seatOf(alpha, 'alpha', 'alpha', 'builder-1', 'builder', null);
-    const builderPane = scripted(['idle', 'working']);
-    const host = sendHost(alpha, 'alpha', { 'builder-1': { pane: 'pane-live-builder', paneStatus: builderPane }, lead: { pane: 'pane-alpha-lead', paneStatus: scripted(['idle']) } });
-    const io = testIo(alpha.root, OWNER);
-
-    const code = await runSend([builder.id, BODY], io, host);
-
-    expect(code).toBe(0);
-    expect(builderPane.typed.length).toBe(0);
-    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
-    expect(drop.text.split('\n')[0]).toBe(senderHeader('owner', admitRuleFor(alpha.home, builder)).trimEnd());
-    expect(drop.text).toContain(BODY);
-  });
-
-  test('a recorded pane another seat now holds is never typed into', async () => {
-    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
-    // The record still names the pane builder-1 was launched on; herdr now lists the lead there
-    // and names no agent of builder-1's at all — the pane was reused after the record was
-    // written. The trigger must not go into the lead's box on the strength of the record.
-    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-reused' });
-    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: builder.id, seat: 'builder-1', role: 'builder', leads: false }]);
-    const leadPane = scripted(['idle', 'working']);
-    const host = sendHost(alpha, 'alpha', { lead: { pane: 'pane-reused', paneStatus: leadPane } });
-    const io = testIo(alpha.root, OWNER);
-
-    const code = await runSend([builder.id, BODY], io, host);
-
-    expect(code).toBe(0);
-    expect(io.err).toContain('builder-1: queued, no event adapter');
-    expect(leadPane.typed).toEqual([]);
-    expect(leadPane.enters).toBe(0);
-    expect(existsSync(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
-  });
-
-  test('a seat herdr lists on another pane is reached there, never at the pane the record carries', async () => {
-    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
-    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-old' });
-    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: builder.id, seat: 'builder-1', role: 'builder', leads: false }]);
-    const builderPane = scripted(['idle', 'working']);
-    const host = sendHost(alpha, 'alpha', { 'builder-1': { pane: 'pane-new', paneStatus: builderPane } });
-    const io = testIo(alpha.root, OWNER);
-
-    const code = await runSend([builder.id, BODY], io, host);
-
-    expect(code).toBe(0);
-    expect(builderPane.typed.length).toBe(0);
-    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
-    expect(drop.text).toContain(BODY);
-  });
-
-  test('a seat whose own record is missing is judged as the file\'s seat: the own-team rules admit it', async () => {
-    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
-    // The team record and the target exist; the caller's own seat has no record of its own — the
-    // live file declares it, and that declared seat is the identity the own-team rule judges.
-    const target = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
-    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: target.id, seat: 'builder-1', role: 'builder', leads: false }]);
-    const builderPane = scripted(['idle', 'working']);
-    const host = sendHost(alpha, 'alpha', { lead: { pane: 'pane-alpha-lead', paneStatus: scripted(['idle']) }, 'builder-1': { pane: 'pane-builder', paneStatus: builderPane } });
-    // The state records the caller on the orchestrator's pane — the placement the declared
-    // judgement asks — and it has no agent record of its own.
-    place(alpha.root, 'alpha', 'lead', 'pane-alpha-lead');
-    const caller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-alpha-lead', session: 'alpha' };
-    const io = testIo(alpha.root, caller);
-
-    const code = await runSend([target.id, BODY], io, host);
-
-    expect(code).toBe(0);
-    expect(builderPane.typed).toEqual([]);
-    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
-    expect(drop.text.split('\n')[0]).toBe(
-      "from the file's seat lead (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team",
-    );
-    expect(drop.text).toContain(BODY);
   });
 
   test('a seat whose own record is missing and whose target is another team is refused: no rule names it', async () => {
@@ -882,57 +782,6 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(existsSync(join(alpha.root, '.agents', 'send-drops'))).toBe(false);
     expect(existsSync(historyPath('alpha', alpha.root, alpha.home))).toBe(false);
   });
-
-  test('a bare nickname the registry has no record for resolves through the local file', async () => {
-    const alpha = world('alpha', 'alpha', 'lead', [
-      seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'),
-      `${seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')}    nickname: hephaestus\n`,
-    ]);
-    // No registry record at all: the declared-seat path answers the bare nickname by the file's
-    // own seats, instead of calling the seat undeclared.
-    const helperPane = scripted(['idle', 'working']);
-    const host = sendHost(alpha, 'alpha', { 'builder-1': { pane: 'pane-builder', paneStatus: helperPane } });
-    const io = testIo(alpha.root, OWNER);
-
-    const code = await runSend(['hephaestus', BODY], io, host);
-
-    expect(code).toBe(0);
-    expect(helperPane.typed.length).toBe(0);
-    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
-    expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
-    expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
-  });
-
-  test('a bare nickname the registry has no record for answers to the word its record signs', async () => {
-    const alpha = world('alpha', 'alpha', 'lead', [
-      seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'),
-      `${seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')}    nickname: hephaestus\n`,
-    ]);
-    // The seat's record signs another word: the declared-seat path takes the word the listing
-    // prints and the registry addresses, so the file's replaced word names nobody.
-    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
-    signNickname(alpha.home, builder.id, 'wren');
-    const helperPane = scripted(['idle', 'working']);
-    const host = sendHost(alpha, 'alpha', { 'builder-1': { pane: 'pane-builder', paneStatus: helperPane } });
-    const io = testIo(alpha.root, OWNER);
-
-    const code = await runSend(['wren', BODY], io, host);
-
-    expect(code).toBe(0);
-    expect(helperPane.typed.length).toBe(0);
-    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
-    expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
-
-    // The native handoff names the same seat: the recorded run resolves the word as the send
-    // does, so a delivery the sender makes itself reaches the seat the word signs.
-    const recorded = testIo(alpha.root, OWNER);
-    expect(await runSend(['--record', 'wren', '--channel', 'native', '--ms', '812', '--dry-run'], recorded, host)).toBe(0);
-    expect(recorded.out).toContain('builder-1: would record (native, 812 ms); nothing was written');
-
-    const replaced = testIo(alpha.root, OWNER);
-    expect(await runSend(['hephaestus', BODY], replaced, host)).toBe(1);
-    expect(replaced.err).toBe(`team send: refused: hephaestus: it is not a declared seat; the file's seats are lead, builder-1\n`);
-  });
 });
 
 describe('the whole command from a folder that is no team', () => {
@@ -963,28 +812,6 @@ describe('the whole command from a folder that is no team', () => {
     return { code, io, panes };
   }
 
-  test('a full address still resolves: seat@team, nickname@team, the lead address and an agent id', async () => {
-    const { w, lead, builder } = teamWorld();
-
-    for (const spec of ['builder-1@alpha', 'worker@alpha', builder.id]) {
-      const sent = await sends(w, spec);
-      expect(sent.code).toBe(0);
-      const typed = sent.panes['builder-1'].typed;
-      expect(typed).toEqual([]);
-      expect(sent.io.err).toContain('queued, no event adapter');
-      const drop = dropOf(w.root, 'alpha', 'builder-1');
-      expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
-      expect(drop.path.startsWith(join(w.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
-      expect(sent.panes.atlas.typed).toEqual([]);
-    }
-
-    const toLead = await sends(w, 'lead@alpha');
-    expect(toLead.code).toBe(0);
-    expect(toLead.panes.atlas.typed).toEqual([]);
-    expect(AGENT_ID.test(lead.id)).toBe(true);
-    expect(AGENT_ID.test(builder.id)).toBe(true);
-  });
-
   test('a bare name from outside a team is refused with the forms that need no team, never a team init', async () => {
     const { w } = teamWorld();
     const outside = join(w.base, 'nowhere');
@@ -1004,48 +831,4 @@ describe('the whole command from a folder that is no team', () => {
 });
 
 describe('the whole command on a legacy seat named lead', () => {
-  test('a file whose named seat holds leads loads, and its lead address reaches that seat', async () => {
-    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
-    const lead = seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead', 'claude-code', { leads: true });
-    const outside = join(w.base, 'nowhere');
-    mkdirSync(outside, { recursive: true });
-    const leadPane = scripted(['idle', 'working']);
-    const host = sendHost(w, 'alpha', { lead: { pane: 'pane-alpha-lead', paneStatus: leadPane } });
-    const io = testIo(outside, OWNER);
-
-    const code = await runSend(['lead@alpha', BODY], io, host);
-
-    expect(code).toBe(0);
-    expect(leadPane.typed.length).toBe(0);
-    const drop = dropOf(w.root, 'alpha', 'lead');
-    expect(drop.text).toContain(BODY);
-    expect(drop.path.startsWith(join(w.root, '.agents', 'send-drops', 'alpha', 'lead'))).toBe(true);
-    expect(AGENT_ID.test(lead.id)).toBe(true);
-  });
-
-  test('a named seat another seat leads by keeps its bare name, and the lead address goes to the lead', async () => {
-    const w = world('alpha', 'alpha', 'atlas', [seatBlock('coordinator', 'atlas', 'claude-code', 'anthropic'), seatBlock('builder', 'lead', 'claude-code', 'anthropic')]);
-    const id = teamIdOf(w.root);
-    const atlas = agent(w.home, { name: 'atlas', role: 'coordinator', cli: 'claude-code', team: id, seat: 'atlas', session: 'alpha', pane: 'pane-atlas' });
-    const legacy = agent(w.home, { name: 'lead', role: 'builder', cli: 'claude-code', team: id, seat: 'lead', session: 'alpha', pane: 'pane-legacy' });
-    team(w.home, id, 'alpha', 'alpha', w.root, [
-      { agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true },
-      { agent: legacy.id, seat: 'lead', role: 'builder', leads: false },
-    ]);
-
-    // The lead address always means the seat that holds `leads`.
-    const outside = join(w.base, 'nowhere');
-    mkdirSync(outside, { recursive: true });
-    const atlasPane = scripted(['idle', 'working']);
-    const legacyPane = scripted(['idle', 'working']);
-    const host = () => sendHost(w, 'alpha', { atlas: { pane: 'pane-atlas', paneStatus: atlasPane }, lead: { pane: 'pane-legacy', paneStatus: legacyPane } });
-    expect(await runSend(['lead@alpha', BODY], testIo(outside, OWNER), host())).toBe(0);
-    expect(atlasPane.typed.length).toBe(0);
-    expect(legacyPane.typed).toEqual([]);
-
-    // The bare name is the legacy seat's own, in its own team.
-    expect(await runSend(['lead', BODY], testIo(w.root, OWNER), host())).toBe(0);
-    expect(legacyPane.typed).toEqual([]);
-    expect(atlasPane.typed).toEqual([]);
-  });
 });

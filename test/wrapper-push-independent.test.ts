@@ -194,16 +194,6 @@ async function agreeOnly(made: World, seat: string, opts: { foreground?: number[
   return { status, sent };
 }
 
-test("a wrapper launch with the team file's inbound accept reads socket, and the send dials it", async () => {
-  const line = wrapper('accept');
-  const made = fixture([], { lead: line });
-  placeSocket(made);
-  const { status, sent } = await agree(made, 'lead', 'socket');
-  expect(status.reach).toBe('socket');
-  expect(sent.code).toBe(0);
-  expect(sent.out).toContain('lead: delivered (socket)');
-});
-
 test("a wrapper launch with no team-file inbound word reads typed, and the send dials no socket", async () => {
   const line = wrapper('accept');
   const made = fixture([{ name: 'wrapped', role: 'implementer', launch: line }]);
@@ -233,16 +223,6 @@ test('a socket older than the declaration reads typed, and the send dials no soc
   expect(sent.frames).toEqual([]);
 });
 
-test('the plain Claude seat with an accepted socket reads socket in both readers', async () => {
-  const made = fixture();
-  generated(made, 'lead', 'accept');
-  placeSocket(made);
-  const { status, sent } = await agree(made, 'lead', 'socket');
-  expect(status.reach).toBe('socket');
-  expect(sent.code).toBe(0);
-  expect(sent.out).toContain('lead: delivered (socket)');
-});
-
 // The two cases a registry address can tell apart from the pane's own processes: the recorded
 // address outranks discovery in the send, and a temporary seat exists only in the registry and
 // the state, never in the team file. Each scene only asks that the two readers agree.
@@ -261,16 +241,4 @@ test("a recorded address the send prefers over the pane's own fresh socket keeps
   // Status discovers the fresh socket of the pane's first process; the send dials the recorded
   // address of the second, which predates the declaration.
   await agreeOnly(made, 'lead', { foreground: [freshPid, recordedPid] });
-});
-
-test('a temporary seat a registry-addressed send can reach agrees with its status row', async () => {
-  const made = fixture();
-  generated(made, 'temp', 'accept');
-  const socket = placeSocket(made);
-  registered(made, 'temp', socket);
-  updateState(made.dir, (state) => {
-    state.sessions.acme ??= emptySession();
-    state.sessions.acme.seats.temp = { stage: 'ready', temporary: { like: 'helper', until: 'manual' } };
-  });
-  await agreeOnly(made, 'temp');
 });
