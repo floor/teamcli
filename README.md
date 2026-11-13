@@ -4,7 +4,7 @@ Ship with a team that never sleeps. Specialized agents, from any lab.
 
 `team` is a small command-line tool with no runtime dependencies: you set the roster, the
 agents do the work in [herdr](https://herdr.dev) panes, and you stay the one who decides.
-It is early and herdr only. Every command `team --help` lists is here. Node 22 or later runs it.
+It is early and herdr only. Every command `team --help` lists is here. Bun 1.4 or later runs it.
 
 - **Any model, in any seat.** Put the right agent from any lab on each role, and swap it without rewriting the team.
 - **Safe by design.** Agents move fast inside the envelope you set, and stop at its edge.

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { generalDoor } from './client/general-door.ts';

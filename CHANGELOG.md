@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- TeamCLI runs on Bun (1.4 or later), the runtime its tests run on: `team` starts with Bun, and `team daemon install` records Bun for the daemon. Node is no longer used.
 - Seats' generated settings files live in TeamCLI's machine folder (`~/.config/team/hooks/`), never in the project. A seat launched before the move keeps its socket route until its next launch. The settings approve TeamCLI's own inbox server and no other project server.
 - Claude Code seats take their rules as a file (`--append-system-prompt-file`, content-addressed under `~/.config/team/rules-text/`), not as text on the launch line.
 - A seat's record follows a new conversation in its own CLI process, and the seat's state moves with it.
