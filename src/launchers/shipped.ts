@@ -173,7 +173,7 @@ const SHIPPED: Readonly<Record<string, (options: ShippedOptions) => LauncherDefi
  *  with an empty key. Nothing is read here; the command names the entry only. */
 export function accountKeyCommand(account: LaunchAccount, store: SecretStore | null): SecretLookup {
   if (store === null) return { ok: false, reason: NO_SECRET_STORE };
-  return store.lookupCommand(account.keychain);
+  return store.lookupCommand({ keychain: account.keychain, secret: account.secret });
 }
 
 /** Shell words a shipped launcher sets in front of its CLI, as `env` assignments; empty when it

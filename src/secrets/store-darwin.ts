@@ -7,7 +7,7 @@
 // its standard output, is never echoed, and is never an argument, an environment variable or
 // input to any process.
 import { realSecretRun, SECRET_NAME, type SecretRunner } from './run.ts';
-import type { SecretLookup, SecretRead, SecretStore, SecretStoreOptions } from './store.ts';
+import type { SecretLookup, SecretName, SecretRead, SecretStore, SecretStoreOptions } from './store.ts';
 
 export type KeyResult = { ok: true; key: string } | { ok: false; reason: string };
 
@@ -54,16 +54,25 @@ export function keychainLookupCommand(service: string): string {
   return `${SECURITY} ${lookupArgs(service).join(' ')}`;
 }
 
+/** The name this store keeps an entry under: the owner's own Keychain entry. An entry's generic
+ *  name and its prefix belong to the stores that keep one file per entity; the Keychain reads its
+ *  own entry exactly as it always has, whatever it holds. */
+function serviceOf(name: SecretName): string {
+  return typeof name === 'string' ? name : name.keychain;
+}
+
 export function darwinSecretStore(options: SecretStoreOptions = {}): SecretStore {
   const lookup = securityRunWith(options.runner ?? realSecretRun);
   return {
-    async read(name: string): Promise<SecretRead> {
+    async read(asked: SecretName): Promise<SecretRead> {
+      const name = serviceOf(asked);
       const out = await lookup(name);
       if (!out.ok) return { ok: false, reason: 'the lookup failed' };
       const key = keyOf(out.stdout);
       return key.ok ? { ok: true, value: key.key } : key;
     },
-    lookupCommand(name: string): SecretLookup {
+    lookupCommand(asked: SecretName): SecretLookup {
+      const name = serviceOf(asked);
       if (!SECRET_NAME.test(name)) return { ok: false, reason: 'the entry name is not a plain word' };
       return { ok: true, command: keychainLookupCommand(name) };
     },

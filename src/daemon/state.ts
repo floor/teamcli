@@ -6,6 +6,7 @@ import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { pidAlive } from '../state.ts';
 import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';
+import { reaperRecordOf, type ReaperRecord } from '../orphan-reaper.ts';
 import { daemonStatePath, machineConfigDir } from './paths.ts';
 
 /** Which features the running build actually carries. `absent` means the handler is not built;
@@ -205,6 +206,11 @@ export type DaemonState = {
   /** The mailbox router's last heartbeat, when this daemon started one. Absent on a daemon
    *  that has no router, and null until the child has answered a beat. */
   mailbox?: { heartbeatAt: string | null };
+  /** The process this user's orphans are handed to, besides pid 1, read at the daemon's start
+   *  (src/orphan-reaper.ts). Absent on a daemon that has none to record, and in older records. */
+  reaper?: ReaperRecord;
+  /** The temporary folder the daemon answers, written at its start; absent in older records. */
+  tempDir?: string;
 };
 
 export type DaemonStateRead =
@@ -279,6 +285,7 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
   const roots = rootsOf(record.roots);
   if (roots === null) return null;
   const mailbox = mailboxOf(record.mailbox);
+  const reaper = reaperRecordOf(record.reaper);
   return {
     format: 1,
     ...(typeof record.nativeFeedOwner === 'string' && /^[a-f0-9]{32}$/.test(record.nativeFeedOwner)
@@ -302,6 +309,9 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     stuck: requests,
     roots,
     ...(mailbox === undefined ? {} : { mailbox }),
+    ...(reaper === undefined ? {} : { reaper }),
+    ...(typeof record.tempDir === 'string' && record.tempDir.startsWith('/') && record.tempDir.length <= 4096
+      ? { tempDir: record.tempDir } : {}),
   };
 }
 

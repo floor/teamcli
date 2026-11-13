@@ -286,6 +286,19 @@ key is ever typed into a pane for it. Antigravity has no such record, so nothing
 its launch carries the folder as trusted for that session only (`--settings`, never saved), and
 its dialog does not wait for the owner.
 
+One dialog a launch answers itself: Claude Code's development-channels warning. A Claude seat
+whose line carries the development-channels flag for the team's own inbox
+(`--dangerously-load-development-channels server:team-inbox`) is asked at every start whether that
+channel is for local development, and Claude Code offers no supported way to approve a named
+development channel ahead of the start or to skip the question. So the wait right after the launch
+answers it with Enter on its marked first option (`I am using this for local development`): only
+on that seat's own pane (one the terminal host lists for no other seat, with the seat's CLI in
+front), only for a line this run launched with that flag, and only when the screen is exactly that
+dialog naming that one channel. Each answer is logged with the seat, the channel and the time, and
+said under the seat's record. A second showing in the same wait is not answered: the wait stops at
+it as at any other dialog. No other dialog is answered, on any platform. `team restart`,
+`team reload` and `team add` launch the same way.
+
 ## A create-grant's seat
 
 A create-grant — a record in `~/.config/team/grants/` — admits a seat whose own registry record the

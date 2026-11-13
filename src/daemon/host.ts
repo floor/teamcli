@@ -88,6 +88,7 @@ import {
   type DaemonRootState,
   type DaemonStuckRequest,
 } from './state.ts';
+import type { ReaperRecord } from '../orphan-reaper.ts';
 
 /** One checkout as hosted by this process; the state record keeps the same shape. */
 export type MachineRootStatus = DaemonRootState;
@@ -155,6 +156,13 @@ export type StartMachineDaemonInput = {
   /** Re-read on each heartbeat and on root.added. A root it names is hosted when it is not already. */
   runningRoots?: () => readonly string[];
   startedBy?: string;
+  /** The process this user's orphans are handed to besides pid 1, read at the start
+   *  (src/orphan-reaper.ts) and kept in the state record for every later reader. */
+  reaper?: ReaperRecord | null;
+  /** The temporary folder this process answers (`os.tmpdir()`), kept in the state record so
+   *  `team doctor` can compare it with the seats'. The send endpoint looks for a Claude Code
+   *  seat's session socket under it. */
+  tempDir?: string;
   version: string;
   /** The packaged commit this build was installed from; null or absent in a source checkout. */
   gitHead?: string | null;
@@ -896,6 +904,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       roots: [...roots],
       ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
       ...(mailboxRouter === null ? {} : { mailbox: { heartbeatAt: mailboxRouter.state().heartbeatAt } }),
+      ...(input.reaper === undefined || input.reaper === null ? {} : { reaper: input.reaper }),
+      ...(input.tempDir === undefined ? {} : { tempDir: input.tempDir }),
     }));
   }, 'sync');
 

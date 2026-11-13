@@ -30,7 +30,16 @@ export const VALUE_OPTIONS: readonly string[] = [];
 /** The trunks no seat pushes to: a trunk merge needs a gate pass (roles RFC 009, A.3). */
 const TRUNKS = new Set(['main', 'master']);
 
-export type Identity = { account: string; authorName: string; authorEmail: string; keychain: string };
+/** The generic name an entity's own secret file holds its GitHub token under, when the identity
+ *  names none: the entity is the file, never part of the name. */
+export const GITHUB_SEAT_SECRET = 'GITHUB_SEAT_TOKEN';
+
+/** What a GitHub token read under its generic name must start with: a fine-grained token. */
+export const GITHUB_TOKEN_PREFIX = 'github_pat_';
+
+/** `keychain` is the token's entry on a store that keeps one set of entries for the machine;
+ *  `secret` its generic name in the entity's own file (`GITHUB_SEAT_TOKEN` when none is named). */
+export type Identity = { account: string; authorName: string; authorEmail: string; keychain: string; secret: string };
 
 /** The entity's GitHub identity, or why it cannot be used. The file holds no secret. */
 export function identityFor(home: string, entity: string): Identity | { why: string } {
@@ -56,7 +65,11 @@ export function identityFor(home: string, entity: string): Identity | { why: str
   const authorEmail = word(github.author_email, /^[^\s@]+@[^\s@]+$/);
   const keychain = word(github.keychain, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
   if (!account || !authorName || !authorEmail || !keychain) return { why: `${path} lacks account, author_name, author_email or keychain` };
-  return { account, authorName, authorEmail, keychain };
+  if (github.secret !== undefined && word(github.secret, /^[A-Za-z0-9][A-Za-z0-9._-]*$/) === undefined) {
+    return { why: `${path} names a secret that is not a plain word` };
+  }
+  const secret = word(github.secret, /^[A-Za-z0-9][A-Za-z0-9._-]*$/) ?? GITHUB_SEAT_SECRET;
+  return { account, authorName, authorEmail, keychain, secret };
 }
 
 /** The entity a folder belongs to: its team's, else the one entity that declares an identity. */
@@ -199,13 +212,15 @@ export async function runGitHub(tool: 'git' | 'gh', argv: string[], io: Io, sour
   }
   // The token's store is the platform's own: a platform with no adapter refuses here, after every
   // non-secret prerequisite is known and before anything is read.
-  const store = sources.store !== undefined ? sources.store : systemSecretStore({ env: io.env, home });
+  const store = sources.store !== undefined ? sources.store : systemSecretStore({ env: io.env, home, entity });
   if (store === null) {
     io.stderr(`team ${tool}: the token's store is not available on this platform\n`);
     // exit: git.platform
     return 1;
   }
-  const key = await store.read(id.keychain);
+  // The store reads the name it keeps: the owner's entry, or the generic one in the entity's own
+  // file, which must hold a fine-grained token.
+  const key = await store.read({ keychain: id.keychain, secret: id.secret, prefix: GITHUB_TOKEN_PREFIX });
   if (!key.ok) {
     io.stderr(`team ${tool}: the GitHub token could not be read (${key.reason})\n`);
     // exit: git.token

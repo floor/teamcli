@@ -2,10 +2,12 @@ import { spawnSync } from 'node:child_process';
 import { spawnProcessToolSync } from '../process-tools-adapter.ts';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
 import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
+import { daemonStateAlive, readDaemonState } from '../daemon/state.ts';
+import { tempFolderRow, type DaemonTempDir, type TempFolderRow } from '../temp-folders.ts';
 import { hostedWatchRunning } from '../daemon/watch_display.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, isOwner, type Caller } from '../caller.ts';
@@ -75,7 +77,19 @@ export type DoctorSources = {
   /** The machine daemon's health. Absent: doctor does not probe, and a session with no pane
    *  watch record is still reported missing. */
   daemonHealth?(home: string): Promise<DaemonHealth>;
+  /** The temporary folder the running daemon recorded at its start. Absent: the temp-folder row
+   *  is not reported, so a test that does not read the machine prints none. */
+  daemonTempDir?(home: string): DaemonTempDir;
+  /** The temporary folder this process answers (`os.tmpdir()`). Absent: the system's. */
+  ownTempDir?(): string;
 };
+
+/** The running daemon's recorded temp folder, read from its state record. */
+export function readDaemonTempDir(home: string): DaemonTempDir {
+  const read = readDaemonState(home);
+  if (read.kind !== 'ok' || !daemonStateAlive(read.state)) return { kind: 'none' };
+  return read.state.tempDir === undefined ? { kind: 'unrecorded' } : { kind: 'recorded', dir: read.state.tempDir };
+}
 
 export type CommandRunner = (binary: string, args: string[]) => { status: number | null; stdout: string } | null;
 
@@ -172,6 +186,7 @@ export const realSources: DoctorSources = {
     return panes.includes(pane);
   },
   daemonHealth,
+  daemonTempDir: readDaemonTempDir,
 };
 
 export const USAGE =
@@ -896,6 +911,20 @@ function saidLine(read: CommandRead): string | null {
   return null;
 }
 
+/** The temp-folder row: the daemon's recorded folder against the seats'. A seat's folder is
+ *  this process's own when doctor runs in one of the terminal host's panes, where the seats' own
+ *  environment is; otherwise it is the folder a pane `team up` starts gets. Nothing is reported
+ *  without a running daemon, or on a source that does not read the daemon's record. */
+export function tempFolderFindings(sources: DoctorSources, caller: Caller | null): Finding[] {
+  if (sources.daemonTempDir === undefined) return [];
+  const inPane = caller !== null && (caller.kind === 'seat' || caller.kind === 'pane');
+  const row: TempFolderRow | null = tempFolderRow({
+    daemon: sources.daemonTempDir(sources.home),
+    ...(inPane ? { measured: sources.ownTempDir?.() ?? tmpdir() } : {}),
+  });
+  return row === null ? [] : [row];
+}
+
 /**
  * `team doctor --jules`: whether the Jules CLI, the owner's Google login, the GitHub link and this
  * project's repository are all in place, and which step is missing when they are not. Two reads —
@@ -1030,6 +1059,9 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   // A focused report (`--login`, `--jules`) carries only its own findings.
   const focused = loginOnly || julesOnly;
   const health = sources.daemonHealth === undefined || focused ? null : await sources.daemonHealth(sources.home);
+  // The caller is placed once: the budget checks read it, and so does the temp-folder row, which
+  // measures a seat's own folder when it runs in one of the terminal host's panes.
+  const caller = focused ? null : callerOf(io);
   const findings = loginOnly
     ? doctorLoginFindings(team, sources)
     : args.flags.has('jules')
@@ -1047,7 +1079,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           ],
           standing,
           undefined,
-          budgetCheckFindings(team, standing, root, sources, callerOf(io)),
+          budgetCheckFindings(team, standing, root, sources, caller ?? callerOf(io)),
           launchLineFindings(team, root, { onPath: (binary) => sources.onPath(binary), home: sources.home, state: readState(dirname(loaded.path)).sessions[session] }),
           rulesOriginOf(loaded.source),
           health,
@@ -1057,6 +1089,8 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
         // A wildcard general grant signed before the release that first shipped an op reaches that
         // op without a new approval: one `note` finding per grant, in neither count, blocking nothing.
         ...widenedGrantNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),
+        // Whether the daemon and the seats keep their temporary files in one folder.
+        ...tempFolderFindings(sources, caller),
         // The team's hold, when one stands: the last line before the summary.
         ...holdFindings(dirname(loaded.path), sources),
       ];

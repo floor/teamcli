@@ -67,7 +67,8 @@ describe('the token comes from the system\'s secret store, on Linux as on macOS'
   const made: string[] = [];
   afterEach(() => discardFixtures(made.splice(0)));
 
-  const TOKEN = 'ghp-fixture-0123456789';
+  // A fine-grained token: the generic name's value must start with the fine-grained prefix.
+  const TOKEN = 'github_pat_fixture0123456789';
 
   /** A synthetic home holding one entity identity, and a folder outside every repository. */
   function scene(): { home: string; cwd: string } {
@@ -94,6 +95,7 @@ describe('the token comes from the system\'s secret store, on Linux as on macOS'
     return systemSecretStore({
       platform: 'linux',
       home,
+      entity: 'acme',
       env: { HOME: home, PATH: '/usr/bin' },
       isFile: () => true,
       isExecutable: (path) => path === '/usr/bin/sops',
@@ -110,13 +112,14 @@ describe('the token comes from the system\'s secret store, on Linux as on macOS'
     return io;
   }
 
-  test('team gh on Linux reads the entry under its env form and hands the token to gh alone', async () => {
+  test('team gh on Linux reads the generic entry of the entity\'s own file and hands the token to gh alone', async () => {
     const { home, cwd } = scene();
     const calls: { args: string[]; options: SecretRunOptions }[] = [];
     const ran: { binary: string; args: string[]; env: Record<string, string> }[] = [];
     const io = ioFor(cwd, home);
     const code = await runGitHub('gh', ['pr', 'view', '12'], io, {
-      store: linuxStore(home, `OTHER=x\nACME_GITHUB_TOKEN=${TOKEN}\n`, calls),
+      // The owner's machine-wide entry name is never read here: only the generic one.
+      store: linuxStore(home, `OTHER=x\nACME_GITHUB_TOKEN=not-this-one\nGITHUB_SEAT_TOKEN=${TOKEN}\n`, calls),
       run: async (binary, args, _io, env) => { ran.push({ binary, args, env }); return 0; },
     });
     expect(code).toBe(0);
@@ -128,6 +131,43 @@ describe('the token comes from the system\'s secret store, on Linux as on macOS'
     expect(ran[0]!.args).toEqual(['pr', 'view', '12']);
     expect(ran[0]!.env.GH_TOKEN).toBe(TOKEN);
     expect(ran[0]!.env.GIT_AUTHOR_NAME).toBe('Acme Bot');
+    // The file is the entity's own.
+    expect(calls[0]!.args.at(-1)).toBe(join(home, '.config', 'sops', 'acme.env.sops'));
+  });
+
+  test('a token under the generic name that is not a fine-grained one is refused, and gh never runs', async () => {
+    const { home, cwd } = scene();
+    let ran = 0;
+    const io = ioFor(cwd, home);
+    const classic = 'ghp_classic0123456789';
+    expect(await runGitHub('gh', ['pr', 'view', '12'], io, {
+      store: linuxStore(home, `GITHUB_SEAT_TOKEN=${classic}\n`, []),
+      run: async () => { ran += 1; return 0; },
+    })).toBe(1);
+    expect(io.err).toBe('team gh: the GitHub token could not be read (its entry in the system\'s secret store does not start with github_pat_)\n');
+    expect(io.err).not.toContain(classic);
+    expect(ran).toBe(0);
+  });
+
+  test('an identity may name its own generic entry; the default is GITHUB_SEAT_TOKEN', async () => {
+    const { home, cwd } = scene();
+    const path = join(home, '.config', 'team', 'entities', 'acme', 'identity.yaml');
+    writeFileSync(path, [
+      'github:',
+      '  account: acme-bot',
+      '  author_name: Acme Bot',
+      '  author_email: bot@example.com',
+      '  keychain: acme-github-token',
+      '  secret: GITHUB_RELEASE_TOKEN',
+      '',
+    ].join('\n'), { mode: 0o600 });
+    const ran: Record<string, string>[] = [];
+    const io = ioFor(cwd, home);
+    expect(await runGitHub('gh', ['pr', 'view', '12'], io, {
+      store: linuxStore(home, `GITHUB_SEAT_TOKEN=github_pat_not-this-one\nGITHUB_RELEASE_TOKEN=${TOKEN}\n`, []),
+      run: async (_binary, _args, _io, env) => { ran.push(env); return 0; },
+    })).toBe(0);
+    expect(ran[0]!.GH_TOKEN).toBe(TOKEN);
   });
 
   test('a store that cannot answer says why, never the value, and gh never runs', async () => {
@@ -155,7 +195,7 @@ describe('the token comes from the system\'s secret store, on Linux as on macOS'
     const { home, cwd } = scene();
     const calls: { args: string[]; options: SecretRunOptions }[] = [];
     const io = ioFor(cwd, home);
-    expect(await runGitHub('gh', ['pr', 'merge', '12'], io, { store: linuxStore(home, `ACME_GITHUB_TOKEN=${TOKEN}\n`, calls), run: async () => 0 })).toBe(1);
+    expect(await runGitHub('gh', ['pr', 'merge', '12'], io, { store: linuxStore(home, `GITHUB_SEAT_TOKEN=${TOKEN}\n`, calls), run: async () => 0 })).toBe(1);
     expect(io.err).toBe('team gh: refused: gh pr merge is refused: a merge goes through its gate\n');
     expect(calls).toHaveLength(0);
   });

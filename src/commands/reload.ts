@@ -753,6 +753,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       ...(home === undefined ? {} : { home }),
       team,
       ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }),
+      ...(sources.launch.secretStore === undefined ? {} : { secretStore: sources.launch.secretStore }),
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
     // run starts.
@@ -771,6 +772,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       classify(current, pane, cli) {
         return launchKind(readScreen(cli, launch.paneText(current, pane) ?? undefined).kind);
       },
+      // The one dialog a launch answers itself (src/launch/channel-dialog.ts).
+      channelDialogKey: (current, pane) => launch.pressEnter?.(current, pane) ?? false,
       foreground: (current, pane) => launch.foreground(current, pane),
       shellBack: (current, pane) => launch.shellBack?.(current, pane) ?? null,
       agentStatus: (current, pane) => launch.agentStatus?.(current, pane) ?? null,

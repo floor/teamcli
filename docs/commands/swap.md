@@ -41,9 +41,15 @@ A `<target>` is `<cli>:<model>`, and the recipe is copied from a seat of the ent
 runs it. A name in the seat's own CLI profile's vendor table — `<vendor>:<model>` — moves the seat
 between vendors of that same CLI with no donor and no launcher script: the generated line keeps the
 seat's own wrapper prefix and the assignments that are not a vendor's, and takes the vendor's env
-words, the CLI's binary and its model flag. The move is refused when this machine's credential
-store does not hold the vendor's item — naming the item and the one-time command that adds it,
-never a secret — or when the store cannot be read.
+words, the CLI's binary and its model flag. The key is named, never written: the line carries
+`ANTHROPIC_AUTH_TOKEN={secret:<item>}`, and each launch fills that word with the system's secret
+store's own lookup of the item, which the pane's shell runs when the seat starts. A line an earlier
+swap wrote with its own lookup launches as it is. The move is refused when this machine's
+credential store does not hold the vendor's item — naming the item and the one-time command that
+adds it, never a secret — or when the store cannot be read. Where the profile's own presence
+check does not run (its program is not on the machine), the system's secret store for the team's
+entity answers instead: the entry is read once in memory and dropped, never shown, and a missing
+one is refused naming the store rather than a command.
 
 ## What it reads and writes
 
@@ -147,6 +153,7 @@ is not a rollback.
 | `team swap: no seat of the entity this team may copy from runs <cli>:<model>` | 1 |
 | `team swap: <vendor> offers no model "<model>"; it offers <ids>` | 1 |
 | `team swap: this machine holds no "<item>" item for the vendor "<vendor>"; add it once with the command below, which asks the store for the secret itself, so nothing is typed here and nothing is read from stdin: <command>` | 1 |
+| `team swap: this machine's secret store holds no "<item>" entry for the vendor "<vendor>"; add it to the system's secret store once, then queue the swap again; nothing is typed here and no secret is read from stdin` | 1 |
 | `team swap: this machine's credential store could not be read while looking for "<item>"; whether it holds the item is not knowable, so the swap is refused rather than guessing` | 1 |
 | `team swap: its launch line is not one this version rewrites for another vendor; refused rather than guessing` | 1 |
 | `team swap: the model "<model>" runs under the lab "<vendor>", which the entity model rule in force does not allow on this seat` | 1 |

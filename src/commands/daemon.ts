@@ -20,7 +20,7 @@
 // machine with no broker handler never falls back to the old per-clone broker.
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
@@ -40,6 +40,7 @@ import {
 import { daemonHealth } from '../daemon/health.ts';
 import { choresPhrase, failureAge, firstPassPhrases } from '../daemon/health_display.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
+import { daemonReaperAtStart, type ReaperRecord } from '../orphan-reaper.ts';
 import { DAEMON_LABEL, daemonLabel } from '../daemon/paths.ts';
 import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
 import {
@@ -153,6 +154,9 @@ export type DaemonCommandSources = {
   retireShuttle?: (label: string) => { ok: true } | { ok: false; why: string };
   /** Injected for tests: the runtime-home migration step of an install. */
   runtimeMigration?: (home: string, roots: readonly string[], dryRun: boolean) => RuntimeMigrationReport;
+  /** Injected for tests: the reaper `run` records at its start (src/orphan-reaper.ts); null
+   *  records none. Absent: read from this process's parent and the service manager's word. */
+  reaper?: ReaperRecord | null;
 };
 
 /** What a status reader answers: the reminders that read, and the entries the parser refused as
@@ -1403,9 +1407,16 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
           for (const problem of read.problems ?? []) log(problem);
           return read.specs;
         };
+    // The process a closed pane's orphans are handed to besides pid 1, recorded once at the
+    // start so every `team` command that closes a workspace can end its own orphans there.
+    const reaper = sources.reaper !== undefined ? sources.reaper : daemonReaperAtStart(startedBy);
     const started = await (sources.start ?? startMachineDaemon)({
       home,
       roots,
+      ...(reaper === null ? {} : { reaper }),
+      // The folder this process answers for its temporary files: the send endpoint looks for a
+      // Claude Code seat's session socket under it, and `team doctor` compares it with the seats'.
+      tempDir: tmpdir(),
       ...(fromRegistry ? {
         rootsFromRegistry: true,
         runningRoots: () => runningRegistryRoots(readTeams(home), home).map((one) => one.root),

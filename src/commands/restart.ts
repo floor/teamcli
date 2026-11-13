@@ -1522,6 +1522,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       home,
       team,
       ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
+      ...(sources.upLaunch.secretStore === undefined ? {} : { secretStore: sources.upLaunch.secretStore }),
       ...(resolveLaunch ? { resolveLaunch: true as const, launcherDiscovery } : {}),
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
@@ -2156,6 +2157,8 @@ function hostOf(input: {
     agentList: launch.agents,
     workspacePanes: launch.workspacePanes ? (s, workspace) => launch.workspacePanes!(s, workspace) : undefined,
     classify: (_name, pane, cli) => launchKind(readScreen(cli, launch.paneText(session, pane) ?? undefined).kind),
+    // The one dialog a launch answers itself (src/launch/channel-dialog.ts).
+    channelDialogKey: (_name, pane) => launch.pressEnter?.(session, pane) ?? false,
     paneText: (_name, pane) => launch.paneText(session, pane),
     foreground: (_name, pane) => launch.foreground(session, pane),
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,

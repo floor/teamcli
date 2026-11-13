@@ -8,6 +8,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import { execText, wasAborted, wasKilled, type ChildOptions } from './child.ts';
 import { resolveForgeShim } from './settings/forge-shim.ts';
 import { assertNoLink, tomlString, writePrivate } from './launch/private-file.ts';
+import { orphanReapers } from './orphan-reaper.ts';
 
 // The only module that talks to herdr. Reading is the default. The calls that change a session
 // are `startServer`, `workspaceCreate`, `paneRun`, `agentRename`, `workspaceClose`, `sessionStop`,
@@ -1515,14 +1516,24 @@ export function workspaceClose(workspace: string, session?: string): boolean {
   if (out === null) return false;
   const body = parsed(out);
   const closed = body !== null && !isHerdrError(body);
-  if (closed && owned.length > 0) endOrphans(owned, parentPidOf, (pid) => process.kill(pid, 'SIGTERM'), sleepSync);
+  if (closed && owned.length > 0) {
+    endOrphans(owned, parentPidOf, (pid) => process.kill(pid, 'SIGTERM'), sleepSync, orphanReapers());
+  }
   return closed;
 }
 
 /** Ends the processes this close owned that outlived it: each pid read in front of the closed
- *  pane's shell and now reparented to pid 1. A pid that exited, or that still has its own parent,
- *  is left alone. Waits up to two seconds for the hangup to work first. Returns the pids ended. */
-export function endOrphans(owned: readonly number[], parentOf: (pid: number) => number | null, end: (pid: number) => void, sleep: (ms: number) => void): number[] {
+ *  pane's shell and now reparented to pid 1, or to a reaper the daemon recorded at its start
+ *  (`reapers`: the service manager that starts this user's processes, src/orphan-reaper.ts). A
+ *  pid that exited, or that still has any other parent, is left alone. Waits up to two seconds
+ *  for the hangup to work first. Returns the pids ended. */
+export function endOrphans(
+  owned: readonly number[],
+  parentOf: (pid: number) => number | null,
+  end: (pid: number) => void,
+  sleep: (ms: number) => void,
+  reapers: readonly number[] = [],
+): number[] {
   let left = [...new Set(owned)];
   for (let waited = 0; waited < 2_000 && left.length > 0; waited += 250) {
     sleep(250);
@@ -1530,7 +1541,8 @@ export function endOrphans(owned: readonly number[], parentOf: (pid: number) => 
   }
   const ended: number[] = [];
   for (const pid of left) {
-    if (parentOf(pid) !== 1) continue;
+    const parent = parentOf(pid);
+    if (parent !== 1 && (parent === null || !reapers.includes(parent))) continue;
     try {
       end(pid);
       ended.push(pid);

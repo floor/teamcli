@@ -5,6 +5,8 @@
 // for one. A swap the machine cannot prove is refused, never guessed at.
 
 import { spawnSync } from 'node:child_process';
+import { accessSync, constants } from 'node:fs';
+import { SECRET_ABSENT, type SecretStore } from '../secrets/store.ts';
 import type { CredentialsBlock } from './profile.ts';
 
 /** What the store answered: it holds the item, it does not, or this machine cannot say. */
@@ -61,4 +63,38 @@ function realRun(file: string, args: readonly string[]): CredentialRun {
   } catch (error) {
     return { status: null, error };
   }
+}
+
+/** Whether the profile's own check can run on this machine: its program is an executable here.
+ *  A machine whose store the profile's check does not name asks the system's secret store. */
+export function profileCheckRuns(credentials: CredentialsBlock, isExecutable: (path: string) => boolean = executable): boolean {
+  const program = credentials.check[0];
+  return program !== undefined && isExecutable(program);
+}
+
+function executable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the system's secret store holds `item`, for a machine where the profile's own check
+ * does not run. The store has no attribute-only check, so the entry is read once into this
+ * process's memory and dropped at once: it is never returned, printed or logged. Its absence is
+ * the store's own sentence for an absent entry; any other failure leaves the store unreadable.
+ */
+export async function storeCredentialState(store: SecretStore | null, item: string): Promise<CredentialState> {
+  if (store === null) return 'unavailable';
+  let read;
+  try {
+    read = await store.read(item);
+  } catch {
+    return 'unavailable';
+  }
+  if (read.ok) return 'present';
+  return read.reason === SECRET_ABSENT ? 'absent' : 'unavailable';
 }

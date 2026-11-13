@@ -4,7 +4,8 @@
 // every scene here injects it: no test queries the machine's credential store, not even for
 // presence.
 import { describe, expect, test } from 'bun:test';
-import { addCommandFor, checkArgv, credentialProbeFor, type CredentialProbe } from '../src/profiles/credentials.ts';
+import { addCommandFor, checkArgv, credentialProbeFor, profileCheckRuns, storeCredentialState, type CredentialProbe } from '../src/profiles/credentials.ts';
+import { SECRET_ABSENT, type SecretRead, type SecretStore } from '../src/secrets/store.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { profileFor } from '../src/profiles/profile.ts';
 import { shellWordTexts } from '../src/launch/shell-words.ts';
@@ -12,8 +13,8 @@ import { planVendorSwap, vendorTargetOf } from '../src/swap/vendor.ts';
 
 const profile = profileFor('claude-code')!;
 
-const AUTH = (item: string): string =>
-  `ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s ${item} -a "$USER" -w)`;
+// The key word names the item; the launch fills it from the machine's secret store.
+const AUTH = (item: string): string => `ANTHROPIC_AUTH_TOKEN={secret:${item}}`;
 
 const DEEPSEEK_LAUNCH =
   'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ' +
@@ -49,7 +50,7 @@ describe('the vendors a profile declares', () => {
       credential: 'deepseek-api-key',
       env: [
         'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic',
-        'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)',
+        'ANTHROPIC_AUTH_TOKEN={secret:{credential}}',
         'ANTHROPIC_MODEL={model}',
       ],
       models: [{ id: 'deepseek-flash', model: 'DeepSeek Flash', version: '4.0', display: 'DeepSeek Flash 4.0' }],
@@ -59,7 +60,7 @@ describe('the vendors a profile declares', () => {
       credential: 'glm-api-key',
       env: [
         'ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic',
-        'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)',
+        'ANTHROPIC_AUTH_TOKEN={secret:{credential}}',
         'ANTHROPIC_MODEL={model}',
       ],
       models: [{ id: 'glm-5.3', model: 'GLM', version: '5.3', display: 'GLM 5.3' }],
@@ -69,7 +70,7 @@ describe('the vendors a profile declares', () => {
       credential: 'kimi-api-key',
       env: [
         'ANTHROPIC_BASE_URL=https://api.kimi.ai/coding/',
-        'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)',
+        'ANTHROPIC_AUTH_TOKEN={secret:{credential}}',
         'ANTHROPIC_MODEL={model}',
       ],
       models: [{ id: 'kimi-k2.5', model: 'Kimi K2.5', version: '2.5', display: 'Kimi K2.5 2.5' }],
@@ -131,6 +132,36 @@ describe('the vendors a profile declares', () => {
     expect(answer(36)('glm-api-key')).toBe('unavailable');
     expect(answer(null)('glm-api-key')).toBe('unavailable');
     expect(answer(0, new Error('spawn failed'))('glm-api-key')).toBe('unavailable');
+  });
+});
+
+describe('off the profile\'s own check, the system\'s secret store answers', () => {
+  const store = (answer: SecretRead | Error): SecretStore => ({
+    read: async () => { if (answer instanceof Error) throw answer; return answer; },
+    lookupCommand: () => ({ ok: false, reason: 'not asked' }),
+  });
+
+  test('the profile\'s check runs only where its program is an executable', () => {
+    const credentials = profile.credentials!;
+    expect(profileCheckRuns(credentials, (path) => path === '/usr/bin/security')).toBe(true);
+    expect(profileCheckRuns(credentials, () => false)).toBe(false);
+  });
+
+  test('present, absent and unreadable are the store\'s own answers; the value is dropped', async () => {
+    expect(await storeCredentialState(store({ ok: true, value: 'sk-fixture' }), 'glm-api-key')).toBe('present');
+    expect(await storeCredentialState(store({ ok: false, reason: SECRET_ABSENT }), 'glm-api-key')).toBe('absent');
+    expect(await storeCredentialState(store({ ok: false, reason: 'the system\'s secret store could not be opened' }), 'glm-api-key')).toBe('unavailable');
+    expect(await storeCredentialState(store(new Error('boom')), 'glm-api-key')).toBe('unavailable');
+    expect(await storeCredentialState(null, 'glm-api-key')).toBe('unavailable');
+  });
+
+  test('an absent item names the store, never the profile\'s add command, when the store answered', () => {
+    const plan = planVendorSwap(profile, seat(ZAI_LAUNCH, { vendor: 'zai' }), 'moonshot', 'kimi-k2.5', () => 'absent', () => null);
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.why).toContain('this machine\'s secret store holds no "kimi-api-key" entry for the vendor "moonshot"');
+    expect(plan.why).not.toContain('add-generic-password');
+    expect(plan.repair).toBeNull();
   });
 });
 

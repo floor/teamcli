@@ -43,6 +43,9 @@ export function planVendorSwap(
   vendorName: string,
   modelId: string,
   probe: CredentialProbe,
+  /** The one-time command that adds a missing item, or null when the store that answered is not
+   *  the one the profile's add command writes: the refusal then names the store, not a command. */
+  addFor: (item: string) => string | null = (item) => (profile.credentials === null ? null : addCommandFor(profile.credentials, item)),
 ): VendorPlan {
   const vendor = vendorTargetOf(profile, vendorName);
   if (vendor === null) {
@@ -76,7 +79,16 @@ export function planVendorSwap(
   if (!written.ok) return { ok: false, why: written.why, repair: null };
   const state = probe(vendor.credential);
   if (state === 'absent') {
-    const add = addCommandFor(credentials, vendor.credential);
+    const add = addFor(vendor.credential);
+    if (add === null) {
+      return {
+        ok: false,
+        why:
+          `this machine's secret store holds no "${vendor.credential}" entry for the vendor "${vendor.name}"; ` +
+          "add it to the system's secret store once, then queue the swap again; nothing is typed here and no secret is read from stdin",
+        repair: null,
+      };
+    }
     return {
       ok: false,
       why:

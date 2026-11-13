@@ -3,11 +3,17 @@
 // store lives here; the neutral interface in store.ts prints none of them, and no reason this
 // adapter gives names the tool, the file or the key.
 //
-// The file is `~/.config/sops/agents.env.sops` (or the absolute path `TEAMCLI_SECRETS_FILE`
-// names), its entries env-style names: a store name is read under its env form, upper-cased
-// with `-` made `_`, so `deepseek-api-key` is `DEEPSEEK_API_KEY`. Two env forms are refused
+// There is one file per entity, `~/.config/sops/<entity>.env.sops` (or the absolute path
+// `TEAMCLI_SECRETS_FILE` names), and its entries keep generic env-style names: the entity is the
+// file, never a part of a key's name, so every entity's file holds its GitHub token under
+// `GITHUB_SEAT_TOKEN` and its provider keys under `DEEPSEEK_API_KEY`, `KIMI_API_KEY` and
+// `GLM_API_KEY`. An entry is asked for by its generic name (`secret`, an identity's or an
+// account's), or by a plain name, and read under its env form, upper-cased with `-` made `_`, so
+// `deepseek-api-key` is `DEEPSEEK_API_KEY`; the owner's machine-wide `keychain` name is never
+// read here. A store with no entity and no override opens no file. Two env forms are refused
 // before anything runs, `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`: seats run on subscriptions,
-// never on a pay-per-use key, so no seat line and no command may be handed one.
+// never on a pay-per-use key, so no seat line and no command may be handed one. An entry asked
+// for with a prefix is refused when its value does not start with it.
 //
 // A read decrypts the file to standard output and keeps the one entry, in memory: the plaintext
 // is never written to disk, never logged and never an argument of any process. sops reads the
@@ -19,7 +25,7 @@ import { accessSync, constants, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { realSecretRun, SECRET_NAME } from './run.ts';
-import type { SecretLookup, SecretRead, SecretStore, SecretStoreOptions } from './store.ts';
+import { SECRET_ABSENT, type SecretLookup, type SecretName, type SecretRead, type SecretStore, type SecretStoreOptions } from './store.ts';
 
 /** The decrypt's deadline: at expiry it is terminated and the read fails. */
 export const STORE_TIMEOUT_MS = 10_000;
@@ -42,6 +48,14 @@ const NOT_SET_UP = 'the system\'s secret store is not set up on this machine';
 const NO_TOOL = 'the system\'s secret store cannot be opened: its tool is not installed';
 const NO_KEY = 'the system\'s secret store cannot be opened: its key is not on this machine';
 const NOT_OPENED = 'the system\'s secret store could not be opened';
+const NO_ENTITY = 'the system\'s secret store keeps one file per entity, and no entity applies here';
+
+/** The name this store keeps an entry under: the generic one, and what its value must start
+ *  with. A plain string is the one name every store reads. */
+function genericOf(name: SecretName): { name: string; prefix?: string } {
+  if (typeof name === 'string') return { name };
+  return name.prefix === undefined ? { name: name.secret } : { name: name.secret, prefix: name.prefix };
+}
 
 type Found<T> = { ok: true } & T | { ok: false; reason: string };
 
@@ -59,7 +73,7 @@ export function envNameOf(name: string): Found<{ env: string }> {
 export function entryOf(text: string, env: string): Found<{ value: string }> {
   const prefix = `${env}=`;
   const lines = text.split('\n').filter((line) => line.startsWith(prefix));
-  if (lines.length === 0) return { ok: false, reason: 'the system\'s secret store holds no entry for it' };
+  if (lines.length === 0) return { ok: false, reason: SECRET_ABSENT };
   if (lines.length > 1) return { ok: false, reason: 'the system\'s secret store holds that entry more than once' };
   const value = lines[0]!.slice(prefix.length);
   if (value.length === 0) return { ok: false, reason: 'its entry in the system\'s secret store is empty' };
@@ -97,14 +111,17 @@ export function linuxSecretStore(options: SecretStoreOptions = {}): SecretStore 
   const isExecutable = options.isExecutable ?? realIsExecutable;
   const run = options.runner ?? realSecretRun;
 
-  /** The encrypted file: the override when it is set, else the default under the home. */
+  /** The encrypted file: the override when it is set, else the entity's own under the home. */
   const storeFile = (): Found<{ path: string }> => {
     const named = env.TEAMCLI_SECRETS_FILE;
     if (named !== undefined && named !== '') {
       if (!isAbsolute(named)) return { ok: false, reason: 'TEAMCLI_SECRETS_FILE must name an absolute path' };
       return isFile(named) ? { ok: true, path: named } : { ok: false, reason: NOT_SET_UP };
     }
-    const path = join(home, '.config', 'sops', 'agents.env.sops');
+    const entity = options.entity;
+    if (entity === undefined || entity === '') return { ok: false, reason: NO_ENTITY };
+    if (!SECRET_NAME.test(entity)) return { ok: false, reason: 'the entity\'s name is not one the system\'s secret store can open' };
+    const path = join(home, '.config', 'sops', `${entity}.env.sops`);
     return isFile(path) ? { ok: true, path } : { ok: false, reason: NOT_SET_UP };
   };
 
@@ -125,7 +142,8 @@ export function linuxSecretStore(options: SecretStoreOptions = {}): SecretStore 
   };
 
   return {
-    async read(name: string): Promise<SecretRead> {
+    async read(asked: SecretName): Promise<SecretRead> {
+      const { name, prefix } = genericOf(asked);
       const entry = envNameOf(name);
       if (!entry.ok) return entry;
       const file = storeFile();
@@ -138,9 +156,15 @@ export function linuxSecretStore(options: SecretStoreOptions = {}): SecretStore 
       const out = await run(sops.path, [...DECRYPT, file.path], { env: childEnv, cap: STDOUT_CAP, timeoutMs: STORE_TIMEOUT_MS });
       if (!out.ok) return { ok: false, reason: NOT_OPENED };
       const found = entryOf(out.stdout, entry.env);
-      return found.ok ? { ok: true, value: found.value } : found;
+      if (!found.ok) return found;
+      if (prefix !== undefined && !found.value.startsWith(prefix)) {
+        return { ok: false, reason: `its entry in the system's secret store does not start with ${prefix}` };
+      }
+      return { ok: true, value: found.value };
     },
-    lookupCommand(name: string): SecretLookup {
+    lookupCommand(asked: SecretName): SecretLookup {
+      // A launch line's lookup reads nothing, so an entry's prefix cannot be checked here.
+      const { name } = genericOf(asked);
       const entry = envNameOf(name);
       if (!entry.ok) return entry;
       const file = storeFile();

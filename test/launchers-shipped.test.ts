@@ -85,7 +85,7 @@ test('claude-code builds the Anthropic model id from the seat and skips the CLI 
 
 test('claude-code on a provider takes its words from the launch account, the key only as a lookup', () => {
   const account = { name: 'deepseek', provider: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', keychain: 'deepseek-api-key',
-    defaultModel: 'deepseek-flash', effortDefault: 'high', autoCompactWindow: 786432 };
+    secret: 'DEEPSEEK_API_KEY', defaultModel: 'deepseek-flash', effortDefault: 'high', autoCompactWindow: 786432 };
   const words = shippedEnv('claude-code', { vendor: 'deepseek', account });
   expect(words).toContain('ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic');
   expect(words).toContain('ANTHROPIC_MODEL=deepseek-flash');
@@ -100,7 +100,8 @@ test('claude-code on a provider takes its words from the launch account, the key
 });
 
 describe('the key word is the machine store\'s own lookup', () => {
-  const account = { name: 'deepseek', provider: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', keychain: 'deepseek-api-key', defaultModel: 'deepseek-flash' };
+  // The Keychain reads the owner's entry; an entity's own file holds the key under its generic name.
+  const account = { name: 'deepseek', provider: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', keychain: 'deepseek-api-key', secret: 'DEEPSEEK_API_KEY', defaultModel: 'deepseek-flash' };
   const tokenOf = (words: string[]) => words.find((word) => word.startsWith('ANTHROPIC_AUTH_TOKEN='));
   const DARWIN_WORD = 'ANTHROPIC_AUTH_TOKEN="$(/usr/bin/security find-generic-password -s deepseek-api-key -w)"';
 
@@ -113,14 +114,14 @@ describe('the key word is the machine store\'s own lookup', () => {
 
   test('on the encrypted dotenv store the word runs that store\'s lookup, one double-quoted word with nothing nested', () => {
     const home = '/home/owner';
-    const store = systemSecretStore({ platform: 'linux', home, env: { HOME: home, PATH: '/usr/bin' }, isFile: () => true, isExecutable: (path) => path === '/usr/bin/sops' });
-    const key = accountKeyCommand(account, store);
+    const store = systemSecretStore({ platform: 'linux', home, entity: 'acme', env: { HOME: home, PATH: '/usr/bin' }, isFile: () => true, isExecutable: (path) => path === '/usr/bin/sops' });
+    const key = accountKeyCommand({ ...account, keychain: 'acme-deepseek-key' }, store);
     expect(key.ok).toBe(true);
     if (!key.ok) return;
     const word = tokenOf(shippedEnv('claude-code', { vendor: 'deepseek', account, keyCommand: key.command }));
     expect(word).toBe(
       'ANTHROPIC_AUTH_TOKEN="$(SOPS_AGE_KEY_FILE=/home/owner/.config/sops/age/keys.txt /usr/bin/sops decrypt --input-type dotenv ' +
-      '--output-type dotenv /home/owner/.config/sops/agents.env.sops | sed -n s/\\^DEEPSEEK_API_KEY=//p)"',
+      '--output-type dotenv /home/owner/.config/sops/acme.env.sops | sed -n s/\\^DEEPSEEK_API_KEY=//p)"',
     );
     expect(word).not.toContain('/usr/bin/security');
     expect(word?.slice('ANTHROPIC_AUTH_TOKEN="'.length, -1)).not.toMatch(/["']/);
@@ -128,11 +129,14 @@ describe('the key word is the machine store\'s own lookup', () => {
 
   test('a machine whose store has none for the entry gives the reason, never a word', () => {
     expect(accountKeyCommand(account, null)).toEqual({ ok: false, reason: NO_SECRET_STORE });
-    const unset = systemSecretStore({ platform: 'linux', home: '/home/owner', env: { HOME: '/home/owner' }, isFile: () => false, isExecutable: () => false });
+    const unset = systemSecretStore({ platform: 'linux', home: '/home/owner', entity: 'acme', env: { HOME: '/home/owner' }, isFile: () => false, isExecutable: () => false });
     expect(accountKeyCommand(account, unset)).toEqual({ ok: false, reason: 'the system\'s secret store is not set up on this machine' });
-    const paid = { ...account, keychain: 'anthropic-api-key' };
-    const set = systemSecretStore({ platform: 'linux', home: '/home/owner', env: { HOME: '/home/owner' }, isFile: () => true, isExecutable: () => true });
+    const paid = { ...account, keychain: 'anthropic-api-key', secret: 'ANTHROPIC_API_KEY' };
+    const set = systemSecretStore({ platform: 'linux', home: '/home/owner', entity: 'acme', env: { HOME: '/home/owner' }, isFile: () => true, isExecutable: () => true });
     expect(accountKeyCommand(paid, set).ok).toBe(false);
+    // A store that keeps one file per entity opens none without one.
+    const noEntity = systemSecretStore({ platform: 'linux', home: '/home/owner', env: { HOME: '/home/owner' }, isFile: () => true, isExecutable: () => true });
+    expect(accountKeyCommand(account, noEntity)).toEqual({ ok: false, reason: 'the system\'s secret store keeps one file per entity, and no entity applies here' });
   });
 });
 
