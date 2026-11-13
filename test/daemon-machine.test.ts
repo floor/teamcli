@@ -1302,6 +1302,20 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(seen[1]?.gitHead).toBeNull();
   });
 
+  test('run hands the reaper it read at its start to the daemon, and none when it has none', async () => {
+    const { root, home } = scratch();
+    const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
+    const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
+      seen.push(input);
+      return { kind: 'already-running' as const, pid: 42 };
+    };
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start, reaper: { pid: 1116, start: 812 } }))).toBe(0);
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start, reaper: null }))).toBe(0);
+    // A manual start under no service manager reads none of its own.
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
+    expect(seen.map((input) => input.reaper)).toEqual([{ pid: 1116, start: 812 }, undefined, undefined]);
+  });
+
   test('run hosts a watch only when --watch is given; --watch belongs to run or install', async () => {
     const { root, home } = scratch();
     const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];

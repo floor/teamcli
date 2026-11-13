@@ -20,3 +20,27 @@ test('a CLI that exits on the hangup inside the wait is never signalled', () => 
   endOrphans([300], () => (reads++ < 2 ? 1 : null), (pid) => ended.push(pid), noSleep);
   expect(ended).toEqual([]);
 });
+
+// Where a service manager runs the user's processes, an orphan is handed to that manager — the
+// subreaper the daemon recorded at its start — not to pid 1. The rule is the recorded pid, never
+// a process name; macOS records none, so its rule is unchanged.
+test('a CLI handed to the recorded reaper is ended like one handed to pid 1; any other parent keeps it', () => {
+  const parents = new Map<number, number | null>([[400, 1116], [401, 1], [402, 4242], [403, null]]);
+  const ended: number[] = [];
+  const result = endOrphans([400, 401, 402, 403], (pid) => parents.get(pid) ?? null, (pid) => ended.push(pid), noSleep, [1116]);
+  expect(result).toEqual([400, 401]);
+  expect(ended).toEqual([400, 401]);
+});
+
+test('with no reaper recorded, a CLI under that same parent is left alone: the rule is pid 1 alone', () => {
+  const ended: number[] = [];
+  expect(endOrphans([500], () => 1116, (pid) => ended.push(pid), noSleep)).toEqual([]);
+  expect(endOrphans([500], () => 1116, (pid) => ended.push(pid), noSleep, [])).toEqual([]);
+  expect(ended).toEqual([]);
+});
+
+test('a pid not read in front of the closed pane is never ended, whatever its parent', () => {
+  const ended: number[] = [];
+  endOrphans([], () => 1116, (pid) => ended.push(pid), noSleep, [1116]);
+  expect(ended).toEqual([]);
+});

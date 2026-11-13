@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A closed workspace's CLI that outlives its pane is ended on Linux too. Under the system's service manager such an orphan is handed to that manager, not to pid 1, so it was never ended. The daemon now records, at its start, the service manager that started it (its pid and start, only when the manager names itself the daemon's parent), and a close ends an orphan handed to that recorded process while it is still the same process. On macOS nothing changes: only an orphan handed to pid 1 is ended.
 - A Claude Code seat reports its own model at session start and at every `/model` switch (two hooks in its settings); a model the entity rule allows becomes the seat's record, so a model the owner switched no longer carries a drift notice on every send.
 - The model-drift notice to a lead names the lead's team by id: a project with two teams no longer makes it ambiguous.
 
