@@ -830,6 +830,26 @@ export function withResume(cli: string, command: string, sessionId: string): str
 }
 
 
+/** One leading assignment of a launch line: the variable it sets, and where its source sits. */
+export type LeadingAssignment = { name: string; source: string; start: number; end: number };
+
+/**
+ * The assignment words a launch line starts with, as the shell reads them before its program:
+ * the line's environment, never a word or a span of the CLI. Null when the line has no knowable
+ * words. A key's secret word stands only here (src/launch/secret-words.ts).
+ */
+export function leadingAssignments(command: string): LeadingAssignment[] | null {
+  const words = shellWords(command);
+  if (words === null) return null;
+  const leading: LeadingAssignment[] = [];
+  for (const word of words) {
+    const name = assignmentWordName(word.text);
+    if (name === null) break;
+    leading.push({ name, source: command.slice(word.start, word.end), start: word.start, end: word.end });
+  }
+  return leading;
+}
+
 /** The variable name an assignment word sets, or null when the word sets none. */
 export function assignmentWordName(word: string): string | null {
   const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(word);

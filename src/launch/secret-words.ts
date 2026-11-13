@@ -6,13 +6,14 @@
 // its logs, and a team file carries no store command of any one machine: the same line launches
 // wherever the store holds the entry.
 //
-// Only a leading assignment's whole value is filled. There a shell does not split the
+// Only a leading assignment's whole value is filled, read through the launch readers
+// (`leadingAssignments` in src/profiles/profile.ts). There a shell does not split the
 // substitution and hands its output to no program as an argument; anywhere else the key would
 // become an argument, so such a word refuses the launch rather than being guessed at. A line
-// with no secret word is returned unchanged, byte for byte: a line an earlier swap wrote with
-// its own lookup launches exactly as it did.
+// with no secret word is returned unchanged, byte for byte: a line an earlier swap wrote with its
+// own lookup launches exactly as it did.
+import { leadingAssignments } from '../profiles/profile.ts';
 import { NO_SECRET_STORE, type SecretStore } from '../secrets/store.ts';
-import { shellWords } from './shell-words.ts';
 
 /** The one form a secret word takes: a leading variable whose whole value names an entry. The
  *  entry is a plain word (`SECRET_NAME` in src/secrets/run.ts), so nothing in it needs quoting. */
@@ -42,24 +43,18 @@ export function secretWord(name: string, entry: string): string {
  */
 export function fillSecretWords(line: string, store: SecretStore | null): SecretFill {
   if (!hasSecretWord(line)) return { ok: true, line, entries: [] };
-  const words = shellWords(line);
-  if (words === null) return { ok: false, why: 'its launch line names a secret, and its words cannot be read' };
+  const leading = leadingAssignments(line);
+  if (leading === null) return { ok: false, why: 'its launch line names a secret, and its words cannot be read' };
   let out = '';
   let cursor = 0;
-  let leading = true;
   const entries: string[] = [];
-  for (const word of words) {
-    const source = line.slice(word.start, word.end);
-    const match = SECRET_WORD.exec(source);
-    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(word.text)) leading = false;
+  for (const word of leading) {
+    const match = SECRET_WORD.exec(word.source);
     if (match === null) {
-      if (source.includes(MARK)) {
-        return { ok: false, why: `its launch line names a secret outside a variable's whole value (\`${source}\`)` };
+      if (word.source.includes(MARK)) {
+        return { ok: false, why: `its launch line names a secret outside a variable's whole value (\`${word.source}\`)` };
       }
       continue;
-    }
-    if (!leading) {
-      return { ok: false, why: `its launch line names a secret after its program (\`${source}\`): only a leading variable may hold one` };
     }
     if (store === null) return { ok: false, why: NO_SECRET_STORE };
     const lookup = store.lookupCommand(match[2]!);
@@ -67,6 +62,11 @@ export function fillSecretWords(line: string, store: SecretStore | null): Secret
     out += `${line.slice(cursor, word.start)}${match[1]}="$(${lookup.command})"`;
     cursor = word.end;
     entries.push(match[2]!);
+  }
+  // Past the leading assignments a secret word would reach a program as an argument.
+  const rest = line.slice(leading.at(-1)?.end ?? 0);
+  if (rest.includes(MARK)) {
+    return { ok: false, why: 'its launch line names a secret after its leading variables: only a leading variable may hold one' };
   }
   return { ok: true, line: out + line.slice(cursor), entries };
 }

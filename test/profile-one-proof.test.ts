@@ -80,6 +80,7 @@ const NOT_A_READER = new Map<string, string>([
   ['splitAtDelimiter', 'splits a line at its delimiter word so a rewrite keeps the tail verbatim: source spans, never a word or span of the CLI'],
   ['lineDelimiterRisk', 'answers whether an unread line may hide the delimiter: a boolean, never a word or span'],
   ['oneShellWord', 'asks how many shell words one vendor env fragment splits into, never reading a launch line: a boolean, never a word or span of the CLI'],
+  ['leadingAssignments', "returns the assignment words before the line's program, the shell's environment for it: never a word or span of the CLI"],
 ]);
 
 // The plain proof: a line with no script word names the CLI's own words only when a word written
@@ -100,6 +101,7 @@ const NOT_A_PLAIN_READER = new Map<string, string>([
   ['splitAtDelimiter', 'splits a line at its delimiter word for a rewrite: source spans only, never a word or span of the CLI'],
   ['lineDelimiterRisk', 'answers whether an unread line may hide the delimiter: a boolean, never a word or span'],
   ['oneShellWord', 'reads one vendor env fragment, never a whole launch line: a boolean, never a word or span of the CLI'],
+  ['leadingAssignments', "stops at the line's first word that sets no variable: the environment before the program, never a word or span of the CLI"],
 ]);
 
 
