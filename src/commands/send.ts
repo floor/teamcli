@@ -2100,7 +2100,9 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         const noticeHost: SendHost = { ...host, modelDriftNotice: { at: notice.at, admitted: () => { noticeAdmitted = true; } }, sendId: () => notice.id,
           ...(host.direct === undefined ? {} : { direct: { ...host.direct, ended: () => {} } }),
         };
-        const spec = to.cross ? `${lead}@${to.project}` : lead;
+        // By the team's id, never its project's name: a project with two teams makes the name
+        // ambiguous and the notice was refused (2026-11-13, material and md3io-marketing).
+        const spec = to.cross ? `${lead}@${teamIdOf(to.root)}` : lead;
         const code = await runSend([spec, notice.body, '--json'], quiet, noticeHost);
         let recorded = code === 0;
         let detail = recorded ? 'lead notice accepted by the ordinary send' : 'lead notice refused or not delivered';
