@@ -1055,6 +1055,10 @@ export async function stopRunning(input: {
   session: string;
   seat: DownSeat;
   keep?: boolean;
+  /** Leave the pane open at its shell after a clean exit, for a relaunch in the same pane: the
+   *  workspace keeps its place in the sidebar (owner, 2026-11-13). A close that never typed an
+   *  exit (`--abandon`, an unreadable screen) still closes: a CLI may still run there. */
+  keepPane?: boolean;
   abandon: boolean;
   /** The owner's `--abandon`: a seat this call asked, whose exit could not be typed or confirmed, is closed. */
   closeUnasked?: boolean;
@@ -1119,7 +1123,7 @@ export async function stopRunning(input: {
       }, cli, keys);
     },
     renameAgent: () => false,
-    closeWorkspace: launch.closeWorkspace,
+    closeWorkspace: input.keepPane === true && !input.abandon && input.closeUnasked !== true ? () => true : launch.closeWorkspace,
     stopSession: () => false,
     kill: () => false,
     agentPanes(sessionName) {

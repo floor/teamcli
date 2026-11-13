@@ -667,6 +667,33 @@ describe('the fixture temp folder', () => {
 });
 
 describe('team restart <seat>', () => {
+  test('a seat whose CLI exits back to its shell is relaunched in the same pane, keeping its sidebar place', async () => {
+    // Owner, 2026-11-13: a restarted seat moved to the end of the sidebar, because the restart
+    // closed its workspace and opened a new one. A clean exit now leaves the pane at its shell and
+    // the launch runs there: nothing is closed and no workspace is created.
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    let exited = false;
+    const typeText = sources.launch!.typeText;
+    sources.launch!.typeText = (session, pane, text) => { if (text === '/exit') exited = true; return typeText(session, pane, text); };
+    // Before the exit the CLI is in front; after it only the shell (pid 300) is, until the
+    // relaunch runs in the same pane and a new CLI (302) is in front again.
+    sources.upLaunch.processInfo = () => (exited && did.runs.length === 0 ? { shell: 300, foreground: [300] } : { shell: 300, foreground: [exited ? 302 : 301] });
+    sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code, io.err).toBe(0);
+    expect(did.typed).toContain('/exit');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+  });
+
   test('owner restarts a free running seat, prints pre-close facts, updates state, and does not edit team.yaml', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
@@ -686,7 +713,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(1);
     expect(io.out).toContain('worker: input box: empty\n');
     expect(io.out).toContain('worker: turn: not working (free)\n');
-    expect(io.out).toContain('worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; no recorded conversation\n');
+    expect(io.out).toContain('worker: context: relaunch runs "claude --model claude-opus-5-5" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript; no recorded conversation\n');
     expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
     expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
 
@@ -2876,7 +2903,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(ran?.startsWith('AGENT_UNATTENDED=1 zsh -lc "claude --model claude-opus-5-5 --resume ses_keep --dangerously-skip-permissions --name worker --append-system-prompt ')).toBe(true);
     expect(ran?.endsWith(`--settings ${settings}"`)).toBe(true);
     expect(io.out).toContain(
-      `worker: context: workspace close ends the pane; relaunch runs "${resumed}" in a new workspace and resumes the recorded conversation ses_keep\n`,
+      `worker: context: relaunch runs "${resumed}" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) and resumes the recorded conversation ses_keep\n`,
     );
     // The recipe the launch records is the declared line, with the resume it carried.
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.launch).toBe(resumed);
@@ -3344,7 +3371,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
     // The caller's own flag is the reason: the context line does not present it as none recorded.
     expect(io.out).toContain(
-      'worker: context: workspace close ends the pane; relaunch runs "codex -m gpt-6.1-sol" in a new workspace without passing the old transcript; abandoned by the caller\n',
+      'worker: context: relaunch runs "codex -m gpt-6.1-sol" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript; abandoned by the caller\n',
     );
   });
 
@@ -3599,7 +3626,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toContain('worker: not resuming its recorded session (its live agent session is not the recorded one)');
     // The context line repeats the reason the run gave: it never reads as a silent fresh start.
     expect(io.out).toContain(
-      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; not resuming its recorded conversation (its live agent session is not the recorded one)\n',
+      'worker: context: relaunch runs "claude --model claude-opus-5-5" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript; not resuming its recorded conversation (its live agent session is not the recorded one)\n',
     );
   });
 
@@ -3633,7 +3660,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toContain('worker: not resuming its recorded session (the seat record changed before the launch)');
     // The carried resume was dropped under the run lock: the context line says so, with the why.
     expect(io.out).toContain(
-      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; its recorded conversation was dropped before the launch (the seat record changed before the launch)\n',
+      'worker: context: relaunch runs "claude --model claude-opus-5-5" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript; its recorded conversation was dropped before the launch (the seat record changed before the launch)\n',
     );
   });
 

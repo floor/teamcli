@@ -1290,11 +1290,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // says: the line says so, never "without passing the old transcript".
       const ownTarget = resumed === undefined ? namedResumeTarget(next.cli, planSeat.launch) : null;
       const context = resumed !== undefined
-        ? `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace and resumes the recorded conversation ${plainLine(resumed)}`
+        ? `relaunch runs "${plainLine(planSeat.launch)}" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) and resumes the recorded conversation ${plainLine(resumed)}`
         : ownTarget !== null
-          ? `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace and resumes ${ownTarget === '' ? 'the conversation its launch line selects' : `conversation ${plainLine(ownTarget)}, named in its launch line`}${resumeNote === undefined ? '' : ` (the recorded one is not carried: ${plainLine(resumeNote.replace(/^not resuming its recorded conversation \((.*)\)$/, '$1'))})`}`
-          : `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace without passing the old transcript${resumeNote === undefined ? '' : `; ${plainLine(resumeNote)}`}`;
-      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; ${context}\n`);
+          ? `relaunch runs "${plainLine(planSeat.launch)}" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) and resumes ${ownTarget === '' ? 'the conversation its launch line selects' : `conversation ${plainLine(ownTarget)}, named in its launch line`}${resumeNote === undefined ? '' : ` (the recorded one is not carried: ${plainLine(resumeNote.replace(/^not resuming its recorded conversation \((.*)\)$/, '$1'))})`}`
+          : `relaunch runs "${plainLine(planSeat.launch)}" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript${resumeNote === undefined ? '' : `; ${plainLine(resumeNote)}`}`;
+      noteIo.stdout(`${plainLine(name)}: context: ${context}\n`);
       if (rechecked.unrecognised !== undefined) {
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
@@ -1336,6 +1336,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // A pane herdr still lists is stopped; one it no longer lists is not typed into, and the
       // old record is cleared below either way.
       let stopped = true;
+      const closesWithoutAsking = (abandon || stopObs.unrecognised !== undefined || stopObs.brokenScreen || stopObs.settingsDialog === true || draftCopy !== undefined) && stopObs.where !== 'free';
       if (stopObs.agent) {
         stopped = await stopRunning({
           io: noteIo,
@@ -1361,15 +1362,29 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           // says "close without typing" here, and the owner's own `--abandon` stays what it was.
           // A broken screen (rate limit or provider error) gets the same close: nothing is typed
           // into a pane whose conversation cannot answer.
-          abandon: (abandon || stopObs.unrecognised !== undefined || stopObs.brokenScreen || stopObs.settingsDialog === true || draftCopy !== undefined) && stopObs.where !== 'free',
+          abandon: closesWithoutAsking,
           closeUnasked: abandon,
+          // A clean exit leaves the pane at its shell and the relaunch below runs there, so the
+          // workspace keeps its place in the sidebar instead of moving to the end.
+          keepPane: true,
           unasked: `team ${input.command} ${name} --abandon closes it`,
         });
       }
       if (!stopped) {
         return { kind: 'busy', message: `${name} could not be stopped; left as it is${keptAt(draftCopy)}` };
       }
-      if (stopObs.agent && sources.upLaunch.agentPanes(session)?.includes(stopObs.agent.pane)) {
+      // The pane kept at its shell is the relaunch's: its shell's identity binds the launch to
+      // it. One whose stop closed it (or whose shell cannot be read) relaunches in a new
+      // workspace, as before.
+      const keptPane = stopObs.agent !== undefined && !closesWithoutAsking ? stopObs.agent : undefined;
+      const keptShell = keptPane === undefined ? null : sources.upLaunch.processInfo?.(session, keptPane.pane) ?? null;
+      // At a bare shell herdr names the shell itself as the foreground process.
+      const atShell = keptShell !== null && keptShell.foreground.every((pid) => pid === keptShell.shell);
+      if (keptPane !== undefined && atShell) {
+        planSeat.repair = { pane: keptPane.pane, workspace: keptPane.workspace, launched: { shell: keptShell!.shell, cli: [] }, cli: next.cli, reuse: true };
+      } else if (keptPane !== undefined && !sources.upLaunch.closeWorkspace(session, keptPane.workspace)) {
+        return { kind: 'busy', message: `${name} did not close its old pane; left as it is${keptAt(draftCopy)}` };
+      } else if (keptPane === undefined && stopObs.agent && sources.upLaunch.agentPanes(session)?.includes(stopObs.agent.pane)) {
         return { kind: 'busy', message: `${name} did not close its old pane; left as it is${keptAt(draftCopy)}` };
       }
       let priorPane = freshRecorded?.pane;
