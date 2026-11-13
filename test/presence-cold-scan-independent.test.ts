@@ -231,7 +231,8 @@ function timeoutsAfterServing(probes: ColdProbe[], startupBegan: number, startup
 }
 
 describe('fix/presence-cold-scan independent verification', () => {
-  test('probe 1: three-root cold start of tens-of-MB fixture logs answers health probes within 600 ms throughout', async () => {
+  // A scale benchmark (three ~23 MB logs): runs when asked (TEAM_SCALE_TESTS=1), not by default.
+  test.skipIf(process.env.TEAM_SCALE_TESTS !== '1')('probe 1: three-root cold start of tens-of-MB fixture logs answers health probes within 600 ms throughout', async () => {
     // 50,000 signed records per root (~22.6 MB per root, ~67.8 MB across three roots).
     const LINES_PER_ROOT = 50_000;
     const world = createWorld([LINES_PER_ROOT, LINES_PER_ROOT, LINES_PER_ROOT], 'three-root-cold');

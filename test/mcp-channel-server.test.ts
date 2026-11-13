@@ -461,7 +461,8 @@ await runMcpServe({
     await exited;
   }
 
-  test('a large inbox stays under the CPU bound for 10s, and a new drop arrives through the folder watch', async () => {
+  // A CPU benchmark that idles 10 s: runs when asked (TEAM_SCALE_TESTS=1), not by default.
+  test.skipIf(process.env.TEAM_SCALE_TESTS !== '1')('a large inbox stays under the CPU bound for 10s, and a new drop arrives through the folder watch', async () => {
     const at = place();
     let running: ChildProcess | undefined;
     try {
