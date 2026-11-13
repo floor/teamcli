@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.22] - 2026-11-13
+
 ### Added
 
 - TeamCLI ships four launchers, configured by the seat: `grok-build`, `claude-code`, `codex` and `antigravity`. A seat names the launcher and its model, version, vendor and effort; the launcher builds the line, so a seat no longer needs a script of its own. `claude-code` reads the entity's provider launch accounts, so a Claude Code seat can run another vendor's model; the provider key is a keychain lookup run by the pane's shell and never reaches a record, a log or the line.
@@ -27,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A send handed to the daemon's typed wake reports its outcome: delivered, not delivered with the reason (exit 1, the message kept in the inbox), or no outcome after 20 s. It is never left "pending".
+- A Codex conversation another app holds ("This conversation is open in another app") reads as blocked, not idle.
+- Closing a seat's pane ends its CLI when that process outlives the pane as an orphan.
+- `team restart` says when its launch line resumes a conversation of its own, instead of "without passing the old transcript".
+- The daemon says once, with its cause, that it cannot archive read mail, instead of every 30 seconds.
+- `bun run test:fast` fails when the machine's registry changes during the run.
 - After a host restart, kept panes get their names and sidebar labels back; a seat relaunched at its bare shell is renamed after its launch; a Grok or Cursor pane started elsewhere is repaired in a new workspace; a provider seat on the claude-code launcher is launched again, not adopted.
 - A launch waits for a new pane's shell prompt before typing its line.
 - `team daemon restart` after a new build runs the installed program, waits for a daemon's cold start and never stops a live one; `team daemon install` says when it drops the unit's `--presence` or `--watch`. The daemon re-reads its team when a sender or recipient is new or a seat was stopped, and writes at most one late-beat line a minute.
