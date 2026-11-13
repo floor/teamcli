@@ -30,6 +30,11 @@ delivery: between-turns
 # dialog refuse before a key. Nothing else is typed, and a wake that cannot deliver leaves the
 # message in the bus inbox. See src/send/typed-wake.ts.
 typed_wake: screen
+# The longest wake line. With no figure the default was 200 bytes, which the message header
+# alone nearly fills: every wake to a Codex seat became "Body too long; read it with team drops
+# --read", a read a Codex seat cannot make (2026-11-13). 1000 is a first figure, not yet a
+# measured one: a line that does not read back is reported "not delivered" with the message kept.
+typed_wake_max: 1000
 login:
   check:
     - login

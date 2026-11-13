@@ -99,7 +99,7 @@ test('an oversized typed body explicitly requests a read and stays unread', asyn
       typedWake: () => ({ read: () => entered ? working : typed ? draw(typed) : idle, type: (_pane, text) => { typed = text; return true; }, enter: () => { entered = true; return true; }, wait: async () => {} }),
       wakeVerifyMs: 1, wakePollMs: 1,
     });
-    expect(await runSend(['native', 'x'.repeat(600)], io, host), io.err).toBe(0);
+    expect(await runSend(['native', 'x'.repeat(2000)], io, host), io.err).toBe(0);
     expect(typed).toContain('Body too long; read it with: team drops --read.');
     const dir = join(w.dir, 'send-drops', 'acme', 'native');
     expect(readdirSync(dir).some((name) => name.endsWith('.read.json'))).toBe(false);

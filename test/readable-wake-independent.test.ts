@@ -347,7 +347,7 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
         wakePollMs: 1,
       });
 
-      const mediumBody = 'm'.repeat(180);
+      const mediumBody = 'm'.repeat(1200); // over the Codex seat's 1000-byte wake
       const code = await runSend(['native', mediumBody], io, host);
       expect(code, io.err + io.out).toBe(0);
       expect(typed).toContain('Body too long; read it with: team drops --read.');
@@ -368,19 +368,19 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
       enter: async () => true,
       wait: async () => {},
     };
-    const overTyped = await deliverTypedWake(noopHost, 'synthetic-pane', 'a'.repeat(TYPED_WAKE_MAX + 1), 'codex');
+    const overTyped = await deliverTypedWake(noopHost, 'synthetic-pane', 'a'.repeat(1001), 'codex');
     expect(overTyped).toEqual({
       delivered: false,
       typed: false,
       tries: 0,
-      reason: `the wake does not fit ${String(TYPED_WAKE_MAX)} bytes; nothing was typed`,
+      reason: "the wake does not fit 1000 bytes; nothing was typed",
     });
     const ctrlTyped = await deliverTypedWake(noopHost, 'synthetic-pane', 'Header\r\nBody', 'codex');
     expect(ctrlTyped).toEqual({
       delivered: false,
       typed: false,
       tries: 0,
-      reason: `the wake does not fit ${String(TYPED_WAKE_MAX)} bytes; nothing was typed`,
+      reason: "the wake does not fit 1000 bytes; nothing was typed",
     });
   });
 
