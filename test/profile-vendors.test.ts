@@ -12,8 +12,8 @@ import { planVendorSwap, vendorTargetOf } from '../src/swap/vendor.ts';
 
 const profile = profileFor('claude-code')!;
 
-const AUTH = (item: string): string =>
-  `ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s ${item} -a "$USER" -w)`;
+// The key word names the item; the launch fills it from the machine's secret store.
+const AUTH = (item: string): string => `ANTHROPIC_AUTH_TOKEN={secret:${item}}`;
 
 const DEEPSEEK_LAUNCH =
   'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ' +
@@ -49,7 +49,7 @@ describe('the vendors a profile declares', () => {
       credential: 'deepseek-api-key',
       env: [
         'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic',
-        'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)',
+        'ANTHROPIC_AUTH_TOKEN={secret:{credential}}',
         'ANTHROPIC_MODEL={model}',
       ],
       models: [{ id: 'deepseek-flash', model: 'DeepSeek Flash', version: '4.0', display: 'DeepSeek Flash 4.0' }],
@@ -59,7 +59,7 @@ describe('the vendors a profile declares', () => {
       credential: 'glm-api-key',
       env: [
         'ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic',
-        'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)',
+        'ANTHROPIC_AUTH_TOKEN={secret:{credential}}',
         'ANTHROPIC_MODEL={model}',
       ],
       models: [{ id: 'glm-5.3', model: 'GLM', version: '5.3', display: 'GLM 5.3' }],
@@ -69,7 +69,7 @@ describe('the vendors a profile declares', () => {
       credential: 'kimi-api-key',
       env: [
         'ANTHROPIC_BASE_URL=https://api.kimi.ai/coding/',
-        'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)',
+        'ANTHROPIC_AUTH_TOKEN={secret:{credential}}',
         'ANTHROPIC_MODEL={model}',
       ],
       models: [{ id: 'kimi-k2.5', model: 'Kimi K2.5', version: '2.5', display: 'Kimi K2.5 2.5' }],

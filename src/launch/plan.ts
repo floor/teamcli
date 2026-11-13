@@ -24,6 +24,7 @@ import { discover } from '../launchers/resolve.ts';
 import { accountKeyCommand, shippedEnv, shippedLauncher, shippedLauncherIsReadOnly } from '../launchers/shipped.ts';
 import { launchAccountFor, type LaunchAccount } from '../launchers/accounts.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
+import { fillSecretWords, hasSecretWord } from './secret-words.ts';
 import { identityFor } from '../commands/git.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
 import { getRelativeDirOps } from '../send/drop-retention.ts';
@@ -1631,6 +1632,23 @@ export function upPlan(input: UpInput): Step[] {
       baseLine = envWords.length === 0 ? decided.command : `${envWords.join(' ')} ${decided.command}`;
       fromResolver = true;
       shippedLaunch = shipped !== null;
+    }
+    // A provider key the seat's own line names (`NAME={secret:<entry>}`, the profile's vendor
+    // word a swap wrote) is filled with the machine's secret store's lookup here, before any
+    // workspace is made: a store with no lookup for it refuses the seat rather than starting it
+    // against the provider with an empty key. A line that names none is left byte for byte, and
+    // the seat's record keeps the line as its file writes it.
+    if (hasSecretWord(baseLine)) {
+      const store = input.secretStore !== undefined
+        ? input.secretStore
+        : systemSecretStore(input.home === undefined ? {} : { home: input.home });
+      const filled = fillSecretWords(baseLine, store);
+      if (!filled.ok) {
+        const why = `its provider key cannot be read: ${filled.why}`;
+        steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`, do: { do: 'refuse', seat: seat.name, why } });
+        continue;
+      }
+      baseLine = filled.line;
     }
     let denyRecordLine: string | undefined;
     if (profile.cli === 'grok' && commandDeny !== 'off') {

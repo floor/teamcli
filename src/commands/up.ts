@@ -10,6 +10,7 @@ import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import { spawnInheritedBus } from '../bus/supervise.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import type { SecretStore } from '../secrets/store.ts';
 import { readArgs, type Args } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
@@ -250,6 +251,9 @@ export type Launch = {
     managed(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }): Promise<ManagedEndpointRead>;
     stop(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   };
+  /** The secret store a seat's key word is looked up in (`{secret:<entry>}`, src/launch/secret-words.ts).
+   *  Absent: the system's own store; a scene passes a fake so no launch reads the machine's store. */
+  secretStore?: SecretStore | null;
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
@@ -3390,6 +3394,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // A launch surface with no endpoint seam plans none: the marker is what makes the launch
     // start one, and a scene's fake launch must never reach a real process.
     ...(sources.launch?.codexEndpoint === undefined ? {} : { stateDir: dir }),
+    ...(sources.launch?.secretStore === undefined ? {} : { secretStore: sources.launch.secretStore }),
     ...(sidebar === null ? {} : { sidebar }),
     ...(resolveLaunch ? { resolveLaunch: true, launcherDiscovery: loadTeamLaunchers(root) } : {}),
   });

@@ -753,6 +753,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       ...(home === undefined ? {} : { home }),
       team,
       ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }),
+      ...(sources.launch.secretStore === undefined ? {} : { secretStore: sources.launch.secretStore }),
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
     // run starts.

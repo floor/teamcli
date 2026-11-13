@@ -1522,6 +1522,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       home,
       team,
       ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
+      ...(sources.upLaunch.secretStore === undefined ? {} : { secretStore: sources.upLaunch.secretStore }),
       ...(resolveLaunch ? { resolveLaunch: true as const, launcherDiscovery } : {}),
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this

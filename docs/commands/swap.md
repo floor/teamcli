@@ -41,9 +41,12 @@ A `<target>` is `<cli>:<model>`, and the recipe is copied from a seat of the ent
 runs it. A name in the seat's own CLI profile's vendor table — `<vendor>:<model>` — moves the seat
 between vendors of that same CLI with no donor and no launcher script: the generated line keeps the
 seat's own wrapper prefix and the assignments that are not a vendor's, and takes the vendor's env
-words, the CLI's binary and its model flag. The move is refused when this machine's credential
-store does not hold the vendor's item — naming the item and the one-time command that adds it,
-never a secret — or when the store cannot be read.
+words, the CLI's binary and its model flag. The key is named, never written: the line carries
+`ANTHROPIC_AUTH_TOKEN={secret:<item>}`, and each launch fills that word with the system's secret
+store's own lookup of the item, which the pane's shell runs when the seat starts. A line an earlier
+swap wrote with its own lookup launches as it is. The move is refused when this machine's
+credential store does not hold the vendor's item — naming the item and the one-time command that
+adds it, never a secret — or when the store cannot be read.
 
 ## What it reads and writes
 

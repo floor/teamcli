@@ -19,6 +19,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { beginSession } from '../src/sessions/registry.ts';
 import { askCheckpoint } from '../src/checkpoint/checkpoint.ts';
 import { readState } from '../src/state.ts';
+import { systemSecretStore } from '../src/secrets/store.ts';
 import type { Screen } from '../src/watch/screen.ts';
 import { CLAUDE_IDLE, claudeBox, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -295,6 +296,9 @@ function fakeHerdr(
     now,
   };
   const upLaunch: Launch = {
+    // The Keychain adapter's lookup reads nothing; its runner refuses to run at all, so a vendor
+    // line's key word is filled with the macOS word on every machine the scene runs on.
+    secretStore: systemSecretStore({ platform: 'darwin', runner: async () => { throw new Error('no store command runs in a scene'); } }),
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,
@@ -542,8 +546,8 @@ describe('team swap views', () => {
 });
 
 describe('team swap to another vendor of the same CLI', () => {
-  const auth = (item: string): string =>
-    `ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s ${item} -a "$USER" -w)`;
+  // The team file names the key; the launch fills the word with the machine store's lookup.
+  const auth = (item: string): string => `ANTHROPIC_AUTH_TOKEN={secret:${item}}`;
   const DEEPSEEK_LINE =
     'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ' +
     `${auth('deepseek-api-key')} ` +
@@ -603,7 +607,7 @@ describe('team swap to another vendor of the same CLI', () => {
     expect(result.code, result.err).toBe(0);
     const launch = queue().lead!.to.launch;
     expect(launch).not.toContain('deepseek');
-    expect(launch).toContain('find-generic-password -s kimi-api-key');
+    expect(launch).toContain('ANTHROPIC_AUTH_TOKEN={secret:kimi-api-key}');
   });
 
   test('the model rule refuses a vendor it does not allow the seat', async () => {
@@ -693,8 +697,10 @@ describe('team swap to another vendor of the same CLI', () => {
     expect(lead).toContain('version: "5.3"');
     expect(lead).toContain('display: "GLM 5.3"');
     expect(lead).toContain(`launch: ${JSON.stringify(ZAI_LINE)}`);
-    // The line the pane ran is the vendor line the seat row now holds.
-    expect(world.did.runs.join('\n')).toContain('find-generic-password -s glm-api-key');
+    // The line the pane ran is the vendor line the seat row now holds, its key word filled with
+    // the store's lookup: on the Keychain, the shipped launcher's own word.
+    expect(world.did.runs.join('\n')).toContain('ANTHROPIC_AUTH_TOKEN="$(/usr/bin/security find-generic-password -s glm-api-key -w)"');
+    expect(world.did.runs.join('\n')).not.toContain('{secret:');
     expect(world.did.runs.join('\n')).not.toContain('claude-opus-5-5');
     expect(queue()).toEqual({});
   });
