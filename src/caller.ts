@@ -11,6 +11,7 @@ import type { Io } from './io.ts';
 import { readState, type SeatState } from './state.ts';
 import { CLI_PROCESSES, processNameMatches } from './clis.ts';
 import { processStartOf, seatOfManagedEndpoint } from './launch/codex-endpoint.ts';
+import { ownerSignsElsewhereOnThisAccount } from './client/owner-pin-path.ts';
 
 // Who runs this command, placed by its parent processes, never by its environment. This guards
 // against a mistaken agent, not a hostile one: every seat runs as the owner's user.
@@ -41,7 +42,15 @@ export type Caller =
   // seat, it never falls back to the owner label, and it may never address the owner or a
   // person's pane.
   | { kind: 'daemon' }
-  | { kind: 'unplaced'; reason: string };
+  // `pinned` marks the one unplaced reading that stands where the owner stood: a process outside
+  // herdr with no agent parent, on a machine whose owner seat is pinned from another machine
+  // (`PINNED_TERMINAL_REASON`). Dev mode lifts nothing for it (src/dev_mode.ts).
+  | { kind: 'unplaced'; reason: string; pinned?: true };
+
+/** Why a terminal is not the owner on a machine whose owner seat is pinned from another machine:
+ *  that machine holds no owner signer, so the owner's word there is a signed answer carried from
+ *  the machine that holds one (`team approvals export`, then `team approvals answer`). */
+export const PINNED_TERMINAL_REASON = "this machine's owner signs on another machine, and a terminal here is not the owner";
 
 export type Process = { pid: number; name: string };
 
@@ -81,6 +90,10 @@ export type CallerSources = {
   /** The instant a process started, in epoch milliseconds; null when it is gone or its start
    *  line is unreadable. */
   processStartOf?(pid: number): number | null;
+  /** Whether this machine's owner seat is pinned from another machine, so a terminal here is not
+   *  the owner. The process's own sources read the account (`ownerSignsElsewhereOnThisAccount`);
+   *  sources a test hands in that leave it out place as a machine with a local owner. */
+  ownerSignsElsewhere?(): boolean;
 };
 
 /** Whether a pane herdr lists without a name is the pane the seat's record holds. The proof is
@@ -277,10 +290,12 @@ export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'calle
       return { kind: 'unplaced', reason: 'it runs under herdr' };
     }
   }
-  return walkOutside(ancestors, { env, stdinIsTTY });
+  // The process's own walk reads the account; sources a test hands in answer for themselves.
+  const signsElsewhere = sources ? sources.ownerSignsElsewhere : ownerSignsElsewhereOnThisAccount;
+  return walkOutside(ancestors, { env, stdinIsTTY, ...(signsElsewhere !== undefined ? { ownerSignsElsewhere: signsElsewhere } : {}) });
 }
 
-function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 'stdinIsTTY'>): Caller {
+function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 'stdinIsTTY' | 'ownerSignsElsewhere'>): Caller {
   const cli = ancestors.find((process) => processNameMatches(process.name, CLI_PROCESSES));
   if (cli) {
     // An agent whose environment still names a herdr pane, but with no herdr server among its
@@ -296,12 +311,22 @@ function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 
     return { kind: 'unplaced', reason: `it is run by an agent (${cli.name}) outside herdr` };
   }
   if (sources.env.AGENT_UNATTENDED) return { kind: 'unplaced', reason: 'AGENT_UNATTENDED is set' };
+  // A machine whose owner seat is pinned from another machine holds no owner signer. A terminal
+  // there may be any agent that opened a shell on the account, so it is never the owner, with a
+  // terminal or without one: the owner's word on that machine is a signed answer. No mode, policy
+  // or variable changes this reading.
+  if (sources.ownerSignsElsewhere?.() === true) return { kind: 'unplaced', reason: PINNED_TERMINAL_REASON, pinned: true };
   if (!sources.stdinIsTTY) return { kind: 'owner-no-tty' };
   return { kind: 'owner' };
 }
 
 export function isOwner(caller: Caller): boolean {
   return caller.kind === 'owner';
+}
+
+/** Whether `caller` is the terminal a machine whose owner seat is pinned refuses as the owner. */
+export function isPinnedTerminal(caller: Caller): boolean {
+  return caller.kind === 'unplaced' && caller.pinned === true;
 }
 
 /** Who may run a command and where from, for the no-terminal refusal. A command the map admits
@@ -826,6 +851,7 @@ export function currentCaller(
     foreground: (pane) => paneForeground(pane, session),
     home: homedir(),
     processStartOf: (pid) => processStartOf(pid),
+    ownerSignsElsewhere: ownerSignsElsewhereOnThisAccount,
   };
   if (extra !== undefined) return placeCaller({ ...sources, ...extra }, session);
   const snapId = activeHerdrSnapshotId();

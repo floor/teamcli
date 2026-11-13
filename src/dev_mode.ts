@@ -60,7 +60,8 @@
 import type { TeamFile } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
-import { callerOf, callerVerdict, logTag, standingOf, walkCaller, type Caller } from './caller.ts';
+import { callerOf, callerVerdict, isPinnedTerminal, logTag, standingOf, walkCaller, type Caller } from './caller.ts';
+import { ownerSignsElsewhereOnThisAccount } from './client/owner-pin-path.ts';
 import { findRoot } from './file/load.ts';
 import { readTeamConfig } from './file/team-config.ts';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
@@ -136,6 +137,9 @@ export type DevModeRun = {
   machine?: { mode: DevelopmentMode; since: string; generation: number };
   /** Why a machine record was present and could not be used: dev mode is not applied on it. */
   machineRefusal?: string;
+  /** Dev mode was on, and the caller is the terminal of a machine whose owner seat is pinned from
+   *  another machine: nothing is lifted for it (src/caller.ts, `PINNED_TERMINAL_REASON`). */
+  pinnedTerminal?: true;
 };
 
 /** The project a team belongs to, read the way `team check`'s policy pass reads it. The
@@ -221,8 +225,35 @@ function nearestExpiry(expired: readonly { name: string; level: PolicyLevel; exp
  *   variable is not consulted, since a governing value may be among what could not be read.
  * - `devModeGoverned`: the variable is ignored; `on` iff the effective `dev-mode` is `on`.
  * - Otherwise: the variable, set to exactly `1`, keeps its pre-policy behaviour.
+ * - In every case, a run that is the terminal of a machine whose owner seat is pinned from
+ *   another machine lifts nothing (`withoutPinnedTerminal`).
  */
-export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
+export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'> & Partial<Pick<Io, 'stdinIsTTY' | 'caller' | 'callerSources'>>, context: DevModeContext = {}): DevModeRun {
+  return withoutPinnedTerminal(resolveDevModeAt(command, io, context), io);
+}
+
+/**
+ * Whether this run is the terminal a machine whose owner seat is pinned refuses as the owner
+ * (src/caller.ts, `PINNED_TERMINAL_REASON`). On such a machine the owner's word is a signed
+ * answer from the machine that holds the signer; a mode an agent may set (the variable) or sign
+ * (a chain value) must never stand in for it, so dev mode lifts nothing for this caller. The
+ * walk runs only when the account is pinned or a test hands its placement in; a reading with no
+ * process to place (`{ env }` alone) is no terminal.
+ */
+function pinnedTerminalRun(io: Pick<Io, 'env'> & Partial<Pick<Io, 'stdinIsTTY' | 'caller' | 'callerSources'>>): boolean {
+  if (io.caller !== undefined) return isPinnedTerminal(io.caller);
+  if (typeof io.stdinIsTTY !== 'boolean') return false;
+  if (io.callerSources === undefined && !ownerSignsElsewhereOnThisAccount()) return false;
+  return isPinnedTerminal(walkCaller({ env: io.env, stdinIsTTY: io.stdinIsTTY, ...(io.callerSources !== undefined ? { callerSources: io.callerSources } : {}) }));
+}
+
+/** The run with nothing lifted when its caller is a pinned machine's terminal; unchanged otherwise. */
+function withoutPinnedTerminal(run: DevModeRun, io: Pick<Io, 'env'> & Partial<Pick<Io, 'stdinIsTTY' | 'caller' | 'callerSources'>>): DevModeRun {
+  if (!run.on || !pinnedTerminalRun(io)) return run;
+  return { ...run, on: false, by: null, pinnedTerminal: true };
+}
+
+function resolveDevModeAt(command: DevModeCommand, io: Pick<Io, 'env'>, context: DevModeContext): DevModeRun {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return variableOnly(envSet);
   const machine = machineRun(readDevelopmentMode(context.home), command, envSet);
@@ -249,9 +280,13 @@ export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, con
  * Dev mode's state at the caller's place, without the operation list: `on` here means dev mode
  * itself is on (the effective policy is `on`, or the variable is in effect before any policy),
  * which is what the owner-gate admission reads. The operation list is a separate question, asked
- * by `resolveDevMode`; nothing here widens it.
+ * by `resolveDevMode`; nothing here widens it. A pinned machine's terminal reads it off.
  */
-export function devModeState(io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
+export function devModeState(io: Pick<Io, 'env'> & Partial<Pick<Io, 'stdinIsTTY' | 'caller' | 'callerSources'>>, context: DevModeContext = {}): DevModeRun {
+  return withoutPinnedTerminal(devModeStateAt(io, context), io);
+}
+
+function devModeStateAt(io: Pick<Io, 'env'>, context: DevModeContext): DevModeRun {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return variableOnly(envSet);
   const machine = machineRun(readDevelopmentMode(context.home), null, envSet);
