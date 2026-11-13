@@ -82,7 +82,7 @@ ${rows}
 }
 
 beforeEach(() => {
-  base = fixtureBase('flo-1372-independent-');
+  base = fixtureBase('live-seat-restore-independent-');
   bases.push(base);
   root = join(base, 'repo');
   home = join(base, 'home');
