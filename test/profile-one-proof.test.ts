@@ -75,6 +75,7 @@ const TOKENIZERS = new Set([
 const NOT_A_READER = new Map<string, string>([
   ['shellProgramOf', 'names the shell that parses the line: one program word, never a word or span of the CLI'],
   ['startsWithCli', "compares the first decoded word with the CLI's binary and returns a boolean, never a word or span"],
+  ['directConversationLaunch', "answers whether the line starts the CLI's own binary directly (the builder's literal marker allowed): a boolean, never a word or span"],
   ['launchWordScopes', "0.5.10's raw-line question: it may see more words than the CLI reads, and its answer only suppresses an addition"],
   ['splitAtDelimiter', 'splits a line at its delimiter word so a rewrite keeps the tail verbatim: source spans, never a word or span of the CLI'],
   ['lineDelimiterRisk', 'answers whether an unread line may hide the delimiter: a boolean, never a word or span'],

@@ -246,6 +246,7 @@ export const ROUTINE_ALLOWLIST: readonly LaneRule[] = [
     patterns: dirPrefixes([
       'src/budgets',
       'src/charter',
+      'src/diagnostics',
       'src/end',
       'src/handover',
       'src/information',
