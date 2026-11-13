@@ -6,7 +6,7 @@ import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping }
 import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, extname, join, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
@@ -28,7 +28,12 @@ import type { Command, Io } from '../io.ts';
 import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, holderText, seatLockHolder, seatLockPath, type LockHolder } from '../launch/seat-lock.ts';
-import { readState, updateState, type SeatState } from '../state.ts';
+import { LOG_FILE, readState, updateState, type SeatState } from '../state.ts';
+import { wakeMarkAt, wakePath } from '../send/wake-marker.ts';
+
+/** How long a real send waits for the daemon's typed-wake child to report: a walk that types and
+ *  sees the working screen takes a few seconds; one the guards refuse answers at once. */
+const HANDED_WAIT_MS = 20_000;
 import { logLine } from '../log.ts';
 import { tokenMark } from '../quota/out-of-tokens.ts';
 import { messageKeyOf } from '../store/keys.ts';
@@ -474,6 +479,10 @@ export type SendHost = {
    *  real host so `--timeout <s>` (default 120s) sets the window; a test sets a small number or 0
    *  to exercise the thread wait without sleeping. */
   waitMs?: number;
+  /** How long a send handed to the daemon's typed wake waits for the child's outcome, in
+   *  milliseconds. The real host waits `HANDED_WAIT_MS`; a test's host leaves it out (0) and
+   *  sees the handoff line. */
+  handedWaitMs?: number;
   /** The build this process runs, compared against a live inbox listener's marker. Left out
    *  (a test's host), the retired inbox name's receipt wait keeps the liveness-only check. */
   build?: () => BuildIdentity;
@@ -505,6 +514,7 @@ export const realHost: SendHost = {
   // The probe's path shape: `<tmp>/cc-socks/<pid>.sock`, the runtime temp folder's own
   // (observed on this Mac as /tmp/cc-socks; a version-specific observation, not a public
   // API contract).
+  handedWaitMs: HANDED_WAIT_MS,
   socketsDir: join(tmpdir(), 'cc-socks'),
   socketsDirAlt: '/tmp/cc-socks',
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
@@ -4381,7 +4391,7 @@ async function finishDaemonSend(
     return sentUnconfirmed(io, seatName, report, ms, 'typed', notes.length === 0 ? undefined : notes.join('; '));
   }
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
-  if (res.outcome === 'handed') return handedTypedWake(io, seatName, res.id, host, report, startedAt);
+  if (res.outcome === 'handed') return handedTypedWake(io, seatName, res.id, host, report, startedAt, { dropPath: res.drop_path, dir });
   if (res.outcome === 'queued') {
     // The receiver was busy when the send reached the daemon: the signed copy is stored and the
     // message holds one place in that seat's FIFO, so the sender is answered now instead of
@@ -4441,30 +4451,78 @@ function queuedBusy(
   return 0; // exit: send.queued
 }
 
-/** The send daemon took the typed wake: the staged message is in its store, its wake child owns
- *  the screen walk, and the delivery's own history line and the trace are the child's. The line
- *  names the handoff, never a delivery, and the id on it is the one the child's history keeps.
- *  The class words a leg's own ending appends are left off: they say what wakes an idle seat when
- *  nothing here does, and the child's walk is exactly the wake this run handed over. Exit 0, the
- *  same acceptance a queued send reports. */
-function handedTypedWake(
+/** The send daemon took the typed wake: the staged message is in its store and its wake child
+ *  owns the screen walk. The send waits a short while for the child's outcome — the wake marker
+ *  beside the stored copy turns `sent` when the line landed, and is given back when a guard or
+ *  the walk refused — and says which, so a wake that cannot land is never left "pending" with
+ *  nobody told (2026-11-13: six sends sat pending on seats the daemon never typed into). With no
+ *  outcome inside the window it says that, and that the message waits in the inbox. Exit 0 for
+ *  delivered or still running, 1 for a wake that did not land (the message is kept). */
+async function handedTypedWake(
   io: Io,
   seatName: string,
   msgId: string,
   host: SendHost,
   report: Report,
   startedAt: number,
-): number {
+  where: { dropPath?: string; dir?: string } = {},
+): Promise<number> {
   report.sent = msgId;
+  const waitMs = host.handedWaitMs ?? 0;
+  let outcome: 'delivered' | 'failed' | 'pending' = 'pending';
+  let why: string | undefined;
+  if (waitMs > 0 && where.dropPath !== undefined) {
+    const marker = wakePath(dirname(where.dropPath), basename(where.dropPath));
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      const mark = wakeMarkAt(marker);
+      if (mark !== null && mark.state !== 'reserved') { outcome = 'delivered'; break; }
+      if (mark === null && !existsSync(marker)) { outcome = 'failed'; break; }
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (outcome === 'failed' && where.dir !== undefined) why = wakeFailureReason(where.dir, where.dropPath);
+  }
   const ms = host.now().getTime() - startedAt;
-  const summary = withId(`${seatName}: handed to the daemon for a typed wake; outcome pending (typed, ${String(ms)} ms; id ${msgId})`, report);
+  const summary = withId(
+    outcome === 'delivered'
+      ? `${seatName}: delivered (typed wake, ${String(ms)} ms; id ${msgId})`
+      : outcome === 'failed'
+        ? `${seatName}: not delivered: the typed wake did not land${why === undefined ? '' : ` (${why})`}; kept in ${seatName}'s inbox (typed, ${String(ms)} ms; id ${msgId})`
+        : waitMs > 0
+          ? `${seatName}: no typed-wake outcome after ${String(Math.round(waitMs / 1000))} s; kept in ${seatName}'s inbox, the daemon is still trying (typed, ${String(ms)} ms; id ${msgId})`
+          : `${seatName}: handed to the daemon for a typed wake; outcome pending (typed, ${String(ms)} ms; id ${msgId})`,
+    report,
+  );
   if (report.json) {
-    writeAction(io, report, { status: 'handed to the daemon for a typed wake', summary, channel: 'typed' });
+    writeAction(io, report, {
+      status: outcome === 'delivered' ? 'delivered' : outcome === 'failed' ? 'queued, not woken' : 'handed to the daemon for a typed wake',
+      summary,
+      channel: 'typed',
+    });
   } else {
     openText(io, report);
-    io.stdout(`${summary}\n`);
+    if (outcome === 'failed') io.stderr(`team send: ${summary}\n`);
+    else io.stdout(`${summary}\n`);
   }
-  return 0; // exit: send.handed
+  return outcome === 'failed' ? 1 : 0; // exit: send.handed
+}
+
+/** The reason the daemon's wake child logged for a wake that did not land, read from the team
+ *  log's line that names this message's stored copy; undefined when no such line is found. */
+function wakeFailureReason(dir: string, dropPath: string): string | undefined {
+  try {
+    const lines = readFileSync(join(dir, LOG_FILE), 'utf8').split('\n');
+    for (let at = lines.length - 1; at >= 0 && at >= lines.length - 400; at -= 1) {
+      const line = lines[at]!;
+      if (!line.includes(dropPath)) continue;
+      const found = /the typed wake did not land \((.*)\); the drop is at /.exec(line);
+      if (found) return found[1];
+    }
+  } catch {
+    // No log to read: the line says the wake did not land, without a reason.
+  }
+  return undefined;
 }
 
 type ThreadReply = { reply: string; msg_id: string };

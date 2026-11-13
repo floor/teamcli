@@ -9,6 +9,7 @@ import { beginFallbackWalk } from '../src/send/fallback-walk.ts';
 import type { FallbackMarker } from '../src/send/fallback-events.ts';
 import { readHistory } from '../src/send/history.ts';
 import type { TypedWakeHost } from '../src/send/typed-wake.ts';
+import { markWake, releaseWake } from '../src/send/wake-marker.ts';
 import { dropDir, fake, NOW, owner, world } from './send-native-fixtures.ts';
 
 const handles: SendDaemonHandle[] = [];
@@ -93,4 +94,43 @@ describe('typed handoff outcome truth', () => {
       expect(scene.marker()).toEqual(after);
     });
   }
+});
+
+// A real send waits for the wake child's outcome instead of leaving "pending" (2026-11-13: six
+// sends sat pending on seats the daemon never typed into, and nobody was told). The child's
+// marker beside the stored copy is the outcome: `sent` when the line landed, given back when a
+// guard or the walk refused. The child is simulated here by acting on that marker.
+describe('a handed send reports the wake outcome', () => {
+  async function sendWith(act: (wake: WakeHandoff) => void) {
+    const made = world(['typed']);
+    cleanups.push(made.cleanup);
+    const loaded = readTeamConfig(made.root, { home: made.home });
+    if (!loaded.ok) throw new Error('fixture configuration did not load');
+    const host = { ...fake(made, { agents: () => [{ name: 'native', pane: 'fixture-pane', cli: 'codex' }], typedWake: () => noPane }), handedWaitMs: 1_000 };
+    const started = await startSendDaemon({ root: made.root, dir: made.dir, team: loaded.team, host, wake: act });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+    const io = owner(made.root);
+    const code = await runSend(['native', 'fixture message'], io, host);
+    return { code, io };
+  }
+
+  test('a wake the child landed is said delivered', async () => {
+    const { code, io } = await sendWith((wake) => markWake(`${wake.dropPath}.wake`, { id: wake.id, at: new Date().toISOString(), state: 'sent', evidence: 'typed-wake' }));
+    expect(code).toBe(0);
+    expect(io.out).toContain('native: delivered (typed wake');
+    expect(io.out).not.toContain('pending');
+  });
+
+  test('a wake the child gave back is said not delivered, with the message kept', async () => {
+    const { code, io } = await sendWith((wake) => releaseWake(`${wake.dropPath}.wake`));
+    expect(code).toBe(1);
+    expect(io.err).toContain("native: not delivered: the typed wake did not land; kept in native's inbox");
+  });
+
+  test('no outcome inside the window is said, never left pending', async () => {
+    const { code, io } = await sendWith(() => {});
+    expect(code).toBe(0);
+    expect(io.out).toContain("native: no typed-wake outcome after 1 s; kept in native's inbox, the daemon is still trying");
+  });
 });
