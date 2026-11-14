@@ -1233,8 +1233,14 @@ export async function proveWhileServing<T = true>(input: {
   deps?: PlacementClock;
 }): Promise<ServingProof<T>> {
   const deps = input.deps ?? {};
-  // The poll timer holds nothing open: a process whose client has gone ends without waiting it out.
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms).unref?.(); }));
+  // The poll timer is cleared when the wait ends, so a process whose client has gone ends at once
+  // instead of waiting it out.
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => { pollTimer = setTimeout(resolve, ms); }));
+  const clearPoll = (): void => {
+    if (pollTimer !== null) clearTimeout(pollTimer);
+    pollTimer = null;
+  };
   const now = deps.now ?? Date.now;
   // No line is asked for until the first refusal is one this wait may serve through: a refused
   // start leaves the input exactly as it found it. One read is outstanding at a time, and it is
@@ -1301,6 +1307,12 @@ export async function proveWhileServing<T = true>(input: {
     }
   };
   const check = input.check ?? ((): StartReading<T> => placementReading(input.io, input.stateDir, input.session, input.name) as StartReading<T>);
+  try {
+    return await readUntilProven(check);
+  } finally {
+    clearPoll();
+  }
+  async function readUntilProven(check: () => StartReading<T>): Promise<ServingProof<T>> {
   const start = now();
   for (;;) {
     const verdict = check();
@@ -1322,6 +1334,7 @@ export async function proveWhileServing<T = true>(input: {
     if (ended) return { ok: false, why: verdict.why };
     const elapsed = now() - start;
     await serveUntil(sleep(elapsed < SERVE_PLACEMENT_WAIT_MS ? SERVE_PLACEMENT_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS));
+  }
   }
 }
 
