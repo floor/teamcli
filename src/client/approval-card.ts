@@ -191,19 +191,23 @@ function scopeOf(actions: readonly string[], team: string, machine?: string): st
 }
 
 /** The machine a carried request names, as the card shows it: its display name, cleaned of
- *  anything that is not a plain name. A request made where it is answered names none. */
-function machineOf(params: Pick<OwnerActionParams, 'machine'>): string | undefined {
+ *  anything that is not a plain name, and, on a machine whose accounts share one owner, the
+ *  account that asked (`server (account floor)`). A request made where it is answered names none. */
+function machineOf(params: Pick<OwnerActionParams, 'machine' | 'account'>): string | undefined {
   const name = params.machine?.name;
   if (typeof name !== 'string') return undefined;
   const plain = name.replace(ESCAPE_SEQUENCE, '').replace(/[^A-Za-z0-9.-]/g, '').slice(0, 63);
-  return plain === '' ? 'another machine' : plain;
+  const shown = plain === '' ? 'another machine' : plain;
+  if (typeof params.account !== 'string') return shown;
+  const account = params.account.replace(ESCAPE_SEQUENCE, '').replace(/[^a-z0-9_-]/g, '').slice(0, 32);
+  return account === '' ? shown : `${shown} (account ${account})`;
 }
 
 /** The kinds whose answer changes something beyond the team's own running state. */
 const CHANGED: ReadonlySet<string> = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant']);
 
 /** One owner-action request, as the owner reads it before answering. */
-export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by' | 'requesters' | 'reason' | 'words' | 'machine'>): ApprovalCard {
+export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by' | 'requesters' | 'reason' | 'words' | 'machine' | 'account'>): ApprovalCard {
   const what = params.actions.map((action) => msg(`card.what.${action}` as MessageId));
   const who = askers(params);
   const machine = machineOf(params);

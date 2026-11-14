@@ -21,11 +21,16 @@
 // (src/client/owner-pin-path.ts): a protected system folder when one is present, else the
 // account's own config folder, never a folder the environment names. Every owner request made on
 // a pinned machine names that machine in its signed parameters, so an answer is bound to it and
-// is never accepted on another. Until a separate account holds the owner state, it is as safe as
-// the account's own files: a process of the account can replace it (the pin's own output says so).
+// is never accepted on another. In the account's own folder the owner state is as safe as the
+// account's own files: a process of the account can replace it (the pin's own output says so).
+//
+// On a machine whose accounts share one owner (Linux), the system folder is the only place: the
+// administrator pins there (as root), each request also names the account it was made by, and an
+// approval is spent only by the owner helper, in that account's own ledger folder
+// (src/client/owner-spend.ts). No process of an entity account writes any of it.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import {
@@ -42,7 +47,7 @@ import {
   type OwnerSigner,
   type SignedOwnerAnswer,
 } from './owner-seat.ts';
-import { ownerMachinePinned, ownerStateOf, type OwnerStatePlace } from './owner-pin-path.ts';
+import { ACCOUNT_NAME_PATTERN, ownerMachinePinned, ownerStateOf, systemOwnerUid, type OwnerStatePlace, type OwnerStateRead } from './owner-pin-path.ts';
 
 export const OWNER_SEAT_EXPORT_FORMAT = 'team-owner-seat-export-v1';
 const OWNER_SEAT_EXPORT_DOMAIN = `${OWNER_SEAT_EXPORT_FORMAT}\n`;
@@ -355,14 +360,22 @@ function readMachineAt(path: string): MachineRecord | null {
   }
 }
 
-function writeExclusive(path: string, text: string): 'written' | 'exists' | 'failed' {
+/** A system folder's entries are read by every account of the machine; an account's are its own. */
+function modeFor(place: OwnerStatePlace): number {
+  return place.kind === 'system' ? 0o644 : 0o600;
+}
+
+function writeExclusive(path: string, text: string, mode = 0o600): 'written' | 'exists' | 'failed' {
   let fd: number;
   try {
-    fd = openSync(path, 'wx', 0o600);
+    fd = openSync(path, 'wx', mode);
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'exists' : 'failed';
   }
   try {
+    // The mode asked for, whatever the process's file-creation mask: a system entry every
+    // account must read is never left readable by its writer alone.
+    if (mode !== 0o600) fchmodSync(fd, mode);
     writeSync(fd, text);
   } finally {
     closeSync(fd);
@@ -370,9 +383,9 @@ function writeExclusive(path: string, text: string): 'written' | 'exists' | 'fai
   return 'written';
 }
 
-function replaceFile(path: string, text: string): boolean {
+function replaceFile(path: string, text: string, mode = 0o600): boolean {
   const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`;
-  if (writeExclusive(temporary, text) !== 'written') return false;
+  if (writeExclusive(temporary, text, mode) !== 'written') return false;
   try {
     renameSync(temporary, path);
     return true;
@@ -390,8 +403,8 @@ function ensureMachine(place: OwnerStatePlace, name: string | undefined, now: Da
   const chosen = name ?? defaultMachineName();
   if (!MACHINE_NAME_PATTERN.test(chosen)) return `"${chosen}" is not a machine name: lower case letters, digits, dots and dashes`;
   const record: MachineRecord = { format: MACHINE_FORMAT, id: `m_${randomBytes(12).toString('hex')}`, name: chosen, created: now.toISOString() };
-  mkdirSync(place.dir, { recursive: true, mode: 0o700 });
-  const written = writeExclusive(place.machine, `${JSON.stringify(record, null, 2)}\n`);
+  if (place.kind === 'account') mkdirSync(place.dir, { recursive: true, mode: 0o700 });
+  const written = writeExclusive(place.machine, `${JSON.stringify(record, null, 2)}\n`, modeFor(place));
   if (written === 'exists') return readMachineAt(place.machine) ?? "this machine's record cannot be read; nothing was pinned";
   if (written === 'failed') return "this machine's record could not be written; nothing was pinned";
   return record;
@@ -405,7 +418,11 @@ function ensureMachine(place: OwnerStatePlace, name: string | undefined, now: Da
  * removing the pin turns no terminal back into the owner and admits no answer.
  */
 export function readOwnerPin(home: string): OwnerPinRead {
-  const state = ownerStateOf(home);
+  return readOwnerPinIn(ownerStateOf(home));
+}
+
+/** The pinned owner seat in one resolved owner state (the owner helper resolves its caller's). */
+export function readOwnerPinIn(state: OwnerStateRead): OwnerPinRead {
   if (state.kind === 'none') return { kind: 'none' };
   if (state.kind === 'refused') return { kind: 'refused', why: state.why };
   const path = state.place.pin;
@@ -445,6 +462,8 @@ export type PinOutcome = {
   /** `pinned`: the first pin (trust on first use). `repinned`: a changed set, signed by a signer
    *  already pinned. `same`: this set is pinned already, and nothing was written. */
   kind: 'pinned' | 'repinned' | 'same';
+  /** Where the pin is kept: the system folder shared by every account, or this account's own. */
+  place: 'system' | 'account';
   fingerprint: string;
   previous: string | null;
   team: string;
@@ -465,14 +484,18 @@ export function pinOwnerSeat(home: string, raw: unknown, now: Date = new Date(),
   if (!verified.ok) return { ok: false, why: verified.why };
   if (Date.parse(verified.body.exported_at) > now.getTime() + FUTURE_SKEW_MS) return { ok: false, why: `the export is dated ${verified.body.exported_at}, ahead of this machine's clock` };
   const state = ownerStateOf(home);
-  if (state.kind === 'refused') return { ok: false, why: `${state.why}; nothing was changed` };
-  const place = state.kind === 'present' ? state.place : state.write;
+  // A machine whose accounts share one owner: the administrator pins in the system folder, the
+  // first time into a folder its install set up, and no entity account ever does.
+  const shared = state.kind === 'present' ? state.place.shared !== undefined : state.kind === 'refused' && state.setup !== undefined;
+  if (shared && process.getuid?.() !== systemOwnerUid()) return { ok: false, why: "this machine's owner state is kept in the system folder for all its accounts; only its administrator pins there (sudo team owner-seat pin --from <file>, from the owner's own account); nothing was changed" };
+  if (state.kind === 'refused' && state.setup === undefined) return { ok: false, why: `${state.why}; nothing was changed` };
+  const place = state.kind === 'present' ? state.place : state.kind === 'refused' ? state.setup! : state.write;
   if (place === null) return { ok: false, why: 'this account has no home folder the pin can be kept in; nothing was pinned' };
-  if (place.kind === 'system') return { ok: false, why: "this machine's owner state is kept in the system folder; it is changed there, not by this command" };
-  const current = readOwnerPin(home);
+  if (place.kind === 'system' && !shared) return { ok: false, why: "this machine's owner state is kept in the system folder; it is changed there, not by this command" };
+  const current = state.kind === 'refused' ? { kind: 'none' as const } : readOwnerPin(home);
   if (current.kind === 'refused') return { ok: false, why: `${current.why}; nothing was changed` };
   if (current.kind === 'pinned') {
-    const result = { team: verified.body.team, signers: verified.body.signers.map((s) => s.name), machine: current.machine };
+    const result = { team: verified.body.team, signers: verified.body.signers.map((s) => s.name), machine: current.machine, place: place.kind };
     if (current.fingerprint === verified.fingerprint) return { ok: true, kind: 'same', fingerprint: current.fingerprint, previous: current.fingerprint, ...result };
     const held = current.body.signers.find((s) => s.name === verified.signer.name);
     if (held === undefined || !sameSigner(held, verified.signer) || !current.body.accepted.includes(held.name)) {
@@ -491,11 +514,12 @@ export function pinOwnerSeat(home: string, raw: unknown, now: Date = new Date(),
     previous: current.kind === 'pinned' ? current.fingerprint : null,
     export: verified.signed,
   };
-  mkdirSync(place.dir, { recursive: true, mode: 0o700 });
-  if (!replaceFile(place.pin, `${JSON.stringify(pin, null, 2)}\n`)) return { ok: false, why: 'the pin could not be written; nothing was changed' };
+  if (place.kind === 'account') mkdirSync(place.dir, { recursive: true, mode: 0o700 });
+  if (!replaceFile(place.pin, `${JSON.stringify(pin, null, 2)}\n`, modeFor(place))) return { ok: false, why: 'the pin could not be written; nothing was changed' };
   return {
     ok: true,
     kind: current.kind === 'pinned' ? 'repinned' : 'pinned',
+    place: place.kind,
     fingerprint: verified.fingerprint,
     previous: pin.previous,
     team: verified.body.team,
@@ -516,6 +540,8 @@ export function claimInLedger(home: string, id: string, action: string, at: Date
   if (!LEDGER_ENTRY.test(entry)) return { ok: false, why: `request ${id} cannot be spent for ${action}` };
   const state = ownerStateOf(home);
   if (state.kind !== 'present') return { ok: false, why: state.kind === 'refused' ? state.why : "this machine's owner seat is not pinned; there is no ledger to spend it in" };
+  // A shared machine's ledger is the owner helper's: an approval is spent there through it, never here.
+  if (state.place.shared !== undefined) return { ok: false, why: 'on this machine an approval is spent only by the owner helper; nothing was spent' };
   if (state.place.kind === 'account') {
     try {
       mkdirSync(state.place.ledger, { mode: 0o700 });
@@ -548,22 +574,39 @@ export function machineBindingOf(home: string): MachineBinding | null {
   return pin.kind === 'pinned' ? { id: pin.machine.id, name: pin.machine.name } : null;
 }
 
+/** The account a request names on a machine whose accounts share one owner, or null elsewhere
+ *  (and when the owner state there cannot be read). */
+export function accountBindingOf(home: string): string | null {
+  const state = ownerStateOf(home);
+  return state.kind === 'present' && state.place.shared !== undefined ? state.place.shared.account : null;
+}
+
+export function validAccountBinding(raw: unknown): raw is string {
+  return typeof raw === 'string' && ACCOUNT_NAME_PATTERN.test(raw);
+}
+
 /**
- * Whether a request may run here, by the machine it names. A request that names a machine runs
- * only on that machine, which must be pinned; on a pinned machine a request that names none is
- * refused, because no answer from the signer machine can have been bound to it. A machine with a
- * local owner (no pin) runs its own unnamed requests as before. Null when the request may run.
+ * Whether a request may run here, by the machine (and, on a machine whose accounts share one
+ * owner, the account) it names. A request that names a machine runs only on that machine, which
+ * must be pinned; on a pinned machine a request that names none is refused, because no answer
+ * from the signer machine can have been bound to it. On a shared machine a request runs only for
+ * the account it names. A machine with a local owner (no pin) runs its own unnamed requests as
+ * before. Null when the request may run.
  */
-export function requestMachineProblem(home: string, machine: unknown, id: string): string | null {
+export function requestMachineProblem(home: string, machine: unknown, id: string, account?: unknown): string | null {
+  const here = accountBindingOf(home);
+  if (account !== undefined && !validAccountBinding(account)) return `request ${id} names an account this build cannot read`;
+  if (here !== null && account === undefined) return `request ${id} names no account; on this machine every owner request names the account it was made by (record it again with --request)`;
+  if (account !== undefined && account !== here) return here === null ? `request ${id} is for account ${account} of a machine whose accounts share one owner; it runs only there` : `request ${id} is for account ${account}, not this one (${here})`;
   const pinned = ownerMachinePinned(home);
   if (machine === undefined) {
     return pinned ? `request ${id} names no machine; on a machine whose owner signs on another machine, every owner request names this machine (record it again with --request)` : null;
   }
   if (!validMachineBinding(machine)) return `request ${id} names a machine this build cannot read`;
   if (!pinned) return `request ${id} is for machine ${machine.name} (${machine.id}); it runs only there`;
-  const here = readMachine(home);
-  if (here === null) return `this machine has no readable machine record, so request ${id} for ${machine.name} (${machine.id}) cannot be matched`;
-  if (here.id !== machine.id) return `request ${id} is for machine ${machine.name} (${machine.id}), not this one (${here.name}, ${here.id})`;
+  const record = readMachine(home);
+  if (record === null) return `this machine has no readable machine record, so request ${id} for ${machine.name} (${machine.id}) cannot be matched`;
+  if (record.id !== machine.id) return `request ${id} is for machine ${machine.name} (${machine.id}), not this one (${record.name}, ${record.id})`;
   return null;
 }
 

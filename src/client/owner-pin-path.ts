@@ -3,7 +3,7 @@
 // of TeamCLI's own, so the caller placement (src/caller.ts) can ask whether the machine's owner
 // signs elsewhere without loading the signing or policy code.
 //
-// The resolver never reads the environment's home. It reads, in order:
+// The resolver never reads the environment's home. On macOS (and every platform but Linux) it reads, in order:
 //   1. a system folder (`/etc/teamcli`), when it is present: it must be a folder owned by the
 //      system's administrator and writable by no one else, and so must every entry it holds. A
 //      system folder that holds any of the three is the machine's owner state; a later step keeps
@@ -18,14 +18,33 @@
 //
 // A machine whose owner seat is pinned holds no owner signer: the owner signs on the machine that
 // holds one, and this machine only verifies.
+//
+// A machine whose accounts share one owner (Linux: the owner's administrator account and one
+// unprivileged account per entity) reads only the system folder, never an account's home:
+//   - the pin and the machine record are in the system folder, written by the administrator alone;
+//   - the ledger is a folder owned by the owner helper's own user (named, with its uid, in the
+//     system folder's `owner-helper.json`), one folder per account under it, and only the helper
+//     spends there (src/client/owner-spend.ts);
+//   - a system folder that is missing, unprotected, without the helper's record or ledger, or
+//     with no pin yet, is `refused`: an entity account is never read as unpinned there, so no
+//     terminal of it is the owner and no answer is accepted.
 
-import { lstatSync, type Stats } from 'node:fs';
+import { lstatSync, readFileSync, type Stats } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 
 /** The account home the resolver reads: a home, no account at all (a test scene that names none),
  *  or an account whose home the user database does not answer — which refuses, never unpins. */
 export type AccountHome = { home: string } | 'none' | 'unresolved';
+
+/** A machine whose accounts share one owner: the system folder is the only source, and each
+ *  account spends its approvals in its own folder under a ledger the owner helper owns. */
+export type SharedOwnerRoots = {
+  /** The ledger folder, owned by the helper's user; one folder per account under it. */
+  ledger: string;
+  /** The account this process runs as, from the user database (null when it does not answer). */
+  account: () => string | null;
+};
 
 /** Where the resolver looks. `account` maps the home a caller passed (if any) to the account home
  *  it reads; production ignores what was passed. */
@@ -34,6 +53,8 @@ export type OwnerStateRoots = {
   account: (given: string | undefined) => AccountHome;
   /** The uid that must own the system folder and every entry in it. */
   systemOwner: number;
+  /** Set on a machine whose accounts share one owner (Linux); the account's home is then never read. */
+  shared?: SharedOwnerRoots | null;
 };
 
 /** The account's home from the user database, which no variable moves; null when it does not answer. */
@@ -46,14 +67,40 @@ export function accountHome(): string | null {
   }
 }
 
-const PRODUCTION_ROOTS: OwnerStateRoots = {
-  system: '/etc/teamcli',
-  account: () => {
+/** An account name as the user database gives it: plain, short, never a path. */
+export const ACCOUNT_NAME_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/;
+
+/** The name of the account this process runs as, from the user database; null when it does not
+ *  answer or the name is not a plain account name. */
+export function accountName(): string | null {
+  try {
+    const name = userInfo().username;
+    return typeof name === 'string' && ACCOUNT_NAME_PATTERN.test(name) ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The system folder on every platform. */
+export const SYSTEM_OWNER_FOLDER = '/etc/teamcli';
+/** The ledger on a machine whose accounts share one owner: the helper user's own folder. */
+export const SHARED_OWNER_LEDGER = '/var/lib/teamcli-owner/ledger';
+
+/**
+ * The process's own roots on `platform`. On macOS (and any platform but Linux) they are exactly
+ * the ones before shared machines: the system folder when it is present, else the account's own
+ * home. On Linux the system folder alone, shared by every account of the machine.
+ */
+export function productionOwnerStateRoots(platform: NodeJS.Platform = process.platform): OwnerStateRoots {
+  const account = (): AccountHome => {
     const home = accountHome();
     return home === null ? 'unresolved' : { home };
-  },
-  systemOwner: 0,
-};
+  };
+  if (platform === 'linux') return { system: SYSTEM_OWNER_FOLDER, account, systemOwner: 0, shared: { ledger: SHARED_OWNER_LEDGER, account: accountName } };
+  return { system: SYSTEM_OWNER_FOLDER, account, systemOwner: 0 };
+}
+
+const PRODUCTION_ROOTS: OwnerStateRoots = productionOwnerStateRoots();
 let roots: OwnerStateRoots = PRODUCTION_ROOTS;
 
 /**
@@ -68,18 +115,34 @@ export function ownerStateRootsForTests(next: OwnerStateRoots | null): void {
 const PIN = 'owner-seat-pin.json';
 const MACHINE = 'machine.json';
 const LEDGER = 'owner-ledger';
+const HELPER = 'owner-helper.json';
+export const OWNER_HELPER_FORMAT = 'team-owner-helper-v1';
 
-/** One place the owner state lives: the system folder or the account's config folder. */
-export type OwnerStatePlace = { kind: 'system' | 'account'; dir: string; pin: string; machine: string; ledger: string };
+/** The owner helper of a machine whose accounts share one owner, as the system folder names it. */
+export type OwnerHelperRecord = { format: typeof OWNER_HELPER_FORMAT; user: string; uid: number };
+
+/** One place the owner state lives: the system folder or the account's config folder. `shared`
+ *  is set on a machine whose accounts share one owner: `ledger` is then this account's own folder
+ *  under the helper's ledger, which only the helper writes. */
+export type OwnerStatePlace = {
+  kind: 'system' | 'account';
+  dir: string;
+  pin: string;
+  machine: string;
+  ledger: string;
+  shared?: { account: string; helper: OwnerHelperRecord; ledgerRoot: string };
+};
 
 export type OwnerStateRead =
   /** Never pinned: nothing at any of the paths. `write` is where a first pin goes (null: a test
-   *  scene that names no account). */
+   *  scene that names no account). Never on a machine whose accounts share one owner. */
   | { kind: 'none'; write: OwnerStatePlace | null }
   /** Pinned, or pinned once: at least one entry stands here. */
   | { kind: 'present'; place: OwnerStatePlace }
-  /** A state the resolver cannot read or trust: treated as pinned, and nothing is accepted. */
-  | { kind: 'refused'; why: string };
+  /** A state the resolver cannot read or trust: treated as pinned, and nothing is accepted.
+   *  `setup` is set when a shared machine's system folder is set up and holds no pin yet: the
+   *  place the administrator's first pin goes. */
+  | { kind: 'refused'; why: string; setup?: OwnerStatePlace };
 
 function placeAt(kind: OwnerStatePlace['kind'], dir: string): OwnerStatePlace {
   return { kind, dir, pin: join(dir, PIN), machine: join(dir, MACHINE), ledger: join(dir, LEDGER) };
@@ -124,11 +187,76 @@ function systemState(dir: string, owner: number): OwnerStateRead | null {
   return any ? { kind: 'present', place } : null;
 }
 
+const NOT_SET_UP = "this machine's owner state is kept in a system folder for all its accounts, and it is not set up (the owner runs team owner-seat install, then team owner-seat pin, from the administrator's account)";
+
+function readHelperRecord(path: string, owner: number): OwnerHelperRecord | 'absent' | 'refused' {
+  const entry = probe(path);
+  if (entry.kind === 'absent') return 'absent';
+  if (entry.kind === 'refused' || !entry.stat.isFile() || !protectedBy(entry.stat, owner) || entry.stat.size > 4096) return 'refused';
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    if (raw === null || typeof raw !== 'object' || raw.format !== OWNER_HELPER_FORMAT) return 'refused';
+    if (typeof raw.user !== 'string' || !ACCOUNT_NAME_PATTERN.test(raw.user)) return 'refused';
+    if (typeof raw.uid !== 'number' || !Number.isInteger(raw.uid) || raw.uid < 0) return 'refused';
+    return { format: OWNER_HELPER_FORMAT, user: raw.user, uid: raw.uid };
+  } catch {
+    return 'refused';
+  }
+}
+
+/**
+ * A machine whose accounts share one owner: the system folder for `account`, or refused. Every
+ * entry must be of its kind and writable only by its owner — the administrator for the folder,
+ * the pin, the machine record and the helper's record; the helper's user for the ledger and the
+ * account's folder in it. Exported for the owner helper, which reads the state of the account
+ * that called it, not its own.
+ */
+export function sharedOwnerStateFor(account: string | null, shared: SharedOwnerRoots | null | undefined = roots.shared, dir: string | null = roots.system, owner: number = roots.systemOwner): OwnerStateRead {
+  if (shared === null || shared === undefined || dir === null) return { kind: 'refused', why: NOT_SET_UP };
+  const folder = probe(dir);
+  if (folder.kind === 'absent') return { kind: 'refused', why: NOT_SET_UP };
+  if (folder.kind === 'refused') return { kind: 'refused', why: 'the system owner folder cannot be read' };
+  if (!folder.stat.isDirectory() || !protectedBy(folder.stat, owner)) return { kind: 'refused', why: 'the system owner folder is not a folder only its administrator can write' };
+  const helper = readHelperRecord(join(dir, HELPER), owner);
+  if (helper === 'absent') return { kind: 'refused', why: NOT_SET_UP };
+  if (helper === 'refused') return { kind: 'refused', why: "the owner helper's record in the system owner folder cannot be read or is not one only its administrator can write" };
+  const ledger = probe(shared.ledger);
+  if (ledger.kind === 'absent') return { kind: 'refused', why: NOT_SET_UP };
+  if (ledger.kind === 'refused' || !ledger.stat.isDirectory() || !protectedBy(ledger.stat, helper.uid)) return { kind: 'refused', why: "the approval ledger is not a folder only the owner helper can write" };
+  if (account === null || !ACCOUNT_NAME_PATTERN.test(account)) return { kind: 'refused', why: "this account's name cannot be read from the user database" };
+  const place: OwnerStatePlace = { ...placeAt('system', dir), ledger: join(shared.ledger, account), shared: { account, helper, ledgerRoot: shared.ledger } };
+  let any = false;
+  for (const path of [place.pin, place.machine]) {
+    const entry = probe(path);
+    if (entry.kind === 'absent') continue;
+    if (entry.kind === 'refused') return { kind: 'refused', why: 'an entry of the system owner folder cannot be read' };
+    if (!entry.stat.isFile() || !protectedBy(entry.stat, owner)) return { kind: 'refused', why: 'an entry of the system owner folder is not one only its administrator can write' };
+    any = true;
+  }
+  const own = probe(place.ledger);
+  if (own.kind === 'refused' || (own.kind === 'present' && (!own.stat.isDirectory() || !protectedBy(own.stat, helper.uid)))) {
+    return { kind: 'refused', why: "this account's approval ledger is not a folder only the owner helper can write" };
+  }
+  if (!any) return { kind: 'refused', why: "no owner seat is pinned on this machine yet (the owner pins it from the administrator's account: sudo team owner-seat pin --from <file>)", setup: place };
+  return { kind: 'present', place };
+}
+
+/** Whether this process's roots are a machine whose accounts share one owner. */
+export function ownerStateShared(): boolean {
+  return roots.shared !== null && roots.shared !== undefined;
+}
+
+/** The uid that writes the system folder: the administrator (root in real use). */
+export function systemOwnerUid(): number {
+  return roots.systemOwner;
+}
+
 /**
  * The machine's owner state, from the one resolver. `given` is the home the caller works in; the
  * process's own roots ignore it, so pointing a command at another home never changes the answer.
  */
 export function ownerStateOf(given?: string): OwnerStateRead {
+  if (roots.shared !== null && roots.shared !== undefined) return sharedOwnerStateFor(roots.shared.account());
   if (roots.system !== null) {
     const system = systemState(roots.system, roots.systemOwner);
     if (system !== null) return system;

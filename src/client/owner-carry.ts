@@ -112,7 +112,7 @@ export function ownerRequestFile(home: string, id: string, store: OwnerSeatKeySt
   if (pin.kind === 'refused') return { ok: false, why: pin.why };
   const record = readOwnerActionRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
-  const elsewhere = requestMachineProblem(home, record.params.machine, id);
+  const elsewhere = requestMachineProblem(home, record.params.machine, id, record.params.account);
   if (elsewhere !== null) return { ok: false, why: elsewhere };
   const binding = ownerActionBindingProblem(home, record);
   if (binding !== null) return { ok: false, why: binding };
@@ -209,7 +209,7 @@ export function acceptCarriedAnswer(home: string, raw: unknown, store: OwnerSeat
   if (pin.kind === 'refused') return { ok: false, why: pin.why };
   const record = readOwnerActionRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
-  const elsewhere = requestMachineProblem(home, record.params.machine, id);
+  const elsewhere = requestMachineProblem(home, record.params.machine, id, record.params.account);
   if (elsewhere !== null) return { ok: false, why: elsewhere };
   if (raw.machine.id !== record.params.machine!.id) return { ok: false, why: `the answer file is for machine ${raw.machine.name} (${raw.machine.id}), not this one` };
   const deadline = ownerActionDeadline(home, record, store, now);
