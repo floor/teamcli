@@ -207,6 +207,12 @@ describe('the doctor names full paths inside the root', () => {
     expect(findings[1]!.text).toContain('the file, line 20: seats.0.launch writes ~/Code/acme, the entity\'s projects root on this machine: write {root} in its place');
   });
 
+  test('where the root is the home itself, a hidden folder of it is the machine\'s and is not named', () => {
+    const home = homeWith('acme:\n  root: "~"\n');
+    const text = teamText({ launch: 'zsh ~/docs/tools/as-acme.sh codex', rules: ['"The lobby is ~/.config/team/lobbies/acme."'] });
+    expect(rootPathUses(text, home).map((use) => [use.field, use.written])).toEqual([['seats.0.launch', '~']]);
+  });
+
   test('no root on this machine: nothing to compare with, so nothing is named', () => {
     const home = homeWith();
     expect(rootPathUses(teamText({ launch: `zsh ${home}/Code/acme/x.sh` }), home)).toEqual([]);

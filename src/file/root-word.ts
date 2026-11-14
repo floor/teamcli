@@ -111,7 +111,10 @@ function escaped(text: string): string {
  * The ways a file can write the entity's projects root in full on this machine: the absolute path,
  * and the `~/…` and `$HOME/…` forms when it sits under the home. A form matches only as a whole
  * path: the next character ends the path or starts a segment, and the one before does not belong
- * to a longer path.
+ * to a longer path. A path into a hidden folder of the root (`~/.config/…` where the root is the
+ * home itself, as on an entity's own server account) is the machine's, not a project's, and is
+ * never read as inside the root: `{root}/.config` would name another folder on a machine whose
+ * root is not its home.
  */
 function rootForms(root: string, home: string): RegExp {
   const forms = [escaped(root)];
@@ -120,7 +123,7 @@ function rootForms(root: string, home: string): RegExp {
     const rest = root.slice(homeless.length);
     forms.push(`~${escaped(rest)}`, `\\$HOME${escaped(rest)}`, `\\$\\{HOME\\}${escaped(rest)}`);
   }
-  return new RegExp(`(?<![A-Za-z0-9_.~/$-])(?:${forms.join('|')})(?=$|[/\\s"'\`,;:)\\]}])`, 'g');
+  return new RegExp(`(?<![A-Za-z0-9_.~/$-])(?:${forms.join('|')})(?!/\\.)(?=$|[/\\s"'\`,;:)\\]}])`, 'g');
 }
 
 /** One value that writes the projects root in full. */
