@@ -1139,6 +1139,7 @@
     "test/watch-async-budget.test.ts": 5,
     "test/watch-authority.test.ts": 4,
     "test/watch-budget.test.ts": 2,
+    "test/watch-cant-work-served.test.ts": 0,
     "test/watch-checks.test.ts": 4,
     "test/watch-child-restart-independent.test.ts": 5,
     "test/watch-claims.test.ts": 3,
