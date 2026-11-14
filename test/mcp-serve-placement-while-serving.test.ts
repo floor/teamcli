@@ -188,7 +188,7 @@ test('an unnamed recorded pane is served while unproven, and the inbox opens whe
   expect(clock).toBeGreaterThan(SERVE_PLACEMENT_WAIT_MS);
   // The input is still open: the line the serving loop is owed is the client's next one.
   peer.push('{"jsonrpc":"2.0","id":3,"method":"ping"}');
-  if (placed.ok) expect((await placed.next).value).toBe('{"jsonrpc":"2.0","id":3,"method":"ping"}');
+  if (placed.ok) expect((await placed.first()).value).toBe('{"jsonrpc":"2.0","id":3,"method":"ping"}');
 });
 
 test('a caller placed on the first reading has every line served by the inbox, none by the pending serving', async () => {
@@ -209,7 +209,7 @@ test('a caller placed on the first reading has every line served by the inbox, n
   });
   expect(placed.ok).toBe(true);
   expect(answered).toEqual([]);
-  if (placed.ok) expect((await placed.next).value).toBe(INITIALIZE);
+  if (placed.ok) expect((await placed.first()).value).toBe(INITIALIZE);
 });
 
 test('a client that has gone keeps the start bound, and the last refusal is returned', async () => {

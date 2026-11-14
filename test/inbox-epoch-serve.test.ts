@@ -234,3 +234,59 @@ test('a server waiting for its pane to be named binds the launch it started unde
     at.cleanup();
   }
 });
+
+for (const [label, at, served] of [
+  ['within the start bound takes the first claim its launch writes', 4, true],
+  ['past the start bound stays bound to none and refuses a first claim', 30, false],
+] as const) {
+  test(`a server that started before any claim, waiting for its pane to be named, ${label}`, async () => {
+    const place0 = place();
+    try {
+      const io = testIo(place0.root, { kind: 'unplaced', reason: 'it runs in pane pane-lead, whose agent has no herdr name' });
+      io.env = { HERDR_PANE_ID: 'pane-lead' };
+      let wake: (() => void) | null = null;
+      let ended = false;
+      const lines = (async function* () {
+        while (!ended) await new Promise<void>((resolve) => { wake = resolve; });
+      })();
+      let polls = 0;
+      const running = runMcpServe({ seat: 'lead', session: SESSION, file: place0.file }, io, {
+        lines,
+        write: () => {},
+      }, { home: place0.home }, {
+        now: () => polls * 250,
+        sleep: async () => {
+          polls += 1;
+          if (polls === at) {
+            claim(place0.root, {
+              id: '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
+              at: '2026-11-06T16:10:00.000Z',
+              incarnation: 'inc_0123456789ab',
+              epoch: EPOCH,
+              sha256: 'a'.repeat(64),
+              stage: 'claimed',
+            });
+            io.caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION };
+          }
+        },
+      });
+      const marker = listenerPath(join(place0.root, '.agents', 'send-drops', SESSION, 'lead'));
+      if (served) {
+        for (let wait = 0; wait < 400 && !existsSync(marker); wait++) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(existsSync(marker), io.err).toBe(true);
+        expect((JSON.parse(readFileSync(marker, 'utf8')) as { epoch?: string }).epoch).toBe(EPOCH);
+        ended = true;
+        (wake as (() => void) | null)?.();
+        expect(await running).toBe(0);
+      } else {
+        expect(await running).toBe(2);
+        expect(io.err).toContain('started without its epoch');
+        expect(existsSync(marker)).toBe(false);
+      }
+    } finally {
+      place0.cleanup();
+    }
+  });
+}

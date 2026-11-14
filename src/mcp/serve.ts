@@ -1113,7 +1113,14 @@ export async function placementAtStart(
 /** What `proveWhileServing` hands back: the placement proven, with the client's next line still
  *  owed to the serving loop, or the refusal the start answers with. */
 type ServingProof =
-  | { ok: true; next: Promise<IteratorResult<string>> }
+  | {
+    ok: true;
+    /** The first line the serving loop reads: one that already arrived, the read still
+     *  outstanding, or a new read. Nothing is asked of the input until it is called. */
+    first: () => Promise<IteratorResult<string>>;
+    /** How long the placement took to prove, from the first reading. */
+    waitedMs: number;
+  }
   | { ok: false; why: string };
 
 /**
@@ -1216,10 +1223,16 @@ export async function proveWhileServing(input: {
   for (;;) {
     const verdict = placementOf(input.io, input.stateDir, input.session, input.name);
     if (verdict.ok) {
-      // A line that already arrived is handed on as it came; otherwise the outstanding read.
+      // A line that already arrived is handed on as it came; otherwise the outstanding read, which
+      // its one handler already observes; otherwise a read started only when the loop asks.
       const held = arrived as { result: IteratorResult<string> } | { error: unknown } | null;
-      if (held !== null) return { ok: true, next: 'error' in held ? Promise.reject(held.error) : Promise.resolve(held.result) };
-      return { ok: true, next: next ?? input.lines.next() };
+      const outstanding = next as Promise<IteratorResult<string>> | null;
+      const first = held !== null
+        ? () => ('error' in held ? Promise.reject(held.error) : Promise.resolve(held.result))
+        : outstanding !== null
+          ? () => outstanding
+          : () => input.lines.next();
+      return { ok: true, first, waitedMs: now() - start };
     }
     input.onRefusal?.(verdict.why);
     const recorded = recordedPaneOf(input.stateDir, input.session, input.name);
@@ -1376,7 +1389,7 @@ export async function runMcpServe(
   // The launch this server belongs to is bound before any wait: a claim a relaunch writes while
   // this process waits for its pane's name is another launch's, never one this server adopts.
   const startGeneration = generationOf(stateDir, team.session, seat.name);
-  const boundEpoch = boundEpochOf(startGeneration, options.epoch);
+  let boundEpoch = boundEpochOf(startGeneration, options.epoch);
   const lines = streams.lines[Symbol.asyncIterator]();
   const placed = await proveWhileServing({
     io,
@@ -1396,6 +1409,12 @@ export async function runMcpServe(
     return refuse(placed.why);
   }
   const generation = generationOf(stateDir, team.session, seat.name);
+  // A seat with no claim yet when its server started takes the first claim its own launch writes,
+  // as it always has, but only within the start bound: past it, a first claim may be a later
+  // launch's, and this process stays bound to none.
+  if (startGeneration.kind === 'none' && options.epoch === undefined && placed.waitedMs <= SERVE_PLACEMENT_WAIT_MS) {
+    boundEpoch = boundEpochOf(generation, options.epoch);
+  }
   const stale = staleLaunch(generation, boundEpoch, seat.name);
   if (stale !== null) return refuse(stale);
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
@@ -1499,7 +1518,7 @@ export async function runMcpServe(
   }
   try {
     // The line the placement wait left owed is the first one served here.
-    let next = placed.next;
+    let next = placed.first();
     for (;;) {
       const result = await next;
       if (result.done === true) break;
