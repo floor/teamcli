@@ -4878,6 +4878,63 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--account",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "install",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team owner-seat install --account <a,b> [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "with --dry-run it prints the steps and changes nothing; a real run changes the machine only as the system's administrator, which on a shared Linux machine is the owner's own account alone, and asks for no team file, seat or terminal"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
               "name": "--from",
               "repeatable": false,
               "takesValue": true
@@ -5167,7 +5224,8 @@
         "team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]",
         "team owner-seat serve [--port <port>]",
         "team owner-seat export --out <file> [--signer <name>] [--json]",
-        "team owner-seat pin --from <file> [--name <machine>] [--json]"
+        "team owner-seat pin --from <file> [--name <machine>] [--json]",
+        "team owner-seat install --account <a,b> [--dry-run] [--json]"
       ],
       "who": {
         "gate": "any-caller",

@@ -308,6 +308,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'an agent may start it, but the export is written only once the owner signs it on the owner\'s device; it carries the seat\'s public keys and no private key',
     },
+    'owner-seat:install': {
+      kind: 'any-caller',
+      why: 'with --dry-run it prints the steps and changes nothing; a real run changes the machine only as the system\'s administrator, which on a shared Linux machine is the owner\'s own account alone, and asks for no team file, seat or terminal',
+    },
     'owner-seat:pin': {
       kind: 'owner-only',
       why: 'the first pin is the owner\'s, from a terminal outside the terminal host on a machine with no pin yet (trust on first use); a changed seat is pinned only from a newer export signed by a signer already pinned there',

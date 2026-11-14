@@ -16,7 +16,7 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
     team owner-seat serve [--port <port>]
     team owner-seat export --out <file> [--signer <name>] [--json]
     team owner-seat pin --from <file> [--name <machine>] [--json]
-    team owner-seat install --account <name>[,<name>] [--dry-run] [--json]
+    team owner-seat install --account <a,b> [--dry-run] [--json]
 
 - `status` (the default): the seat, its signers and the security-profile line. A relaxed profile
   prints `SECURITY PROFILE: RELAXED: …` in capitals. On a machine whose owner seat is pinned it

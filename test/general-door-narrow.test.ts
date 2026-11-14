@@ -13,6 +13,9 @@ import { FLAG_OPS, GENERAL_OPS, GENERAL_REFUSED_COMMANDS, issueOwnerGeneralGrant
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { commands, main } from '../src/cli.ts';
+
+/** The suite's owner-state roots for a child CLI (test/preload/owner-state-child.ts). */
+const OWNER_STATE_CHILD = join(import.meta.dir, 'preload', 'owner-state-child.ts');
 import { runConfig } from '../src/commands/config.ts';
 import { runDaemon } from '../src/commands/daemon.ts';
 import { runDrops } from '../src/commands/drops.ts';
@@ -171,7 +174,7 @@ for (const [spelling, id] of [
     expect(owner.out).toContain(body);
     expect(existsSync(receipt)).toBe(false);
     const json = spelling === 'equals';
-    const request = spawnSync(process.execPath, ['--no-env-file', join(import.meta.dir, '..', 'src', 'cli.ts'), 'drops', ...words, ...(json ? ['--json'] : []), '--general', wildcard, '--key', client.path], {
+    const request = spawnSync(process.execPath, ['--no-env-file', '--preload', OWNER_STATE_CHILD, join(import.meta.dir, '..', 'src', 'cli.ts'), 'drops', ...words, ...(json ? ['--json'] : []), '--general', wildcard, '--key', client.path], {
       cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: 'utf8', timeout: 20_000,
     });
     expect(request.error).toBeUndefined();
@@ -420,7 +423,7 @@ test('a grant does not reach init --approval-mode or init --revoke-approval: bot
 // grant that lists entities recorded a request and exited 0. In a child whose HOME is the
 // scene's own, it now stops at the dispatcher: exit 1, the one sentence, no request file.
 test('team init --request under a grant that lists entities records nothing', () => {
-  const run = spawnSync(process.execPath, [join(import.meta.dir, '..', 'src', 'cli.ts'), 'init', '--request', '--general', alphaGrant, '--key', client.path], {
+  const run = spawnSync(process.execPath, ['--preload', OWNER_STATE_CHILD, join(import.meta.dir, '..', 'src', 'cli.ts'), 'init', '--request', '--general', alphaGrant, '--key', client.path], {
     cwd: fresh,
     env: { ...process.env, HOME: home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' },
     encoding: 'utf8',

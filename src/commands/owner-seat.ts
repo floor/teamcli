@@ -37,7 +37,7 @@ export const USAGE = `Usage: team owner-seat [--json]
        team owner-seat serve [--port <port>]
        team owner-seat export --out <file> [--signer <name>] [--json]
        team owner-seat pin --from <file> [--name <machine>] [--json]
-       team owner-seat install --account <name>[,<name>] [--dry-run] [--json]
+       team owner-seat install --account <a,b> [--dry-run] [--json]
 
 export writes the seat's public signer records (no private key) for a machine that holds no owner
 signer, signed with one confirmation on the owner's device, and prints their fingerprint. pin, on that machine, trusts the
