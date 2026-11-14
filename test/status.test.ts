@@ -244,7 +244,9 @@ describe('team status', () => {
       pid: process.pid, ts: NOW.toISOString(),
     })).toBe(true);
     const drop = '019a0000-4444-7555-8666-777788889999';
-    writeFileSync(join(inbox, drop), 'hello\n');
+    // A record this home's key does not vouch for: unread mail. A plain-text drop an earlier build
+    // wrote is not mail at all, and is counted apart (below).
+    writeFileSync(join(inbox, drop), `${JSON.stringify({ body: 'hello' })}\n`);
     writeFileSync(
       join(inbox, `${drop}.pending`),
       `${JSON.stringify({ id: drop, from: 'lead', ts: new Date(NOW.getTime() - 5 * 60_000).toISOString() })}\n`,
@@ -265,6 +267,13 @@ describe('team status', () => {
       class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false,
       listener: true, unread: 1, oldest_unread_seconds: 300,
     });
+
+    // An old plain-text drop is never served: it does not ring the unread count, and is said apart.
+    writeFileSync(join(inbox, '019a0000-4444-7555-8666-77778888aaaa'), 'an old raw drop\n');
+    const legacyIo = testIo(dir, { kind: 'owner' });
+    expect(await runStatus(['--file', file, '--json'], legacyIo, { ...sources, home })).toBe(1);
+    const legacyRow = JSON.parse(legacyIo.out).rows.find((one: { name: string }) => one.name === 'codex-acme');
+    expect(legacyRow.seat_wake).toMatchObject({ unread: 1, legacy_unsigned: 1 });
   });
 
   test('the note a stalled not-woken drop adds leads with the send\'s own outcome words', async () => {
@@ -282,7 +291,9 @@ describe('team status', () => {
       pid: process.pid, ts: NOW.toISOString(),
     })).toBe(true);
     const drop = '019a0000-4444-7555-8666-777788889aaa';
-    writeFileSync(join(inbox, drop), 'hello\n');
+    // A record this home's key does not vouch for: unread mail. A plain-text drop an earlier build
+    // wrote is not mail at all, and is counted apart (below).
+    writeFileSync(join(inbox, drop), `${JSON.stringify({ body: 'hello' })}\n`);
     writeFileSync(
       join(inbox, `${drop}.pending`),
       `${JSON.stringify({ id: drop, from: 'lead', ts: new Date(NOW.getTime() - 11 * 60_000).toISOString() })}\n`,
