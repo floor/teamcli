@@ -72,7 +72,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { emptySession, mintSeatId, readState, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, startFolderOf, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -1963,6 +1963,8 @@ function hostOf(input: {
             start_cwd = input.startCwd;
           }
         }
+        // Kept absolute, against the team root, whatever the plan or an older record held.
+        start_cwd = startFolderOf(input.root, start_cwd);
         // `waiting: null` removes the field alone; anything else written replaces it.
         // `effort: null` is a launch that set no word: the stored word goes with it.
         const { waiting: written, effort: patchedEffort, ...rest } = patch;

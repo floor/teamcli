@@ -1321,8 +1321,9 @@ export function upPlan(input: UpInput): Step[] {
     const channelPlace = channelFallback === undefined && claudeChannelSeat(asChannel) && input.home !== undefined && input.team !== undefined
       ? channelStart(asChannel, input.root, lobbyOf(input.home, input.root, input.team), isLeadSeat(input.team, seat.name))
       : null;
+    // Always absolute: the workspace starts here, and the seat's record keeps it as its start folder.
     let cwd = channelPlace !== null
-      ? channelPlace.cwd
+      ? (isAbsolute(channelPlace.cwd) ? channelPlace.cwd : resolve(input.root, channelPlace.cwd))
       : isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
     // A seat whose folder is the team's seat folder (it names no cwd) gets that folder made when
     // it is missing, whatever its CLI, as a Grok or Cursor seat's start check makes it: only inside

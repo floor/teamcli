@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
 import { handoverPath } from './handover/paths.ts';
@@ -96,6 +96,8 @@ export type SeatState = {
   /**
    * The folder the seat's launch line was run in, when the state records it. A resumed seat's
    * pane keeps that folder, so its launch line is checked there, never against the file's.
+   * Always an absolute path (`startFolderOf`): an older record that held the declared relative
+   * cwd is read against the team root.
    */
   start_cwd?: string;
   cli_version?: string;
@@ -1410,4 +1412,15 @@ export function reclaimLockDir(dir: string, options: { youngMs?: number } = {}):
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'kept';
   }
+}
+
+/**
+ * The start folder a seat record keeps: absolute, resolved against the team root exactly as a
+ * declared cwd is (`resolve(root, cwd)`), so every reader of the record — a client key's
+ * placement check above all — reads a real folder and never a path relative to its own working
+ * folder. Undefined stays undefined: a record with no folder keeps none.
+ */
+export function startFolderOf(root: string, cwd: string | undefined): string | undefined {
+  if (cwd === undefined || cwd === '') return undefined;
+  return isAbsolute(cwd) ? cwd : resolve(root, cwd);
 }

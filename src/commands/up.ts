@@ -130,7 +130,7 @@ import { declaredInboundOf, inboundStaleReason } from '../send/inbound.ts';
 import { defaultSocketsDirs, liveSocketOf } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
+import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, startFolderOf, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -4222,6 +4222,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
               start_cwd = planned.cwd;
             }
           }
+          // Kept absolute, against the team root, whatever the plan or an older record held.
+          start_cwd = startFolderOf(root, start_cwd);
           // `waiting: null` removes the field alone; anything else written replaces it.
           // `effort: null` is a launch that set no word: the stored word goes with it.
           const { waiting: written, effort: patchedEffort, ...rest } = patch;

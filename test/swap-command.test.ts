@@ -749,6 +749,18 @@ describe('team swap to another vendor of the same CLI', () => {
 });
 
 describe('team swap now and --run', () => {
+  test('the swapped seat\'s record keeps an absolute start folder', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    const world = fakeHerdr();
+    const forced = await swap(['now', 'lead'], OWNER, { sources: world.sources });
+    expect(forced.code, `${forced.err}${forced.out}`).toBe(0);
+    const recorded = readState(join(root, '.agents')).sessions.acme?.seats.lead?.start_cwd;
+    expect(recorded).toBeDefined();
+    expect(recorded!.startsWith('/')).toBe(true);
+  });
+
   test('a recipe copied from a {root} line keeps the word in the file; the pane runs this machine\'s path', async () => {
     place();
     // The entity's projects root on this machine (src/file/root-word.ts), and a donor whose line

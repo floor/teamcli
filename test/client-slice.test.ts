@@ -21,6 +21,7 @@ import {
   clientGrantsFolder,
   clientKeyDir,
   clientKeyPlacementProblem,
+  startFolderProblems,
   clientRevocations,
   newClientKeyPair,
   publicKeyObject,
@@ -307,7 +308,28 @@ describe('client grant and key records', () => {
       // A hand-edited or future record: the field is present, but it is not a path.
       state.sessions.floor = { seats: { worker: { id: 'seat_0123456789ab', stage: 'ready', start_cwd: 42 } }, worktrees: {} } as unknown as SessionState;
     });
-    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('not an absolute path');
+    // Refused, naming the seat, its team's state file and the repair: a key the check cannot
+    // place could sit in that seat's folder, so one bad record is a refusal, never a skip.
+    const said = clientKeyPlacementProblem(f.home, f.keyDir);
+    expect(said).toContain('the recorded start folder of seat "worker"');
+    expect(said).toContain('is not a path: client key placement cannot be checked; `team restart worker` records it again');
+    expect(startFolderProblems(f.teamRoot)).toEqual(['worker (session floor): its recorded start folder is not a path, so every client send on this machine is refused; run `team restart worker`']);
+  });
+
+  test('a relative start folder an older version recorded is read against the team root, not refused', () => {
+    const f = fixture('relative-cwd');
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      const session = emptySession();
+      session.seats.worker = { id: 'seat_0123456789ab', stage: 'ready', start_cwd: 'web' };
+      state.sessions.floor = session;
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+    expect(startFolderProblems(f.teamRoot)).toEqual([]);
+    // Still checked: read against the root, a relative folder that reaches the key is refused.
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      state.sessions.floor!.seats.worker!.start_cwd = relative(f.teamRoot, dirname(f.keyDir));
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
   });
 
   test('a present but non-path recorded worktree path is unknown, not accepted', () => {

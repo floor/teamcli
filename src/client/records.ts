@@ -397,6 +397,36 @@ function declaredLaunchFolder(
  * `.agents` tree and outside the OS temp directory, with no symbolic link on its path. This is a
  * placement refusal, not proof that another same-user process cannot read the key.
  */
+/**
+ * The seats of the team at `root` whose recorded start folder is no path at all: each one makes
+ * every client key's placement check refuse on this machine (`clientKeyPlacementProblem`), so
+ * `team doctor` names it before a client send does. A relative folder an older version wrote is
+ * not among them: the check reads it against the team root. A state that does not read is named
+ * once.
+ */
+export function startFolderProblems(root: string): string[] {
+  let sessions: Record<string, unknown> | null;
+  try {
+    sessions = readPlacementSessions(join(root, '.agents'));
+  } catch (error) {
+    return [`the team's recorded seat folders cannot be read (${error instanceof Error ? error.message : String(error)}): every client send on this machine is refused until it reads`];
+  }
+  const out: string[] = [];
+  for (const [sessionName, rawSession] of Object.entries(sessions ?? {})) {
+    const seats = rawSession !== null && typeof rawSession === 'object' && !Array.isArray(rawSession) ? (rawSession as { seats?: unknown }).seats : undefined;
+    if (seats === null || typeof seats !== 'object' || Array.isArray(seats)) continue;
+    for (const [seatName, rawSeat] of Object.entries(seats as Record<string, unknown>)) {
+      if (rawSeat === null || typeof rawSeat !== 'object' || Array.isArray(rawSeat)) continue;
+      const cwd = (rawSeat as { start_cwd?: unknown }).start_cwd;
+      if (cwd === undefined) continue;
+      if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) {
+        out.push(`${seatName} (session ${sessionName}): its recorded start folder is not a path, so every client send on this machine is refused; run \`team restart ${seatName}\``);
+      }
+    }
+  }
+  return out;
+}
+
 export function clientKeyPlacementProblem(home: string, dir: string): string | null {
   if (!isAbsolute(dir)) return `the key directory "${dir}" is not absolute`;
   if (hasDotTraversal(dir)) return `the key directory "${dir}" walks through "." or ".."; name the real path`;
@@ -508,11 +538,18 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
           }
           continue;
         }
+        // A start folder an older version recorded as the declared relative cwd is read against the
+        // team root, exactly as the launch resolved it and as a legacy relative worktree path is
+        // read below: never against the caller's working folder. A value that is no path at all
+        // is no placement evidence, and the check still refuses rather than skip the seat: a key
+        // the check cannot place could sit inside that seat's folder, readable by it, so one bad
+        // record costs a refusal that names it and its repair, never a key placed blind.
         const cwd = seat.start_cwd;
-        if (typeof cwd !== 'string' || cwd === '' || !isAbsolute(cwd)) {
-          return `the recorded start folder of seat "${seatName}" is not an absolute path: client key placement cannot be checked`;
+        if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) {
+          return `the recorded start folder of seat "${seatName}" of team "${team.project}" (session "${sessionName}", ${join(team.root, '.agents', 'team.state.json')}) is not a path: client key placement cannot be checked; \`team restart ${seatName}\` records it again`;
         }
-        if (overlaps(canonical(cwd), target)) {
+        const startFolder = isAbsolute(cwd) ? cwd : resolve(team.root, cwd);
+        if (overlaps(canonical(startFolder), target)) {
           return `the key directory "${dir}" is inside the folder seat "${seatName}" ran in; a client key sits outside every seat folder`;
         }
       }
