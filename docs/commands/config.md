@@ -86,7 +86,8 @@ start with `@`) and takes no `set` or `unset`, so an entity or project named `co
 `composed.rules` for its own stored rules.
 
 `<entity>.root` is the folder the entity's repositories sit directly under on this machine — an
-absolute path, or `~` or `~/…` under the home — which a team file names as `{root}`
+absolute path or `~/…`, of letters, digits and `/ . _ - ~ @ +` only, never the filesystem's root,
+the home or a folder above it — which a team file names as `{root}`
 ([the team file's reference](../team-file.md#the-entitys-projects-root-root)). It is the machine's
 own word, never derived from the home: a set writes it as given (a trailing slash dropped) and
 says the folder it reads as, and on a fresh machine it creates the entity's entry, and the entities

@@ -417,13 +417,28 @@ team config unset acme.root
   is left alone, and a `{secret:<entry>}` word on the same launch line is filled as before.
 - A value that starts with the word is quoted (`"{root}/site"`): unquoted, YAML reads the brace as
   a map, and the reader says so.
+- A folder of an entity holds only letters, digits and `/ . _ - ~ @ +`: a launch line carries it as
+  it is, so a space, a quote, `$`, a backtick, a backslash or any of `;|&<>()*?[]{}` is refused
+  when the folder is set. It is an absolute path or `~/…`, never the filesystem's root, the home
+  itself, a folder above the home, or a path with a `..` segment.
+- The entities file is not signed, so a folder is bound to the owner's charter where there is one:
+  the word is filled with the folder's real path (every link resolved), and that path must exist
+  and lie inside one of the charter's roots, or the file is refused. On a machine with no charter
+  the folder is filled as the entities file writes it, and `team doctor` warns that it is bound to
+  no signature.
+- A seat's `cwd` and `workspace.path` take an absolute path when it comes from the word and lies
+  inside the entity's folders (`cwd: "{root}/site"`, `path: "{worktrees}/site/{task}"`); an
+  absolute path the file writes itself is still refused.
+- `team down` and `team status` read a team whose folder this machine no longer names, leaving
+  the word as written, so a running team can still be shown and stopped; every command that
+  launches refuses it.
 - A file that writes `{root}` on a machine where its entity names no root, or that names no
   `entity:`, is refused when it is read — by `up`, `doctor`, `check` and every other command — on
   the first line that writes it, with the command that sets one. A launch never runs a literal
   `{root}`. A file that does not write the word reads exactly as before.
 - The entity's and the home project's rules (`<entity>.rules`, `project.<id>.rules`) read the word
-  the same way. They are not a team file, so where no root is named they keep the word as written,
-  and `team doctor` says so.
+  the same way, and a rule whose word this machine cannot fill refuses the team as the file's own
+  word would, even when the team file writes none.
 - Setting the root of an entity, or moving it, changes what its `{root}` teams read at their next
   read: a running seat keeps the line it was launched with until it is launched again. An
   approval is bound to the paths as they were filled in when it was signed, so moving a root needs
@@ -432,7 +447,10 @@ team config unset acme.root
   `team launchers migrate` — writes it with the words: a line it adds or changes that holds a full
   path inside the entity's folders is written as `{root}/…` or `{worktrees}/…` again, so a seat
   swapped on one machine keeps a file that reads on every other. A line the editor did not touch,
-  and a value the owner sets with `team config`, is kept as written.
+  and a value the owner sets with `team config`, is kept as written. In a shell line (a launch
+  line, a setup step) a path is written as the word only where that keeps what the line runs:
+  `~/…` inside quotes and `$HOME/…` inside single quotes are text to the shell, not the home, and
+  stay as written.
 - [`team doctor`](commands/doctor.md) warns about every value that writes a full path inside the
   entity's folders on this machine, and [`team migrate --root`](commands/migrate.md) rewrites those
   paths as `{root}/…` and `{worktrees}/…`: `--dry-run` first lists each line it would change.

@@ -82,7 +82,10 @@ reads on every machine. Set the root first: `team config set <entity>.root <fold
 
 The rewrite is line by line: comments, keys and every other value stay byte for byte, a value that
 would start with the word is quoted, and the result must read back as the same team with only
-those paths changed, or nothing is offered. Every changed line is printed, before and after, by
+those paths changed, or nothing is offered. In a launch line or a setup step a path is rewritten
+only where the word keeps what the shell runs: `~/…` inside quotes, `~` in the middle of a word
+and `$HOME/…` inside single quotes are text to the shell, so they are left and each is listed as
+`left as written`. Every changed line is printed, before and after, by
 the dry run and by the write alike; the write is never silent. Anyone may run the dry run; the
 write is the owner's, from a terminal outside herdr, as every edit of the team's record. A seat
 whose launch line changed has its agent record's launch line updated with it. `--root` takes no
