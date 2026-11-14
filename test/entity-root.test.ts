@@ -69,8 +69,10 @@ function teamText(options: { entity?: string | null; launch?: string; rules?: st
 
 describe('the projects root an entity names on this machine', () => {
   test('an absolute path or one under the home reads as an absolute folder, trailing slash dropped', () => {
-    expect(checkedRootPath('/home/acme', '/home/owner')).toEqual({ ok: true, root: '/home/acme' });
+    expect(checkedRootPath('/home/acme/repos', '/home/acme')).toEqual({ ok: true, root: '/home/acme/repos' });
     expect(checkedRootPath('~/Code/acme/', '/home/owner')).toEqual({ ok: true, root: '/home/owner/Code/acme' });
+    expect(checkedRootPath('~/repos', '/home/acme')).toEqual({ ok: true, root: '/home/acme/repos' });
+    // The home itself is a folder the reader takes when the owner writes it; nothing derives it.
     expect(checkedRootPath('~', '/home/acme')).toEqual({ ok: true, root: '/home/acme' });
   });
 
@@ -211,7 +213,18 @@ describe('the doctor names full paths inside the root', () => {
     expect(findings[1]!.text).toContain('the file, line 20: seats.0.launch writes ~/Code/acme, the entity\'s projects root on this machine: write {root} in its place');
   });
 
-  test('where a root is the home itself, a hidden folder of it is the machine\'s and is not named', () => {
+  test('the home\'s own folders sit outside a root under the home, and are not named', () => {
+    // The server layout: repositories under ~/repos (a folder need not carry its remote's name),
+    // worktrees beside it, the machine's config in ~/.config: only ~/repos/… is the root's.
+    const home = homeWith('acme:\n  root: ~/repos\n');
+    const text = teamText({
+      launch: 'zsh ~/repos/v4/tools/as-acme.sh codex',
+      rules: ['"The lobby is ~/.config/team/lobbies/acme."', '"Worktrees go in ~/worktrees/acme."', '"Docs: ~/repos-old/docs."'],
+    });
+    expect(rootPathUses(text, home).map((use) => [use.field, use.written])).toEqual([['seats.0.launch', '~/repos']]);
+  });
+
+  test('a root the owner set to the home itself still leaves the home\'s hidden folders alone', () => {
     const home = homeWith('acme:\n  root: "~"\n');
     const text = teamText({ launch: 'zsh ~/docs/tools/as-acme.sh codex', rules: ['"The lobby is ~/.config/team/lobbies/acme."'] });
     expect(rootPathUses(text, home).map((use) => [use.field, use.written])).toEqual([['seats.0.launch', '~']]);
