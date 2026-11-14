@@ -130,7 +130,7 @@ import { declaredInboundOf, inboundStaleReason } from '../send/inbound.ts';
 import { defaultSocketsDirs, liveSocketOf } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
+import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, carriedStartFolderProblem, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -2816,6 +2816,12 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   }
 
   const recorded = readState(dir).sessions[session];
+  // Carried start folders that do not read stop the run here, before anything is launched.
+  const carriedProblem = carriedStartFolderProblem(recorded, session, dir);
+  if (carriedProblem !== null) {
+    refuse(io, json, 'up', { id: 'up.carried-start', message: plainText(carriedProblem), repair: null });
+    return 1; // exit: up.carried-start
+  }
   const workspaces = sources.workspaces?.(session) ?? null;
   // What each recorded seat's pane holds, read from its pane: what decides whether the seat is
   // still the seat, or whether it must be launched again. Only a running session has panes, and

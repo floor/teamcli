@@ -2080,6 +2080,18 @@ describe('start_cwd and removal check', () => {
     expect(workerRow.start_cwd).toBe(canonicalLanding(join(lobby, 'worker')).landing);
   });
 
+  test('carried start folders that do not read stop up before anything is launched', async () => {
+    approveYaml(migratedTeamYaml());
+    const made = world();
+    updateState(dir, (st) => {
+      st.sessions['acme'] = { ...emptySession(), retained_start_cwd: null } as unknown as typeof st.sessions[string];
+    });
+    const upRes = await runUpCmd([], made);
+    expect(upRes.code).toBe(1);
+    expect(upRes.err).toContain('are not a map by seat name: nothing was launched');
+    expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual([]);
+  });
+
   test('a fresh launch that records a seat\'s folder retires the folder a relaunch carried for it', async () => {
     approveYaml(migratedTeamYaml());
     const made = world();

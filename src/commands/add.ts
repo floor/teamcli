@@ -72,7 +72,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { emptySession, mintSeatId, readState, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, carriedStartFolderProblem, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -761,6 +761,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const recorded = readState(dir).sessions[session] ?? emptySession();
+  // Carried start folders that do not read stop the run here, before anything is launched.
+  const carriedProblem = carriedStartFolderProblem(recorded, session, dir);
+  if (carriedProblem !== null) {
+    refuse(io, json, 'add', { id: 'add.carried-start', message: carriedProblem, repair: null });
+    return 1; // exit: add.carried-start
+  }
 
   const original = loaded.text ?? readTeamText(path, { home: sources.home ?? homedir() });
   // The place the refusals below name: the file this run read, or the registry's record when that

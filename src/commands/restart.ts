@@ -96,7 +96,7 @@ import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
-import { emptySession, mintSeatId, readState, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, carriedStartFolderProblem, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { findAgent as findRegisteredAgent, recordProvenAgentAddress, updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
@@ -1059,6 +1059,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   if (planSeat.rulesProblem !== undefined) {
     return { kind: 'not-ready', message: `${next.name}: ${planSeat.rulesProblem}` };
   }
+  // Carried start folders that do not read refuse before the seat is stopped or touched.
+  const carriedProblem = carriedStartFolderProblem(recordedSession, session, dir);
+  if (carriedProblem !== null) return { kind: 'not-ready', message: carriedProblem };
   // A named launcher resolves on its own (8cf63fb22), except in a preset swap: the swap resolved
   // its team preset itself and wrote the line, so restarting it resolves nothing again (and asks no
   // launcher-file cover the swap's own resolution did not ask). A shipped launcher always resolves.

@@ -21,7 +21,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { declaredEntityClients, declaredRoots } from '../entities.ts';
 import { loadTeamText } from '../file/load.ts';
-import { withRecordedSession } from '../file/recorded-session.ts';
+import { withRecordedSession, withSessionOf } from '../file/recorded-session.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { SEAT_NAME } from '../file/sections/seats.ts';
@@ -385,25 +385,30 @@ type DeclaredTeam =
   | { kind: 'invalid' }
   | { kind: 'read'; team: TeamFile };
 
-function readDeclarations(root: string, home: string): DeclaredTeam {
+function readDeclarations(root: string, home: string, cached?: { id: string; session: string | null }): DeclaredTeam {
   // The registry's config record is this team's definition. The file at this root is only the
   // fallback, read by its own path: a team root that sits inside another checkout must not be
-  // replaced by that checkout's file.
+  // replaced by that checkout's file. A caller that already read the registry (the placement
+  // check, with the root's real path) passes the team's id and session: nothing here resolves the
+  // root's spelling again or looks the registry up a second time.
   const file = join(root, '.agents', 'team.yaml');
+  const id = cached?.id ?? teamIdOf(root);
+  const sessionOf = (team: TeamFile, text: string): TeamFile =>
+    cached === undefined ? withRecordedSession(team, text, home, root) : withSessionOf(team, text, cached.session);
   let stored: ReturnType<typeof readStoredTeamConfig>;
   try {
-    stored = readStoredTeamConfig(home, teamIdOf(root));
+    stored = readStoredTeamConfig(home, id);
   } catch (error) {
     if (error instanceof TeamConfigStoreError) return { kind: 'unreadable' };
     throw error;
   }
   if (stored === null) {
     // No registry record, for sure: a record path that only cannot be read is no absence.
-    if (pathPresence(teamConfigRecordPath(home, teamIdOf(root))).kind !== 'absent') return { kind: 'unreadable' };
+    if (pathPresence(teamConfigRecordPath(home, id)).kind !== 'absent') return { kind: 'unreadable' };
   }
   if (stored !== null) {
     const loaded = loadTeamText(stored.text, root, file, { home, checkOnly: true });
-    if (loaded.ok) return { kind: 'read', team: withRecordedSession(loaded.team, loaded.text, home, root) };
+    if (loaded.ok) return { kind: 'read', team: sessionOf(loaded.team, loaded.text) };
     return loaded.errors.some((problem) => problem.unreadable) ? { kind: 'unreadable' } : { kind: 'invalid' };
   }
   const presence = pathPresence(file);
@@ -416,7 +421,7 @@ function readDeclarations(root: string, home: string): DeclaredTeam {
     return { kind: 'unreadable' };
   }
   if (!loaded.ok) return loaded.errors.some((problem) => problem.unreadable) ? { kind: 'unreadable' } : { kind: 'invalid' };
-  return { kind: 'read', team: withRecordedSession(loaded.team, loaded.text, home, root) };
+  return { kind: 'read', team: sessionOf(loaded.team, loaded.text) };
 }
 
 /** The folder a declaration launches its seat in, resolved from recorded and declared placement
@@ -599,7 +604,9 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
     // missing declaration for a recorded seat: both refuse rather than skip the seat.
     let declarations: DeclaredTeam | undefined;
     const declaredTeam = (): DeclaredTeam => {
-      declarations ??= readDeclarations(team.root, home);
+      // Through the root's real path and the registry's own id and session for it, never the
+      // registry spelling resolved again.
+      declarations ??= readDeclarations(realRoot, home, { id: teamId, session: team.session ?? null });
       return declarations;
     };
     if (overlaps(root, target)) return `the key directory "${dir}" is inside the team root "${team.root}"; a client key sits outside every checkout`;
@@ -617,7 +624,7 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
     // seat recorded as not yet ready.
     let sessions: Record<string, unknown> | null;
     try {
-      sessions = readPlacementSessions(join(team.root, '.agents'));
+      sessions = readPlacementSessions(join(realRoot, '.agents'));
     } catch {
       return `the recorded seat folders of team "${team.project}" cannot be read: client key placement cannot be checked`;
     }

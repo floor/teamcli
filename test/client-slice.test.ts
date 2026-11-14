@@ -43,7 +43,10 @@ import type { Caller } from '../src/caller.ts';
 import type { Io } from '../src/io.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
-import { emptySession, keptStartFolder, updateState, type SessionState } from '../src/state.ts';
+import { carriedStartFolderProblem, emptySession, keptStartFolder, retireCarriedStartFolder, updateState, type SessionState } from '../src/state.ts';
+import { CANONICAL_RECORD_VERSION } from '../src/file/canonical-record.ts';
+import { canonicalTeam } from '../src/file/team-config.ts';
+import { sha256, TEAM_CONFIG_RECORD_FORMAT, writeStoredTeamConfig } from '../src/registry/team-config-store.ts';
 import { registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { readHistory, type HistoryEntry } from '../src/send/history.ts';
 import { signedRecordOf, verifyRecord } from '../src/send/record.ts';
@@ -51,6 +54,8 @@ import type { SendOutcome } from '../src/send/uds.ts';
 import type { OrderWord } from '../src/settings/inherit.ts';
 import { keyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
 import { fixtureBase, testIo } from './helpers.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 
 const TEAM_ID = 'aaaaaaaaaaaa';
 const OTHER_TEAM_ID = 'bbbbbbbbbbbb';
@@ -356,6 +361,44 @@ describe('client grant and key records', () => {
     mkdirSync(missing);
     expect(staleRegistryRoots(f.home)).toEqual([]);
     expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+  });
+
+  test('declarations are read by the registry\'s own id for the entry, through the root\'s real path', () => {
+    const f = fixture('registry-id');
+    // The registry keys this team by its recorded id, which is not the hash of today's root
+    // spelling: the record stored under that id is the team's definition, and its seat starts
+    // beside the key's folder.
+    const text = `format: 1
+project: floor
+operator: steward
+workspace:
+  mode: shared
+seats:
+  - role: orchestrator
+    name: steward
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    leads: true
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    cwd: ${relative(realpathSync(f.teamRoot), dirname(f.keyDir))}
+`;
+    const checked = validateTeamFile(text);
+    if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
+    expect(teamIdOf(f.teamRoot)).not.toBe(TEAM_ID);
+    writeStoredTeamConfig(f.home, {
+      format: TEAM_CONFIG_RECORD_FORMAT, id: TEAM_ID, root: f.teamRoot, text, text_sha256: sha256(text),
+      record_version: CANONICAL_RECORD_VERSION, record_sha256: sha256(canonicalTeam(checked.team)), created_by: 'init', created_at: NOW.toISOString(),
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" starts in');
   });
 
   test('a registry root that is not absolute refuses', () => {
@@ -1289,5 +1332,19 @@ describe('the start folder a record write keeps', () => {
     // No path at all, and nothing fresh to repair it: kept as it was, so placement keeps refusing.
     expect(keptStartFolder('/srv/team', undefined, 42) as unknown).toBe(42);
     expect(keptStartFolder('/srv/team', undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe('carried start folders that do not read', () => {
+  test('are named before any launch, and a record write never throws on them', () => {
+    for (const value of [null, 42, 'x', []]) {
+      const session = { ...emptySession(), retained_start_cwd: value } as unknown as SessionState;
+      expect(carriedStartFolderProblem(session, 'floor', '/srv/team/.agents'), JSON.stringify(value)).toContain('are not a map by seat name: nothing was launched');
+      expect(() => retireCarriedStartFolder(session, 'worker')).not.toThrow();
+      // Kept as it was: it is placement evidence the client key's check refuses on.
+      expect((session as { retained_start_cwd?: unknown }).retained_start_cwd).toEqual(value);
+    }
+    expect(carriedStartFolderProblem({ ...emptySession(), retained_start_cwd: { worker: 0 } }, 'floor', '/x')).toBeNull();
+    expect(carriedStartFolderProblem(undefined, 'floor', '/x')).toBeNull();
   });
 });

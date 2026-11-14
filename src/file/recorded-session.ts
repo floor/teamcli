@@ -51,7 +51,13 @@ export function recordedSession(home: string, root: string): string | null {
  *  The grant's session is the team's, so a grant that named the derived session moves with it. */
 export function withRecordedSession(team: TeamFile, text: string, home: string, root: string): TeamFile {
   if (textDeclaresSession(text)) return team;
-  const recorded = recordedSession(home, root);
+  return withSessionOf(team, text, recordedSession(home, root));
+}
+
+/** `withRecordedSession` with the registry's session already in hand: a caller that read the
+ *  registry once (the client key's placement check) passes it, and nothing is looked up again. */
+export function withSessionOf(team: TeamFile, text: string, recorded: string | null): TeamFile {
+  if (textDeclaresSession(text)) return team;
   if (recorded === null || recorded === team.session) return team;
   const grant = team.grant !== null && team.grant.session === team.session
     ? { ...team.grant, session: recorded }

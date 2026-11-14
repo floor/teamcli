@@ -1453,9 +1453,25 @@ export function keptStartFolder(root: string, fresh: unknown, prior: unknown): s
  * the session map once it is empty. The record write calls it in the same state update.
  */
 export function retireCarriedStartFolder(session: SessionState, name: string): void {
-  if (session.retained_start_cwd === undefined) return;
-  delete session.retained_start_cwd[name];
-  if (Object.keys(session.retained_start_cwd).length === 0) delete session.retained_start_cwd;
+  const carried = session.retained_start_cwd as unknown;
+  // A map that is not one is left as it is: the launch refused it before any side effect
+  // (`carriedStartFolderProblem`), and the placement check keeps refusing it.
+  if (carried === null || typeof carried !== 'object' || Array.isArray(carried)) return;
+  delete (carried as Record<string, unknown>)[name];
+  if (Object.keys(carried).length === 0) delete session.retained_start_cwd;
+}
+
+/**
+ * Why a session's carried start folders (`retained_start_cwd`) cannot be read: present, and not a
+ * map by seat name. A launch refuses on it before any side effect, with its repair, so a record
+ * write never meets it mid-launch; the map is kept as it is, since it is placement evidence the
+ * client key's check still refuses on. Null when the map is absent or reads.
+ */
+export function carriedStartFolderProblem(session: Pick<SessionState, 'retained_start_cwd'> | undefined, sessionName: string, stateDir: string): string | null {
+  const carried = session?.retained_start_cwd as unknown;
+  if (carried === undefined) return null;
+  if (carried !== null && typeof carried === 'object' && !Array.isArray(carried)) return null;
+  return `the carried start folders of session "${sessionName}" in ${join(stateDir, STATE_FILE)} are not a map by seat name: nothing was launched; fix or remove the \`retained_start_cwd\` field of that session, then run it again`;
 }
 
 /** A seat record's start folder when it is a path: a value an older or hand-edited record holds
