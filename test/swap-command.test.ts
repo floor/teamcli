@@ -600,25 +600,6 @@ describe('team swap to another vendor of the same CLI', () => {
     expect(queue().lead!.to.launch).toBe(ZAI_LINE.replace('claude --model', 'zsh ~/tools/as-floor.sh claude --model'));
   });
 
-  test('a {root} wrapper keeps the word in the file: the run writes {root}, and the pane runs this machine\'s path', async () => {
-    place("zsh '{root}/tools/as-floor.sh' claude --model claude-opus-5-5");
-    // The entity's projects root on this machine (src/file/root-word.ts).
-    mkdirSync(join(home, '.config', 'team'), { recursive: true });
-    writeFileSync(join(home, '.config', 'team', 'entities.yaml'), 'lab:\n  root: /srv/lab/repos\n');
-    setRule('*=!anthropic');
-    const queued = await swap(['queue', 'lead', '--to', 'zai:glm-5.3'], OWNER, { credentialProbe: present });
-    expect(queued.code, queued.err).toBe(0);
-    const world = fakeHerdr({ newScreen: CLAUDE_IDLE.replace('Opus 5.5 · Acme billing', 'glm-5.3 · API Usage Billing') });
-    const ran = await swap(['--run'], OWNER, { sources: world.sources });
-    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
-    const yaml = readFileSync(join(root, '.agents', 'team.yaml'), 'utf8');
-    const lead = yaml.slice(yaml.indexOf('name: lead'), yaml.indexOf('name: worker'));
-    expect(lead).toContain('vendor: zai');
-    expect(lead).toContain("{root}/tools/as-floor.sh");
-    expect(yaml).not.toContain('/srv/lab/repos');
-    expect(world.did.runs.join('\n')).toContain("'/srv/lab/repos/tools/as-floor.sh'");
-  });
-
   test("switching away from a vendor line drops the previous vendor's words", async () => {
     place(DEEPSEEK_LINE);
     setRule('*=!anthropic');
@@ -768,6 +749,26 @@ describe('team swap to another vendor of the same CLI', () => {
 });
 
 describe('team swap now and --run', () => {
+  test('a recipe copied from a {root} line keeps the word in the file; the pane runs this machine\'s path', async () => {
+    place();
+    // The entity's projects root on this machine (src/file/root-word.ts), and a donor whose line
+    // names it: the run builds the lead's new line from the team as read, the word filled.
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(home, '.config', 'team', 'entities.yaml'), 'lab:\n  root: /srv/lab/repos\n');
+    const path = join(root, '.agents', 'team.yaml');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('launch: claude --model deepseek-flash', 'launch: claude --model deepseek-flash --add-dir {root}/docs'));
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    const world = fakeHerdr();
+    const forced = await swap(['now', 'lead'], OWNER, { sources: world.sources });
+    expect(forced.code, `${forced.err}${forced.out}`).toBe(0);
+    const yaml = readFileSync(path, 'utf8');
+    const lead = yaml.slice(yaml.indexOf('name: lead'), yaml.indexOf('name: worker'));
+    expect(lead).toContain('launch: claude --model deepseek-flash --add-dir {root}/docs');
+    expect(yaml).not.toContain('/srv/lab/repos');
+    expect(world.did.runs.join('\n')).toContain('--add-dir /srv/lab/repos/docs');
+  });
+
   test('the owner forces a queued swap, and the run carries it out', async () => {
     place();
     setRule('*=!anthropic');

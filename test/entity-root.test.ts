@@ -462,7 +462,7 @@ describe('the worktrees folder: {worktrees}', () => {
     const mac = homeWith('acme:\n  root: ~/Code/acme\n');
     const onMac = planRootRewrite(teamText({ launch: 'codex', rules: ['"Work in ~/Code/acme/worktrees/web, read ~/Code/acme/docs."'] }), mac);
     expect(onMac.ok && onMac.changes.map((change) => change.after.trim())).toEqual(['- "Work in {worktrees}/web, read {root}/docs."']);
-    expect(rootPathUses(teamText({ launch: 'zsh ~/worktrees/web/run.sh' }), server).map((use) => use.word)).toEqual(['{root}', '{worktrees}']);
+    expect(rootPathUses(teamText({ launch: 'zsh ~/worktrees/web/run.sh' }), server).map((use) => use.word)).toEqual(['{worktrees}']);
   });
 
   test('team config set and unset <entity>.worktrees, the owner\'s', async () => {

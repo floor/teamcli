@@ -27,16 +27,19 @@ export const WORKTREES_WORD = '{worktrees}';
 /** Every place a word stands: not after a `$`, which makes it the shell's `${root}`. */
 const WORD = /(?<!\$)\{(root|worktrees)\}/g;
 
+/** The same words, for a yes-or-no test: no `lastIndex` carried from one call to the next. */
+const ANY_WORD = /(?<!\$)\{(root|worktrees)\}/;
+
 /** Whether a text writes either word. */
 export function hasRootWord(text: string): boolean {
-  WORD.lastIndex = 0;
-  return WORD.test(text);
+  return ANY_WORD.test(text);
 }
 
 /** The words a text writes, each once. */
 function wordsIn(text: string): Array<'root' | 'worktrees'> {
   const found = new Set<'root' | 'worktrees'>();
-  for (const match of text.matchAll(WORD)) found.add(match[1] as 'root' | 'worktrees');
+  // `matchAll` copies the pattern's `lastIndex`: a fresh pattern starts at the text's beginning.
+  for (const match of text.matchAll(new RegExp(WORD.source, 'g'))) found.add(match[1] as 'root' | 'worktrees');
   return [...found];
 }
 
