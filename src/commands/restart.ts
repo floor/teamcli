@@ -84,7 +84,7 @@ import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
 import { isShippedLauncher } from '../launchers/shipped.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
-import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
+import { inheritedRulesProblem, rulesOf, rulesOriginOf, type RulesOrigin, withRulesProblem } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { acquireRunLockWithin, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
@@ -1054,6 +1054,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
   const liveRules = standing.kind !== 'verified' || owner;
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules, input.rulesOrigin ?? 'file');
+  // Rules that name a folder this machine cannot fill refuse the restart here, before the seat
+  // is stopped or its record touched: the running seat keeps running on the rules it has.
+  if (planSeat.rulesProblem !== undefined) {
+    return { kind: 'not-ready', message: `${next.name}: ${planSeat.rulesProblem}` };
+  }
   // A named launcher resolves on its own (8cf63fb22), except in a preset swap: the swap resolved
   // its team preset itself and wrote the line, so restarting it resolves nothing again (and asks no
   // launcher-file cover the swap's own resolution did not ask). A shipped launcher always resolves.
@@ -2026,6 +2031,7 @@ function buildUpSeat(
     // A human's pane: no launch, no key, no line. The plan skips it before any of that.
     ...(seat.human ? { human: true as const } : {}),
     rules: rulesOf(team, seat, root, undefined, origin, home),
+    ...withRulesProblem(inheritedRulesProblem(team, root, home)),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,

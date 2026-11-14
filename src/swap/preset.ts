@@ -223,7 +223,8 @@ export async function runPresetSwap(argv: string[], io: Io, options: SwapCommand
     declare: () => {
       const live = readTeamText(path, { home, command: 'swap' });
       if (live !== before || !hasSeat(live, name)) return { ok: false, why: 'the team changed while swap was preparing; run it again' };
-      const written = writeTeamText(path, text, { home, command: 'swap' });
+      // The recipe is built from the team as read, its words filled: they are written back as words.
+      const written = writeTeamText(path, text, { home, command: 'swap', keepWords: true });
       declarationWritten = written.ok;
       return written.ok ? { ok: true } : { ok: false, why: written.errors.map(p => p.message).join('; ') };
     },

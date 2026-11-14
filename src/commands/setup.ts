@@ -25,6 +25,7 @@ import {
   defaultCharterBody,
   defaultProjectRoots,
   parseDuration,
+  signedRoots,
   type CharterBody,
   type CharterLifetimes,
 } from '../charter/body.ts';
@@ -38,8 +39,9 @@ export const USAGE = `Usage: team setup --signer <touch-id|passkey> [--roots <di
 Signs the owner charter once. --signer touch-id (or mac) creates the owner seat's
 Secure Enclave key when there is none, then asks for Touch ID on the charter.
 --signer passkey (or iphone) checks one signature over that same charter and
-records the passkey; it does not create a Mac key. Roots default to the project
-directories under the home (or ~/Code). Durations are 15m, 30d, 7d, or never.
+records the passkey; it does not create a Mac key. Roots default to the projects
+root each entity names on this machine (team config set <entity>.root <folder>);
+with none named and no --roots, nothing is signed. Durations are 15m, 30d, 7d, or never.
 --edit re-signs. A cancelled sign writes nothing.
 
 Exits 0 when the charter is signed, 1 when the owner does not sign, 2 when the invocation is invalid.
@@ -92,7 +94,19 @@ async function setupOutcome(argv: string[], rawIo: Io, options: SetupOptions): P
 
   const existing = readCharter(home, store);
   if (args.flags.has('edit') && existing.kind === 'invalid') return fail(`${existing.why}; nothing was written`);
-  const roots = parsedRoots ?? (existing.kind === 'ok' ? existing.charter.body.roots : defaultProjectRoots(home));
+  // The owner's own roots, then the roots the charter already signed, then the projects root each
+  // entity names on this machine: a machine that names none is refused, never given a guess.
+  // Every root is signed as it is on disk (`signedRoots`): a link cannot widen the scope later.
+  let roots: string[];
+  if (parsedRoots !== undefined || existing.kind === 'ok') {
+    const named = signedRoots(parsedRoots ?? (existing.kind === 'ok' ? existing.charter.body.roots : []), home);
+    if (!named.ok) return fail(named.why);
+    roots = named.roots;
+  } else {
+    const defaults = defaultProjectRoots(home);
+    if (!defaults.ok) return fail(defaults.why);
+    roots = defaults.roots;
+  }
   const body = charterBody(existing, roots, lifetimes);
   const statement = charterStatement(body);
   let createdSeat = false;

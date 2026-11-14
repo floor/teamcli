@@ -41,12 +41,16 @@ export function currentTeam(
   /** The session the command addresses, when it has one: the placement check reads that
    *  session's recorded lobby. Absent reads the file's own. */
   session?: string,
+  /** `keep` for a command that stops or shows a team (`down`, `status`): `{root}` and
+   *  `{worktrees}` the machine cannot fill are read as written, never a refusal. */
+  unfilled?: 'strict' | 'keep',
 ): Current {
   return currentFrom(readTeamConfig(cwd, {
     ...(file ? { file } : {}),
     ...(home ? { home } : {}),
     ...(session !== undefined ? { session } : {}),
-  }), now, home, remember);
+    ...(unfilled !== undefined ? { unfilled } : {}),
+  }), now, home, remember, unfilled);
 }
 
 /** The same read for a launched pointer: where a session was launched from is not a copy to
@@ -59,14 +63,16 @@ export function currentLaunchedTeam(
   home?: string,
   remember = true,
   session?: string,
+  unfilled?: 'strict' | 'keep',
 ): Current {
   return currentFrom(readLaunchedTeam(launched, {
     ...(home ? { home } : {}),
     ...(session !== undefined ? { session } : {}),
-  }), now, home, remember);
+    ...(unfilled !== undefined ? { unfilled } : {}),
+  }), now, home, remember, unfilled);
 }
 
-function currentFrom(loaded: LoadResult, now: Date, home: string | undefined, remember: boolean): Current {
+function currentFrom(loaded: LoadResult, now: Date, home: string | undefined, remember: boolean, unfilled?: 'strict' | 'keep'): Current {
   if (loaded.ok) {
     const dir = dirname(loaded.path);
     // Remember the text this read validated. A registry team has no `.agents/team.yaml` to
@@ -80,7 +86,7 @@ function currentFrom(loaded: LoadResult, now: Date, home: string | undefined, re
   if (!loaded.path || !existsSync(loaded.path)) return { ok: false, errors: loaded.errors };
   const dir = dirname(loaded.path);
   const root = dir.endsWith('.agents') ? dirname(dir) : dir;
-  const saved = lastValid(dir, home, root);
+  const saved = lastValid(dir, home, root, unfilled);
   if (!saved) return { ok: false, errors: loaded.errors };
   const first = loaded.errors[0];
   const where = home ?? undefined;
@@ -130,13 +136,13 @@ function rememberText(dir: string, file: string, now: Date): void {
   }
 }
 
-function lastValid(dir: string, home: string | undefined, root: string): { team: TeamFile; file: string; readAt: string } | null {
+function lastValid(dir: string, home: string | undefined, root: string, unfilled?: 'strict' | 'keep'): { team: TeamFile; file: string; readAt: string } | null {
   try {
     const saved = readState(dir).last_valid;
     if (!saved) return null;
     // The remembered copy is read the way the invalid file was: a team whose lead comes from the
     // default chain still resolves it, so the fallback stays a copy of the same team.
-    const result = validateTeamFile(saved.file, { home, root });
+    const result = validateTeamFile(saved.file, { home, root, ...(unfilled !== undefined ? { unfilled } : {}) });
     return result.ok ? { team: result.team, file: saved.file, readAt: saved.read_at } : null;
   } catch {
     return null;

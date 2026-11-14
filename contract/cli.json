@@ -4640,6 +4640,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--root",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -4653,7 +4659,8 @@
       "usage": [
         "team migrate [--keep-file] [--dry-run] [--json]",
         "team migrate [--keep-file] --request [--reason <text>] [--json]",
-        "team migrate [--keep-file] --approval <request-id> [--json]"
+        "team migrate [--keep-file] --approval <request-id> [--json]",
+        "team migrate --root [--dry-run] [--json]"
       ],
       "who": {
         "gate": "owner-only",

@@ -2,8 +2,8 @@
 
 Three things: the team's own record, read and edited with `get`, `set`, `unset` and `edit` — what
 `.agents/team.yaml` used to hold, before [`team migrate`](migrate.md) moved it into the registry —
-two keys of the owner's entity record, `<entity>.names.unique` and `<entity>.reminders`; and the
-settings registry, printed with `keys`.
+keys of the owner's entity record, `<entity>.names.unique`, `<entity>.reminders` and
+`<entity>.root`; and the settings registry, printed with `keys`.
 
 ## The team's record: get, set, unset, edit
 
@@ -53,7 +53,7 @@ team runs.
 | the path holds nothing (`get`), cannot be set, the caller is not the owner, or the change does not validate | 1 |
 | a bad invocation, no team found, a record that cannot be read, or the editor failed | 2 |
 
-## The entity's and project's records: names.unique, reminders, and rules
+## The entity's and project's records: names.unique, reminders, rules, and root
 
     team config get <entity>.names.unique [--json]
     team config set <entity>.names.unique <word>
@@ -66,6 +66,12 @@ team runs.
     team config get project.<id>.rules [--json]
     team config set project.<id>.rules <yaml list> [--dry-run] [--json]
     team config get @composed.rules [--json]
+    team config get <entity>.root [--json]
+    team config set <entity>.root <folder> [--dry-run] [--json]
+    team config unset <entity>.root [--dry-run] [--json]
+    team config get <entity>.worktrees [--json]
+    team config set <entity>.worktrees <folder> [--dry-run] [--json]
+    team config unset <entity>.worktrees [--dry-run] [--json]
 
 A path whose last segment is `names.unique` or `reminders` names one key of an entity's own
 entry, not the team's record. Both live with the rest of the entry in the owner's entities file
@@ -78,6 +84,23 @@ writing to disk. `team config get @composed.rules` prints the composed rules (en
 and team) with their origin headings; the `@` path is reserved for that view (no entity name can
 start with `@`) and takes no `set` or `unset`, so an entity or project named `composed` keeps
 `composed.rules` for its own stored rules.
+
+`<entity>.root` is the folder the entity's repositories sit directly under on this machine — an
+absolute path or `~/…`, of letters, digits and `/ . _ - @ +` only (after a leading `~/`), never the filesystem's root,
+the home or a folder above it — which a team file names as `{root}`
+([the team file's reference](../team-file.md#the-entitys-projects-root-root)). It is the machine's
+own word, never derived from the home: a set writes it as given (a trailing slash dropped) and
+says the folder it reads as, and on a fresh machine it creates the entity's entry, and the entities
+file, which no other key of this form does; a
+relative path, the filesystem's root, or a path that writes `{root}` itself is refused and nothing
+is written. `unset` removes it, after which a team of the entity that writes `{root}` is refused
+until one is set again. `get --json` adds the folder it reads as (`resolved`). A path whose first
+segment is a section of the team's own record (`seats.root` is a seat named `root`) stays the
+team's. A set says on stderr the folder the entity's teams now read `{root}` as.
+
+`<entity>.worktrees` is the folder the entity's worktrees sit in on this machine, which a team file
+names as `{worktrees}`; unset, it is `<root>/worktrees`. It takes the same values, the same
+refusals and the same door as `<entity>.root`, and `unset` puts it back to `<root>/worktrees`.
 
 `<entity>.names.unique` says how far apart seat nicknames stay — `entity` (the default, across
 every team of the entity), `project` (within one project), `team` (within one team) or `off`.

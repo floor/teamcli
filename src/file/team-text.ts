@@ -21,6 +21,7 @@ import { writeTeamFile } from './write.ts';
 import { readStoredTeamConfig, sha256, TeamConfigStoreError, writeStoredTeamConfig, type StoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { auditRecordWrite, type RecordWriteAudit } from './record-write-audit.ts';
+import { keptRootWords } from './root-word.ts';
 
 export type TeamTextOptions = {
   /** The home whose registry holds the record; the user's when absent. */
@@ -38,6 +39,11 @@ export type TeamTextOptions = {
   now?: () => Date;
   /** A new team (team init): the registry is the target even before it holds a record. */
   create?: boolean;
+  /** An editor that builds values from the team as read (where `{root}` and `{worktrees}` are
+   *  already filled): each line it adds or changes gets the words back for full paths inside the
+   *  entity's folders (`keptRootWords`, src/file/root-word.ts). The owner's own `team config`
+   *  writes the words the owner wrote, and does not set it. */
+  keepWords?: boolean;
 };
 
 export type TeamTextTarget =
@@ -141,6 +147,11 @@ function provenanceOf(
 // lands; the record's `format` lets that change be read without a guess.
 /** The one write of an edited team: validated, then the registry's record or the file. */
 export function writeTeamText(path: string, text: string, options: TeamTextOptions = {}): { ok: true; target: TeamTextTarget['kind'] } | { ok: false; errors: Problem[] } {
+  if (options.keepWords === true) {
+    let previous = '';
+    try { previous = readTeamText(path, options); } catch { /* a new team: every line is the edit's */ }
+    text = keptRootWords(previous, text, options.home ?? homedir());
+  }
   const target = teamTextTarget(path, options);
   if (target.kind === 'file') {
     // A file under a project's own `.agents/` is a team the default lead chain can read for; any

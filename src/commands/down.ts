@@ -930,10 +930,10 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const current: Current = liveCurrent ?? (binding.kind === 'unreadable' || binding.kind === 'ambiguous'
     ? { ok: false, errors: [{ line: 0, message: binding.message }] }
     : binding.kind === 'bound'
-      ? currentTeam(binding.team.root, undefined, loadedAt!, sources.home, false)
+      ? currentTeam(binding.team.root, undefined, loadedAt!, sources.home, false, undefined, 'keep')
       : pointer !== undefined
-        ? currentLaunchedTeam(pointer, loadedAt!, sources.home, false)
-        : currentTeam(io.cwd, file, loadedAt!, sources.home, false));
+        ? currentLaunchedTeam(pointer, loadedAt!, sources.home, false, undefined, 'keep')
+        : currentTeam(io.cwd, file, loadedAt!, sources.home, false, undefined, 'keep'));
   if (!current.ok) {
     const said = current.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     const id = current.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
@@ -1797,7 +1797,8 @@ type LiveFile = { team: TeamFile; root: string; dir: string; path: string };
  * load carries no delegate, and the ordinary path keeps its own fallback and its own words.
  */
 function liveTeam(io: Io, home?: string): LiveFile | undefined {
-  const loaded = readTeamConfig(io.cwd, home ? { home } : {});
+  // A team whose `{root}` this machine can no longer fill can still be stopped: down never launches.
+  const loaded = readTeamConfig(io.cwd, { ...(home ? { home } : {}), unfilled: 'keep' });
   if (!loaded.ok) return undefined;
   return { team: loaded.team, root: loaded.root, dir: dirname(loaded.path), path: loaded.path };
 }

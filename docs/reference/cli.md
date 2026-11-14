@@ -2239,6 +2239,7 @@ Usage:
     team migrate [--keep-file] [--dry-run] [--json]
     team migrate [--keep-file] --request [--reason <text>] [--json]
     team migrate [--keep-file] --approval <request-id> [--json]
+    team migrate --root [--dry-run] [--json]
 
 ### Who may run it
 
@@ -2257,6 +2258,7 @@ Usage:
 | `--key` | yes | no | no |
 | `--reason` | yes | no | no |
 | `--request` | no | no | no |
+| `--root` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

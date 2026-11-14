@@ -49,6 +49,15 @@ host's server starts with no temporary folder named). One folder is `ok`; two ar
 naming both, since the daemon's sends then reach such a seat by a later leg; a daemon that
 recorded none (an older build) is a `note`. On every platform. A focused report does not carry it.
 
+A value of the team's file that writes a full path inside its entity's projects root on this
+machine (`team config get <entity>.root`) is a `warn` naming the line and the field, since
+`{root}` reads the same there and on every other machine;
+[`team migrate --root`](migrate.md#rewriting-full-paths-as-root) shows the rewrite. The entity's
+or home project's rules that write `{root}` where this machine names no root for the entity are a
+`warn` too: seats would read the word as written. A team file that writes `{root}` with no root
+named does not load at all, and doctor exits 2 naming the line and `team config set
+<entity>.root <folder>`. Neither warning blocks `up` or `add`.
+
 A hold on the team ([team hold](hold.md)) is the last `note` line before the summary:
 `hold: <reason>`, or `hold until <instant>: <reason>`, naming `team hold --release` as what clears
 it. It is a note: the summary's counts do not move, and no exit changes. A hold past its `until`

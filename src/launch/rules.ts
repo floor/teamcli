@@ -6,6 +6,7 @@ import { renderSignature } from '../file/signature.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
 import { readPolicyChain } from '../policy/sources.ts';
+import { filledPath, hasRootWord } from '../file/root-word.ts';
 import { landingRule, policyRuleLines, resolveWorkSettings, vaultRule, type WorkSettings } from '../policy/work-settings.ts';
 import { homeProjectIdOf } from '../registry/projects.ts';
 
@@ -361,6 +362,30 @@ export function formatComposedRules(
     return `No entity, project, or team rules declared for ${team.project}.\n`;
   }
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Why a seat may not launch with these rules: the entity's or the effective home project's rules —
+ * the very ones `rulesOf` composes, from the same chain — write `{root}` or `{worktrees}`, and this
+ * machine cannot fill the word (src/file/root-word.ts). Undefined when the rules carry no word
+ * left unfilled. The launch refuses the seat rather than start it with a rule naming no folder.
+ */
+export function inheritedRulesProblem(team: TeamFile, root: string, home: string = homedir()): string | undefined {
+  const work = workSettingsFor(team, root, home);
+  if (work === null) return undefined;
+  const left = [...(work.entityRules ?? []), ...(work.projectRules ?? [])].filter(hasRootWord);
+  if (left.length === 0) return undefined;
+  const entity = work.entityName ?? team.entity;
+  const why = entity === null ? 'the team names no entity' : (() => {
+    const filled = filledPath(left.join('\n'), home, entity);
+    return filled.ok ? 'the words cannot be filled on this machine' : filled.why;
+  })();
+  return `its entity's or project's rules write {root} or {worktrees}, and ${why}`;
+}
+
+/** The `rulesProblem` field of a launch seat, present only when there is one. */
+export function withRulesProblem(problem: string | undefined): { rulesProblem?: string } {
+  return problem === undefined ? {} : { rulesProblem: problem };
 }
 
 /** The work settings a seat's rules read: the signed chain for this team, or null when it cannot be read. */

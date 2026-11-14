@@ -52,7 +52,9 @@ function readWorkspace(
     if (/[\x00-\x1f\x7f`]/.test(path)) {
       check.fail(at, 'workspace.path must not contain control characters or backticks');
     }
-    const problem = worktreePathProblem(path, project, trust);
+    // A path `{root}` or `{worktrees}` was filled into may be absolute, inside the entity's folders.
+    const fromWord = check.insideWordFolder(fields.get('path')?.value, path);
+    const problem = worktreePathProblem(path, project, trust, fromWord);
     if (problem) check.fail(at, `workspace.path ${problem}`);
   }
   const protectedItems = fields.get('protected') ? check.list(fields.get('protected'), 'workspace.protected') : [];
@@ -80,8 +82,8 @@ function readWorkspace(
 }
 
 // A worktree goes under a fixed folder of its own, and inside a trust path.
-function worktreePathProblem(path: string, project: string, trust: string[]): string | null {
-  if (path.startsWith('/') || path.startsWith('~')) return 'must be relative to the project';
+function worktreePathProblem(path: string, project: string, trust: string[], fromWord = false): string | null {
+  if (!fromWord && (path.startsWith('/') || path.startsWith('~'))) return 'must be relative to the project';
   const segments = path.split('/').filter((segment) => segment && segment !== '.');
   const last = segments[segments.length - 1];
   if (last !== '{task}') return 'must end with the segment {task}';

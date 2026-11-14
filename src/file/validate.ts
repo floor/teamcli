@@ -1,7 +1,9 @@
 import type { FsReader } from '../lobby/gate.ts';
 import { YamlError, parseYaml } from '../yaml.ts';
 import type { YamlNode } from '../yaml.ts';
+import { homedir } from 'node:os';
 import { findSecrets } from './secrets.ts';
+import { fillRootWords, type FillOptions } from './root-word.ts';
 import { Check } from './check.ts';
 import { SECTIONS } from './sections/index.ts';
 import type { Ctx } from './sections/section.ts';
@@ -20,7 +22,7 @@ export { defaultBudgets } from './sections/budgets.ts';
 // `root` is the project root when the caller knows it: trust entries are then checked against it.
 // `lead` pins the seat a stored copy is read as naming, in place of the default chain: an approval
 // carries the lead it approved, and a copy read again for verification is not re-resolved.
-export function validateTeamFile(text: string, options: { home?: string; lead?: string; leadHome?: string; fs?: FsReader; root?: string; workspaceMode?: 'worktree' | 'shared' } = {}): ValidateResult {
+export function validateTeamFile(text: string, options: { home?: string; lead?: string; leadHome?: string; fs?: FsReader; root?: string; workspaceMode?: 'worktree' | 'shared' } & FillOptions = {}): ValidateResult {
   let root: YamlNode;
   try {
     root = parseYaml(text);
@@ -28,7 +30,16 @@ export function validateTeamFile(text: string, options: { home?: string; lead?: 
     if (error instanceof YamlError) return { ok: false, parse: true, errors: [{ line: error.line, message: error.message }] };
     throw error;
   }
+  // `{root}` is filled with this machine's projects root of the file's entity before any section
+  // reads a value (src/file/root-word.ts); a file that writes it where no root is named is refused.
+  const filled = fillRootWords(root, options.home ?? options.leadHome ?? homedir(), {
+    ...(options.unfilled !== undefined ? { unfilled: options.unfilled } : {}),
+    ...(options.ownerSeatStore !== undefined ? { ownerSeatStore: options.ownerSeatStore } : {}),
+  });
+  if (filled.problems.length > 0) return { ok: false, errors: filled.problems };
   const check = new Check();
+  check.wordNodes = filled.nodes;
+  check.wordFolders = filled.folders;
   const secrets = findSecrets(root, options.fs);
   check.problems.push(...secrets.refused);
   check.warnings.push(...secrets.warned);

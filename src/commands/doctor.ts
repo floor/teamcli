@@ -32,7 +32,8 @@ import { featureMismatch } from '../launch/features.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
-import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
+import { rulesOf, rulesOriginOf, workSettingsFor, type RulesOrigin } from '../launch/rules.ts';
+import { foldersUnsigned, hasRootWord, ROOT_WORD, rootPathUses, rootPathWarning, setRootCommand } from '../file/root-word.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { cliWordList, versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
@@ -998,6 +999,37 @@ import { firstRunLine, firstRunVerdicts, codexOwnServerArgv } from '../launchers
 import { contextLine, hasJsonFlag, pluralCount, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from '../permissions/must-not-pretend.ts';
 
+/**
+ * The projects-root findings (src/file/root-word.ts): each value of the team's text that writes
+ * this machine's projects root of its entity in full, where `{root}` would read the same on every
+ * machine; and the entity's or project's rules that write `{root}` where this machine names no root
+ * for the entity, which a seat would read as written. Warnings: none blocks a launch.
+ */
+export function rootWordFindings(text: string, team: TeamFile, root: string, home: string): Finding[] {
+  const findings: Finding[] = rootPathUses(text, home).map((use) => ({
+    level: 'warn',
+    text: plainLine(`the file, line ${use.line}: ${rootPathWarning(use)}`),
+  }));
+  const work = workSettingsFor(team, root, home);
+  // With no charter the entities file's folders are filled as written: say they are unsigned,
+  // wherever a word stands — the team file, the entity's or project's rules, the vault.
+  const words = hasRootWord(text) || work?.ruleWords === true || work?.vaultWords === true;
+  if (team.entity !== null && words && foldersUnsigned(home)) {
+    findings.push({ level: 'warn', text: plainLine(`the team's words ${ROOT_WORD} or {worktrees} are filled on this machine, and it has no owner charter: entity "${team.entity}"'s folders are filled from the entities file as written, bound to no signature; \`team setup\` signs one`) });
+  }
+  if (work?.vaultProblem !== undefined) findings.push({ level: 'warn', text: plainLine(`${work.vaultProblem}: seats get no vault rule`) });
+  if (work !== null && team.entity !== null) {
+    const held = [...(work.entityRules ?? []), ...(work.projectRules ?? [])].some(hasRootWord);
+    if (held) {
+      findings.push({
+        level: 'warn',
+        text: plainLine(`the entity's or project's rules write ${ROOT_WORD} or {worktrees}, and entity "${team.entity}" names no such folder on this machine: seats read the word as written; run \`${setRootCommand(team.entity)}\``),
+      });
+    }
+  }
+  return findings;
+}
+
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, ['session', 'file'], ['login', 'jules', 'json']);
@@ -1084,6 +1116,8 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           rulesOriginOf(loaded.source),
           health,
         ),
+        // Full paths inside the entity's projects root, and rules whose {root} cannot be filled.
+        ...rootWordFindings(loaded.text, team, root, sources.home),
         // Each verified general grant's chain, one note, in neither count, blocking nothing.
         ...generalGrantChainNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),
         // A wildcard general grant signed before the release that first shipped an op reaches that

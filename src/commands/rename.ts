@@ -647,7 +647,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   }
 
   const standing = (sources.standing ?? ((at) => approvalStanding(at, home)))(root);
-  const where = { home, command: 'rename' };
+  const where = { home, command: 'rename', keepWords: true };
   const originalText = readTeamText(path, where);
   // The lead the approval pinned, carried through the rename when the renamed seat is the lead.
   // A live chain that no longer resolves to that lead is drift: the rename would re-sign the
@@ -1031,7 +1031,7 @@ async function executeTeamRename(
     }
   }
 
-  const where = { home, command: 'rename' };
+  const where = { home, command: 'rename', keepWords: true };
   const originalText = readTeamText(path, where);
   const nextText = renameTeamIdentity(originalText, {
     project: newTeamName,

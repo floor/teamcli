@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { isAbsolute, posix } from 'node:path';
 import { CLIS } from '../../clis.ts';
 import type { CrossSessionInbound } from '../../launch/declaration.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
@@ -613,8 +613,15 @@ function readCwd(entry: YamlEntry | undefined, at: string, trust: string[], chec
     check.fail(entry.value.line, `${at}: cwd must not contain control characters or backticks`);
     return { cwd: '.', outside: false };
   }
+  // An absolute folder `{root}` or `{worktrees}` was filled into is the file's word, not a path of
+  // this machine's: it is taken when it lies inside the entity's folders (src/file/root-word.ts).
+  if (check.insideWordFolder(entry.value, cwd)) {
+    const path = posix.normalize(cwd).replace(/(.)\/+$/, '$1');
+    const inProject = root !== undefined && (path === root || path.startsWith(`${root}/`));
+    return { cwd: path, outside: !inProject && !insideTrust(path, trust, root) };
+  }
   if (cwd.startsWith('/') || cwd.startsWith('~') || /^[A-Za-z]:[\\/]/.test(cwd)) {
-    check.fail(entry.value.line, `${at}: cwd must be relative to the project, never absolute and never "~"`);
+    check.fail(entry.value.line, `${at}: cwd must be relative to the project, never absolute and never "~"${check.wordNodes.has(entry.value) ? ", or inside the entity's folders where it names {root} or {worktrees}" : ''}`);
     return { cwd: '.', outside: false };
   }
   const path = normalize(cwd);

@@ -381,6 +381,123 @@ More fields exist — `tools`, `trust`, `machine`, `limits`, `watch`, `visibilit
 `releases` — and the comments `team init` writes name them; validation refuses what it cannot
 check, and this build acts on what [the commands](commands/README.md) read.
 
+## The entity's projects root: `{root}`
+
+Each entity has one projects root per machine: the folder its repositories sit directly under.
+On one machine that may be `~/Code/acme`; on a server where the entity has an account of its own,
+`/home/acme/repos`. Each machine names it outright; it is never derived from the home. A
+repository's folder under the root need not carry its remote's name: `{root}/v4` is whatever folder
+is there. A team file names it with one word, `{root}`, in place of the full path, so the same
+file reads on every machine:
+
+```yaml
+entity: acme
+rules:
+  - "Never switch, reset or commit in {root}/site itself; work only in your worktree."
+  - Docs for this team live in {root}/docs/projects/site/.
+seats:
+  - role: implementer
+    name: builder
+    launch: zsh {root}/docs/tools/as-acme.sh codex -m gpt-6.1-sol
+    brief: "{root}/docs/briefs/builder.md"
+```
+
+The root itself is the machine's, never the team file's: it is the entity's `root:` in the
+owner's entities file, set and read with [`team config`](commands/config.md):
+
+```sh
+team config set acme.root ~/Code/acme    # on this machine
+team config get acme.root
+team config unset acme.root
+```
+
+- The word is filled when the file is read, in every value it writes — a launch line, a rule, a
+  seat's folder, a brief, a trust path — and never in a key. It reads as the absolute folder, so
+  `~/Code/acme` fills `{root}/docs` as the home's full path. `${root}`, the shell's own variable,
+  is left alone, and a `{secret:<entry>}` word on the same launch line is filled as before.
+- A value that starts with the word is quoted (`"{root}/site"`): unquoted, YAML reads the brace as
+  a map, and the reader says so.
+- A folder of an entity holds only letters, digits and `/ . _ - @ +` after a leading `~/`: a
+  launch line carries it as it is, so a space, a quote, `$`, a backtick, a backslash, any other
+  `~` (a pattern word to some shells' globbing) or any of `;|&<>()*?[]{}` is refused when the
+  folder is set. It is an absolute path or `~/…`, never the filesystem's root, the home
+  itself, a folder above the home, or a path with a `..` segment.
+- The entities file is not signed, so a folder is bound to the owner's charter where there is one:
+  the word is filled with the folder's real path (every link resolved), and that path must exist
+  and lie inside one of the charter's roots, or the file is refused. On a machine with no charter
+  the folder is filled as the entities file writes it, and `team doctor` warns that it is bound to
+  no signature.
+- A seat's `cwd` and `workspace.path` take an absolute path when it comes from the word and lies
+  inside the entity's folders (`cwd: "{root}/site"`, `path: "{worktrees}/site/{task}"`); an
+  absolute path the file writes itself is still refused.
+- `team down` and `team status` read a team whose folder this machine no longer names, leaving
+  the word as written and leaving out any `trust` entry that writes it, so a running team can
+  still be shown and stopped; every command that launches refuses it.
+- A file that writes `{root}` on a machine where its entity names no root, or that names no
+  `entity:`, is refused when it is read — by `up`, `doctor`, `check` and every other command — on
+  the first line that writes it, with the command that sets one. A launch never runs a literal
+  `{root}`. A file that does not write the word reads exactly as before.
+- The entity's and the home project's rules (`<entity>.rules`, `project.<id>.rules`) read the word
+  the same way, and a rule whose word this machine cannot fill refuses the team as the file's own
+  word would, even when the team file writes none; a launch refuses the seat on the same rules
+  it would compose, the registry's home project included.
+- In a launch line or a setup step, a line that holds a command substitution, a here-document or
+  `eval` is never rewritten by `team migrate --root` or an editor: its paths are listed and left.
+- Setting the root of an entity, or moving it, changes what its `{root}` teams read at their next
+  read: a running seat keeps the line it was launched with until it is launched again. An
+  approval is bound to the paths as they were filled in when it was signed, so moving a root needs
+  fresh approvals for the teams that write the word.
+- An editor that writes a value back — `team swap`, `team add`, `team rename`,
+  `team launchers migrate` — writes it with the words: a line it adds or changes that holds a full
+  path inside the entity's folders is written as `{root}/…` or `{worktrees}/…` again, so a seat
+  swapped on one machine keeps a file that reads on every other. A line the editor did not touch,
+  and a value the owner sets with `team config`, is kept as written. In a shell line (a launch
+  line, a setup step) a path is written as the word only where that keeps what the line runs:
+  `~/…` inside quotes and `$HOME/…` inside single quotes are text to the shell, not the home, and
+  stay as written.
+- [`team doctor`](commands/doctor.md) warns about every value that writes a full path inside the
+  entity's folders on this machine, and [`team migrate --root`](commands/migrate.md) rewrites those
+  paths as `{root}/…` and `{worktrees}/…`: `--dry-run` first lists each line it would change.
+
+### What the root check protects, and what it does not
+
+The checks bind the words to what the owner signed: a folder is filled only with a real path that
+holds no shell character, and, on a machine with a charter, only inside a charter root that still
+resolves to what was signed. A link put in place of a signed root, a link inside a root that leads
+out of it, and an edit of the entities file to a folder outside the charter are each refused when
+the team is read, and the charter is verified on every read. What they do not do is hold a folder
+still between that read and the moment a seat's shell runs its line: a process of the same account
+can rename a checked folder and put a link in its place in between. An account can always change
+its own folders; these checks keep the team's words and the owner's signature in step, and are no
+boundary between processes of one account. A machine with no charter binds the folders to nothing,
+and `team doctor` says so.
+
+### The worktrees folder: `{worktrees}`
+
+An entity's worktrees sit in one folder per machine too: `<root>/worktrees` unless the entity's
+entry names another. On a laptop that is `~/Code/acme/worktrees`, inside the root; on a server it
+may sit beside the root, `/home/acme/worktrees` next to `/home/acme/repos`. A team file names it
+`{worktrees}`, with the same rules as `{root}`: filled in every value, quoted at the start of a
+value, refused on a machine whose entity names neither a worktrees folder nor a root it sits
+under.
+
+```sh
+team config set acme.worktrees ~/worktrees    # beside the root, on this machine
+team config unset acme.worktrees              # back to <root>/worktrees
+```
+
+A full path inside the worktrees folder is written as `{worktrees}/…` by the rewrite and the
+editors, even where the folder sits inside the root. [`team setup`](commands/setup.md) signs the
+charter over each entity's root, and over its worktrees folder when that folder lies outside the
+root.
+
+### The vault under the root
+
+The `vault-root` policy, the folder seats keep notes and memory under, takes `{root}/…` and
+`{worktrees}/…` as well as an absolute or `~/` path, and reads the entity's folders on the machine
+that reads it. Where the entity names no such folder the policy names no vault there, seats get no
+vault rule, and `team doctor` says why.
+
 ## `tasks`
 
 Names the team's one task source. It is an owner section: only the owner writes it. Omitted, it

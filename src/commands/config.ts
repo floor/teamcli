@@ -3,8 +3,8 @@
 // edit this team's own record — what `.agents/team.yaml` used to hold — wherever the team lives
 // (the registry under the registry source): one schema-validated editor in place of editing a
 // file by hand. Every write is validated by the team-file validator before it is stored, and is
-// the owner's, as editing the file was. A path whose last segment is `names.unique` or `reminders`
-// reads or writes one key of the owner's entity record instead, and reads no team
+// the owner's, as editing the file was. A path whose last segment is `names.unique`, `reminders`
+// or `root` reads or writes one key of the owner's entity record instead, and reads no team
 // (src/config/entity-edit.ts).
 
 import { readArgs } from '../args.ts';
@@ -49,8 +49,11 @@ reach makes the command rewrite the record whole, which does not keep its commen
 command says so on stderr (comments_kept: false in --json). edit keeps the comments it
 leaves.
 
-A path whose last segment is names.unique or reminders names one key of an entity's own record
-in the owner's entities file (<entity>.names.unique, <entity>.reminders). names.unique is how far
+A path whose last segment is names.unique, reminders, root or worktrees names one key of an
+entity's own record in the owner's entities file (<entity>.names.unique, <entity>.reminders,
+<entity>.root, <entity>.worktrees). root is the folder the entity's projects sit directly under on
+this machine, an absolute path or ~/…; worktrees is the folder its worktrees sit in, <root>/worktrees
+unless set. A team record names them as {root} and {worktrees}, and unset removes either. names.unique is how far
 apart seat nicknames stay — entity, project, team or off. reminders is the list the reminder
 chore fires: each item is {name, at, zone, catchUp, text, to}, the same shape the daemon reads.
 A set is the owner's, or a seat's under the owner's general grant: 0.5.10 admits a wildcard grant
@@ -86,6 +89,23 @@ export type ConfigSources = {
   editor?: (path: string) => number;
 };
 
+/**
+ * `<entity>.root` and `<entity>.worktrees`: one entity's folders on this machine
+ * (src/config/entity-edit.ts). A path
+ * whose first segment is a section of the team's own record (`seats.root`, a seat named root) or a
+ * list index stays the team's, so the entity form never takes a team path from it.
+ */
+async function isEntityRootPath(path: string): Promise<boolean> {
+  const folder = ['.root', '.worktrees'].find((suffix) => path.endsWith(suffix) && path.length > suffix.length);
+  if (folder === undefined) return false;
+  const head = path.split('.')[0] ?? '';
+  if (/^\d+$/.test(head)) return false;
+  const { SECTIONS } = await import('../file/sections/index.ts');
+  const heads = new Set<string>(['coordinator', 'leads']);
+  for (const section of SECTIONS) heads.add((section.key ?? section.name).split('.')[0] as string);
+  return !heads.has(head);
+}
+
 export async function runConfig(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
@@ -104,7 +124,8 @@ export async function runConfig(argv: string[], rawIo: Io, sources: ConfigSource
       verb !== 'edit' &&
       (entityPath.endsWith('.names.unique') ||
         entityPath.endsWith('.reminders') ||
-        (entityPath.endsWith('.rules') && entityPath.includes('.')))
+        (entityPath.endsWith('.rules') && entityPath.includes('.')) ||
+        (await isEntityRootPath(entityPath)))
     ) {
       const { runEntityRecordEdit } = await import('../config/entity-edit.ts');
       return runEntityRecordEdit(argv, rawIo, sources);
