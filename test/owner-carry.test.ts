@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PINNED_TERMINAL_REASON, type Caller } from '../src/caller.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
-import { admitOwnerAction, approveOwnerAction, ownerActionHash, readOwnerActionRecord, type OwnerActionRecord } from '../src/client/owner-action.ts';
+import { admitOwnerAction, approveOwnerAction, createOwnerActionRequest, ownerActionHash, readOwnerActionRecord, type OwnerActionRecord } from '../src/client/owner-action.ts';
 import type { OwnerAnswerFile, OwnerRequestFile } from '../src/client/owner-carry.ts';
 import { exportOwnerSeat, pinOwnerSeat, type SignedOwnerSeatExport } from '../src/client/owner-pin.ts';
 import { ownerSeatInbox, registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
@@ -219,6 +219,23 @@ describe('a request carried to the signer machine and its answer carried back', 
     expect(again.err + again.out).toContain('single-use');
     const replayed = await answer(s.server.home, s.server.root, signed.path, LATER(120_000));
     expect(replayed.code).toBe(1);
+  });
+
+  test('a request made on the signer machine never joins a card carried from another machine', async () => {
+    const s = await scene();
+    const request = await exportRequest(s);
+    expect((await sign(s, request.path, null)).code).toBe(0);
+    const foreign = readFileSync(join(actionRequestsFolder(s.mac.home), `${s.id}.json`), 'utf8');
+    expect(JSON.parse(foreign).join).toBeUndefined();
+    const carried = (JSON.parse(readFileSync(request.path, 'utf8')) as OwnerRequestFile).request;
+    // The same folder, team and HEAD, asked on the signer machine at once: its own card.
+    const local = createOwnerActionRequest(s.mac.home, { actions: ['team-import'], root: carried.params.root, team: 'acme', head: carried.params.head, args: { 'team-import': [] }, requestedBy: 'probe' }, NOW);
+    expect(local.ok).toBe(true);
+    if (local.ok) {
+      expect(local.record.request_id).not.toBe(s.id);
+      expect(local.record.params.machine).toBeUndefined();
+    }
+    expect(readFileSync(join(actionRequestsFolder(s.mac.home), `${s.id}.json`), 'utf8')).toBe(foreign);
   });
 
   test('a card answered on the owner page: sign with no answer waits, then writes the page\'s answer', async () => {

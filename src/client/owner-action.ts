@@ -312,6 +312,8 @@ function joinCardAfter(home: string, seen: number): OwnerActionRecord | null {
       const record = JSON.parse(readFileSync(join(actionRequestsFolder(home), name), 'utf8')) as OwnerActionRecord;
       const epoch = record.join?.epoch;
       if (epoch === undefined || !(epoch > seen)) continue;
+      // A card carried from another machine is never joined here, whatever epoch it carries.
+      if (record.params?.machine !== undefined && record.params.machine.id !== machineBindingOf(home)?.id) continue;
       if (found === null || epoch > (found.join?.epoch ?? 0)) found = record;
     } catch {
       // skip a card that is mid-write
@@ -563,7 +565,10 @@ export function recordForeignOwnerAction(home: string, record: OwnerActionRecord
   mkdirSync(actionRequestsFolder(home), { recursive: true, mode: 0o700 });
   const path = join(actionRequestsFolder(home), `${record.request_id}.json`);
   const text = `Request ${record.request_id} from machine ${record.params.machine.name}: ${ownerActionSummary(record.params)} Authorized? oui, always, or non.`;
-  const written = writeExclusive(path, `${JSON.stringify(record, null, 2)}\n`);
+  // The other machine's coalescing epoch stays there: a request made here never joins a card
+  // that came from another machine. The epoch is not part of the hash.
+  const kept: OwnerActionRecord = { request_id: record.request_id, params: record.params, params_sha256: record.params_sha256, created: record.created, expires_at: record.expires_at };
+  const written = writeExclusive(path, `${JSON.stringify(kept, null, 2)}\n`);
   if (written === 'failed') return { ok: false, why: 'the request could not be recorded' };
   if (written === 'exists') {
     const held = readOwnerActionRecord(home, record.request_id);
