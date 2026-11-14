@@ -135,7 +135,8 @@ corrected run. The write is planned, the answer spent and the planned text writt
 file's one lock, so a file that changes in between cannot spend an answer for a write that is
 then refused. The owner's card names the exact change: set or unset, the key, the value in full
 and the file. An entity's record is answered once or denied: `always` is refused, and no
-standing rule ever admits one. `--request` and `--approval` take no `get`, never go together, and never go
+standing rule ever admits one. A project's rules through an answer name the project by its id
+(`project.<id>.rules`), never its display name, and the write under the lock requires that id. `--request` and `--approval` take no `get`, never go together, and never go
 with `--general`. On a machine whose owner seat is pinned from another machine this is the only
 way, and the request is carried with `team approvals export`.
 

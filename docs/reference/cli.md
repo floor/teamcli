@@ -1096,7 +1096,7 @@ Usage:
 
 ### Who may run it
 
-`owner-only` — the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, or to the owner's signed answer to that exact verb, and the system service manager's no-terminal start is the owner's own login session
+`owner-only` — the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, or to the owner's signed answer to that exact install or uninstall, and the system service manager's no-terminal start is the owner's own login session
 
 ### Flags
 
@@ -1145,7 +1145,7 @@ Usage:
 
 #### Who may run it
 
-`owner-only` — the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact request (`--request`, `--approval`); it starts, stops and kills no process
+`owner-only` — the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, or the owner's dev-mode admission for a placed lead; it starts, stops and kills no process
 
 #### Flags
 
@@ -1208,7 +1208,7 @@ Usage:
 
 #### Who may run it
 
-`owner-only` — restarting the daemon the installed unit runs is the owner's act; a verified general grant whose ops name `daemon`, the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact restart (`--request`, `--approval`) are the other ways; the restart writes nothing
+`owner-only` — restarting the daemon the installed unit runs is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way; the restart writes nothing
 
 #### Flags
 

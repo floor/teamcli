@@ -556,6 +556,15 @@ export function recordOwnerActionAnswer(home: string, prepared: PreparedOwnerAns
   return { ok: true, choice };
 }
 
+/** Whether the answer would be signed by the credential store's own prompt: the named signer, or
+ *  the only one, is a device key. A passkey, or a signer that cannot be told, is not. */
+function deviceKeySigner(home: string, name: string | undefined): boolean {
+  const seat = readOwnerSeat(home);
+  if (seat === null) return false;
+  const signer = name === undefined ? (seat.signers.length === 1 ? seat.signers[0] : undefined) : seat.signers.find((one) => one.name === name);
+  return signer !== undefined && signer.type !== 'webauthn';
+}
+
 /** The owner seat answers one request; `always` also stores a rule for the parent folder.
  *  `expect` is the parameter hash the owner was shown: a request that no longer has it is not
  *  signed. */
@@ -569,9 +578,11 @@ export function approveOwnerAction(
 ): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
   const ready = prepareOwnerActionAnswer(home, id, word, store, now, via);
   if (!ready.ok) return ready;
-  // A card that carries an exact change is signed only under a prompt inside the budget: its
-  // change, or the short form shown in full before it. Nothing is cut to fit.
-  if (via.assertion === undefined && ready.prepared.card.change !== undefined && cardPrompt(ready.prepared.card).length > PROMPT_MAX) {
+  // A card that carries an exact change is signed by the credential store only under a prompt
+  // inside the budget: its change, or the short form shown in full before it. Nothing is cut to
+  // fit. A passkey signer shows no such prompt: its challenge is prepared and answered on the owner
+  // page, which shows the whole card, and is bound to the same record by `expect`.
+  if (via.assertion === undefined && deviceKeySigner(home, via.signer) && ready.prepared.card.change !== undefined && cardPrompt(ready.prepared.card).length > PROMPT_MAX) {
     return { ok: false, why: `request ${id} does not fit the confirmation prompt; answer it on the owner page; nothing was signed` };
   }
   const signed = signOwnerAnswer(home, ready.prepared.answer, via.signer, store, cardPrompt(ready.prepared.card), via.assertion);

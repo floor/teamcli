@@ -354,22 +354,23 @@ run and are never written into the unit.
 
 The owner's signed answer admits `install` and `uninstall`, for any caller. `--request`
 records the verb's plan, resolved once: the home the unit is for (the `--home` folder, or this
-home) and, for an install, every checkout it hosts (named with `--root`, or the checkout the
-command stands in) and its hosting opt-ins. Every folder is its real path, and a folder that
-does not resolve refuses the request. The owner's card shows the whole plan. `--approval
-<request-id>` resolves the plan again, runs only when it is the plan the answer binds, and then
-executes exactly that plan: nothing is resolved again after the check, so a relative folder,
-another working folder or a link changed later never means another target under the same
-answer. A value of `--home`, `--root`, `--route` or `--reason` that starts with `-` is refused.
-A daemon request is answered once or denied: `always` is refused, and no standing rule admits
-one. The answer is checked when the command starts, with nothing spent, and spent once just
-before the service manager is asked, so a run refused before that (no service manager, a
+home, as its real path) and, for an install, its hosting opt-ins and the teams registered for
+this account as they are now. The installed unit names no checkout: the daemon it starts hosts
+the teams registered for this account, read again at each start and heartbeat, so an owner-seat
+install takes no `--root`, and the owner's card says "hosting the teams registered for this
+account" with the list as it is when the request is made. `--approval <request-id>` resolves the
+plan again and runs only when it is the plan the answer binds (a home or a registry that changed
+since admits nothing), then executes exactly that plan. A folder that does not resolve refuses
+the request. A value of `--home`, `--root`, `--route` or `--reason` that starts with `-` is
+refused. A daemon request is answered once or denied: `always` is refused, and no standing rule
+admits one. The answer is checked when the command starts, with nothing spent, and spent once
+just before the service manager is asked, so a run refused before that (no service manager, a
 program that cannot be read) keeps it; a dry run never spends it. A change the service manager
 refuses after that has spent the answer: a new answer is needed to retry. On a machine whose
 owner seat is pinned from another machine this is the only way, and the request is carried with
-`team approvals export`. `restart` and `fault-watch` take no request yet: on such a machine
-they stay with the owner, a general grant naming `daemon` (`restart`) or a dev-mode lead. A
-refused answer is `daemon.approval-refused`.
+`team approvals export`. `restart` and `fault-watch` take no request yet: on such a machine they
+stay with the owner, a general grant naming `daemon` (`restart`) or a dev-mode lead. A refused
+answer is `daemon.approval-refused`.
 
 A caller who is not the owner, holds no such grant and is not a lead the dev-mode lift admits is
 refused with `only the owner, a general grant naming daemon, or a lead in development mode

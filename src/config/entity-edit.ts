@@ -401,6 +401,13 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     { root: dirname(file), team: targetName, head: null, words: [...args.rest, `file=${file}`] },
   );
   let spendAnswer = false;
+  // A project's rules through an answer name the project by its id, exactly: a display name can
+  // later be moved to another project, so it is never what an answer binds. The write under the
+  // lock then requires that same id.
+  if (asked && isProjectRules) {
+    const exact = exactProjectId(file, targetName);
+    if (exact !== null) return pathRefused(io, json, exact);
+  }
   if (asked) {
     const step = door(true);
     if (step.kind === 'requested') {
@@ -446,7 +453,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     try {
       outcome = setProjectRules(home, targetName, list as string[], {
         dryRun,
-        allowDisplayName: true,
+        allowDisplayName: !asked,
         ...(spendAnswer ? { claim: spend } : {}),
       });
     } catch (error) {
@@ -644,6 +651,22 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   }
   // exit: config.entity.written
   return 0;
+}
+
+/** Why `name` is not the exact id of a project in `file`, naming the id when `name` is a display
+ *  name; null when it is one. */
+function exactProjectId(file: string, name: string): string | null {
+  let projects: YamlValue | undefined;
+  try {
+    const record = toValue(parseYaml(readFileSync(file, 'utf8')));
+    projects = isMap(record) ? record.projects : undefined;
+  } catch {
+    return `${file} cannot be read, so project "${name}" cannot be named exactly; nothing was recorded or written`;
+  }
+  if (isMap(projects) && Object.hasOwn(projects, name)) return null;
+  const byName = isMap(projects) ? Object.entries(projects).find(([, raw]) => isMap(raw) && raw.name === name) : undefined;
+  if (byName !== undefined) return `"${name}" is a project's display name; an owner-seat answer binds the project's id: use project.${byName[0]}.rules; nothing was recorded or written`;
+  return `no project has the id "${name}" in ${file}; an owner-seat answer binds a project's id; nothing was recorded or written`;
 }
 
 /** One problem as a value, so the same complaint before and after an edit compares equal. */

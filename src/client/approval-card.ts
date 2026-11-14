@@ -127,13 +127,16 @@ export function ownerActionChange(action: string, words: readonly string[] | und
   if (action === 'team-daemon') {
     const verb = words[0] ?? '';
     const home = boundValue(words, 'home');
-    const roots = words.filter((word) => word.startsWith('root=')).map((word) => word.slice(5));
+    const registered = words.filter((word) => word.startsWith('registered=')).map((word) => word.slice('registered='.length));
     const flags = ['presence', 'watch'].filter((flag) => words.includes(flag));
-    const hosting = roots.length > 0 ? `, hosting ${roots.map(quoted).join(', ')}` : '';
     const with_ = flags.length > 0 ? `, with ${flags.join(' and ')}` : '';
-    const change = `${verb} for home ${home === undefined ? 'this home' : quoted(home)}${hosting}${with_}`;
-    const digest = shortDigest(JSON.stringify({ verb, home: home ?? null, roots, flags }));
-    const changeShort = `${verb} for ${roots.length} checkout${roots.length === 1 ? '' : 's'}${with_}, digest ${digest}, shown in full on screen`;
+    const forHome = `for home ${home === undefined ? 'this home' : quoted(home)}`;
+    if (verb !== 'install') return { change: `${verb} ${forHome}`, changeShort: `${verb} ${forHome}` };
+    // The unit hosts whatever this account registers, at each start: the list is the one now.
+    const now = registered.length === 0 ? 'none registered now' : `now ${registered.map(quoted).join(', ')}`;
+    const change = `install ${forHome}, hosting the teams registered for this account (${now})${with_}`;
+    const digest = shortDigest(JSON.stringify({ verb, home: home ?? null, registered, flags }));
+    const changeShort = `install, hosting the teams registered for this account (${registered.length} now)${with_}, digest ${digest}, shown in full on screen`;
     return { change, changeShort };
   }
   return null;

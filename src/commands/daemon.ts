@@ -307,6 +307,11 @@ function verbProblem(parsed: Parsed): string | null {
   if (!answered && parsed.approval !== undefined) return '--approval belongs to install or uninstall';
   if (parsed.request && parsed.approval !== undefined) return '--request asks the owner seat and --approval runs an answered request: pass one';
   if (parsed.reason !== undefined && !parsed.request) return '--reason goes with --request';
+  // The installed unit names no checkout: it hosts the teams registered for this account. An
+  // owner-seat install binds what the unit runs, so it takes no --root that would read as more.
+  if ((parsed.request || parsed.approval !== undefined) && parsed.verb === 'install' && parsed.roots.length > 0) {
+    return 'an owner-seat install takes no --root: the installed unit hosts the teams registered for this account, not the checkouts a line names';
+  }
   if (parsed.verb !== 'install' && parsed.verb !== 'uninstall' && parsed.home !== undefined) {
     return '--home belongs to install or uninstall';
   }
@@ -465,12 +470,13 @@ function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSourc
 }
 
 /**
- * One install or uninstall, as it will run: the home the unit is for (the `--home` folder, or
- * this home) and, for an install, every checkout it hosts (named with `--root`, or the checkout
- * this run stands in) and its hosting opt-ins. Every folder is its real path; a folder that does
- * not resolve refuses the plan, never stands for itself. The plan's words are what an answer
- * binds, and the run executes these same targets. `--dry-run` is not bound: a dry run spends
- * nothing.
+ * One install or uninstall, as it will run: the home the unit is for (the `--home` folder, or this
+ * home, as its real path) and, for an install, its hosting opt-ins. The installed unit names no
+ * checkout — the daemon it starts hosts the teams registered for this account, read at each start
+ * and heartbeat — so the plan binds the registered checkouts as they are when the request is made,
+ * for the owner to read and as the install's own list; a registry that changed since admits
+ * nothing. A folder that does not resolve refuses the plan. `--dry-run` is not bound: a dry run
+ * spends nothing.
  */
 type DaemonPlan = { targetHome: string; realTargetHome: string | null; roots: string[] | null; words: string[] };
 
@@ -492,17 +498,21 @@ function daemonPlan(io: Io, parsed: Parsed, home: string): DaemonPlan | { why: s
   const words: string[] = [parsed.verb ?? '', `home=${targetHome}`];
   let roots: string[] | null = null;
   if (parsed.verb === 'install') {
-    const named = rootsOf(parsed, io, targetHome, 'install');
-    if ('problem' in named) return { why: named.problem };
+    let registered: string[];
+    try {
+      registered = runningRegistryRoots(readTeams(targetHome), targetHome).map((one) => one.root);
+    } catch (error) {
+      return { why: error instanceof Error ? error.message : 'the team registry could not be read' };
+    }
     roots = [];
-    for (const root of named.roots) {
+    for (const root of registered) {
       try {
         roots.push(realpathSync(root));
       } catch {
-        return { why: `the checkout ${root} cannot be resolved` };
+        return { why: `the registered checkout ${root} cannot be resolved` };
       }
     }
-    for (const root of roots) words.push(`root=${root}`);
+    for (const root of roots) words.push(`registered=${root}`);
     if (parsed.presence) words.push('presence');
     if (parsed.watch) words.push('watch');
   }
@@ -1728,7 +1738,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   // install
-  // An answered install hosts exactly the checkouts its plan resolved and the answer bound.
+  // An answered install's list is the registered checkouts its plan read and the answer bound;
+  // the unit itself names none (it hosts the teams registered for this account at each start).
   const named = answeredPlan?.roots != null ? { roots: answeredPlan.roots } : rootsOf(parsed, io, targetHome, 'install');
   if ('problem' in named) {
     refuse(io, parsed.json, 'daemon', { id: 'daemon.no-root', message: named.problem, repair: null });

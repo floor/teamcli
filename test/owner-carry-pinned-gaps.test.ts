@@ -24,6 +24,8 @@ import { runDaemon } from '../src/commands/daemon.ts';
 import { runSetup } from '../src/commands/setup.ts';
 import type { ServiceManager, ServiceProgram } from '../src/daemon/service.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
+import { serviceRunWords } from '../src/daemon/service-runtime.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { entitiesPath } from '../src/entities.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { keyOf } from '../src/store/keys.ts';
@@ -347,47 +349,42 @@ describe('the machine daemon on a machine whose owner seat is pinned', () => {
     expect(service.calls).toEqual(['uninstall']);
   });
 
-  test('an install binds one plan of real paths, runs exactly it, and a dry run spends nothing', async () => {
+  test('an install binds its home, opt-ins and the registered teams; the unit it writes names no checkout', async () => {
     const s = scene();
     const service = fakeService();
     const repo = teamCheckout(s.server.home, 'checkout');
-    const link = join(s.server.home, 'alias');
-    const { symlinkSync } = await import('node:fs');
-    symlinkSync(repo, link);
+    upsertTeam(s.server.home, teamIdOf(repo), { root: repo, lobby: repo, project: 'checkout', session: 'checkout', entity: null, lifecycle: 'running' });
+    writeFileSync(join(s.server.home, 'cli.js'), '');
     const sources = { home: s.server.home, accountHome: s.server.home, service, now: () => NOW, program: { execPath: process.execPath, entry: join(s.server.home, 'cli.js') }, health: async () => ANSWERING };
     const run = async (argv: string[]) => { const io = testIo(s.server.home, SEAT); const code = await runDaemon(argv, io, sources); return { code, io }; };
-    const asked = await run(['install', '--root', 'alias', '--presence', '--request']);
+    // A --root would read as more than the unit runs: refused on the owner-seat path.
+    expect((await run(['install', '--root', repo, '--request'])).code).toBe(2);
+    const asked = await run(['install', '--presence', '--request']);
     expect(asked.code, asked.io.err).toBe(0);
     const id = idOf(asked.io.out);
     const record = readOwnerActionRecord(s.server.home, id) as OwnerActionRecord;
-    expect(record.params.words?.['team-daemon']).toEqual(['install', `home=${realpathSync(s.server.home)}`, `root=${realpathSync(repo)}`, 'presence']);
+    expect(record.params.words?.['team-daemon']).toEqual(['install', `home=${realpathSync(s.server.home)}`, `registered=${realpathSync(repo)}`, 'presence']);
     const carried = await carry(s, [id]);
+    expect(carried.signIo.err).toContain(`hosting the teams registered for this account (now "${realpathSync(repo)}"), with presence`);
     expect((await answerOn(s, carried.answer)).code).toBe(0);
     // A dry run checks the answer and spends nothing.
-    expect((await run(['install', '--root', 'alias', '--presence', '--dry-run', '--approval', id])).code).toBe(0);
+    expect((await run(['install', '--presence', '--dry-run', '--approval', id])).code).toBe(0);
     expect(existsSync(join(actionRequestsFolder(s.server.home), `${id}.used-team-daemon`))).toBe(false);
-    // The alias now names another checkout: the plan differs, and the answer admits nothing.
+    // Another team registered since: the registry the owner read is not the one now; refused.
     const other = teamCheckout(s.server.home, 'other');
-    const { unlinkSync } = await import('node:fs');
-    unlinkSync(link);
-    symlinkSync(other, link);
-    expect((await run(['install', '--root', 'alias', '--presence', '--approval', id])).code).toBe(1);
+    upsertTeam(s.server.home, teamIdOf(other), { root: other, lobby: other, project: 'other', session: 'other', entity: null, lifecycle: 'running' });
+    expect((await run(['install', '--presence', '--approval', id])).code).toBe(1);
     expect(service.calls).toEqual([]);
-    unlinkSync(link);
-    symlinkSync(repo, link);
-    const installed = await run(['install', '--root', 'alias', '--presence', '--approval', id]);
+    upsertTeam(s.server.home, teamIdOf(other), { lifecycle: 'archived' });
+    const installed = await run(['install', '--presence', '--approval', id]);
     expect(installed.code, installed.io.err).toBe(0);
     expect(service.calls).toEqual(['install']);
-    // The unit hosts the plan's real path, not the alias.
-    expect(service.programs.at(-1)?.roots).toEqual([realpathSync(repo)]);
-    expect((await run(['install', '--root', 'alias', '--presence', '--approval', id])).code).toBe(1);
-  });
-
-  test('a checkout that does not resolve refuses the request', async () => {
-    const s = scene();
-    const asked = await daemonOn(s, ['install', '--root', join(s.server.home, 'missing'), '--request'], fakeService(), SEAT);
-    expect(asked.code).toBe(1);
-    expect(asked.io.err).toContain('nothing was recorded or run');
+    // The run words the adapter writes into the unit: the opt-in, and no checkout of any kind.
+    const words = serviceRunWords(service.programs.at(-1)!);
+    expect(words).toContain('--presence');
+    expect(words).not.toContain('--root');
+    expect(words.some((word) => word.includes(repo) || word.includes(realpathSync(repo)))).toBe(false);
+    expect((await run(['install', '--presence', '--approval', id])).code).toBe(1);
   });
 
   test('the request options belong to install and uninstall only', async () => {
@@ -446,6 +443,51 @@ describe('an exact change is never bundled, and is shown whole before it is sign
     expect(s.mac.store.prompts).toHaveLength(1);
     expect(s.mac.store.prompts[0]).toContain('shown in full on screen');
     expect(s.mac.store.prompts[0]!.length).toBeLessThanOrEqual(PROMPT_MAX);
+  });
+
+  test("a project's rules through an answer name the project by its exact id", async () => {
+    const s = scene();
+    writeFileSync(join(s.server.home, '.config', 'team', 'projects.yaml'), 'projects:\n  beacon:\n    name: Beacon\n');
+    const byName = await configOn(s, ['set', 'project.Beacon.rules', '[ "one" ]', '--request'], SEAT);
+    expect(byName.code).toBe(1);
+    expect(byName.io.err).toContain('use project.beacon.rules');
+    const unknown = await configOn(s, ['set', 'project.nowhere.rules', '[ "one" ]', '--request'], SEAT);
+    expect(unknown.code).toBe(1);
+    const byId = await configOn(s, ['set', 'project.beacon.rules', '[ "one" ]', '--request'], SEAT);
+    expect(byId.code, byId.io.err).toBe(0);
+    const id = idOf(byId.io.out);
+    const carried = await carry(s, [id]);
+    expect(carried.signIo.err).toContain('"project.beacon.rules"');
+    expect((await answerOn(s, carried.answer)).code).toBe(0);
+    // The id is gone and its display name now names another project: the write is refused under
+    // the lock, and the answer is kept.
+    writeFileSync(join(s.server.home, '.config', 'team', 'projects.yaml'), 'projects:\n  other:\n    name: beacon\n');
+    expect((await configOn(s, ['set', 'project.beacon.rules', '[ "one" ]', '--approval', id], SEAT)).code).toBe(1);
+    expect(readFileSync(join(s.server.home, '.config', 'team', 'projects.yaml'), 'utf8')).not.toContain('one');
+    writeFileSync(join(s.server.home, '.config', 'team', 'projects.yaml'), 'projects:\n  beacon:\n    name: Beacon\n');
+    expect((await configOn(s, ['set', 'project.beacon.rules', '[ "one" ]', '--approval', id], SEAT)).code).toBe(0);
+  });
+
+  test('a card over the prompt budget is refused by the credential store, and a passkey still gets its challenge', async () => {
+    const mac = signerMachine();
+    const root = join(mac.home, 'repo');
+    mkdirSync(root, { recursive: true });
+    const entity = `e${'x'.repeat(127)}`;
+    const asked = testIo(root, SEAT);
+    expect(await runConfig(['set', `${entity}.rules`, '[ "one" ]', '--request'], asked, { home: mac.home, now: () => NOW }), asked.err).toBe(0);
+    const id = idOf(asked.out);
+    const { approveOwnerAction } = await import('../src/client/owner-action.ts');
+    const byStore = approveOwnerAction(mac.home, id, 'oui', mac.store, NOW, { signer: 'mac' });
+    expect((byStore as { why: string }).why).toContain('does not fit the confirmation prompt');
+    expect(mac.store.prompts).toHaveLength(0);
+    // A passkey signer: the challenge is prepared, whatever the prompt's length.
+    const { readOwnerSeat } = await import('../src/client/owner-seat.ts');
+    const seatFile = join(mac.home, '.config', 'team', 'owner-seat.json');
+    const seat = readOwnerSeat(mac.home)!;
+    writeFileSync(seatFile, JSON.stringify({ ...seat, signers: [...seat.signers, { name: 'phone', type: 'webauthn', label: 'phone', public_key: seat.signers[0]!.public_key, credential_id: 'cred', rp_id: 'localhost' }] }));
+    writePolicySet(mac.home, { level: 'entity', target: 'floor', name: 'owner-signers', value: ['mac', 'phone'] }, { now: NOW });
+    const byPasskey = approveOwnerAction(mac.home, id, 'oui', mac.store, NOW, { signer: 'phone' });
+    expect((byPasskey as { why: string }).why).toContain('sign challenge');
   });
 
   test('every untrusted field is quoted, control characters are escaped, and the prompt stays in budget', () => {
