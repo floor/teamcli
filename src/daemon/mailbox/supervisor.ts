@@ -197,9 +197,11 @@ export function createMailboxRouter(input: MailboxRouterInput): MailboxRouter {
         && held.firstUnansweredMs !== null
         && ms - held.firstUnansweredMs >= missedBeats * input.beatMs;
       if (!behind) {
-        child.send({ type: 'tick', at: at.toISOString() });
+        // The tick is counted before it is written: a child that answers inside `send` clears
+        // the count it was asked by, not one taken after its answer.
         if (held.unanswered === 0) held.firstUnansweredMs = ms;
         held.unanswered += 1;
+        child.send({ type: 'tick', at: at.toISOString() });
         return;
       }
       held.killing = true;

@@ -231,4 +231,31 @@ describe('the mailbox router child', () => {
     children[0]?.emit({ kind: 'message', message: { type: 'heartbeat', at: clock.at.toISOString() } });
     expect(router.state().state).toBe('ok');
   });
+
+  test('a child that answers inside the send is never counted behind', () => {
+    const clock = { at: new Date('2026-11-14T15:00:00Z') };
+    let router: ReturnType<typeof createMailboxRouter> | null = null;
+    const fake = fakeChild(99);
+    const send = fake.child.send.bind(fake.child);
+    // The heartbeat arrives before `send` returns, as a synchronous transport would deliver it.
+    fake.child.send = (message) => {
+      const sent = send(message);
+      fake.emit({ kind: 'message', message: { type: 'heartbeat', at: message.at } });
+      return sent;
+    };
+    router = createMailboxRouter({
+      beatMs: 5_000,
+      missedBeats: 1,
+      now: () => clock.at,
+      log: () => {},
+      factory: () => fake.child,
+    });
+    router.tick(clock.at);
+    for (let step = 0; step < 4; step += 1) {
+      clock.at = new Date(clock.at.getTime() + 5_000);
+      router.tick(clock.at);
+      expect(router.state().state).toBe('ok');
+    }
+    expect(fake.kills).toEqual([]);
+  });
 });
