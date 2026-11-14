@@ -17,7 +17,7 @@ import { keyOf } from '../src/store/keys.ts';
 const NOW = new Date('2026-11-14T10:00:00Z');
 const UID = process.getuid?.() ?? 0;
 const made: string[] = [];
-const SUITE: OwnerStateRoots = { system: null, account: (given) => given ?? null, systemOwner: UID };
+const SUITE: OwnerStateRoots = { system: null, account: (given) => (given === undefined ? 'none' : { home: given }), systemOwner: UID };
 afterEach(() => {
   ownerStateRootsForTests(SUITE);
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -66,7 +66,7 @@ function anExport(label: string) {
 
 /** The process's own rule, with folders this test owns: a system folder, and one account home. */
 function realRoots(system: string | null, account: string, owner = UID): void {
-  ownerStateRootsForTests({ system, account: () => account, systemOwner: owner });
+  ownerStateRootsForTests({ system, account: () => ({ home: account }), systemOwner: owner });
 }
 
 describe('the account home, whatever home a command passes', () => {
@@ -93,7 +93,8 @@ describe('the account home, whatever home a command passes', () => {
     expect(pin.kind === 'pinned' && pin.fingerprint).toBe(exported.fingerprint);
   });
 
-  test('a parent that is not a folder, and an account home the user database does not answer, are not read as a pin', () => {
+  test('a parent that is not a folder, and an account home the user database does not answer, both fail closed', () => {
+    const exported = anExport('nohome');
     const account = temp('notdir');
     mkdirSync(join(account, '.config'), { recursive: true });
     writeFileSync(join(account, '.config', 'team'), 'a file where the folder was');
@@ -101,11 +102,17 @@ describe('the account home, whatever home a command passes', () => {
     expect(ownerStateOf().kind).toBe('refused');
     expect(ownerMachinePinned()).toBe(true);
     expect(readOwnerPin(account).kind).toBe('refused');
-    ownerStateRootsForTests({ system: null, account: () => null, systemOwner: UID });
-    expect(ownerStateOf()).toEqual({ kind: 'none', write: null });
-    const exported = anExport('nohome');
-    ownerStateRootsForTests({ system: null, account: () => null, systemOwner: UID });
+    // The user database does not answer: the pin could be in a home the resolver cannot find.
+    ownerStateRootsForTests({ system: null, account: () => 'unresolved', systemOwner: UID });
+    const state = ownerStateOf('/any/home');
+    expect(state.kind).toBe('refused');
+    if (state.kind === 'refused') expect(state.why).toContain('user database');
+    expect(ownerMachinePinned()).toBe(true);
+    expect(readOwnerPin(account).kind).toBe('refused');
     expect(pinOwnerSeat(account, exported.signed, NOW).ok).toBe(false);
+    // A scene that names no account at all (the suite's own roots, no home) was never pinned.
+    ownerStateRootsForTests({ system: null, account: () => 'none', systemOwner: UID });
+    expect(ownerStateOf()).toEqual({ kind: 'none', write: null });
   });
 });
 
@@ -115,7 +122,7 @@ describe('the system folder, read first when it is present and protected', () =>
     const staging = temp('staging');
     mkdirSync(join(staging, '.config', 'team'), { recursive: true });
     // The administrator's own step, done here by hand: the pin and machine record put in place.
-    ownerStateRootsForTests({ system: null, account: () => staging, systemOwner: owner });
+    ownerStateRootsForTests({ system: null, account: () => ({ home: staging }), systemOwner: owner });
     if (!pinOwnerSeat(staging, exported.signed, NOW, { name: 'server' }).ok) throw new Error('pin');
     const system = join(temp('etc'), 'teamcli');
     mkdirSync(system, { mode: 0o755 });

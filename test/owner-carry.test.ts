@@ -21,7 +21,7 @@ import { runDevelopmentMode } from '../src/commands/development-mode.ts';
 import { readDevelopmentMode } from '../src/development_mode.ts';
 import { ownerSeatPinFile } from '../src/client/owner-pin-path.ts';
 import { exportOwnerSeat, pinOwnerSeat, type SignedOwnerSeatExport } from '../src/client/owner-pin.ts';
-import { ownerSeatInbox, registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
+import { ownerSeatInbox, readOwnerSeat, registerOwnerSeat, signOwnerAnswer, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { actionApprovalsFolder, actionRequestsFolder } from '../src/client/team-create.ts';
 import { runApprovals } from '../src/commands/approvals.ts';
 import { runImport } from '../src/commands/import.ts';
@@ -498,7 +498,7 @@ describe('the signed window (review finding 5)', () => {
     expect(existsSync(join(actionRequestsFolder(s.mac.home), `${s.id}.json`))).toBe(false);
   });
 
-  test('a record from before the window: refused on a pinned machine, read as before on a machine with a local owner', async () => {
+  test('a record from before the window: refused on a pinned machine; on a local one never signed again, and an old answer stands fifteen minutes', async () => {
     const s = await scene();
     const path = join(actionRequestsFolder(s.server.home), `${s.id}.json`);
     const record = JSON.parse(readFileSync(path, 'utf8')) as OwnerActionRecord;
@@ -509,16 +509,40 @@ describe('the signed window (review finding 5)', () => {
     expect(await runApprovals(['export', s.id, '--out', join(s.files, 'old.json')], io, { home: s.server.home, now: () => NOW })).toBe(1);
     expect(io.err).toContain('carries no signed answer window');
 
-    // On the signer machine, a request recorded before the window existed answers and runs as before.
+    // On the signer machine, a pending request recorded before the window existed is never signed:
+    // the owner is told to record it again, and no prompt is shown.
     const root = join(s.mac.home, 'repo');
-    const made = createOwnerActionRequest(s.mac.home, { actions: ['team-up'], root, team: 'floor', head: null, args: { 'team-up': [] }, requestedBy: 'probe' }, NOW);
-    if (!made.ok) throw new Error(made.why);
-    const localPath = join(actionRequestsFolder(s.mac.home), `${made.record.request_id}.json`);
-    const localParams: OwnerActionParams = { ...made.record.params };
-    delete localParams.window;
-    writeFileSync(localPath, JSON.stringify({ ...made.record, params: localParams, params_sha256: ownerActionHash(localParams) }));
-    expect(approveOwnerAction(s.mac.home, made.record.request_id, 'oui', s.mac.store, NOW)).toMatchObject({ ok: true, choice: 'once' });
-    expect(admitOwnerAction(s.mac.home, made.record.request_id, { action: 'team-up', root, team: 'floor', head: null, words: [], claim: true }, s.mac.store, LATER(60_000))).toMatchObject({ ok: true, via: 'owner-seat' });
+    const legacy = (): { id: string; record: OwnerActionRecord } => {
+      const made = createOwnerActionRequest(s.mac.home, { actions: ['team-up'], root, team: 'floor', head: null, args: { 'team-up': [] }, requestedBy: 'probe' }, NOW);
+      if (!made.ok) throw new Error(made.why);
+      const localParams: OwnerActionParams = { ...made.record.params };
+      delete localParams.window;
+      const old: OwnerActionRecord = { request_id: made.record.request_id, params: localParams, params_sha256: ownerActionHash(localParams), created: made.record.created, expires_at: made.record.expires_at };
+      writeFileSync(join(actionRequestsFolder(s.mac.home), `${old.request_id}.json`), JSON.stringify(old));
+      return { id: old.request_id, record: old };
+    };
+    const pending = legacy();
+    const prompts = s.mac.store.reasons.length;
+    const refused = approveOwnerAction(s.mac.home, pending.id, 'oui', s.mac.store, NOW);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.why).toContain('record it again with --request');
+    expect(s.mac.store.reasons.length).toBe(prompts);
+
+    // A request answered under an earlier build (its answer signed then, over the windowless hash)
+    // runs once within fifteen minutes of that signed answer, and never after, whatever its
+    // unsigned expiry is edited to.
+    const answeredBefore = legacy();
+    const seat = readOwnerSeat(s.mac.home)!.team;
+    const answer = { kind: 'owner-action' as const, request_id: answeredBefore.id, params_sha256: answeredBefore.record.params_sha256, choice: 'once' as const, team: seat, seat: 'owner' as const, at: NOW.toISOString() };
+    const signed = signOwnerAnswer(s.mac.home, answer, 'mac', s.mac.store, 'an earlier build');
+    if (!signed.ok) throw new Error(signed.why);
+    writeFileSync(join(actionRequestsFolder(s.mac.home), `${answeredBefore.id}.seat-answer.json`), JSON.stringify(signed.signed));
+    writeFileSync(join(actionRequestsFolder(s.mac.home), `${answeredBefore.id}.json`), JSON.stringify({ ...answeredBefore.record, expires_at: null }));
+    const ask = { action: 'team-up' as const, root, team: 'floor', head: null, words: [], claim: true };
+    const late = admitOwnerAction(s.mac.home, answeredBefore.id, ask, s.mac.store, LATER(16 * 60_000));
+    expect(late.ok).toBe(false);
+    if (!late.ok) expect(late.why).toContain('record it again with --request');
+    expect(admitOwnerAction(s.mac.home, answeredBefore.id, ask, s.mac.store, LATER(60_000))).toMatchObject({ ok: true, via: 'owner-seat' });
   });
 });
 

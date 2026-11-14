@@ -558,19 +558,34 @@ function boundAnswer(home: string, signed: SignedOwnerAnswer, record: OwnerActio
   return { ok: true, answer: a, signer: verified.signer.name };
 }
 
-/** The owner seat answers one request; `always` also stores a rule for the parent folder. */
+/** The refusal for a request recorded by a build before the signed window: it is never signed
+ *  again, on any machine, so its unsigned expiry can never be stretched under a fresh answer. */
+export function windowlessRefusal(id: string): string {
+  return `request ${id} was recorded by an earlier build and carries no signed answer window, so it is not signed; record it again with --request`;
+}
+
+/** How long an answer to a request recorded before the signed window stands: counted from the
+ *  answer's own signed time, whatever the request's unsigned expiry says. */
+export const WINDOWLESS_ANSWER_MS = OWNER_ACTION_TTL_MS;
+
+/** The owner seat answers one request; `always` also stores a rule for the parent folder.
+ *  `expect` is the parameter hash the owner was shown: a request that no longer has it is not
+ *  signed. */
 export function approveOwnerAction(
   home: string,
   id: string,
   word: string,
   store: OwnerSeatKeyStore,
   now: Date = new Date(),
-  via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } } = {},
+  via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; expect?: string } = {},
 ): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
   const choice = answerChoiceOf(word);
   if (choice === null) return { ok: false, why: `"${word}" is not an answer: oui/approved/yes, always, or non/deny` };
   const record = readOwnerActionRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
+  if (via.expect !== undefined && record.params_sha256 !== via.expect) return { ok: false, why: `request ${id} changed since it was shown; nothing was signed` };
+  // Every fresh signature covers a signed window: a request from before the window is not signed.
+  if (record.params.window === undefined) return { ok: false, why: windowlessRefusal(id) };
   // Before any card is shown or signed: a request for another machine carries all it must.
   const binding = ownerActionBindingProblem(home, record);
   if (binding !== null) return { ok: false, why: binding };
@@ -778,6 +793,11 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
     const bound = boundAnswer(home, signed, record, store, now);
     if (!bound.ok) return bound;
     if (!(Date.parse(bound.answer.at) <= answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, OWNER_ACTION_TTL_MS))) return { ok: false, why: `the owner-seat answer to ${id} was given after the request expired` };
+    // A request recorded before the signed window, answered then: its expiry is not signed, so the
+    // answer stands only for the default window after its own signed time.
+    if (p.window === undefined && !(now.getTime() < Date.parse(bound.answer.at) + WINDOWLESS_ANSWER_MS)) {
+      return { ok: false, why: `request ${id} was recorded by an earlier build with no signed answer window; its answer stood for ${WINDOWLESS_ANSWER_MS / 60_000} minutes after it was signed, and that has passed: record it again with --request` };
+    }
     if (bound.answer.choice === 'deny') return { ok: false, why: `the owner seat denied request ${id}` };
     admitted = { ok: true, via: 'owner-seat', requestId: id, signer: bound.signer };
   } else {

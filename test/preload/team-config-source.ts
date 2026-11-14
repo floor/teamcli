@@ -30,7 +30,11 @@ import '../helpers/real-registry.ts';
 // pinning the machine the suite runs on changes no scene. test/owner-state-resolver.test.ts
 // covers the real roots' rules with roots of its own.
 import { ownerStateRootsForTests } from '../../src/client/owner-pin-path.ts';
-export const SUITE_OWNER_STATE_ROOTS = { system: null, account: (given: string | undefined) => given ?? null, systemOwner: process.getuid?.() ?? 0 };
+export const SUITE_OWNER_STATE_ROOTS = {
+  system: null,
+  account: (given: string | undefined) => (given === undefined ? 'none' as const : { home: given }),
+  systemOwner: process.getuid?.() ?? 0,
+};
 ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
 afterEach(() => {
   ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);

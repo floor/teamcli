@@ -8,7 +8,8 @@
 //      system's administrator and writable by no one else, and so must every entry it holds. A
 //      system folder that holds any of the three is the machine's owner state; a later step keeps
 //      them there, out of the account's reach.
-//   2. the account's own home, from the user database: `~/.config/team`.
+//   2. the account's own home, from the user database: `~/.config/team`. An account whose home
+//      the user database does not answer is refused, since its pin could be there.
 // A machine that has ever been pinned keeps at least one of the three entries. Anything at one of
 // those paths counts — a file that does not verify, a link, a folder — and any state the resolver
 // cannot read (a parent that is not a folder, an entry it may not read, an unprotected system
@@ -22,11 +23,15 @@ import { lstatSync, type Stats } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 
+/** The account home the resolver reads: a home, no account at all (a test scene that names none),
+ *  or an account whose home the user database does not answer — which refuses, never unpins. */
+export type AccountHome = { home: string } | 'none' | 'unresolved';
+
 /** Where the resolver looks. `account` maps the home a caller passed (if any) to the account home
  *  it reads; production ignores what was passed. */
 export type OwnerStateRoots = {
   system: string | null;
-  account: (given: string | undefined) => string | null;
+  account: (given: string | undefined) => AccountHome;
   /** The uid that must own the system folder and every entry in it. */
   systemOwner: number;
 };
@@ -41,7 +46,14 @@ export function accountHome(): string | null {
   }
 }
 
-const PRODUCTION_ROOTS: OwnerStateRoots = { system: '/etc/teamcli', account: () => accountHome(), systemOwner: 0 };
+const PRODUCTION_ROOTS: OwnerStateRoots = {
+  system: '/etc/teamcli',
+  account: () => {
+    const home = accountHome();
+    return home === null ? 'unresolved' : { home };
+  },
+  systemOwner: 0,
+};
 let roots: OwnerStateRoots = PRODUCTION_ROOTS;
 
 /**
@@ -61,7 +73,8 @@ const LEDGER = 'owner-ledger';
 export type OwnerStatePlace = { kind: 'system' | 'account'; dir: string; pin: string; machine: string; ledger: string };
 
 export type OwnerStateRead =
-  /** Never pinned: nothing at any of the paths. `write` is where a first pin goes (null: no account home). */
+  /** Never pinned: nothing at any of the paths. `write` is where a first pin goes (null: a test
+   *  scene that names no account). */
   | { kind: 'none'; write: OwnerStatePlace | null }
   /** Pinned, or pinned once: at least one entry stands here. */
   | { kind: 'present'; place: OwnerStatePlace }
@@ -120,9 +133,11 @@ export function ownerStateOf(given?: string): OwnerStateRead {
     const system = systemState(roots.system, roots.systemOwner);
     if (system !== null) return system;
   }
-  const home = roots.account(given);
-  if (home === null) return { kind: 'none', write: null };
-  const place = accountPlace(home);
+  const account = roots.account(given);
+  if (account === 'none') return { kind: 'none', write: null };
+  // An account whose home cannot be found may hold a pin the resolver cannot see: refused.
+  if (account === 'unresolved') return { kind: 'refused', why: "this account's home cannot be read from the user database" };
+  const place = accountPlace(account.home);
   let any = false;
   for (const path of [place.pin, place.machine, place.ledger]) {
     const entry = probe(path);
