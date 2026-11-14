@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import type { CallerSources } from '../src/caller.ts';
 import { setHerdrCapture, setHerdrRun } from '../src/herdr.ts';
 import type { Io } from '../src/io.ts';
-import { proveWhileServing, SERVE_HANDSHAKE_GRACE_MS as GRACE, SERVE_PLACEMENT_SLOW_POLL_MS, SERVE_PLACEMENT_WAIT_MS } from '../src/mcp/serve.ts';
+import { proveWhileServing, SERVE_PLACEMENT_SLOW_POLL_MS, SERVE_PLACEMENT_WAIT_MS } from '../src/mcp/serve.ts';
 import { testIo } from './helpers.ts';
 
 const SESSION = 'placement-scene';
@@ -151,7 +151,7 @@ function client(): { lines: AsyncIterator<string>; push(line: string): void; end
  *  restores the pane before the agent in it is named. */
 const UNANCHORED = { stage: 'ready', pane: PANE, workspace: WORKSPACE };
 
-test('the handshake is answered before the placement is proven, and the inbox opens when herdr names the pane past the start bound', async () => {
+test('an unnamed recorded pane is served while unproven, and the inbox opens when herdr names it past the start bound', async () => {
   const made = scene({ [SEAT]: UNANCHORED });
   const peer = client();
   peer.push(INITIALIZE);
@@ -172,9 +172,9 @@ test('the handshake is answered before the placement is proven, and the inbox op
       sleep: async (ms) => {
         clock += ms;
         // A call while unplaced is answered by the pending serving, never held.
-        if (clock === GRACE + SERVE_PLACEMENT_WAIT_MS + SERVE_PLACEMENT_SLOW_POLL_MS) peer.push(CHECK);
+        if (clock === SERVE_PLACEMENT_WAIT_MS + SERVE_PLACEMENT_SLOW_POLL_MS) peer.push(CHECK);
         // herdr names the pane well past the old 5 s bound; the client is still connected.
-        if (clock >= GRACE + SERVE_PLACEMENT_WAIT_MS + 3 * SERVE_PLACEMENT_SLOW_POLL_MS) made.vars.name = SEAT;
+        if (clock >= SERVE_PLACEMENT_WAIT_MS + 3 * SERVE_PLACEMENT_SLOW_POLL_MS) made.vars.name = SEAT;
         await Promise.resolve();
       },
     },
@@ -191,7 +191,7 @@ test('the handshake is answered before the placement is proven, and the inbox op
   if (placed.ok) expect((await placed.next).value).toBe('{"jsonrpc":"2.0","id":3,"method":"ping"}');
 });
 
-test('a call that arrives before the first reading is held for the inbox when the caller is placed at once', async () => {
+test('a caller placed on the first reading has every line served by the inbox, none by the pending serving', async () => {
   const made = scene({ [SEAT]: created() });
   const peer = client();
   peer.push(INITIALIZE);
@@ -208,8 +208,8 @@ test('a call that arrives before the first reading is held for the inbox when th
     deps: { now: () => 0, sleep: async () => {} },
   });
   expect(placed.ok).toBe(true);
-  expect(answered).toEqual([`pending:${INITIALIZE}`]);
-  if (placed.ok) expect((await placed.next).value).toBe(CHECK);
+  expect(answered).toEqual([]);
+  if (placed.ok) expect((await placed.next).value).toBe(INITIALIZE);
 });
 
 test('a client that has gone keeps the start bound, and the last refusal is returned', async () => {
@@ -236,7 +236,7 @@ test('a client that has gone keeps the start bound, and the last refusal is retu
   });
   expect(placed.ok).toBe(false);
   expect(placed.ok ? '' : placed.why).toContain(UNNAMED);
-  expect(clock).toBe(GRACE + SERVE_PLACEMENT_WAIT_MS);
+  expect(clock).toBe(SERVE_PLACEMENT_WAIT_MS);
   expect(answered).toEqual([`pending:${INITIALIZE}`]);
 });
 
@@ -260,8 +260,8 @@ test('a caller in a pane the seat does not record is refused at once, without wa
     },
   });
   expect(placed.ok).toBe(false);
-  // Only the handshake grace ran; no placement wait followed the refusal.
-  expect(slept).toBe(GRACE);
+  // The refusal is answered at once: no wait, and no line served.
+  expect(slept).toBe(0);
 });
 
 test('a wait whose record moves the seat to another pane ends at once', async () => {
@@ -280,7 +280,7 @@ test('a wait whose record moves the seat to another pane ends at once', async ()
       now: () => clock,
       sleep: async (ms) => {
         clock += ms;
-        if (clock >= GRACE + SERVE_PLACEMENT_WAIT_MS + SERVE_PLACEMENT_SLOW_POLL_MS) {
+        if (clock >= SERVE_PLACEMENT_WAIT_MS + SERVE_PLACEMENT_SLOW_POLL_MS) {
           writeFileSync(
             join(made.stateDir, 'team.state.json'),
             `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { [SEAT]: { ...UNANCHORED, pane: 'fixture-relaunched' } }, worktrees: {} } } })}\n`,
@@ -290,5 +290,5 @@ test('a wait whose record moves the seat to another pane ends at once', async ()
     },
   });
   expect(placed.ok).toBe(false);
-  expect(clock).toBe(GRACE + SERVE_PLACEMENT_WAIT_MS + SERVE_PLACEMENT_SLOW_POLL_MS);
+  expect(clock).toBe(SERVE_PLACEMENT_WAIT_MS + SERVE_PLACEMENT_SLOW_POLL_MS);
 });

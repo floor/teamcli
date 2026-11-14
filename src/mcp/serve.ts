@@ -1059,9 +1059,6 @@ const SERVE_PLACEMENT_POLL_MS = 250;
 /** Past the start bound, while the seat's own recorded pane still has no herdr name and the
  *  client is still connected, the placement is read again at this slower pace. */
 export const SERVE_PLACEMENT_SLOW_POLL_MS = 2000;
-/** How long the start leaves the client's handshake to arrive before the first placement read,
- *  which can block on a slow terminal host. */
-export const SERVE_HANDSHAKE_GRACE_MS = 100;
 
 /** The pane the state records for a seat, or undefined when the state cannot be read or records
  *  none; the start's wait is only for a pane this says the server runs in. */
@@ -1112,24 +1109,6 @@ export async function placementAtStart(
   return last;
 }
 
-/** Stands for any line without an id: a notification, which is answered by nothing. */
-const NOTIFICATION = '\u0000notification';
-
-/** A line's JSON-RPC method, `NOTIFICATION` for a message without an id, or null when the line
- *  is not a request at all (it is then served, and refused, like any other line). */
-function methodOf(line: string): string | null {
-  if (line.trim() === '') return NOTIFICATION;
-  try {
-    const message = JSON.parse(line) as unknown;
-    if (typeof message !== 'object' || message === null || Array.isArray(message)) return null;
-    const record = message as Record<string, unknown>;
-    if (!('id' in record)) return NOTIFICATION;
-    return typeof record.method === 'string' ? record.method : null;
-  } catch {
-    return null;
-  }
-}
-
 /** What `proveWhileServing` hands back: the placement proven, with the client's next line still
  *  owed to the serving loop, or the refusal the start answers with. */
 type ServingProof =
@@ -1137,19 +1116,19 @@ type ServingProof =
   | { ok: false; why: string };
 
 /**
- * The start placement, read while the client's handshake is answered. A seat's CLI starts its
- * MCP servers during boot, and after a machine restart herdr can restore the pane before it names
- * the agent in it: the placement then cannot be proven for longer than the client waits for its
- * handshake, and a server that refused there was never started again for the whole session. So
- * the handshake is answered first, by `pending` — a serving whose every tool call refuses and
- * which opens no inbox, writes no receipt and pushes nothing — and the placement is read after it.
+ * The start placement, read while the client is served. A seat's CLI starts its MCP servers
+ * during boot, and after a machine restart herdr can restore the pane before it names the agent
+ * in it: the placement then cannot be proven for longer than the client waits for its handshake,
+ * and a server that refused there was never started again for the whole session.
  *
- * The refusal rules are `placementAtStart`'s: a first refusal is answered at once unless the
- * environment names the pane the seat's record holds, and a wait whose record stops naming that
- * pane ends at once. The difference is the bound: while the client is still connected, the seat's
- * own recorded pane is read again (every 250 ms for the first 5 s, then every 2 s) until herdr
- * names it, so the inbox opens as soon as the caller is proven. A client that has gone keeps the
- * old 5 s bound and the last refusal is returned.
+ * The first reading is taken before any line is served, and its refusal rules are
+ * `placementAtStart`'s: a refusal is answered at once, with nothing served, unless the
+ * environment names the pane the seat's record holds. In that one case the lines that arrive are
+ * answered by `pending` — a serving whose every tool call refuses with the reason, and which
+ * opens no inbox, writes no receipt and pushes nothing — while the placement is read again
+ * (every 250 ms for the first 5 s, then every 2 s) for as long as the client stays connected, so
+ * the inbox opens as soon as herdr names the pane. A wait whose record stops naming that pane
+ * ends at once, and a client that has gone keeps the old 5 s bound; the last refusal is returned.
  */
 export async function proveWhileServing(input: {
   io: Io;
@@ -1169,16 +1148,11 @@ export async function proveWhileServing(input: {
   const now = deps.now ?? Date.now;
   let next = input.lines.next();
   let ended = false;
-  /**
-   * Answers the lines that arrive until `tick` settles. In the handshake grace it stops early: at
-   * the input's end, once `initialize` is answered, or at the first line that is not part of the
-   * handshake — that line is held back, unanswered, for the reading that follows, so a caller
-   * proven on the first reading has its call served by the inbox, not refused by `pending`.
-   */
-  const serveUntil = async (tick: Promise<void>, grace: boolean): Promise<void> => {
+  /** Answers the lines that arrive until `tick` settles; past the input's end, waits it out. */
+  const serveUntil = async (tick: Promise<void>): Promise<void> => {
     for (;;) {
       if (ended) {
-        if (!grace) await tick;
+        await tick;
         return;
       }
       const got = await Promise.race([next.then((result) => ({ result })), tick.then(() => null)]);
@@ -1187,18 +1161,11 @@ export async function proveWhileServing(input: {
         ended = true;
         continue;
       }
-      const method = grace ? methodOf(got.result.value) : null;
-      if (grace && method !== 'initialize' && method !== 'ping' && method !== NOTIFICATION) {
-        next = Promise.resolve(got.result);
-        return;
-      }
       const reply = input.pending(got.result.value);
       if (reply !== null) input.write(reply);
       next = input.lines.next();
-      if (grace && method === 'initialize') return;
     }
   };
-  await serveUntil(sleep(SERVE_HANDSHAKE_GRACE_MS), true);
   const start = now();
   for (;;) {
     const verdict = placementOf(input.io, input.stateDir, input.session, input.name);
@@ -1208,7 +1175,7 @@ export async function proveWhileServing(input: {
     if (recorded === undefined || input.io.env.HERDR_PANE_ID !== recorded) return { ok: false, why: verdict.why };
     const elapsed = now() - start;
     if (ended && elapsed >= SERVE_PLACEMENT_WAIT_MS) return { ok: false, why: verdict.why };
-    await serveUntil(sleep(elapsed < SERVE_PLACEMENT_WAIT_MS ? SERVE_PLACEMENT_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS), false);
+    await serveUntil(sleep(elapsed < SERVE_PLACEMENT_WAIT_MS ? SERVE_PLACEMENT_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS));
   }
 }
 

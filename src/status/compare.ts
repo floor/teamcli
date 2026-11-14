@@ -1,4 +1,4 @@
-import { WATCH_REPAIR } from '../daemon/watch_display.ts';
+import { WATCH_MISSING_REPAIR } from '../daemon/watch_display.ts';
 import { homedir } from 'node:os';
 import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -337,7 +337,7 @@ export function compare(
   hostedWatchRunning = false,
   /** The repair a missing or stale watch names, from the caller's daemon reading
    *  (`watchRepairOf`); absent, the generic one. */
-  watchRepair: string = WATCH_REPAIR,
+  watchRepair: string = WATCH_MISSING_REPAIR,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
