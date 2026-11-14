@@ -462,7 +462,7 @@ describe('a request dated ahead, or an answer given outside its window, is refus
     const m = sharedMachine();
     pinShared(m, mac.exported);
     const r = answeredRequest(m, mac, 'floor');
-    const future = redated(r.record, 365 * 24 * 3600_000);
+    const future = { ...redated(r.record, 365 * 24 * 3600_000), request_id: 'oa_000000000000000000000f00' };
     const file: OwnerRequestFile = { format: 'team-owner-request-file-v1', machine: future.params.machine!, owner_seat: (readOwnerPin(r.home) as { fingerprint: string }).fingerprint, request: future };
     ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
     const signed = signCarriedRequest(mac.home, file, mac.store, NOW, () => ({ ok: true }), null);
