@@ -665,21 +665,3 @@ describe('6. an undeclared seat is still refused with today text', () => {
     expect(io.err).toBe('team restart: ghost is not a signed declared seat\n');
   });
 });
-
-describe('the start folder a restart records', () => {
-  test('a seat declaring a relative cwd is recorded with the absolute folder, against the team root', async () => {
-    const fixture = makeFixture(FULL_TEAM_YAML.replace('    channel: off\n', '    channel: off\n    cwd: web\n'));
-    mkdirSync(join(fixture.root, 'web'), { recursive: true });
-    seedStalePointer(fixture);
-    seedRegistryTeam(fixture);
-    const { sources } = makeHarness(fixture, false);
-    const io = testIo(fixture.lobby, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
-    const code = await runRestart(['worker'], io, sources);
-    expect(code, `${io.err}${io.out}`).toBe(0);
-    const recorded = readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd;
-    expect(recorded).toBeDefined();
-    expect(recorded!.startsWith('/')).toBe(true);
-    expect([join(fixture.root, 'web'), fixture.lobby]).toContain(recorded!);
-  });
-});
-

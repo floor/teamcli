@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { Caller, CallerSources } from '../src/caller.ts';
 import { standingOf } from '../src/caller.ts';
 import { runTeamCheck } from '../src/check/team.ts';
@@ -2840,6 +2840,34 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       `AGENT_UNATTENDED=1 grok -r ${GROK_SESSION} --trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --sandbox team-seat-acme-worker`,
     );
     expect(io.err).toBe('');
+  });
+
+  test('a restarted seat that declares a relative folder records it absolute, against the team root', async () => {
+    // A Cursor seat's own folder, written relative to the project: the start check returns it as
+    // written, and the record must still hold the absolute folder (a relative one made every
+    // client key's placement check refuse).
+    const yaml = CURSOR_TEAM_YAML
+      .replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      cli: 'cursor',
+      model: 'Grok',
+      version: '4.7',
+      yaml,
+      launch: 'cursor-agent --model cursor-model',
+      foregroundArgv0: 'cursor-agent',
+      newPaneScreen: CURSOR_IDLE,
+      launched: true,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+    const recorded = readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd;
+    expect(recorded).toBe(join(fixture.root, 'web'));
+    expect(isAbsolute(recorded!)).toBe(true);
   });
 
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {
