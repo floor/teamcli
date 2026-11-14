@@ -2,6 +2,11 @@ import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // One mailbox router for every root. The daemon's beat nudges it and reads its heartbeat.
 // The beat never waits on an ask, a reply, or the child: a child that leaves is recorded
 // late, and a later beat starts the replacement after a capped backoff.
+//
+// A heartbeat is the answer to a tick, and the child is only ever asked on a beat. So a child
+// is behind when ticks it was sent go unanswered, never when the daemon's own beat comes late:
+// a daemon whose beat is delayed (a loaded machine, a long scan elsewhere in the process) sent
+// no tick in that gap, and the child had nothing to answer.
 import type { MailboxAskResult } from './ask.ts';
 
 /** How the router is doing, for the daemon's status row. */
@@ -43,7 +48,9 @@ export type MailboxRouterInput = {
   log: (text: string) => void;
   /** Starts the child. A test supplies a fixture; the beat does not wait for it. */
   factory: () => MailboxChild;
-  /** Heartbeats a live child may miss before it is ended. */
+  /** Ticks a live child may leave unanswered before it is ended. The oldest of them must also
+   *  be at least this many beat intervals old, so a burst of beats cannot end a child that has
+   *  not had the time to answer. */
   missedBeats?: number;
   /** The longest restart wait. */
   backoffCapMs?: number;
@@ -64,9 +71,10 @@ const DEFAULT_BACKOFF_CAP_MS = 30_000;
 type Held = {
   child: MailboxChild | null;
   unsubscribe: (() => void) | null;
-  startedAtMs: number;
-  lastBeatReadMs: number | null;
   heartbeatAt: string | null;
+  /** Ticks sent since the child's last heartbeat, and when the oldest of them was sent. */
+  unanswered: number;
+  firstUnansweredMs: number | null;
   ready: boolean;
   startedOnce: boolean;
   killing: boolean;
@@ -79,11 +87,6 @@ type Held = {
   lastAsk: MailboxRouterState['lastAsk'];
 };
 
-function overdueBeats(lastBeatMs: number | null, startedAtMs: number, ms: number, beatMs: number): number {
-  const reference = lastBeatMs ?? startedAtMs;
-  return Math.max(0, Math.ceil((ms - reference) / beatMs) - 1);
-}
-
 function waitMs(backoff: number, cap: number): number {
   return Math.min(cap, 1000 * 2 ** (backoff - 1));
 }
@@ -94,9 +97,9 @@ export function createMailboxRouter(input: MailboxRouterInput): MailboxRouter {
   const held: Held = {
     child: null,
     unsubscribe: null,
-    startedAtMs: 0,
-    lastBeatReadMs: null,
     heartbeatAt: null,
+    unanswered: 0,
+    firstUnansweredMs: null,
     ready: false,
     startedOnce: false,
     killing: false,
@@ -124,9 +127,9 @@ export function createMailboxRouter(input: MailboxRouterInput): MailboxRouter {
       return;
     }
     held.child = child;
-    held.startedAtMs = at.getTime();
-    held.lastBeatReadMs = null;
     held.heartbeatAt = null;
+    held.unanswered = 0;
+    held.firstUnansweredMs = null;
     held.ready = false;
     held.killing = false;
     held.beats = 0;
@@ -140,8 +143,9 @@ export function createMailboxRouter(input: MailboxRouterInput): MailboxRouter {
         held.unsubscribe = null;
         held.ready = false;
         held.killing = false;
-        held.lastBeatReadMs = null;
         held.heartbeatAt = null;
+        held.unanswered = 0;
+        held.firstUnansweredMs = null;
         if (held.stopping) {
           held.why = held.why ?? 'the daemon is stopping this child';
           return;
@@ -162,7 +166,8 @@ export function createMailboxRouter(input: MailboxRouterInput): MailboxRouter {
       if (held.child !== child) return;
       if (event.message.type === 'heartbeat') {
         held.heartbeatAt = event.message.at;
-        held.lastBeatReadMs = input.now().getTime();
+        held.unanswered = 0;
+        held.firstUnansweredMs = null;
         held.ready = true;
         held.beats += 1;
         held.why = null;
@@ -188,19 +193,25 @@ export function createMailboxRouter(input: MailboxRouterInput): MailboxRouter {
         return;
       }
       if (held.killing || !child.alive) return;
-      child.send({ type: 'tick', at: at.toISOString() });
-      const missed = overdueBeats(held.lastBeatReadMs, held.startedAtMs, ms, input.beatMs);
-      if (missed < missedBeats) return;
+      const behind = held.unanswered >= missedBeats
+        && held.firstUnansweredMs !== null
+        && ms - held.firstUnansweredMs >= missedBeats * input.beatMs;
+      if (!behind) {
+        // The tick is counted before it is written: a child that answers inside `send` clears
+        // the count it was asked by, not one taken after its answer.
+        if (held.unanswered === 0) held.firstUnansweredMs = ms;
+        held.unanswered += 1;
+        child.send({ type: 'tick', at: at.toISOString() });
+        return;
+      }
       held.killing = true;
       held.why = `the child missed ${String(missedBeats)} heartbeats`;
       input.log(`mailbox router: ${held.why}; ending it and starting a replacement`);
       child.kill(held.why);
     },
     state(): MailboxRouterState {
-      const ms = input.now().getTime();
-      const missed = held.child === null || held.lastBeatReadMs === null
-        ? 0
-        : Math.min(missedBeats, overdueBeats(held.lastBeatReadMs, held.startedAtMs, ms, input.beatMs));
+      // One tick outstanding is the ordinary wait between a beat and its answer; a second is late.
+      const missed = held.child === null || !held.ready ? 0 : Math.max(0, held.unanswered - 1);
       const state: MailboxRouterState['state'] = held.stopping
         ? 'stopped'
         : held.child === null
