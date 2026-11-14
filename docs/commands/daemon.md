@@ -357,7 +357,8 @@ for any caller: `--request` records the verb and every option it names, bound to
 `--approval <request-id>` runs exactly that once the owner has answered. The answer is checked
 when the command starts, with nothing spent, and spent once just before the daemon is changed,
 so a run refused before that (no service manager, a root that cannot be read) keeps it; a dry run
-never spends it. On a machine whose owner seat is pinned from another machine this is the only
+never spends it. A change the service manager refuses after that has spent the answer: a new
+answer is needed to retry. On a machine whose owner seat is pinned from another machine this is the only
 way, and the request is carried with `team approvals export`. A refused answer is
 `daemon.approval-refused`.
 

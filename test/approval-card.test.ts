@@ -24,10 +24,10 @@ const ROOT = '/synthetic/repo';
 const WORDS = ['set', 'seats.lead', '{"role":"builder","cli":"fake"}'];
 
 /** The first word of every title: an action verb, in plain words. */
-const VERBS = ['Add', 'Approve', 'Change', 'Create', 'Forget', 'Import', 'Install', 'Issue', 'Migrate', 'Remove', 'Restart', 'Revoke', 'Run', 'Send', 'Set', 'Start', 'Stop', 'Test', 'Turn', 'Use'];
+const VERBS = ['Add', 'Approve', 'Change', 'Create', 'Forget', 'Import', 'Install', 'Issue', 'Migrate', 'Remove', 'Restart', 'Revoke', 'Send', 'Set', 'Start', 'Stop', 'Test', 'Turn', 'Use'];
 
 /** The kinds whose answer changes more than the team's own running state. */
-const CHANGING = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant', 'team-owner-command']);
+const CHANGING = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant']);
 
 /** What no card line may ever carry, and the words for why it is refused. */
 const BANNED: ReadonlyArray<readonly [RegExp | string, string]> = [

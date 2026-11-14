@@ -123,7 +123,6 @@ const ACTION_WORDS: Record<OwnerAction, string> = {
   'development-mode': "set the machine's development mode",
   'team-entity-config': "change an entity's record",
   'team-daemon': 'change the machine daemon',
-  'team-owner-command': 'run an owner-only command',
 };
 
 /** The card for `team migrate`: team, project, seat count, and the canonical-record hash the signature binds. */

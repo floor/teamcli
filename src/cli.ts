@@ -2,7 +2,6 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { generalDoor } from './client/general-door.ts';
-import { carriesOwnerAnswer } from './client/owner-answer-door.ts';
 import type { Command, Io } from './io.ts';
 import { writeJson, writeJsonError } from './output/index.ts';
 import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from './permissions/must-not-pretend.ts';
@@ -252,28 +251,6 @@ export async function main(argv: string[], io: Io): Promise<number> {
   if (door.kind === 'admitted' && !door.json) io.stderr(`team ${name}: admitted by general grant ${door.grant.grant_id} (${door.grant.client_id})\n`);
   rest = door.argv;
   io = door.io;
-  // On a machine whose owner seat is pinned from another machine, every owner-only command that
-  // reads no owner-seat option of its own takes --request and --approval here
-  // (src/client/owner-answer-door.ts). Elsewhere, and for every other line, nothing changes.
-  if (door.kind === 'pass' && carriesOwnerAnswer(rest)) {
-    const { ownerAnswerDoor } = await import('./client/owner-answer-door.ts');
-    const answer = await ownerAnswerDoor(name, rest, io);
-    if (answer.kind === 'usage') {
-      if (answer.json) writeJsonError(io, 'team.owner-answer-usage', answer.why, null);
-      else io.stderr(`team ${name}: ${answer.why}\n`);
-      return 2; // exit: team.owner-answer-usage
-    }
-    if (answer.kind === 'refused') {
-      if (answer.json) writeJsonError(io, 'team.owner-answer-refused', answer.why, null);
-      else io.stderr(`team ${name}: ${answer.why}\n`);
-      return 1; // exit: team.owner-answer-refused
-    }
-    if (answer.kind === 'requested') return 0; // exit: team.owner-answer-requested
-    if (answer.kind === 'admitted') {
-      rest = answer.argv;
-      io = answer.io;
-    }
-  }
   return command.default(rest, io);
 }
 

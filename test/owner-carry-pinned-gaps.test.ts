@@ -21,8 +21,6 @@ import { runApprovals } from '../src/commands/approvals.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { runDaemon } from '../src/commands/daemon.ts';
 import { runSetup } from '../src/commands/setup.ts';
-import { ownerAnswerDoor } from '../src/client/owner-answer-door.ts';
-import { main } from '../src/cli.ts';
 import type { ServiceManager } from '../src/daemon/service.ts';
 import { entitiesPath } from '../src/entities.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
@@ -521,67 +519,3 @@ describe("the credential helper's one-prompt signing", () => {
   });
 });
 
-describe('every other owner-only command on a pinned machine: the dispatcher door', () => {
-  const pinnedIo = (s: Scene, caller: Caller = SEAT) => {
-    const io = testIo(s.server.root, caller);
-    io.env = { HOME: s.server.home };
-    return io;
-  };
-
-  test('a line is recorded, carried, admitted once as the owner with the options taken off, and refused on replay', async () => {
-    const s = scene();
-    const asked = pinnedIo(s);
-    const requested = await ownerAnswerDoor('policy', ['set', 'acme', 'x', '--dry-run', '--request', '--reason', 'try it'], asked, NOW);
-    expect(requested.kind).toBe('requested');
-    const id = idOf(asked.out);
-    expect(asked.out).toContain(`then run: team policy set acme x --dry-run --approval ${id}`);
-    const record = readOwnerActionRecord(s.server.home, id) as OwnerActionRecord;
-    expect(record.params.actions).toEqual(['team-owner-command']);
-    // Every word is bound, --dry-run included; the door's own options are not.
-    expect(record.params.words?.['team-owner-command']).toEqual(['policy', 'set', 'acme', 'x', '--dry-run']);
-
-    const carried = await carry(s, [id]);
-    expect(s.mac.store.prompts[0]).toContain('run team policy');
-    expect(s.mac.store.prompts[0]).not.toContain('acme x');
-    expect((await answerOn(s, carried.answer)).code).toBe(0);
-
-    // Another word, or the same line without --dry-run, admits nothing.
-    expect((await ownerAnswerDoor('policy', ['set', 'acme', 'y', '--dry-run', '--approval', id], pinnedIo(s), NOW)).kind).toBe('refused');
-    expect((await ownerAnswerDoor('policy', ['set', 'acme', 'x', '--approval', id], pinnedIo(s), NOW)).kind).toBe('refused');
-
-    const run = await ownerAnswerDoor('policy', ['set', 'acme', 'x', '--dry-run', '--approval', id, '--json'], pinnedIo(s), NOW);
-    expect(run.kind).toBe('admitted');
-    if (run.kind !== 'admitted') throw new Error('not admitted');
-    expect(run.argv).toEqual(['set', 'acme', 'x', '--dry-run', '--json']);
-    expect(run.io.caller).toEqual({ kind: 'owner' });
-
-    const replay = await ownerAnswerDoor('policy', ['set', 'acme', 'x', '--dry-run', '--approval', id], pinnedIo(s), NOW);
-    expect(replay).toMatchObject({ kind: 'refused' });
-    expect((replay as { why: string }).why).toContain('single-use');
-  });
-
-  test('without an answer the dispatcher refuses before the command reads its line', async () => {
-    const s = scene();
-    const io = pinnedIo(s);
-    expect(await main(['tempo', 'urgent', '--approval', 'oa_000000000000000000000000'], io)).toBe(1);
-    expect(io.err).toContain('no owner-seat request');
-    const twice = pinnedIo(s);
-    expect(await main(['tempo', 'urgent', '--request', '--approval', 'oa_000000000000000000000000'], twice)).toBe(2);
-  });
-
-  test('a command that reads the options itself, and a machine with its own owner, pass the line untouched', async () => {
-    const s = scene();
-    for (const name of ['config', 'daemon', 'import', 'init', 'owner-seat', 'setup', 'batch', 'approvals']) {
-      expect((await ownerAnswerDoor(name, ['x', '--request'], pinnedIo(s), NOW)).kind).toBe('pass');
-    }
-    // grant's own --request is its --client form's; every other grant line is the door's.
-    expect((await ownerAnswerDoor('grant', ['--client', 'app', '--request'], pinnedIo(s), NOW)).kind).toBe('pass');
-    expect((await ownerAnswerDoor('grant', ['--scope', 'acme', '--request'], pinnedIo(s), NOW)).kind).toBe('requested');
-    // `migrate --root` takes none of the options itself, so the door reads them there.
-    const root = pinnedIo(s);
-    expect((await ownerAnswerDoor('migrate', ['--root', '--request'], root, NOW)).kind).toBe('requested');
-    const local = testIo(s.mac.home, SEAT);
-    local.env = { HOME: s.mac.home };
-    expect((await ownerAnswerDoor('policy', ['set', 'acme', 'x', '--request'], local, NOW)).kind).toBe('pass');
-  });
-});

@@ -77,16 +77,25 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   spent once in this machine's approval ledger. A request that names no machine or another
   machine, carries no signed window or no words, is refused here; the signer machine never runs
   a request that names another machine.
-- **Every owner-only command takes the answer.** The lifecycle commands, `team config` (a team's
-  record and an entity's own record: `<entity>.root`, `.worktrees`, `.names.unique`,
-  `.reminders`, `.rules`), `team daemon install|restart|uninstall|fault-watch`,
-  `team development-mode`, `team approvals revoke` and `team client general-grant` read
-  `--request` and `--approval <id>` themselves. Every other owner-only command takes the same
-  two options at the dispatcher on this machine: the request binds the exact command line —
-  its name and every word, `--dry-run` included — and the answer runs that line once, as the
-  owner. Two are never admitted this way: `team owner-seat` (its pins are trust on first use or
-  signed exports) and `team setup` (below). Several requests can travel in one file and be
-  signed with one card and one confirmation (`team approvals export <id> <id> …`).
+- **Which commands take the answer.** `team import`, `migrate`, `up` (and `init` bundled with
+  it), `add`, `send`, `down`, `bus`, `forget`, `approvals revoke`, `batch`, `team config` (a
+  team's record, and an entity's own record: `<entity>.root`, `.worktrees`, `.names.unique`,
+  `.reminders`, `.rules`, and a project's rules), `team daemon install|restart|uninstall|fault-watch`,
+  `team development-mode` and `team client general-grant` read `--request` and
+  `--approval <id>`. Several requests can travel in one file and be signed with one card and
+  one confirmation (`team approvals export <id> <id> …`).
+- **Which commands do not yet.** These stay the owner's at a terminal, so on this machine they
+  are refused until they take an answer: `team grant` (outside its `--client` form), `revoke`,
+  `delegate`, `policy set|unset`, `settings set|unset`, `tempo`, `broker`, `start`,
+  `swap --now`, `mcp setup`, `approve`, `remove --abandon`, `rename` (a team, `--rekey`),
+  `migrate --root`, and `init --approval-mode` and `--revoke-approval` (no `always` rule is kept
+  here, so there is none to change). `team owner-seat` (its pins are trust on first use or
+  signed exports) and `team setup` (below) never take one.
+- **What an answer binds.** The request's action, its argument words, the folder it acts in
+  (the repository, the entities file's folder, or the home for the daemon), its team or
+  entity, HEAD in a repository, this machine and, on a shared server, the account. A file a
+  command names is bound by its path, not its contents (as under a general grant); inside a
+  repository HEAD binds the repository's own files.
 - **No owner signer and no charter are made here.** `team owner-seat setup` and `team setup` are
   refused, and no `always` rule is kept here yet: `always` admits the one request once. The
   machine keeps no charter of its own: a charter is standing consent signed for one machine's
