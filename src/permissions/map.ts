@@ -214,7 +214,7 @@ function buildGates(): Record<string, Gate> {
     },
     daemon: {
       kind: 'owner-only',
-      why: 'the one machine daemon is the owner\'s: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager\'s no-terminal start is the owner\'s own login session',
+      why: 'the one machine daemon is the owner\'s: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, or to the owner\'s signed answer to that exact verb, and the system service manager\'s no-terminal start is the owner\'s own login session',
     },
     'daemon:status': {
       kind: 'any-caller',
@@ -226,19 +226,19 @@ function buildGates(): Record<string, Gate> {
     },
     'daemon:install': {
       kind: 'owner-only',
-      why: 'registering the user service unit is the owner\'s act; a verified general grant whose ops name `daemon`, or the owner\'s dev-mode admission for a placed lead, is the other way',
+      why: 'registering the user service unit is the owner\'s act; a verified general grant whose ops name `daemon`, the owner\'s dev-mode admission for a placed lead, or the owner\'s signed answer to that exact install (`--request`, `--approval`) are the other ways',
     },
     'daemon:restart': {
       kind: 'owner-only',
-      why: 'restarting the daemon the installed unit runs is the owner\'s act; a verified general grant whose ops name `daemon`, or the owner\'s dev-mode admission for a placed lead, is the other way; the restart writes nothing',
+      why: 'restarting the daemon the installed unit runs is the owner\'s act; a verified general grant whose ops name `daemon`, the owner\'s dev-mode admission for a placed lead, or the owner\'s signed answer to that exact restart (`--request`, `--approval`) are the other ways; the restart writes nothing',
     },
     'daemon:fault-watch': {
       kind: 'owner-only',
-      why: 'the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, or the owner\'s dev-mode admission for a placed lead; it starts, stops and kills no process',
+      why: 'the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, the owner\'s dev-mode admission for a placed lead, or the owner\'s signed answer to that exact request (`--request`, `--approval`); it starts, stops and kills no process',
     },
     'daemon:uninstall': {
       kind: 'owner-only',
-      why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
+      why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead, or the owner\'s signed answer to that exact removal (`--request`, `--approval`), are the other ways',
     },
     'daemon:chores': {
       kind: 'owner-only',
@@ -458,11 +458,11 @@ function buildGates(): Record<string, Gate> {
     },
     'config:set': {
       kind: 'owner-only',
-      why: 'the team\'s record is the owner\'s: editing it is the owner\'s act, as editing the team file was, from a terminal outside herdr',
+      why: 'the team\'s record, and an entity\'s record in the owner\'s entities file, are the owner\'s: editing either is the owner\'s act, as editing the team file was, from a terminal outside herdr, or the owner\'s signed answer to that exact edit (`--request`, `--approval`)',
     },
     'config:unset': {
       kind: 'owner-only',
-      why: 'the team\'s record is the owner\'s: editing it is the owner\'s act, as editing the team file was, from a terminal outside herdr',
+      why: 'the team\'s record, and an entity\'s record in the owner\'s entities file, are the owner\'s: editing either is the owner\'s act, as editing the team file was, from a terminal outside herdr, or the owner\'s signed answer to that exact edit (`--request`, `--approval`)',
     },
     'config:edit': {
       kind: 'owner-only',

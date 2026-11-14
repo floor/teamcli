@@ -25,9 +25,9 @@ import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, r
 import { dirname, join } from 'node:path';
 import { charterLifetime } from '../charter/check.ts';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
-import { answerCard, cardPrompt, ownerActionCard } from './approval-card.ts';
+import { answerCard, cardPrompt, ownerActionCard, type ApprovalCard } from './approval-card.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
-import { answerDeadline, deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type AnswerWindow, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
+import { answerDeadline, deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, signOwnerAnswers, verifyOwnerAnswer, type AnswerWindow, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { accountBindingOf, claimInLedger, ledgerSpent, machineBindingOf, readOwnerPin, requestMachineProblem, verifyPinnedOwnerAnswer } from './owner-pin.ts';
 import { ownerSpendShared, spendThroughHelper } from './owner-spend-client.ts';
 import { ownerMachinePinned } from './owner-pin-path.ts';
@@ -121,6 +121,8 @@ const ACTION_WORDS: Record<OwnerAction, string> = {
   'team-config': "change the team's record",
   'team-general-grant': 'issue a general grant',
   'development-mode': "set the machine's development mode",
+  'team-entity-config': "change an entity's record",
+  'team-daemon': 'change the machine daemon',
 };
 
 /** The card for `team migrate`: team, project, seat count, and the canonical-record hash the signature binds. */
@@ -144,6 +146,16 @@ function migrateCardSummary(p: OwnerActionParams): string | null {
 export function ownerActionSummary(p: OwnerActionParams): string {
   const card = migrateCardSummary(p);
   if (card !== null) return card;
+  // A request bound outside a repository: the machine daemon of one home, or one entity's record
+  // in the owner's file. It names that home or file folder, and no team.
+  if (p.actions.length === 1 && (p.actions[0] === 'team-daemon' || p.actions[0] === 'team-entity-config')) {
+    const action = p.actions[0];
+    const words = p.words?.[action] ?? [];
+    const what = `${ACTION_WORDS[action]}${words.length > 0 ? ` (${words.join(' ')})` : ''}`;
+    return action === 'team-daemon'
+      ? `${p.requested_by} asks to ${what} — home ${p.root}.`
+      : `${p.requested_by} asks to ${what} — "${p.team}" in ${p.root}.`;
+  }
   const what = p.actions.map((action) => {
     const words = p.words?.[action] ?? [];
     return words.length > 0 ? `${ACTION_WORDS[action]} (${words.join(' ')})` : ACTION_WORDS[action];
@@ -446,17 +458,18 @@ export function windowlessRefusal(id: string): string {
  *  answer's own signed time, whatever the request's unsigned expiry says. */
 export const WINDOWLESS_ANSWER_MS = OWNER_ACTION_TTL_MS;
 
-/** The owner seat answers one request; `always` also stores a rule for the parent folder.
- *  `expect` is the parameter hash the owner was shown: a request that no longer has it is not
- *  signed. */
-export function approveOwnerAction(
-  home: string,
-  id: string,
-  word: string,
-  store: OwnerSeatKeyStore,
-  now: Date = new Date(),
-  via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; expect?: string } = {},
-): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
+type AnswerVia = { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; expect?: string };
+
+/** One answer ready to sign: the request it answers, the unsigned answer and its card. */
+export type PreparedOwnerAnswer = { record: OwnerActionRecord; answer: OwnerSeatAnswer; choice: 'once' | 'always' | 'deny'; card: ApprovalCard };
+
+/**
+ * Every check `approveOwnerAction` makes before it signs: the answer word, the request whole and
+ * unchanged since it was shown, its signed window and words, what a carried request must carry,
+ * its deadline, the owner seat, and that the signer did not ask for it. Nothing is signed or
+ * written.
+ */
+export function prepareOwnerActionAnswer(home: string, id: string, word: string, store: OwnerSeatKeyStore, now: Date, via: AnswerVia = {}): { ok: true; prepared: PreparedOwnerAnswer } | { ok: false; why: string } {
   const choice = answerChoiceOf(word);
   if (choice === null) return { ok: false, why: `"${word}" is not an answer: oui/approved/yes, always, or non/deny` };
   const record = readOwnerActionRecord(home, id);
@@ -486,11 +499,15 @@ export function approveOwnerAction(
   };
   // The Touch ID prompt is the card, one line: the kind, the question, and the answer's scope.
   // The record (arguments, root, HEAD, hash) is not in it; `team approvals details` prints that.
-  const card = answerCard(ownerActionCard(record.params), choice);
-  const signed = signOwnerAnswer(home, answer, via.signer, store, cardPrompt(card), via.assertion);
-  if (!signed.ok) return signed;
-  if (askedBy(record.params).includes(signed.signed.signer)) return { ok: false, why: `signer "${signed.signed.signer}" asked for request ${id}; no principal approves its own request` };
-  const text = `${JSON.stringify(signed.signed, null, 2)}\n`;
+  return { ok: true, prepared: { record, answer, choice, card: answerCard(ownerActionCard(record.params), choice) } };
+}
+
+/** Writes one signed answer for a prepared request, and its `always` rule where one is kept. */
+export function recordOwnerActionAnswer(home: string, prepared: PreparedOwnerAnswer, signed: SignedOwnerAnswer, store: OwnerSeatKeyStore, now: Date): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
+  const { record, choice } = prepared;
+  const id = record.request_id;
+  if (askedBy(record.params).includes(signed.signer)) return { ok: false, why: `signer "${signed.signer}" asked for request ${id}; no principal approves its own request` };
+  const text = `${JSON.stringify(signed, null, 2)}\n`;
   const path = join(actionRequestsFolder(home), `${id}.seat-answer.json`);
   const written = writeExclusive(path, text);
   if (written === 'failed') return { ok: false, why: 'the answer could not be written' };
@@ -505,12 +522,70 @@ export function approveOwnerAction(
   if (choice === 'always' && record.params.machine === undefined) {
     mkdirSync(actionApprovalsFolder(home), { recursive: true, mode: 0o700 });
     const rulePath = join(actionApprovalsFolder(home), `${id}.json`);
-    const ruleText = `${JSON.stringify({ ...signed.signed, params: record.params }, null, 2)}\n`;
+    const ruleText = `${JSON.stringify({ ...signed, params: record.params }, null, 2)}\n`;
     const ruleWritten = writeExclusive(rulePath, ruleText);
     if (ruleWritten !== 'written' && !replaceFile(rulePath, ruleText)) return { ok: false, why: `the answer was recorded but the always rule ${id} could not be written; the request can still run once` };
     return { ok: true, choice, ruleId: id };
   }
   return { ok: true, choice };
+}
+
+/** The owner seat answers one request; `always` also stores a rule for the parent folder.
+ *  `expect` is the parameter hash the owner was shown: a request that no longer has it is not
+ *  signed. */
+export function approveOwnerAction(
+  home: string,
+  id: string,
+  word: string,
+  store: OwnerSeatKeyStore,
+  now: Date = new Date(),
+  via: AnswerVia = {},
+): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
+  const ready = prepareOwnerActionAnswer(home, id, word, store, now, via);
+  if (!ready.ok) return ready;
+  const signed = signOwnerAnswer(home, ready.prepared.answer, via.signer, store, cardPrompt(ready.prepared.card), via.assertion);
+  if (!signed.ok) return signed;
+  return recordOwnerActionAnswer(home, ready.prepared, signed.signed, store, now);
+}
+
+/**
+ * The owner seat answers several requests with one word and one user-presence prompt: every
+ * request is prepared exactly as `approveOwnerAction` prepares one, and a single refusal signs
+ * none. The prompt is one card that lists them all. Each answer is its own signature over its own
+ * request, so each is verified, recorded and spent on its own, as if it had been signed alone.
+ */
+export function approveOwnerActions(
+  home: string,
+  ids: readonly string[],
+  word: string,
+  store: OwnerSeatKeyStore,
+  now: Date = new Date(),
+  via: Omit<AnswerVia, 'assertion' | 'expect'> & { title?: string } = {},
+): { ok: true; answered: { id: string; choice: 'once' | 'always' | 'deny'; ruleId?: string }[]; prompts: number } | { ok: false; why: string } {
+  if (ids.length === 0) return { ok: false, why: 'no request to answer' };
+  if (new Set(ids).size !== ids.length) return { ok: false, why: 'a request is named twice; nothing was signed' };
+  const prepared: PreparedOwnerAnswer[] = [];
+  for (const id of ids) {
+    const ready = prepareOwnerActionAnswer(home, id, word, store, now, via);
+    if (!ready.ok) return { ok: false, why: `${ready.why}; nothing was signed` };
+    prepared.push(ready.prepared);
+  }
+  const prompt = batchPrompt(prepared.map((one) => one.card), via.title);
+  const signed = signOwnerAnswers(home, prepared.map((one) => one.answer), via.signer, store, prompt);
+  if (!signed.ok) return signed;
+  const answered: { id: string; choice: 'once' | 'always' | 'deny'; ruleId?: string }[] = [];
+  for (const [index, one] of prepared.entries()) {
+    const recorded = recordOwnerActionAnswer(home, one, signed.signed[index]!, store, now);
+    if (!recorded.ok) return { ok: false, why: answered.length === 0 ? recorded.why : `${recorded.why}; ${answered.map((done) => done.id).join(', ')} answered before it` };
+    answered.push({ id: one.record.request_id, choice: recorded.choice, ...(recorded.ruleId === undefined ? {} : { ruleId: recorded.ruleId }) });
+  }
+  return { ok: true, answered, prompts: signed.prompts };
+}
+
+/** The one prompt that answers several requests: how many, then each card's own line, numbered. */
+export function batchPrompt(cards: readonly ApprovalCard[], title?: string): string {
+  const head = title ?? `${cards.length} requests`;
+  return `${head}: ${cards.map((card, index) => `${index + 1}) ${cardPrompt(card)}`).join(' | ')}`;
 }
 
 function heldAnswer(home: string, path: string, record: OwnerActionRecord, store: OwnerSeatKeyStore, now: Date): boolean {
@@ -574,11 +649,9 @@ export function recordForeignOwnerAction(home: string, record: OwnerActionRecord
  */
 export function recordCarriedOwnerAnswer(home: string, record: OwnerActionRecord, signed: SignedOwnerAnswer, store: OwnerSeatKeyStore, now: Date): { ok: true; answer: OwnerSeatAnswer; signer: string } | { ok: false; why: string } {
   const id = record.request_id;
-  const binding = ownerActionBindingProblem(home, record);
-  if (binding !== null) return { ok: false, why: binding };
-  const bound = boundAnswer(home, signed, record, store, now);
-  if (!bound.ok) return bound;
-  if (ledgerSpent(home, id)) return { ok: false, why: `request ${id} was already used: an approval is single-use` };
+  const checked = carriedOwnerAnswerCheck(home, record, signed, store, now);
+  if (!checked.ok) return checked;
+  const bound = checked;
   const text = `${JSON.stringify(signed, null, 2)}\n`;
   const path = join(actionRequestsFolder(home), `${id}.seat-answer.json`);
   const written = writeExclusive(path, text);
@@ -587,6 +660,23 @@ export function recordCarriedOwnerAnswer(home: string, record: OwnerActionRecord
     if (heldAnswer(home, path, record, store, now)) return { ok: false, why: `request ${id} was already answered` };
     if (!replaceFile(path, text)) return { ok: false, why: 'the answer could not be written' };
   }
+  return bound;
+}
+
+/**
+ * Every check `recordCarriedOwnerAnswer` makes, writing nothing: the request carries what a carried
+ * request must, the answer verifies and is bound to it, the request was never spent, and no answer
+ * that verifies is held for it yet. A batch of carried answers asks this of every member before it
+ * records any.
+ */
+export function carriedOwnerAnswerCheck(home: string, record: OwnerActionRecord, signed: SignedOwnerAnswer, store: OwnerSeatKeyStore, now: Date): { ok: true; answer: OwnerSeatAnswer; signer: string } | { ok: false; why: string } {
+  const id = record.request_id;
+  const binding = ownerActionBindingProblem(home, record);
+  if (binding !== null) return { ok: false, why: binding };
+  const bound = boundAnswer(home, signed, record, store, now);
+  if (!bound.ok) return bound;
+  if (ledgerSpent(home, id)) return { ok: false, why: `request ${id} was already used: an approval is single-use` };
+  if (heldAnswer(home, join(actionRequestsFolder(home), `${id}.seat-answer.json`), record, store, now)) return { ok: false, why: `request ${id} was already answered` };
   return bound;
 }
 

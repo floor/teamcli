@@ -232,7 +232,7 @@ Usage:
     team approvals revoke <id...> [--json]
     team approvals revoke <id...> --request [--reason <text>] [--json]
     team approvals revoke <id...> --approval <request-id> [--json]
-    team approvals export <id> --out <file> [--json]
+    team approvals export <id...> --out <file> [--json]
     team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
     team approvals answer --from <file> [--json]
 
@@ -314,7 +314,7 @@ Hidden: no
 
 Usage:
 
-    team approvals export <id> --out <file> [--json]
+    team approvals export <id...> --out <file> [--json]
 
 #### Who may run it
 
@@ -335,7 +335,7 @@ Usage:
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `id` | no | no |
+| `id...` | no | no |
 
 ### `list`
 
@@ -890,6 +890,8 @@ Usage:
     team config unset <path>
     team config set <path> <value> --request [--reason <text>] [--json]
     team config set <path> <value> --approval <request-id> [--json]
+    team config unset <path> --request [--reason <text>] [--json]
+    team config unset <path> --approval <request-id> [--json]
     team config set <path> <value> --general <grant.json> --key <client.key> [--json]
     team config unset <path> --general <grant.json> --key <client.key> [--json]
     team config edit
@@ -1005,7 +1007,7 @@ Usage:
 
 #### Who may run it
 
-`owner-only` — the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr
+`owner-only` — the team's record, and an entity's record in the owner's entities file, are the owner's: editing either is the owner's act, as editing the team file was, from a terminal outside herdr, or the owner's signed answer to that exact edit (`--request`, `--approval`)
 
 #### Flags
 
@@ -1034,20 +1036,25 @@ Hidden: no
 Usage:
 
     team config unset <path>
+    team config unset <path> --request [--reason <text>] [--json]
+    team config unset <path> --approval <request-id> [--json]
     team config unset <path> --general <grant.json> --key <client.key> [--json]
 
 #### Who may run it
 
-`owner-only` — the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr
+`owner-only` — the team's record, and an entity's record in the owner's entities file, are the owner's: editing either is the owner's act, as editing the team file was, from a terminal outside herdr, or the owner's signed answer to that exact edit (`--request`, `--approval`)
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
+| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1082,14 +1089,14 @@ Usage:
 
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
-    team daemon restart [--dry-run] [--json]
-    team daemon uninstall [--home <folder>] [--json]
-    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon restart [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 ### Who may run it
 
-`owner-only` — the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager's no-terminal start is the owner's own login session
+`owner-only` — the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, or to the owner's signed answer to that exact verb, and the system service manager's no-terminal start is the owner's own login session
 
 ### Flags
 
@@ -1134,21 +1141,24 @@ Hidden: no
 
 Usage:
 
-    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
+    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 #### Who may run it
 
-`owner-only` — the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, or the owner's dev-mode admission for a placed lead; it starts, stops and kills no process
+`owner-only` — the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact request (`--request`, `--approval`); it starts, stops and kills no process
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
+| `--request` | no | no | no |
 | `--root` | yes | no | no |
 | `--route` | yes | no | no |
 | `-h` | no | no | yes |
@@ -1163,16 +1173,17 @@ Hidden: no
 
 Usage:
 
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 #### Who may run it
 
-`owner-only` — registering the user service unit is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way
+`owner-only` — registering the user service unit is the owner's act; a verified general grant whose ops name `daemon`, the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact install (`--request`, `--approval`) are the other ways
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
@@ -1180,6 +1191,8 @@ Usage:
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--presence` | no | no | no |
+| `--reason` | yes | no | no |
+| `--request` | no | no | no |
 | `--root` | yes | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
@@ -1194,21 +1207,24 @@ Hidden: no
 
 Usage:
 
-    team daemon restart [--dry-run] [--json]
+    team daemon restart [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 #### Who may run it
 
-`owner-only` — restarting the daemon the installed unit runs is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way; the restart writes nothing
+`owner-only` — restarting the daemon the installed unit runs is the owner's act; a verified general grant whose ops name `daemon`, the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact restart (`--request`, `--approval`) are the other ways; the restart writes nothing
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
+| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1276,21 +1292,24 @@ Hidden: no
 
 Usage:
 
-    team daemon uninstall [--home <folder>] [--json]
+    team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 #### Who may run it
 
-`owner-only` — removing the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way
+`owner-only` — removing the user service unit is the owner's act; the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact removal (`--request`, `--approval`), are the other ways
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--home` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
+| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals

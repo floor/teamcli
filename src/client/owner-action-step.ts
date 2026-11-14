@@ -170,15 +170,43 @@ export function ownerSeatStep(
   // A caller who asked for the card gets the card. The charter may admit a run that did not.
   if (charterSigner !== null && !ask.request) return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: charterSigner } };
   if (!ask.request && ask.approval === undefined) return { kind: 'none' };
+  if (ask.request && ask.approval !== undefined) return ownerRequestDoor(command, action, argv, ask, io, sources, null);
+  const root = sources.root ?? findRoot(io.cwd);
+  if (root === null) return ownerRequestDoor(command, action, argv, ask, io, sources, null);
+  return ownerRequestDoor(command, action, argv, ask, io, sources, { root, team: teamNameAt(root, home), head: headOf(root) });
+}
+
+/** What a request outside a repository binds in place of the repository, team and HEAD: a folder
+ *  the action writes in and a name the card shows. */
+export type OwnerRequestBinding = { root: string; team: string; head: string | null };
+
+/**
+ * `--request` and `--approval <id>` alone: no charter, no default rule and no `always` rule is
+ * asked. `--request` records the card and returns; `--approval` admits a run only on the owner's
+ * signed answer to exactly this action, binding and argument words, claimed once (`dry` claims
+ * nothing). A command whose action no charter and no lead may admit (an entity's record, the
+ * machine daemon) opens this door directly, naming its own binding. `binding` null: the caller
+ * stands in no repository, and the door refuses.
+ */
+export function ownerRequestDoor(
+  command: string,
+  action: OwnerAction,
+  argv: readonly string[],
+  ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean; reason?: string },
+  io: Io,
+  sources: Pick<OwnerSeatSources, 'home' | 'now' | 'ownerSeatStore'>,
+  binding: OwnerRequestBinding | null,
+): OwnerSeatStep {
+  const home = sources.home ?? homedir();
+  const now = sources.now?.() ?? new Date();
   const refused = (message: string): OwnerSeatStep => {
     refuse(io, ask.json, command, { id: `${command}.approval-refused`, message, repair: null });
     return { kind: 'refused' };
   };
+  if (!ask.request && ask.approval === undefined) return { kind: 'none' };
   if (ask.request && ask.approval !== undefined) return refused('--request asks the owner seat and --approval runs an answered request: pass one');
-  const root = sources.root ?? findRoot(io.cwd);
-  if (root === null) return refused('not inside a git repository');
-  const team = teamNameAt(root, home);
-  const head = headOf(root);
+  if (binding === null) return refused('not inside a git repository');
+  const { root, team, head } = binding;
   const words = boundWords(argv);
   if (ask.request) {
     const made = createOwnerActionRequest(home, {

@@ -85,7 +85,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   client: ['approval', 'days', 'entities', 'ops', 'out', 'public-key', 'reason', 'to', 'via'],
   commits: ['file', 'since'],
   config: ['approval', 'reason'],
-  daemon: ['home', 'inherited', 'root', 'route', 'started-by'],
+  daemon: ['approval', 'home', 'inherited', 'reason', 'root', 'route', 'started-by'],
   delegate: ['commands'],
   'development-mode': ['approval', 'reason'],
   doctor: ['file', 'session'],

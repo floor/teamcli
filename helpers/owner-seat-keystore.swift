@@ -5,6 +5,9 @@
 //   owner-seat-keystore create <label>          prints the public key (X9.63, hex)
 //   owner-seat-keystore public <label>          prints the public key of an existing key
 //   owner-seat-keystore sign <label> <reason>   reads hex bytes on stdin, prints a DER ECDSA-SHA256 signature (hex)
+//   owner-seat-keystore sign-many <label> <reason>
+//                                               reads one hex message per line on stdin (at most 32), asks for
+//                                               user presence once, prints one signature per line, in order
 //
 //   owner-seat-keystore selftest [--emit]       creates a throwaway Secure Enclave key (no prompt, never stored),
 //                                               reloads it from its handle, signs and verifies; --emit prints
@@ -128,7 +131,7 @@ if args.count >= 2 && args[1] == "selftest" {
   print("ok secure-enclave")
   exit(0)
 }
-guard args.count >= 3 else { fail("usage: owner-seat-keystore create|public|sign|pin-set|pin-get <label> [reason] | selftest") }
+guard args.count >= 3 else { fail("usage: owner-seat-keystore create|public|sign|sign-many|pin-set|pin-get <label> [reason] | selftest") }
 let command = args[1]
 let label = args[2]
 
@@ -176,6 +179,64 @@ case "sign":
     fail("signing was refused or failed")
   }
   print(hex(signature))
+case "sign-many":
+  // Several answers under one user-presence prompt. The prompt names them all (the caller writes
+  // one card listing every answer into `reason`). The context is evaluated once, then every
+  // signature is made with that same context, so the key's user-presence check is the one the
+  // owner just passed and no second prompt is shown. Each message is signed on its own: nothing
+  // here combines them, and each signature verifies as one made by `sign`.
+  let reason = args.count >= 4 ? args[3] : "TeamCLI owner seat signatures"
+  let lines = (String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? "")
+    .split(whereSeparator: { $0.isNewline }).map(String.init).filter { !$0.isEmpty }
+  guard !lines.isEmpty, lines.count <= 32 else { fail("stdin holds no message, or more than 32") }
+  var messages: [Data] = []
+  for line in lines {
+    guard let message = unhex(line) else { fail("stdin is not one hex message per line") }
+    messages.append(message)
+  }
+  let useKeychain = findKey(label, reason: nil) != nil
+  if !useKeychain && !FileManager.default.fileExists(atPath: blobURL(label).path) { fail("no key named \(label)") }
+  final class Outcome: @unchecked Sendable { var passed = false }
+  let outcome = Outcome()
+  let context = LAContext()
+  context.localizedReason = reason
+  let done = DispatchSemaphore(value: 0)
+  context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { passed, _ in
+    outcome.passed = passed
+    done.signal()
+  }
+  done.wait()
+  guard outcome.passed else { fail("signing was refused or failed") }
+  var signatures: [String] = []
+  if useKeychain {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassKey,
+      kSecAttrApplicationTag as String: tag(label),
+      kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+      kSecReturnRef as String: true,
+      kSecUseAuthenticationContext as String: context,
+    ]
+    var item: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let found = item else { fail("no key named \(label)") }
+    let key = found as! SecKey
+    for message in messages {
+      var error: Unmanaged<CFError>?
+      guard let signature = SecKeyCreateSignature(key, .ecdsaSignatureMessageX962SHA256, message as CFData, &error) as Data? else {
+        fail("signing was refused or failed")
+      }
+      signatures.append(hex(signature))
+    }
+  } else {
+    guard let data = try? Data(contentsOf: blobURL(label)),
+          let key = try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: data, authenticationContext: context) else {
+      fail("no key named \(label)")
+    }
+    for message in messages {
+      guard let signature = try? key.signature(for: message) else { fail("signing was refused or failed") }
+      signatures.append(hex(signature.derRepresentation))
+    }
+  }
+  print(signatures.joined(separator: "\n"))
 case "pin-set":
   // A pinned public key for a non-keychain signer (a passkey), stored once and never overwritten.
   let value = (String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -25,6 +25,8 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
+import { ownerRequestDoor } from '../client/owner-action-step.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { serveChoresChild } from '../daemon/chores/child.ts';
 import { spawnMailboxChild } from '../daemon/mailbox/spawn.ts';
@@ -78,10 +80,10 @@ import { version as installedVersion, gitHead as installedGitHead } from '../ver
 
 export const USAGE = `Usage: team daemon status [--json]
        team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
-       team daemon restart [--dry-run] [--json]
-       team daemon uninstall [--home <folder>] [--json]
-       team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
+       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+       team daemon restart [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+       team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
+       team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 One machine-wide daemon serves every team and clone on this machine. It answers its own
 protocol on the one machine socket, and for now it also hosts each checkout's existing send
@@ -101,6 +103,13 @@ watch, named by the route id its record already carries. One request is written,
 consumes it on its next heartbeat, and only that route's loop is ended and restarted; no
 process is killed. A route that is not hosted, not required, standing down or stopped is
 refused, and the result names why.
+
+install, restart, uninstall and fault-watch are the owner's. --request records the exact verb
+and options for the owner seat to answer (--reason <text> is the short reason the card shows),
+and --approval <request-id> runs them once the owner has answered: the answer is checked when
+the command starts and spent once, just before the daemon is changed. On a machine whose owner
+seat is pinned from another machine this is the only way: the request is carried to the owner's
+signers with team approvals export.
 
 The daemon reads no credential store; the broker feature is not hosted in this build.
 
@@ -134,6 +143,8 @@ export type DaemonCommandSources = {
   heartbeatMs?: number;
   /** Injected for tests: never the real pane/herdr sources. */
   sendHost?: DaemonHost;
+  /** Injected for tests: the credential store an owner-seat answer is confirmed against. */
+  ownerSeatStore?: OwnerSeatKeyStore;
   /** Injected for tests: how long `fault-watch` waits for the daemon's result. */
   faultWaitMs?: number;
   /** Injected for tests: the interval between result reads. */
@@ -177,6 +188,11 @@ type Parsed = {
   presence: boolean;
   watch: boolean;
   startedBy: string | undefined;
+  /** `--request`: record the verb for the owner seat to answer. */
+  request: boolean;
+  /** `--approval <id>`: run the verb on the owner's signed answer to that request. */
+  approval: string | undefined;
+  reason: string | undefined;
   extra: string | undefined;
   /** The one-use token a chores child is started with. Internal: never a user's option. */
   inherited: string | undefined;
@@ -184,7 +200,7 @@ type Parsed = {
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited'], ['json', 'dry-run', 'presence', 'watch']);
+  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited', 'approval', 'reason'], ['json', 'dry-run', 'presence', 'watch', 'request']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
   // uses `known`; the flags and values come from `readArgs`. `chores` is the daemon's own child
@@ -224,6 +240,9 @@ function parse(argv: string[]): Parsed {
     presence: args.flags.has('presence'),
     watch: args.flags.has('watch'),
     startedBy: args.values['started-by'],
+    request: args.flags.has('request'),
+    approval: args.values['approval'],
+    reason: args.values['reason'],
     extra: args.rest[1],
     inherited: args.values['inherited'],
     error: args.error ?? null,
@@ -250,10 +269,16 @@ function verbProblem(parsed: Parsed): string | null {
     if (parsed.roots.length > 0) return 'chores takes no --root';
     if (parsed.startedBy !== undefined) return 'chores takes no --started-by';
     if (parsed.route !== undefined) return 'chores takes no --route';
-    if (parsed.json || parsed.dryRun || parsed.presence || parsed.watch) return 'chores takes no flags';
+    if (parsed.json || parsed.dryRun || parsed.presence || parsed.watch || parsed.request) return 'chores takes no flags';
+    if (parsed.approval !== undefined || parsed.reason !== undefined) return 'chores takes no --approval or --reason';
     return null;
   }
   if (parsed.inherited !== undefined) return '--inherited belongs to the daemon\'s own child';
+  const ownerGated = parsed.verb === 'install' || parsed.verb === 'restart' || parsed.verb === 'uninstall' || parsed.verb === 'fault-watch';
+  if (!ownerGated && parsed.request) return '--request belongs to install, restart, uninstall or fault-watch';
+  if (!ownerGated && parsed.approval !== undefined) return '--approval belongs to install, restart, uninstall or fault-watch';
+  if (parsed.request && parsed.approval !== undefined) return '--request asks the owner seat and --approval runs an answered request: pass one';
+  if (parsed.reason !== undefined && !parsed.request) return '--reason goes with --request';
   if (parsed.verb !== 'install' && parsed.verb !== 'uninstall' && parsed.home !== undefined) {
     return '--home belongs to install or uninstall';
   }
@@ -376,6 +401,35 @@ function localProgram(sources: DaemonCommandSources): { execPath: string; entry:
  * `run` is not this gate: a no-terminal start by the service manager is `runAllowed`'s separate
  * answer, and no dev-mode setting admits a seat or a pane to it.
  */
+/**
+ * The owner-seat door of the same verbs (`ownerRequestDoor`): `--request` records the verb and its
+ * options, bound to this home, and `--approval <id>` admits the run on the owner's signed answer
+ * to exactly that. The answer is checked here with nothing claimed; `spend` claims it once, just
+ * before the daemon is changed, so a run refused before that keeps it. A dry run never spends.
+ * No charter, no rule and no lead admits the daemon through this door.
+ */
+type DaemonGate = { kind: 'allowed'; spend: () => boolean } | { kind: 'requested' } | { kind: 'refused' };
+
+function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSources, parsed: Parsed): DaemonGate {
+  if (!parsed.request && parsed.approval === undefined) {
+    return ownerAllows(io, sources, parsed.json, parsed.verb) ? { kind: 'allowed', spend: () => true } : { kind: 'refused' };
+  }
+  const home = sources.home ?? homedir();
+  const door = (dry: boolean) => ownerRequestDoor(
+    'daemon',
+    'team-daemon',
+    argv,
+    { request: parsed.request, approval: parsed.approval, dry, json: parsed.json, ...(parsed.reason === undefined ? {} : { reason: parsed.reason }) },
+    io,
+    { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) },
+    { root: home, team: 'daemon', head: null },
+  );
+  const step = door(true);
+  if (step.kind === 'requested') return { kind: 'requested' };
+  if (step.kind !== 'admitted') return { kind: 'refused' };
+  return { kind: 'allowed', spend: () => parsed.dryRun || door(false).kind === 'admitted' };
+}
+
 function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb: string | undefined): boolean {
   const caller = callerOf(io);
   if (isOwner(caller)) return true;
@@ -1504,13 +1558,22 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   // admissions widen the gate through `ownerAllows`: the owner's dev-mode lift admits a placed
   // orchestrator, and install and restart also admit a verified general grant
   // whose ops name `daemon`. status returned above, and run has its own gate.
-  if (!ownerAllows(io, sources, parsed.json, parsed.verb)) {
+  const gate = daemonGate(io, argv, sources, parsed);
+  if (gate.kind === 'requested') {
+    // exit: daemon.approval-requested
+    return 0;
+  }
+  if (gate.kind === 'refused') {
     // exit: daemon.not-owner
     // exit: daemon.grant-refused
+    // exit: daemon.approval-refused
     return 1;
   }
+  const spent = (): boolean => gate.spend();
 
   if (parsed.verb === 'fault-watch') {
+    // exit: daemon.approval-refused
+    if (!spent()) return 1;
     return await faultWatch(parsed, io, sources, home);
   }
 
@@ -1529,6 +1592,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   if (parsed.verb === 'restart') {
+    // exit: daemon.approval-refused
+    if (!spent()) return 1;
     return await restartInstalled(manager, io, parsed, home, sources);
   }
 
@@ -1561,6 +1626,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   if (parsed.verb === 'uninstall') {
+    // exit: daemon.approval-refused
+    if (!spent()) return 1;
     const removed = manager.uninstall(targetHome);
     if (!removed.ok) {
       appendDaemonLog(targetHome, `uninstall: ${removed.detail ?? removed.why}`, sources.now?.() ?? new Date());
@@ -1669,6 +1736,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // exit: daemon.dry-run
     return 0;
   }
+  // exit: daemon.approval-refused
+  if (!spent()) return 1;
   const installed = manager.install(targetHome, fullProgram);
   if (!installed.ok) {
     return await reportInstallFailure(installed, io, parsed, named.roots, plan.unitPath, targetHome, sources, manager);

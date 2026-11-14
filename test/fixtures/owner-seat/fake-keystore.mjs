@@ -40,6 +40,16 @@ switch (command) {
     console.log(sign('sha256', msg, { key: createPrivateKey(readFileSync(file('pem'))), dsaEncoding: 'der' }).toString('hex'));
     break;
   }
+  case 'sign-many': {
+    // FAKE_KEYSTORE_OLD stands for a helper built before this verb existed.
+    if (process.env.FAKE_KEYSTORE_OLD === '1') fail(`unknown command ${command}`);
+    if (!existsSync(file('pem'))) fail(`no key named ${label}`);
+    appendFileSync(join(here, 'prompts.log'), `Touch ID: ${reason ?? 'TeamCLI owner seat signatures'}\n`);
+    const key = createPrivateKey(readFileSync(file('pem')));
+    const lines = stdin().split('\n').filter((line) => line !== '');
+    console.log(lines.map((line) => sign('sha256', Buffer.from(line, 'hex'), { key, dsaEncoding: 'der' }).toString('hex')).join('\n'));
+    break;
+  }
   case 'pin-set': {
     if (existsSync(file('pin'))) fail('pin exists');
     writeFileSync(file('pin'), stdin(), { mode: 0o600 });

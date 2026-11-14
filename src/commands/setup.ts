@@ -82,8 +82,11 @@ async function setupOutcome(argv: string[], rawIo: Io, options: SetupOptions): P
   };
   if (args.error !== undefined || args.rest.length > 0) return fail(args.error ?? `unexpected "${args.rest[0]}"\n${USAGE}`, 'invocation');
   // A machine whose owner seat is pinned holds no owner signer: no key is made here and no passkey
-  // is recorded here, since neither could be confirmed by the owner on this machine.
-  if (ownerMachinePinned(home)) return fail("this machine's owner seat is pinned from another machine; the charter is signed on the machine that holds the owner's signers, and nothing was written");
+  // is recorded here, since neither could be confirmed by the owner on this machine. It keeps no
+  // charter of its own either: a charter is standing consent signed for one machine's folders, and
+  // carrying one here would be a second signing flow. Every owner-only action on such a machine
+  // runs on the owner's signed answer to its own request, carried as a file.
+  if (ownerMachinePinned(home)) return fail("this machine's owner seat is pinned from another machine, and it keeps no charter of its own; an owner-only action here runs on the owner's answer to its own request: run it with --request, carry the request with team approvals export, sign it with team approvals sign on the machine that holds the owner's signers, record the answer here with team approvals answer, then run it with --approval <id>; nothing was written");
   const choice = signerChoice(args.values.signer);
   if (choice === null) return fail('--signer is touch-id (or mac) or passkey (or iphone); the owner chooses in this step, and this run does not sign', 'invocation');
 

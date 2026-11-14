@@ -183,6 +183,12 @@ function scopeOf(actions: readonly string[], team: string, machine?: string): st
   if (actions.length === 1 && actions[0] === 'development-mode') {
     return machine === undefined ? msg('card.scope.development-mode') : msg('card.scope.development-mode.machine', { machine });
   }
+  if (actions.length === 1 && actions[0] === 'team-daemon') {
+    return machine === undefined ? msg('card.scope.daemon') : msg('card.scope.daemon.machine', { machine });
+  }
+  if (actions.length === 1 && actions[0] === 'team-entity-config') {
+    return machine === undefined ? msg('card.scope.entity', { team }) : msg('card.scope.entity.machine', { team, machine });
+  }
   const changes = [...new Set(actions.filter((action) => CHANGED.has(action)).map((action) => msg(`card.change.${action}` as MessageId)))];
   if (changes.length === 0) return machine === undefined ? msg('card.scope.team', { team }) : msg('card.scope.team.machine', { team, machine });
   return machine === undefined
@@ -203,12 +209,34 @@ function machineOf(params: Pick<OwnerActionParams, 'machine' | 'account'>): stri
   return account === '' ? shown : `${shown} (account ${account})`;
 }
 
+/** The thing one action changes, in plain words. An entity's record and the machine daemon name
+ *  the key or the verb their bound words carry; a word this build does not know names the kind. */
+function whatOf(action: string, words: readonly string[] | undefined): string {
+  if (action === 'team-daemon') {
+    const verb = words?.[0];
+    return verb === 'install' || verb === 'restart' || verb === 'uninstall' || verb === 'fault-watch'
+      ? msg(`card.what.team-daemon.${verb}` as MessageId)
+      : msg('card.what.team-daemon');
+  }
+  if (action === 'team-entity-config') {
+    const path = words?.[1] ?? '';
+    const key = path.endsWith('.names.unique') ? 'names'
+      : path.endsWith('.worktrees') ? 'worktrees'
+        : path.endsWith('.root') ? 'root'
+          : path.endsWith('.reminders') ? 'reminders'
+            : path.endsWith('.rules') ? (/^projects?\./.test(path) ? 'project-rules' : 'rules')
+              : null;
+    return msg((key === null ? 'card.what.team-entity-config' : `card.what.team-entity-config.${key}`) as MessageId);
+  }
+  return msg(`card.what.${action}` as MessageId);
+}
+
 /** The kinds whose answer changes something beyond the team's own running state. */
 const CHANGED: ReadonlySet<string> = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant']);
 
 /** One owner-action request, as the owner reads it before answering. */
 export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by' | 'requesters' | 'reason' | 'words' | 'machine' | 'account'>): ApprovalCard {
-  const what = params.actions.map((action) => msg(`card.what.${action}` as MessageId));
+  const what = params.actions.map((action) => whatOf(action, params.words?.[action]));
   const who = askers(params);
   const machine = machineOf(params);
   if (params.actions.length === 1) {

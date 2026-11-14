@@ -27,6 +27,8 @@ export const USAGE = `Usage: team config keys [<level>] [--json]
        team config unset <path>
        team config set <path> <value> --request [--reason <text>] [--json]
        team config set <path> <value> --approval <request-id> [--json]
+       team config unset <path> --request [--reason <text>] [--json]
+       team config unset <path> --approval <request-id> [--json]
        team config set <path> <value> --general <grant.json> --key <client.key> [--json]
        team config unset <path> --general <grant.json> --key <client.key> [--json]
        team config edit
@@ -58,7 +60,11 @@ apart seat nicknames stay — entity, project, team or off. reminders is the lis
 chore fires: each item is {name, at, zone, catchUp, text, to}, the same shape the daemon reads.
 A set is the owner's, or a seat's under the owner's general grant: 0.5.10 admits a wildcard grant
 only, so one that lists entities is refused until 0.5.11, and the grant's operations must admit
-config. A charter covers a folder and does not reach it. It edits an entry the file already
+config. A charter covers a folder and does not reach it. The owner's signed answer is the third
+way: --request records the exact set or unset for the owner seat, and --approval <request-id>
+applies it once; the answer is spent only by a write that goes through. On a machine whose owner
+seat is pinned from another machine it is the only way, and the request is carried with team
+approvals export. It edits an entry the file already
 declares, keeps every other line and writes nothing else; get is any caller's. A reminders set
 takes its value as one-line YAML, writes the whole list, and is refused unless the daemon's own
 parser would read it; an empty list ([]) clears the entity's reminders, and there is no unset.
