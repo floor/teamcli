@@ -25,9 +25,12 @@ export type CharterGate =
 const EDIT = 'team setup --edit';
 
 /** The path a check is asked about, as it is on disk (`resolvedTarget`), or null: never the
- *  written spelling, which a link could carry outside a root. */
-function located(path: string): string | null {
-  return resolvedTarget(path.startsWith('/') ? path : `${process.cwd()}/${path}`);
+ *  written spelling, which a link could carry outside a root. A leading `~` is the home, as the
+ *  grant record expands it (`expand` in src/permissions/grants.ts), so the path checked is the
+ *  path kept. */
+function located(path: string, home: string): string | null {
+  const named = path.replace(/^~(?=$|\/)/, () => home);
+  return resolvedTarget(named.startsWith('/') ? named : `${process.cwd()}/${named}`);
 }
 
 /** Whether a signed root covers `path`: only while the root still resolves to what was signed
@@ -43,7 +46,7 @@ function covers(root: string, path: string | null): boolean {
 export function charterCoversFolder(home: string, folder: string, store?: OwnerSeatKeyStore): boolean {
   const read = readCharter(home, store ?? systemOwnerSeatKeyStore());
   if (read.kind !== 'ok') return false;
-  const at = located(folder);
+  const at = located(folder, home);
   return read.charter.body.roots.some((root) => covers(root, at));
 }
 
@@ -88,7 +91,7 @@ export function charterGate(home: string, ask: CharterAsk, store?: OwnerSeatKeyS
   if (ask.vendor !== undefined && body.vendors !== 'all' && !body.vendors.includes(ask.vendor)) {
     return { kind: 'block', message: `the owner charter does not allow vendor ${ask.vendor}; the owner widens it with ${EDIT}` };
   }
-  const path = located(ask.path ?? ask.cwd);
+  const path = located(ask.path ?? ask.cwd, home);
   const inside = body.roots.some((root) => covers(root, path));
   if (!inside) {
     return { kind: 'block', message: `this is outside the owner charter (${path ?? (ask.path ?? ask.cwd)} is not under a charter root); the owner widens it with ${EDIT}` };
@@ -110,7 +113,7 @@ export function charterRootsGate(home: string, folder: string, store?: OwnerSeat
   if (body.expires_at !== null && Date.parse(body.expires_at) <= Date.now()) {
     return { kind: 'block', message: `the owner charter expired at ${body.expires_at}; the owner signs again with ${EDIT}` };
   }
-  const path = located(folder);
+  const path = located(folder, home);
   const inside = body.roots.some((root) => covers(root, path));
   if (!inside) {
     return { kind: 'block', message: `this is outside the owner charter (${path ?? folder} is not under a charter root); the owner widens it with ${EDIT}` };
@@ -147,7 +150,7 @@ export function charterGrantBound(
   }
   const places = [...request.roots, ...(request.scope ?? [])];
   for (const place of places) {
-    const at = located(place);
+    const at = located(place, home);
     if (!body.roots.some((root) => covers(root, at))) {
       return `the grant path ${at ?? place} is outside the owner charter; the owner widens it with ${EDIT}`;
     }

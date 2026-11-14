@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { boundRoot, charterPath, defaultProjectRoots, resolvedTarget, signedRoots } from '../src/charter/body.ts';
-import { charterRootsGate } from '../src/charter/check.ts';
+import { charterGrantBound, charterRootsGate } from '../src/charter/check.ts';
 import { inheritedRulesProblem } from '../src/launch/rules.ts';
 import { readCharter } from '../src/charter/store.ts';
 import { runConfig } from '../src/commands/config.ts';
@@ -747,5 +747,27 @@ describe('round 2 of the review', () => {
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(rootWordFindings(text, read.team, '/srv/acme/repos/web', home).some((finding) => finding.text.includes('it has no owner charter'))).toBe(true);
+  });
+});
+
+describe('round 3 of the review', () => {
+  test('a home-relative grant scope is checked as the home path the grant keeps: a link out of the charter is refused', async () => {
+    const home = homeWith('acme:\n  root: ~/repos\n');
+    for (const folder of ['repos/web', 'outside']) mkdirSync(join(home, folder), { recursive: true });
+    symlinkSync(join(home, 'outside'), join(home, 'repos', 'web', 'link'));
+    const store = fakeOwnerStore();
+    const io = testIo(home, { kind: 'unplaced', reason: 'the agent that launched setup' });
+    expect(await runSetup(['--signer', 'touch-id', '--team', 'acme'], io, { home, store, now: () => new Date('2026-11-14T12:00:00.000Z') }), io.err).toBe(0);
+    // The caller stands inside the root, as the scenario does: the scope is never read from there.
+    const was = process.cwd();
+    process.chdir(join(home, 'repos', 'web'));
+    try {
+      const request = (scope: string) => ({ capabilities: ['up'], roots: ['~/repos'], scope: [scope] });
+      expect(charterGrantBound(home, request('~/repos/web/link'), store)).toBe(`the grant path ${home}/outside is outside the owner charter; the owner widens it with team setup --edit`);
+      expect(charterGrantBound(home, request('~/repos/web'), store)).toBeNull();
+      expect(charterGrantBound(home, request('~/repos/web/not-yet'), store)).toBeNull();
+    } finally {
+      process.chdir(was);
+    }
   });
 });

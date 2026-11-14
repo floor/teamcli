@@ -1054,6 +1054,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
   const liveRules = standing.kind !== 'verified' || owner;
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules, input.rulesOrigin ?? 'file');
+  // Rules that name a folder this machine cannot fill refuse the restart here, before the seat
+  // is stopped or its record touched: the running seat keeps running on the rules it has.
+  if (planSeat.rulesProblem !== undefined) {
+    return { kind: 'not-ready', message: `${next.name}: ${planSeat.rulesProblem}` };
+  }
   // A named launcher resolves on its own (8cf63fb22), except in a preset swap: the swap resolved
   // its team preset itself and wrote the line, so restarting it resolves nothing again (and asks no
   // launcher-file cover the swap's own resolution did not ask). A shipped launcher always resolves.

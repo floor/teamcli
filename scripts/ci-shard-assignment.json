@@ -890,6 +890,7 @@
     "test/resume.test.ts": 3,
     "test/retire-mcp-inbox-leg.test.ts": 2,
     "test/rewake-after-busy-independent.test.ts": 2,
+    "test/root-word-launch-gates.test.ts": 3,
     "test/route.test.ts": 4,
     "test/rules-at-launch.test.ts": 4,
     "test/rules-settings.test.ts": 5,
