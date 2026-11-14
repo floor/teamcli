@@ -192,8 +192,11 @@ function systemState(dir: string, owner: number): OwnerStateRead | null {
  * in full: the administrator's search path under sudo seldom reaches an account's own install.
  */
 function adminCommand(words: string): string {
+  // Only TeamCLI's own command line is named in full; any other program (the owner helper among
+  // them) names the command by its plain name.
   const cli = process.argv[1];
-  const team = typeof cli === 'string' && cli.startsWith('/') ? `${process.execPath} ${cli}` : 'team';
+  const ours = typeof cli === 'string' && cli.startsWith('/') && /(^|\/)(cli\.[jt]s|team)$/.test(cli);
+  const team = ours ? `${process.execPath} ${cli}` : 'team';
   return `sudo ${team} ${words}`;
 }
 

@@ -543,10 +543,18 @@ describe("the helper's input, and what the account may replace", () => {
   test('a machine not set up names the install the owner runs, in full, as the administrator', () => {
     const linux = productionOwnerStateRoots('linux');
     ownerStateRootsForTests({ ...linux, system: join(temp('nothing'), 'teamcli'), shared: { ledger: join(temp('no-ledger'), 'ledger'), account: () => 'floor' } });
-    const note = ownerSetupNoteOnThisAccount();
-    expect(note).toContain('sudo ');
-    expect(note).toContain('owner-seat install --account floor');
-    expect(note).toContain(process.execPath);
+    const saved = process.argv[1];
+    try {
+      // Run as TeamCLI's own command line: the install is named with this Bun and this CLI in full.
+      process.argv[1] = '/opt/teamcli/dist/cli.js';
+      expect(ownerSetupNoteOnThisAccount()).toContain(`sudo ${process.execPath} /opt/teamcli/dist/cli.js owner-seat install --account floor`);
+      // Any other program (the owner helper among them) names it plainly.
+      process.argv[1] = '/usr/local/teamcli-owner/app/owner-spend.js';
+      expect(ownerSetupNoteOnThisAccount()).toContain('sudo team owner-seat install --account floor');
+      expect(ownerSetupNoteOnThisAccount()).toContain('sudo team owner-seat pin --from <export file>');
+    } finally {
+      process.argv[1] = saved!;
+    }
     ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
     expect(ownerSetupNoteOnThisAccount()).toBeNull();
   });
