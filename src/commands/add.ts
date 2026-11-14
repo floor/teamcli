@@ -1955,10 +1955,11 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        // A workspace this write made records its own folder (the verified lobby for a lobby seat);
-        // otherwise the folder the seat already ran in stands. Kept absolute, against the team root.
+        // A workspace this write made records the folder it was made in (the launch names it);
+        // failing that, the verified lobby for a lobby seat or the planned folder. Otherwise the
+        // folder the seat already ran in stands. Kept absolute, against the team root.
         const fresh = patch.createdWorkspace
-          ? (input.inLobby ? (input.verifiedLobby ?? patch.start_cwd) : (patch.start_cwd ?? input.startCwd))
+          ? (patch.start_cwd ?? (input.inLobby ? (input.verifiedLobby ?? undefined) : input.startCwd))
           : patch.start_cwd;
         const start_cwd = keptStartFolder(input.root, fresh, prior.start_cwd);
         // `waiting: null` removes the field alone; anything else written replaces it.

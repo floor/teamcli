@@ -4213,12 +4213,12 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
             : (prior.last_active ?? retained?.last_active);
-          // A replacement workspace records the folder it was made in, never the prior record's
-          // (the verified lobby for a lobby seat); otherwise the folder the seat already ran in
-          // stands. Kept absolute, against the team root.
+          // A replacement workspace records the folder it was made in (the launch names it), never
+          // the prior record's; failing that, the verified lobby for a lobby seat or the planned
+          // folder. Otherwise the folder the seat already ran in stands. Kept absolute.
           const planned = seats.find((item) => item.name === name);
           const fresh = patch.createdWorkspace
-            ? (planned?.lobby ? (verifiedLobby ?? patch.start_cwd) : (patch.start_cwd ?? planned?.cwd))
+            ? (patch.start_cwd ?? (planned?.lobby ? (verifiedLobby ?? undefined) : planned?.cwd))
             : patch.start_cwd;
           const start_cwd = keptStartFolder(root, fresh, prior.start_cwd);
           // `waiting: null` removes the field alone; anything else written replaces it.
