@@ -61,6 +61,7 @@ import type { TeamFile } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
 import { callerOf, callerVerdict, logTag, standingOf, walkCaller, type Caller } from './caller.ts';
+import { ownerMachinePinned } from './client/owner-pin-path.ts';
 import { findRoot } from './file/load.ts';
 import { readTeamConfig } from './file/team-config.ts';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
@@ -136,6 +137,9 @@ export type DevModeRun = {
   machine?: { mode: DevelopmentMode; since: string; generation: number };
   /** Why a machine record was present and could not be used: dev mode is not applied on it. */
   machineRefusal?: string;
+  /** Dev mode was on, and this machine's owner seat is pinned from another machine: nothing is
+   *  lifted, for any caller (src/client/owner-pin-path.ts). */
+  pinnedMachine?: true;
 };
 
 /** The project a team belongs to, read the way `team check`'s policy pass reads it. The
@@ -221,8 +225,27 @@ function nearestExpiry(expired: readonly { name: string; level: PolicyLevel; exp
  *   variable is not consulted, since a governing value may be among what could not be read.
  * - `devModeGoverned`: the variable is ignored; `on` iff the effective `dev-mode` is `on`.
  * - Otherwise: the variable, set to exactly `1`, keeps its pre-policy behaviour.
+ * - In every case, on a machine whose owner seat is pinned from another machine, nothing is
+ *   lifted, for any caller (`withoutPinnedMachine`).
  */
 export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
+  return withoutPinnedMachine(resolveDevModeAt(command, io, context), context.home);
+}
+
+/**
+ * On a machine whose owner seat is pinned from another machine (src/client/owner-pin-path.ts),
+ * the owner's word is a signed answer from the machine that holds the signers. A mode an agent
+ * may set (the variable) or sign with the account's own key (a chain value, the machine record)
+ * must never stand in for it, so dev mode lifts no gate there — for a terminal, an agent outside
+ * herdr, an unattended run and a placed lead alike. The answer is the machine's, read from the one
+ * resolver: no caller placement, variable or home decides it.
+ */
+function withoutPinnedMachine(run: DevModeRun, home: string | undefined): DevModeRun {
+  if (!run.on || !ownerMachinePinned(home)) return run;
+  return { ...run, on: false, by: null, pinnedMachine: true };
+}
+
+function resolveDevModeAt(command: DevModeCommand, io: Pick<Io, 'env'>, context: DevModeContext): DevModeRun {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return variableOnly(envSet);
   const machine = machineRun(readDevelopmentMode(context.home), command, envSet);
@@ -249,9 +272,13 @@ export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, con
  * Dev mode's state at the caller's place, without the operation list: `on` here means dev mode
  * itself is on (the effective policy is `on`, or the variable is in effect before any policy),
  * which is what the owner-gate admission reads. The operation list is a separate question, asked
- * by `resolveDevMode`; nothing here widens it.
+ * by `resolveDevMode`; nothing here widens it. A pinned machine reads it off, for every caller.
  */
 export function devModeState(io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
+  return withoutPinnedMachine(devModeStateAt(io, context), context.home);
+}
+
+function devModeStateAt(io: Pick<Io, 'env'>, context: DevModeContext): DevModeRun {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return variableOnly(envSet);
   const machine = machineRun(readDevelopmentMode(context.home), null, envSet);
@@ -560,6 +587,8 @@ export function devModeOwnerLiftAtCwd(
  * reports inactive: a policy the tool could not verify does not quiet a single row.
  */
 export function devModeActive(io: Pick<Io, 'env'>, context: DevModeContext = {}): boolean {
+  // A pinned machine has no dev mode to fold rows under: it lifts nothing there.
+  if (ownerMachinePinned(context.home)) return false;
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return envSet;
   const machine = readDevelopmentMode(context.home);

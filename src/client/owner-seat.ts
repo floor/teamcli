@@ -22,6 +22,7 @@ import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, re
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { loadAndResolvePolicyChain, writePolicySet } from '../policy/sources.ts';
+import { ownerMachinePinned } from './owner-pin-path.ts';
 
 /** One credential store: user-presence signing keys, plus pins for keys held elsewhere. */
 export type OwnerSeatKeyStore = {
@@ -187,6 +188,7 @@ export function registerOwnerSeat(
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(input.team)) return { ok: false, why: `"${input.team}" is not a team name` };
   if (!SIGNER_NAME.test(input.signer)) return { ok: false, why: `"${input.signer}" is not a signer name` };
   if (existsSync(ownerSeatFile(home))) return { ok: false, why: `an owner seat is already registered (${ownerSeatFile(home)}); add a signer with --add-owner-signer` };
+  if (ownerMachinePinned(home)) return { ok: false, why: "this machine's owner seat is pinned from another machine; the owner's signers live on the machine that holds them" };
   if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available; build the helper: swiftc helpers/owner-seat-keystore.swift -o ${ownerSeatHelperPath(home)}` };
   const label = ownerSignerLabel(home, input.team, input.signer);
   const created = store.create(label);
@@ -215,6 +217,7 @@ export function addOwnerSigner(
 ): { ok: true; signer: OwnerSigner } | { ok: false; why: string } {
   const record = readOwnerSeat(home);
   if (record === null) return { ok: false, why: 'no owner seat is registered' };
+  if (ownerMachinePinned(home)) return { ok: false, why: "this machine's owner seat is pinned from another machine; a signer is added on the machine that holds the seat, then exported and pinned again" };
   if (!SIGNER_NAME.test(input.signer)) return { ok: false, why: `"${input.signer}" is not a signer name` };
   if (record.signers.some((s) => s.name === input.signer)) return { ok: false, why: `signer "${input.signer}" is already registered` };
   if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available` };
@@ -399,8 +402,9 @@ function verifyingSigner(
   return { ok: true, signer, publicKey: confirmed.publicKey };
 }
 
-/** One signature (or WebAuthn assertion) under a confirmed signer, over exactly these bytes. */
-function signatureOk(
+/** One signature (or WebAuthn assertion) under a confirmed signer, over exactly these bytes.
+ *  The pinned owner seat (src/client/owner-pin.ts) checks its records with this same rule. */
+export function signatureOk(
   signer: OwnerSigner,
   publicKey: string,
   bytes: Buffer,

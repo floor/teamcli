@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { CLIENT_PUBLIC_KEY_PATTERN, publicKeyObject, readClientPrivateKey } from './records.ts';
+import { ownerMachinePinned } from './owner-pin-path.ts';
 
 export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
 /** Dispatcher commands explicitly refused by the general door, outside its op vocabulary. */
@@ -225,6 +226,9 @@ function load(path: string): Disk | string {
 
 /** One verified general grant, its whole chain checked back to the owner's signature. */
 export function readGeneralGrant(home: string, path: string, now: Date = new Date(), depth = 0): R<{ grant: GeneralGrant }> {
+  // A grant's root is signed with this account's own key, which any process of the account can
+  // read: on a machine whose owner seat is pinned from another machine, no grant verifies.
+  if (ownerMachinePinned(home)) return { ok: false, why: "this machine's owner signs on another machine; a general grant does not stand in for the owner here" };
   if (depth > MAX_CHAIN) return { ok: false, why: 'the grant chain is too long' };
   const disk = load(path);
   if (typeof disk === 'string') return { ok: false, why: disk };

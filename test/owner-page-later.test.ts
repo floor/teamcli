@@ -9,9 +9,9 @@ import { createHash, generateKeyPairSync, sign as cryptoSign, type KeyObject } f
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { recordDir, runMessages } from '../src/commands/messages.ts';
-import { admitOwnerAction, createOwnerActionRequest } from '../src/client/owner-action.ts';
+import { admitOwnerAction, createOwnerActionRequest, readOwnerActionRecord } from '../src/client/owner-action.ts';
 import { registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
-import { actionRequestsFolder, admitTeamCreate, createTeamCreateRequest } from '../src/client/team-create.ts';
+import { actionRequestsFolder, admitTeamCreate, createTeamCreateRequest, readTeamCreateRecord } from '../src/client/team-create.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { OWNER_PAGE_HTML, serveOwnerPage } from '../src/security/owner-page.ts';
@@ -153,8 +153,15 @@ async function ready(s: Page): Promise<Phone> {
   return p;
 }
 
+/** The hash the page's card shows for a request: the record's own, as the page sends it back. */
+function shownOf(s: Page, id: string): string | undefined {
+  const record = id.startsWith('oa_') ? readOwnerActionRecord(s.home, id) : id.startsWith('tc_') ? readTeamCreateRecord(s.home, id) : null;
+  return record === null || typeof record === 'string' ? undefined : record.params_sha256;
+}
+
 function challenge(s: Page, p: Phone, id: string, word: string): Promise<CallResult> {
-  return s.call('POST', '/api/team-create/challenge', { id, word, credentialId: p.credentialId });
+  const shown = shownOf(s, id);
+  return s.call('POST', '/api/team-create/challenge', { id, word, credentialId: p.credentialId, ...(shown !== undefined ? { shown } : {}) });
 }
 
 async function answerWord(s: Page, p: Phone, id: string, word: string): Promise<{ probe: CallResult; done: CallResult | null }> {

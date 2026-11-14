@@ -31,6 +31,8 @@ const EN = {
   'page.approve_once': 'Approve once',
   'page.always_allow': 'Always allow',
   'page.deny': 'Deny',
+  'page.unreadable': 'This request cannot be read, so it cannot be answered here: {why}',
+  'page.changed': 'This request changed since it was shown; nothing was signed. Read the card again.',
   // The approval card (src/client/approval-card.ts): the owner must know instantly what she
   // accepts or rejects, with no extra context. The title is an action verb and its object in plain
   // words; the question is who wants it and why, ending `OK?`; the scope names the team and says
@@ -50,6 +52,11 @@ const EN = {
   'card.scope.changes': 'Team {team} · {change}',
   'card.scope.changes.many': 'Team {team} · {changes}',
   'card.scope.development-mode': 'This Mac · all teams',
+  // A request carried from another machine (src/client/owner-carry.ts) names that machine beside
+  // its team, so the owner never reads it as one for the machine she answers on.
+  'card.scope.team.machine': 'Team {team} on {machine} · no permission change',
+  'card.scope.changes.many.machine': 'Team {team} on {machine} · {changes}',
+  'card.scope.development-mode.machine': 'Machine {machine} · all teams',
   'card.scope.always': 'always allows this, until revoked',
   'card.scope.always.base': '{base} · always allows this, until revoked',
   'card.scope.deny': 'refused, nothing changes',

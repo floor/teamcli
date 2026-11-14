@@ -291,3 +291,24 @@ describe('grant reader: the later window', () => {
     expect(note.payload.body).toContain(until.toISOString());
   });
 });
+
+describe('grant answer: the request shown is the request signed', () => {
+  test('an answer is held to the hash the owner was shown, against the one read it signs', async () => {
+    const s = await stage();
+    const id = await requestGrant(s, s.now());
+    const envelope = JSON.parse(readFileSync(join(grantRequestsFolder(s.home), `${id}.json`), 'utf8')) as { grant_request?: { params_sha256?: string } };
+    const shown = envelope.grant_request?.params_sha256 ?? '';
+    let prompts = 0;
+    const counted: OwnerSeatKeyStore = { ...s.store, sign: (label, message, reason) => { prompts += 1; return s.store.sign(label, message, reason); } };
+    const other = approveAsOwnerSeat(s.home, id, 'oui', counted, s.now(), { signer: 'mac', expect: 'f'.repeat(64) });
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.why).toContain('changed since it was shown');
+    expect(prompts).toBe(0);
+    expect(existsSync(join(grantRequestsFolder(s.home), `${id}.seat-answer.json`))).toBe(false);
+    // The page refuses a challenge for a grant whose hash is not the one it showed.
+    const refused = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: s.p.credentialId, shown: 'f'.repeat(64) });
+    expect(refused.status).toBe(409);
+    expect(approveAsOwnerSeat(s.home, id, 'oui', counted, s.now(), { signer: 'mac', expect: shown })).toMatchObject({ ok: true, choice: 'once' });
+    expect(prompts).toBe(1);
+  });
+});

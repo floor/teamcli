@@ -232,6 +232,9 @@ Usage:
     team approvals revoke <id...> [--json]
     team approvals revoke <id...> --request [--reason <text>] [--json]
     team approvals revoke <id...> --approval <request-id> [--json]
+    team approvals export <id> --out <file> [--json]
+    team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
+    team approvals answer --from <file> [--json]
 
 ### Who may run it
 
@@ -247,6 +250,33 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `answer`
+
+Hidden: no
+
+Usage:
+
+    team approvals answer --from <file> [--json]
+
+#### Who may run it
+
+`any-caller` — it records an answer carried from another machine, and only one that verifies against this machine's pinned owner seat and is bound to a request of this machine; the command still runs with --approval and is checked again there
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--from` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
@@ -270,6 +300,35 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+
+### `export`
+
+Hidden: no
+
+Usage:
+
+    team approvals export <id> --out <file> [--json]
+
+#### Who may run it
+
+`any-caller` — it writes a waiting request of a machine whose owner seat is pinned to a file; the request grants nothing until the owner signs an answer on the machine that holds the signers
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--out` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -338,6 +397,37 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `id...` | no | no |
+
+### `sign`
+
+Hidden: no
+
+Usage:
+
+    team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
+
+#### Who may run it
+
+`any-caller` — an agent may start it, but the answer is written only once the owner signs it (on the owner's device, or with a passkey); the request it answers runs only on the machine it names
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--answer` | yes | no | no |
+| `--assertion` | yes | no | no |
+| `--from` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--out` | yes | no | no |
+| `--signer` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
 
 ## `archive`
 
@@ -2241,6 +2331,8 @@ Usage:
     team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>] [--policy-entity <entity>]
     team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]
     team owner-seat serve [--port <port>]
+    team owner-seat export --out <file> [--signer <name>] [--json]
+    team owner-seat pin --from <file> [--name <machine>] [--json]
 
 ### Who may run it
 
@@ -2257,6 +2349,62 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `export`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat export --out <file> [--signer <name>] [--json]
+
+#### Who may run it
+
+`any-caller` — an agent may start it, but the export is written only once the owner signs it on the owner's device; it carries the seat's public keys and no private key
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--out` | yes | no | no |
+| `--signer` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `pin`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat pin --from <file> [--name <machine>] [--json]
+
+#### Who may run it
+
+`owner-only` — the first pin is the owner's, from a terminal outside the terminal host on a machine with no pin yet (trust on first use); a changed seat is pinned only from a newer export signed by a signer already pinned there
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--from` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--name` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
