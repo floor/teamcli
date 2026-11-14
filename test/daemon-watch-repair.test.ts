@@ -49,7 +49,7 @@ test('no reading, a daemon that is not running, or an older build with no watch 
   expect(daemonHostsNoWatch(health(undefined))).toBe(false);
 });
 
-test('the state record keeps the run's watch word, and an older record without one reads as not known', () => {
+test('the state record keeps the watch word of the run, and an older record without one reads as not known', () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'team-watch-word-')));
   try {
     const base = {
