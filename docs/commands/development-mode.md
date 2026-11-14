@@ -28,7 +28,10 @@ mode and the generation the record stands at now. The owner reads the fingerprin
 same `set` run with `TEAM_OWNER_APPROVAL` holding that hex is admitted. An empty or arbitrary
 token never matches; the token is never logged and never written into the record; and because it
 binds the prior generation, a token shown for one switch never authorizes another — a switch that
-finds the generation moved refuses and says to show the fingerprint again.
+finds the generation moved refuses and says to show the fingerprint again. On a machine whose
+owner seat is pinned from another machine (`team owner-seat pin`) the token admits nothing,
+since a fingerprint is public: the switch there runs on the owner's signed answer
+(`set <mode> --request`, then `--approval`). Dev mode lifts no gate on such a machine either.
 
 `set <mode> --request` is the owner-seat path, exactly as `team config set … --request` records a
 record change: it records one owner-seat request naming this switch — for `local-fast` the card

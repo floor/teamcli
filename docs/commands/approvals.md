@@ -35,12 +35,16 @@ A machine whose owner seat is pinned holds no owner signer, and a terminal there
 Its owner-only actions run on the owner's signed answer, carried as files by an agent:
 
 1. **On the pinned machine**, the command records its request as on any machine (`--request`).
-   The request names this machine — its id and name — inside the parameters the owner signs.
+   The request names this machine — its id and name — its answer window (at most fifteen
+   minutes) and every action's argument words, all inside the parameters the owner signs.
    `team approvals export <id> --out <file>` writes it to a new file. A request that is answered,
-   past its window, or names no machine (one recorded before the pin) is refused.
+   past its window, names no machine or carries no signed window (one recorded before the pin,
+   or by an earlier build) is refused.
 2. **On the machine that holds the signers**, `team approvals sign --from <file> --out <file>`
    records the request as a card for another machine (the owner page shows it, and its scope
-   line names that machine) and writes the signed answer to a new file. With
+   line names that machine) and writes the signed answer to a new file. Before the card is
+   recorded or shown, every action's argument hash must be the hash of the words the card shows,
+   and the window must be whole and no longer than fifteen minutes. With
    `--answer <oui|always|non>` the owner signs at once on the usual card (on the owner's device,
    or a passkey with `--signer` and `--assertion`); without it, the card waits on the owner page and running
    `sign` again writes the answer the owner gave there. That machine never runs the request
@@ -48,9 +52,10 @@ Its owner-only actions run on the owner's signed answer, carried as files by an 
    owner seat than this one.
 3. **Back on the pinned machine**, `team approvals answer --from <file>` records the answer once
    it verifies against the pinned owner seat: signed by a pinned, accepted signer, over exactly
-   this request and this machine, inside the window, and not answered or run before. The command
-   then runs with `--approval <id>`, checked again and claimed single-use. On a pinned machine
-   `always` admits that one request once; no standing rule is kept there yet.
+   this request and this machine, inside the signed window, and not answered or run before. The
+   command then runs with `--approval <id>`, checked again and spent once in the machine's
+   approval ledger. On a pinned machine `always` admits that one request once; no standing rule
+   is kept there yet.
 
 The files carry the request record and the signed answer unchanged; neither file grants anything
 on its own, and neither is ever written over an existing file.

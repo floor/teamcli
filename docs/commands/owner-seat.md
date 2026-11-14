@@ -52,20 +52,36 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
 
 - **A terminal there is not the owner**, with a terminal or without one: any agent that opens a
   shell on the account would otherwise count as the owner. No mode, policy or variable changes
-  this, and dev mode lifts no gate for it. Seats in their own panes are placed as before.
+  this. Seats in their own panes are placed as before.
+- **Nothing else stands in for the owner there.** Dev mode lifts no gate on a pinned machine, for
+  any caller — a terminal, an agent outside the terminal host, an unattended run, a placed lead. A
+  general grant is refused (`--general`), since it is signed with this account's own key, and the
+  owner-authorization fingerprint (`TEAM_OWNER_APPROVAL`) admits nothing, since a fingerprint is
+  public.
 - **Owner-only actions run on the owner's signed answer.** The command records its request
-  (`--request`), and the request names this machine inside the signed parameters. An agent
-  carries it to the signer machine and the answer back (`team approvals export`, `sign`,
+  (`--request`). The request names this machine, its answer window (made, and expiring at most
+  fifteen minutes later) and every action's full argument words, all inside the signed
+  parameters, and each action's argument hash must be the hash of the words its card shows. An
+  agent carries it to the signer machine and the answer back (`team approvals export`, `sign`,
   `answer`); the command then runs with `--approval <id>`. An answer is checked against the
-  pinned keys, is bound to one request of this machine, expires with the request, and is spent
-  once. A request that names no machine, or another machine, is refused here; the signer machine
-  never runs a request that names another machine.
+  pinned keys, is bound to one request of this machine, expires with the signed window, and is
+  spent once in this machine's approval ledger. A request that names no machine or another
+  machine, carries no signed window or no words, is refused here; the signer machine never runs
+  a request that names another machine.
 - **No owner signer is made here.** `team owner-seat setup` and `team setup` are refused, and no
   `always` rule is kept here yet: `always` admits the one request once.
-- **The limit of this step.** The pin and the machine record sit in this account's config folder.
-  A process of the account can move them aside, which puts the machine back under the old rule;
-  a later step keeps them where seats cannot write. Commands that have no `--request` door
-  (`team daemon install`, `team grant`) are refused from a terminal here until they have one.
+- **Where the owner state lives.** The pin, the machine record and the approval ledger are found
+  by one rule, which never reads the environment's home: a system folder (`/etc/teamcli`) first,
+  when it is present, owned by the system's administrator and writable by no one else, then the
+  account's own home from the user database (`~/.config/team`). A machine that holds any of the
+  three counts as pinned, and a state that cannot be read or trusted — a missing pin beside a
+  machine record, a parent that is not a folder, an unprotected system folder — refuses every
+  answer and keeps the terminal from being the owner; it never reads as unpinned.
+- **The limit of this step.** In the account's own folder, the owner state is as safe as the
+  account's files: a process of the account can replace the pin, copy a machine record, or remove
+  a ledger entry. A later step keeps all three in the system folder, out of the agents' reach;
+  this command does not write there. Commands that have no `--request` door (`team daemon
+  install`, `team grant`) are refused from a terminal here until they have one.
 
 ## Flags
 
@@ -91,9 +107,11 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
 `~/.config/team/owner-seat.json` (the seat), `~/.config/team-owner-seat/` (the helper and its
 Secure Enclave key handles), `~/.config/team/security-profile.json` (the signed profile),
 `security-profile.proposal.json` beside it, and the append-only `security-profile.log`. On a
-pinned machine: `~/.config/team/owner-seat-pin.json` (the pinned export, its fingerprint and the
-fingerprint it replaced) and `~/.config/team/machine.json` (this machine's id and name). The
-export, the pin and the re-pin are logged in `security-profile.log`.
+pinned machine, in the owner-state folder (`/etc/teamcli` when it is present and protected, else
+the account's own `~/.config/team`): `owner-seat-pin.json` (the pinned export, its fingerprint
+and the fingerprint it replaced), `machine.json` (this machine's id and name) and `owner-ledger/`
+(one entry per approval spent). The export, the pin and the re-pin are logged in
+`security-profile.log`.
 
 ## Exit codes
 
