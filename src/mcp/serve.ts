@@ -1431,6 +1431,9 @@ export async function runMcpServe(
   }
   const seatName = options.seat;
   const replacement = io.env[SERVE_REPLACEMENT_ENV] === '1';
+  // The input's reader is taken before the first wait: a reader whose input ended while nothing
+  // was iterating it would never report that end.
+  const lines = streams.lines[Symbol.asyncIterator]();
   // A named file is the launch's own team file, read as given. Without one the team is the
   // registry's record for this seat: the folder the server starts in is a lobby for most seats,
   // and reading a team file from it would be reading the checkout's folder, not the seat's team.
@@ -1546,7 +1549,6 @@ export async function runMcpServe(
     channel: pendingChannel,
     alive: () => `this server has not proven its seat and launch yet, so it serves no inbox: ${unplacedWhy}`,
   };
-  const lines = streams.lines[Symbol.asyncIterator]();
   const placed = await proveWhileServing<Admitted>({
     check: admit,
     io,
