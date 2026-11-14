@@ -3,12 +3,13 @@
 // the administrator's own folder, and the system's privilege rule starts it, through its
 // launcher, as the helper's user. Its input is read with a size cap and a deadline, and one
 // spend runs at a time.
+import { Readable } from 'node:stream';
 import { holdSpendLock } from './owner-spend-lock.ts';
 import { OWNER_HELPER_HOME, OWNER_SPEND_INPUT_MS, OWNER_SPEND_OUTPUT_MS, passwdNameOf, readCappedInput, runOwnerSpend, verdictLine, type SpendVerdict } from './owner-spend.ts';
 
 // One deadline for the whole call: reading the input, then waiting for the spend lock.
 const started = Date.now();
-const input = await readCappedInput(Bun.stdin.stream());
+const input = await readCappedInput(Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>);
 const verdict: SpendVerdict = input.ok
   ? runOwnerSpend({
     stdin: input.text,
