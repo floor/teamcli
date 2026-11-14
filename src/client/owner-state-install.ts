@@ -316,7 +316,7 @@ export function realInstallSystem(): InstallSystem {
     platform: process.platform,
     uid: () => process.getuid?.() ?? -1,
     run: (argv) => {
-      const run = spawnSync(argv[0]!, argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C' } });
+      const run = spawnSync(argv[0]!, argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: Infinity, env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C' } });
       return { status: run.status, stdout: run.stdout ?? '', stderr: run.stderr ?? (run.error?.message ?? '') };
     },
     lstat: (path) => {
