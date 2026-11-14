@@ -25,6 +25,8 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
+import { ownerRequestDoor } from '../client/owner-action-step.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { serveChoresChild } from '../daemon/chores/child.ts';
 import { spawnMailboxChild } from '../daemon/mailbox/spawn.ts';
@@ -78,9 +80,9 @@ import { version as installedVersion, gitHead as installedGitHead } from '../ver
 
 export const USAGE = `Usage: team daemon status [--json]
        team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
        team daemon restart [--dry-run] [--json]
-       team daemon uninstall [--home <folder>] [--json]
+       team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
        team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 One machine-wide daemon serves every team and clone on this machine. It answers its own
@@ -101,6 +103,15 @@ watch, named by the route id its record already carries. One request is written,
 consumes it on its next heartbeat, and only that route's loop is ended and restarted; no
 process is killed. A route that is not hosted, not required, standing down or stopped is
 refused, and the result names why.
+
+install, restart, uninstall and fault-watch are the owner's. For install and uninstall,
+--request records the verb's plan for the owner seat to answer: the home the unit is for and,
+for an install, every checkout it hosts, each as its real path, and the hosting opt-ins
+(--reason <text> is the short reason the card shows). --approval <request-id> runs that plan once
+the owner has answered: the answer is checked when the command starts and spent once, just
+before the daemon is changed. On a machine whose owner seat is pinned from another machine this
+is the only way, and the request is carried with team approvals export; restart and fault-watch
+take no request there yet.
 
 The daemon reads no credential store; the broker feature is not hosted in this build.
 
@@ -134,6 +145,8 @@ export type DaemonCommandSources = {
   heartbeatMs?: number;
   /** Injected for tests: never the real pane/herdr sources. */
   sendHost?: DaemonHost;
+  /** Injected for tests: the credential store an owner-seat answer is confirmed against. */
+  ownerSeatStore?: OwnerSeatKeyStore;
   /** Injected for tests: how long `fault-watch` waits for the daemon's result. */
   faultWaitMs?: number;
   /** Injected for tests: the interval between result reads. */
@@ -177,6 +190,13 @@ type Parsed = {
   presence: boolean;
   watch: boolean;
   startedBy: string | undefined;
+  /** The first of `--home`, `--root`, `--route`, `--reason` given a value that starts with `-`. */
+  optionLike: string | null;
+  /** `--request`: record the verb for the owner seat to answer. */
+  request: boolean;
+  /** `--approval <id>`: run the verb on the owner's signed answer to that request. */
+  approval: string | undefined;
+  reason: string | undefined;
   extra: string | undefined;
   /** The one-use token a chores child is started with. Internal: never a user's option. */
   inherited: string | undefined;
@@ -184,7 +204,7 @@ type Parsed = {
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited'], ['json', 'dry-run', 'presence', 'watch']);
+  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited', 'approval', 'reason'], ['json', 'dry-run', 'presence', 'watch', 'request']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
   // uses `known`; the flags and values come from `readArgs`. `chores` is the daemon's own child
@@ -224,10 +244,34 @@ function parse(argv: string[]): Parsed {
     presence: args.flags.has('presence'),
     watch: args.flags.has('watch'),
     startedBy: args.values['started-by'],
+    optionLike: optionLikeValue(argv),
+    request: args.flags.has('request'),
+    approval: args.values['approval'],
+    reason: args.values['reason'],
     extra: args.rest[1],
     inherited: args.values['inherited'],
     error: args.error ?? null,
   };
+}
+
+/**
+ * The first folder, route or reason option whose value starts with `-`. Such a value reads as an
+ * option to anyone reading the line, so it is refused before anything is bound or run: what the
+ * owner is asked to answer is never a line that reads two ways.
+ */
+function optionLikeValue(argv: readonly string[]): string | null {
+  for (let index = 0; index < argv.length; index++) {
+    const word = argv[index] as string;
+    for (const name of ['home', 'root', 'route', 'reason']) {
+      if (word === `--${name}`) {
+        const value = argv[index + 1];
+        if (value !== undefined && value.startsWith('-')) return name;
+      } else if (word.startsWith(`--${name}=`) && word.slice(name.length + 3).startsWith('-')) {
+        return name;
+      }
+    }
+  }
+  return null;
 }
 
 function verbProblem(parsed: Parsed): string | null {
@@ -250,10 +294,24 @@ function verbProblem(parsed: Parsed): string | null {
     if (parsed.roots.length > 0) return 'chores takes no --root';
     if (parsed.startedBy !== undefined) return 'chores takes no --started-by';
     if (parsed.route !== undefined) return 'chores takes no --route';
-    if (parsed.json || parsed.dryRun || parsed.presence || parsed.watch) return 'chores takes no flags';
+    if (parsed.json || parsed.dryRun || parsed.presence || parsed.watch || parsed.request) return 'chores takes no flags';
+    if (parsed.approval !== undefined || parsed.reason !== undefined) return 'chores takes no --approval or --reason';
     return null;
   }
   if (parsed.inherited !== undefined) return '--inherited belongs to the daemon\'s own child';
+  if (parsed.optionLike !== null) return `--${parsed.optionLike} takes a value, not an option: a value that starts with "-" is refused`;
+  // The owner-seat door opens for install and uninstall only: restart and fault-watch stay the
+  // owner's, a general grant's or a dev-mode lead's.
+  const answered = parsed.verb === 'install' || parsed.verb === 'uninstall';
+  if (!answered && parsed.request) return '--request belongs to install or uninstall';
+  if (!answered && parsed.approval !== undefined) return '--approval belongs to install or uninstall';
+  if (parsed.request && parsed.approval !== undefined) return '--request asks the owner seat and --approval runs an answered request: pass one';
+  if (parsed.reason !== undefined && !parsed.request) return '--reason goes with --request';
+  // The installed unit names no checkout: it hosts the teams registered for this account. An
+  // owner-seat install binds what the unit runs, so it takes no --root that would read as more.
+  if ((parsed.request || parsed.approval !== undefined) && parsed.verb === 'install' && parsed.roots.length > 0) {
+    return 'an owner-seat install takes no --root: the installed unit hosts the teams registered for this account, not the checkouts a line names';
+  }
   if (parsed.verb !== 'install' && parsed.verb !== 'uninstall' && parsed.home !== undefined) {
     return '--home belongs to install or uninstall';
   }
@@ -376,6 +434,91 @@ function localProgram(sources: DaemonCommandSources): { execPath: string; entry:
  * `run` is not this gate: a no-terminal start by the service manager is `runAllowed`'s separate
  * answer, and no dev-mode setting admits a seat or a pane to it.
  */
+/**
+ * The owner-seat door of install and uninstall (`ownerRequestDoor`): `--request` records the
+ * verb's execution plan (`daemonPlan`), and `--approval <id>` admits the run on the owner's
+ * signed answer to exactly that plan. The answer is checked here with nothing claimed; `spend`
+ * claims it once, just before the daemon is changed, so a run refused before that keeps it. A dry
+ * run never spends. The plan the answer was checked against is the one the run executes: nothing
+ * is resolved again after the gate. No charter, no rule and no lead admits the daemon this way.
+ */
+type DaemonGate = { kind: 'allowed'; spend: () => boolean; plan: DaemonPlan | null } | { kind: 'requested' } | { kind: 'refused' };
+
+function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSources, parsed: Parsed): DaemonGate {
+  if (!parsed.request && parsed.approval === undefined) {
+    return ownerAllows(io, sources, parsed.json, parsed.verb) ? { kind: 'allowed', spend: () => true, plan: null } : { kind: 'refused' };
+  }
+  const home = sources.home ?? homedir();
+  const plan = daemonPlan(io, parsed, home);
+  if ('why' in plan) {
+    refuse(io, parsed.json, 'daemon', { id: 'daemon.approval-refused', message: `${plan.why}; nothing was recorded or run`, repair: null });
+    return { kind: 'refused' };
+  }
+  const door = (dry: boolean) => ownerRequestDoor(
+    'daemon',
+    'team-daemon',
+    argv,
+    { request: parsed.request, approval: parsed.approval, dry, json: parsed.json, ...(parsed.reason === undefined ? {} : { reason: parsed.reason }) },
+    io,
+    { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) },
+    { root: plan.targetHome, team: 'daemon', head: null, words: plan.words },
+  );
+  const step = door(true);
+  if (step.kind === 'requested') return { kind: 'requested' };
+  if (step.kind !== 'admitted') return { kind: 'refused' };
+  return { kind: 'allowed', spend: () => parsed.dryRun || door(false).kind === 'admitted', plan };
+}
+
+/**
+ * One install or uninstall, as it will run: the home the unit is for (the `--home` folder, or this
+ * home, as its real path) and, for an install, its hosting opt-ins. The installed unit names no
+ * checkout — the daemon it starts hosts the teams registered for this account, read at each start
+ * and heartbeat — so the plan binds the registered checkouts as they are when the request is made,
+ * for the owner to read and as the install's own list; a registry that changed since admits
+ * nothing. A folder that does not resolve refuses the plan. `--dry-run` is not bound: a dry run
+ * spends nothing.
+ */
+type DaemonPlan = { targetHome: string; realTargetHome: string | null; roots: string[] | null; words: string[] };
+
+function daemonPlan(io: Io, parsed: Parsed, home: string): DaemonPlan | { why: string } {
+  let targetHome: string;
+  let realTargetHome: string | null = null;
+  if (parsed.home !== undefined) {
+    const checked = homeTargetProblem(parsed.home, io.cwd);
+    if (!checked.ok) return { why: checked.why };
+    targetHome = checked.realTarget;
+    realTargetHome = checked.realTarget;
+  } else {
+    try {
+      targetHome = realpathSync(home);
+    } catch {
+      return { why: 'this home cannot be resolved' };
+    }
+  }
+  const words: string[] = [parsed.verb ?? '', `home=${targetHome}`];
+  let roots: string[] | null = null;
+  if (parsed.verb === 'install') {
+    let registered: string[];
+    try {
+      registered = runningRegistryRoots(readTeams(targetHome), targetHome).map((one) => one.root);
+    } catch (error) {
+      return { why: error instanceof Error ? error.message : 'the team registry could not be read' };
+    }
+    roots = [];
+    for (const root of registered) {
+      try {
+        roots.push(realpathSync(root));
+      } catch {
+        return { why: `the registered checkout ${root} cannot be resolved` };
+      }
+    }
+    for (const root of roots) words.push(`registered=${root}`);
+    if (parsed.presence) words.push('presence');
+    if (parsed.watch) words.push('watch');
+  }
+  return { targetHome, realTargetHome, roots, words };
+}
+
 function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb: string | undefined): boolean {
   const caller = callerOf(io);
   if (isOwner(caller)) return true;
@@ -1504,11 +1647,19 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   // admissions widen the gate through `ownerAllows`: the owner's dev-mode lift admits a placed
   // orchestrator, and install and restart also admit a verified general grant
   // whose ops name `daemon`. status returned above, and run has its own gate.
-  if (!ownerAllows(io, sources, parsed.json, parsed.verb)) {
+  const gate = daemonGate(io, argv, sources, parsed);
+  if (gate.kind === 'requested') {
+    // exit: daemon.approval-requested
+    return 0;
+  }
+  if (gate.kind === 'refused') {
     // exit: daemon.not-owner
     // exit: daemon.grant-refused
+    // exit: daemon.approval-refused
     return 1;
   }
+  const spent = (): boolean => gate.spend();
+  const answeredPlan = gate.plan;
 
   if (parsed.verb === 'fault-watch') {
     return await faultWatch(parsed, io, sources, home);
@@ -1532,9 +1683,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     return await restartInstalled(manager, io, parsed, home, sources);
   }
 
-  let targetHome = home;
-  let realTargetHome: string | null = null;
-  if (parsed.home !== undefined) {
+  let targetHome = answeredPlan === null ? home : answeredPlan.targetHome;
+  let realTargetHome: string | null = answeredPlan === null ? null : answeredPlan.realTargetHome;
+  if (answeredPlan === null && parsed.home !== undefined) {
     const checkedHome = homeTargetProblem(parsed.home, io.cwd);
     if (!checkedHome.ok) {
       return usageRefused(io, parsed, checkedHome.why);
@@ -1561,6 +1712,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   if (parsed.verb === 'uninstall') {
+    // exit: daemon.approval-refused
+    if (!spent()) return 1;
     const removed = manager.uninstall(targetHome);
     if (!removed.ok) {
       appendDaemonLog(targetHome, `uninstall: ${removed.detail ?? removed.why}`, sources.now?.() ?? new Date());
@@ -1585,7 +1738,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   // install
-  const named = rootsOf(parsed, io, targetHome, 'install');
+  // An answered install's list is the registered checkouts its plan read and the answer bound;
+  // the unit itself names none (it hosts the teams registered for this account at each start).
+  const named = answeredPlan?.roots != null ? { roots: answeredPlan.roots } : rootsOf(parsed, io, targetHome, 'install');
   if ('problem' in named) {
     refuse(io, parsed.json, 'daemon', { id: 'daemon.no-root', message: named.problem, repair: null });
     // exit: daemon.no-root
@@ -1669,6 +1824,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // exit: daemon.dry-run
     return 0;
   }
+  // exit: daemon.approval-refused
+  if (!spent()) return 1;
   const installed = manager.install(targetHome, fullProgram);
   if (!installed.ok) {
     return await reportInstallFailure(installed, io, parsed, named.roots, plan.unitPath, targetHome, sources, manager);

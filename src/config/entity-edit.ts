@@ -14,15 +14,18 @@
 // admits a wildcard grant only: a grant that lists entities is refused with the one sentence in
 // src/client/general-grant.ts before the op is checked, and the entity is not read. A charter is
 // the owner's word for one folder, and this word is not a folder's, so the charter does not admit
-// it. There is no owner-seat request: the owner asked that relaxing the check need no answer, and
-// the grant is the standing answer.
+// it. The third way is the owner's signed answer to this exact write: `--request` records it and
+// `--approval <id>` applies it once (`ownerRequestDoor`). It is the only way on a machine whose
+// owner seat is pinned from another machine, where no terminal is the owner and no general grant
+// stands; the request is carried to the owner's signers as a file (`team approvals export`).
 
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
+import { ownerRequestDoor } from '../client/owner-action-step.ts';
 import { checkedRootPath, ENTITY_ROOT_KEY, ENTITY_WORKTREES_KEY, entitiesPath, lockedEntities, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { isEntityName } from '../file/sections/entity.ts';
@@ -173,7 +176,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   const dryRun = argv.includes('--dry-run');
   const args = readArgs(
     argv.filter((arg) => arg !== '--dry-run'),
-    ['approval', 'general', 'key'],
+    ['approval', 'general', 'key', 'reason'],
     ['json', 'request'],
   );
   const usage = (await import('../commands/config.ts')).USAGE;
@@ -203,19 +206,11 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   if (why === null && verb === 'get' && given > 2) why = `unexpected "${args.rest[2] ?? ''}"`;
   if (why === null && verb === 'set' && given === 2) why = `a value is required: ${FORM[key as EntityKey]}`;
   if (why === null && verb === 'set' && given > 3) why = `unexpected "${args.rest[3] ?? ''}"`;
-  if (why === null && (args.flags.has('request') || args.values.approval !== undefined)) {
-    const what =
-      key === NAMES_KEY
-        ? "an entity's word"
-        : isFolderKey(key)
-          ? `an entity's ${folderLabel(key)}`
-        : key === RULES_KEY
-          ? isProjectRules
-            ? "a project's rules"
-            : "an entity's rules"
-          : "an entity's reminders";
-    why = `${what} take${key === NAMES_KEY || isFolderKey(key) ? 's' : ''} no --request or --approval: the owner runs it, or a seat under the owner's general grant`;
-  }
+  const asked = args.flags.has('request') || args.values.approval !== undefined;
+  if (why === null && asked && verb === 'get') why = '--request and --approval take set or unset: a get is any caller\'s';
+  if (why === null && args.flags.has('request') && args.values.approval !== undefined) why = '--request asks the owner seat and --approval runs an answered request: pass one';
+  if (why === null && asked && args.values.general !== undefined) why = '--general admits the write by a grant, and --request or --approval by the owner\'s answer: pass one';
+  if (why === null && args.values.reason !== undefined && !args.flags.has('request')) why = '--reason goes with --request';
   if (why === null && (args.values.general !== undefined) !== (args.values.key !== undefined)) why = '--general and --key go together';
   if (why === null && args.values.general !== undefined && verb === 'get') why = `--general takes set${isFolderKey(key) ? ' or unset' : ''}`;
   if (why === null && path !== COMPOSED_PATH && !isEntityName(targetName)) {
@@ -389,9 +384,42 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     return 0;
   }
 
-  // The door: the owner at a terminal, or a seat the owner's general grant covers for this
-  // entity. Nothing is read from the file before one of the two admits the write.
-  if (args.values.general !== undefined) {
+  // The door: the owner at a terminal, a seat the owner's general grant covers for this entity,
+  // or the owner's signed answer to exactly this write. Nothing is read from the file before one
+  // of the three admits the write. An answer binds the file's folder, the entity and the words.
+  // It is checked first with nothing claimed, then the write is tried with nothing written, and
+  // only a write that would go through spends the answer.
+  const door = (dry: boolean) => ownerRequestDoor(
+    'config',
+    'team-entity-config',
+    argv,
+    { request: args.flags.has('request'), approval: args.values.approval, dry, json, ...(args.values.reason === undefined ? {} : { reason: args.values.reason }) },
+    io,
+    { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) },
+    // Bound as the parser read the line — the verb, the path and the value — and the file it
+    // writes, so the card can show the exact change and the run writes nothing else.
+    { root: dirname(file), team: targetName, head: null, words: [...args.rest, `file=${file}`] },
+  );
+  let spendAnswer = false;
+  // A project's rules through an answer name the project by its id, exactly: a display name can
+  // later be moved to another project, so it is never what an answer binds. The write under the
+  // lock then requires that same id.
+  if (asked && isProjectRules) {
+    const exact = exactProjectId(file, targetName);
+    if (exact !== null) return pathRefused(io, json, exact);
+  }
+  if (asked) {
+    const step = door(true);
+    if (step.kind === 'requested') {
+      // exit: config.entity.approval-requested
+      return 0;
+    }
+    if (step.kind !== 'admitted') {
+      // exit: config.entity.approval-refused
+      return 1;
+    }
+    spendAnswer = !dryRun;
+  } else if (args.values.general !== undefined) {
     const admitted = admitGeneral(home, resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key as string), 'config', targetName, sources.now?.() ?? new Date());
     if (!admitted.ok) return generalRefused(io, json, admitted.why);
     if (!json) io.stderr(`team config: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
@@ -414,12 +442,19 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     }
   }
 
+  // An answer is spent only by a write that goes through, inside the file's lock: the write is
+  // planned under the lock, a plan that is refused keeps the answer for a corrected run, and the
+  // answer is claimed just before the planned text is written (or, for a value already in place,
+  // before the unchanged plan returns).
+  const spend = (): boolean => door(false).kind === 'admitted';
+
   if (isProjectRules) {
     let outcome: ReturnType<typeof setProjectRules>;
     try {
       outcome = setProjectRules(home, targetName, list as string[], {
         dryRun,
-        allowDisplayName: true,
+        allowDisplayName: !asked,
+        ...(spendAnswer ? { claim: spend } : {}),
       });
     } catch (error) {
       const msg = error instanceof ProjectsError || error instanceof Error ? error.message : String(error);
@@ -428,6 +463,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       }
       return unreadable(io, json, msg);
     }
+    // exit: config.entity.approval-refused
+    if (outcome.claimRefused === true) return 1;
     if (!outcome.changed) {
       if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: false, ...(dryRun ? { dry_run: true } : {}), source: 'project', comments_kept: true });
       else io.stdout(`nothing changed in ${file}\n`);
@@ -451,7 +488,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   }
 
   const entitiesFile = entitiesPath(home);
-  const runEntityWrite = ():
+  const runEntityWrite = (write: boolean = !dryRun, claim?: () => boolean):
+    | { kind: 'claim-refused' }
     | { kind: 'path'; why: string }
     | { kind: 'unreadable'; why: string }
     | { kind: 'reminders-problem'; why: string }
@@ -461,7 +499,10 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     // set makes the file and the entry when they are missing, and an unset of a root that is not
     // there changes nothing. Every other key keeps to an entry the file already declares.
     const makesEntry = isFolderKey(key) && verb === 'set';
-    if (isFolderKey(key) && verb === 'unset' && !existsSync(entitiesFile)) return { kind: 'unchanged' };
+    // Every outcome that stands as done spends an answer the run carries, a value already absent
+    // included, so a replay of the same answer is refused as any replay is.
+    const done = (): { kind: 'unchanged' } | { kind: 'claim-refused' } => (claim !== undefined && !claim() ? { kind: 'claim-refused' } : { kind: 'unchanged' });
+    if (isFolderKey(key) && verb === 'unset' && !existsSync(entitiesFile)) return done();
     if (!existsSync(entitiesFile) && !makesEntry) {
       return {
         kind: 'path',
@@ -496,7 +537,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     const wrapped = hasEntitiesWrapper(record);
     const entryLookup = wrapped ? ['entities', targetName] : [targetName];
     const entry = getAt(record, entryLookup);
-    if (!entry.found && isFolderKey(key) && verb === 'unset') return { kind: 'unchanged' };
+    if (!entry.found && isFolderKey(key) && verb === 'unset') return done();
     if (!entry.found && !makesEntry) {
       return {
         kind: 'path',
@@ -524,9 +565,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
         why: `entity "${targetName}" ${key as string}: ${changed.why}; nothing was written`,
       };
     }
-    if (!changed.changed) {
-      return { kind: 'unchanged' };
-    }
+    if (!changed.changed) return done();
     const edited = editedRecordText(text, recordPath, value, changed.root);
     // A reminder list is held to the daemon's own parser on the text that would be written. A
     // problem on this entity refuses the write with the parser's reason, whatever the file carried
@@ -551,7 +590,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       );
       if (refused !== undefined) return { kind: 'reminders-problem', why: refused.why };
     }
-    if (!dryRun) {
+    if (claim !== undefined && !claim()) return { kind: 'claim-refused' };
+    if (write) {
       writeOwnerFile(entitiesFile, edited.text);
     }
     return { kind: 'written', text: edited.text, kept: edited.kept };
@@ -559,10 +599,19 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
 
   let entityOutcome: ReturnType<typeof runEntityWrite>;
   try {
-    entityOutcome = dryRun ? runEntityWrite() : lockedEntities(home, runEntityWrite);
+    if (spendAnswer) {
+      // Planned, claimed and written under the one lock. A plan that is refused spends nothing,
+      // and its refusal is said below; one that changes nothing is the write the owner answered,
+      // already in place, and spends the answer as a write would, so a replay is refused.
+      entityOutcome = lockedEntities(home, () => runEntityWrite(true, spend));
+    } else {
+      entityOutcome = dryRun ? runEntityWrite() : lockedEntities(home, () => runEntityWrite());
+    }
   } catch (error) {
     return unreadable(io, json, error instanceof Error ? error.message : String(error));
   }
+  // exit: config.entity.approval-refused
+  if (entityOutcome.kind === 'claim-refused') return 1;
   if (entityOutcome.kind === 'path') return pathRefused(io, json, entityOutcome.why);
   if (entityOutcome.kind === 'unreadable') return unreadable(io, json, entityOutcome.why);
   if (entityOutcome.kind === 'reminders-problem') return remindersProblem(io, json, entityOutcome.why);
@@ -602,6 +651,22 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   }
   // exit: config.entity.written
   return 0;
+}
+
+/** Why `name` is not the exact id of a project in `file`, naming the id when `name` is a display
+ *  name; null when it is one. */
+function exactProjectId(file: string, name: string): string | null {
+  let projects: YamlValue | undefined;
+  try {
+    const record = toValue(parseYaml(readFileSync(file, 'utf8')));
+    projects = isMap(record) ? record.projects : undefined;
+  } catch {
+    return `${file} cannot be read, so project "${name}" cannot be named exactly; nothing was recorded or written`;
+  }
+  if (isMap(projects) && Object.hasOwn(projects, name)) return null;
+  const byName = isMap(projects) ? Object.entries(projects).find(([, raw]) => isMap(raw) && raw.name === name) : undefined;
+  if (byName !== undefined) return `"${name}" is a project's display name; an owner-seat answer binds the project's id: use project.${byName[0]}.rules; nothing was recorded or written`;
+  return `no project has the id "${name}" in ${file}; an owner-seat answer binds a project's id; nothing was recorded or written`;
 }
 
 /** One problem as a value, so the same complaint before and after an edit compares equal. */

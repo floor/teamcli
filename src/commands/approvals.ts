@@ -15,12 +15,14 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { canonicalScope } from '../client/emission.ts';
-import { ownerActionDetails, teamCreateDetails } from '../client/approval-card.ts';
+import { answerCard, cardWhole, ownerActionCard, ownerActionDetails, promptCarriesChange, teamCreateDetails } from '../client/approval-card.ts';
+import { answerChoiceOf } from '../client/emission.ts';
+import type { OwnerActionRecord } from '../client/owner-request-record.ts';
 import { approveOwnerAction, listOwnerActionRules, OWNER_ACTION_ID_PATTERN, readOwnerActionRecord, revokeOwnerActionRule } from '../client/owner-action.ts';
 import { ownerAdmitsRecord, ownerSeatStep } from '../client/owner-action-step.ts';
 import { acceptCarriedAnswer, ownerRequestFile, readCarriedFile, readOwnerRequestFile, signCarriedRequest, writeCarriedFile } from '../client/owner-carry.ts';
 import { fingerprintText, localOwnerSeatFingerprint } from '../client/owner-pin.ts';
-import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, listTeamCreateRules, readTeamCreateRecord, revokeTeamCreateRule, TEAM_CREATE_ID_PATTERN } from '../client/team-create.ts';
 import { describeCaller, detachedRefusal } from '../caller.ts';
 import { hasJsonFlag } from '../output/index.ts';
@@ -232,13 +234,28 @@ function signRequest(io: Io, json: boolean, home: string, now: Date, store: Owne
   if (!read.ok) return refused(io, json, read.why);
   const file = readOwnerRequestFile(read.value);
   if (!file.ok) return refused(io, json, file.why);
+  // A passkey assertion belongs to a passkey signer: a device key signs with its own prompt.
+  if (values.assertion !== undefined) {
+    const seat = readOwnerSeat(home);
+    const named = seat === null ? undefined : values.signer === undefined ? (seat.signers.length === 1 ? seat.signers[0] : undefined) : seat.signers.find((one) => one.name === values.signer);
+    if (named !== undefined && named.type !== 'webauthn') {
+      io.stderr(`team approvals: --assertion belongs to a passkey signer; signer "${named.name}" holds a device key and signs with its own prompt\n${USAGE}`);
+      // exit: approvals.invocation
+      return 2;
+    }
+  }
   const assertion = assertionOf(values.assertion, io.cwd);
   if (assertion === 'unreadable') return refused(io, json, `${values.assertion} is not a passkey assertion (authenticator_data, client_data_json, signature)`);
   const word = values.answer;
-  const answer = word === undefined ? null : (record: { request_id: string }) => {
+  const answer = word === undefined ? null : (record: OwnerActionRecord) => {
+    // One snapshot: the card is drawn from this record, shown whole, and the answer is signed only
+    // over the record with this same parameter hash, so a request replaced in between is refused.
+    const shown = showWhole(io, record, word);
+    if (!shown.ok) return shown;
     const answered = approveOwnerAction(home, record.request_id, word, store, now, {
       ...(values.signer !== undefined ? { signer: values.signer } : {}),
       ...(assertion !== undefined ? { assertion } : {}),
+      expect: record.params_sha256,
     });
     return answered.ok ? { ok: true as const } : answered;
   };
@@ -261,6 +278,22 @@ function signRequest(io: Io, json: boolean, home: string, now: Date, store: Owne
   else io.stdout(`team approvals: request ${id} for machine ${machine.name} answered ${signed.choice} by ${signed.signer}; answer written to ${written.path}\non machine ${machine.name} run: team approvals answer --from <file>\n${stale}`);
   // exit: approvals.signed
   return 0;
+}
+
+/**
+ * Before a carried request is signed here: the card and its exact change, whole, on the terminal.
+ * When the signing prompt cannot carry the change itself (it carries its short form), the change
+ * must be shown where the owner reads it: a sign whose terminal is not a terminal is refused, and
+ * the owner answers on the owner page instead.
+ */
+function showWhole(io: Io, record: OwnerActionRecord, word: string): { ok: true } | { ok: false; why: string } {
+  const choice = answerChoiceOf(word);
+  const card = choice === null ? ownerActionCard(record.params) : answerCard(ownerActionCard(record.params), choice);
+  if (!promptCarriesChange(card) && io.stderrIsTTY !== true) {
+    return { ok: false, why: `request ${record.request_id} changes more than the confirmation prompt can show, and this run has no terminal to show it whole: run team approvals sign at a terminal, or answer it on the owner page; nothing was signed` };
+  }
+  io.stderr(`team approvals: the confirmation that follows answers request ${record.request_id}: ${cardWhole(card)}\n`);
+  return { ok: true };
 }
 
 /** Back on the machine whose owner seat is pinned: record a carried answer for one of its requests. */

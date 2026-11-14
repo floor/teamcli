@@ -703,6 +703,7 @@
     "test/overrides-file.test.ts": 0,
     "test/overrides-floor.test.ts": 2,
     "test/overrides-quota.test.ts": 5,
+    "test/owner-carry-pinned-gaps.test.ts": 5,
     "test/owner-carry.test.ts": 0,
     "test/owner-no-tty-boundaries.test.ts": 2,
     "test/owner-no-tty.test.ts": 1,

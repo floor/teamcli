@@ -77,8 +77,32 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   spent once in this machine's approval ledger. A request that names no machine or another
   machine, carries no signed window or no words, is refused here; the signer machine never runs
   a request that names another machine.
-- **No owner signer is made here.** `team owner-seat setup` and `team setup` are refused, and no
-  `always` rule is kept here yet: `always` admits the one request once.
+- **Which commands take the answer.** `team import`, `migrate`, `up` (and `init` bundled with
+  it), `add`, `send`, `down`, `bus`, `forget`, `approvals revoke`, `batch`, `team config` (a
+  team's record, and an entity's own record: `<entity>.root`, `.worktrees`, `.names.unique`,
+  `.reminders`, `.rules`, and a project's rules), `team daemon install|uninstall`,
+  `team development-mode` and `team client general-grant` read `--request` and
+  `--approval <id>`. Each request travels and is signed on its own; signing several carried
+  requests with one confirmation is planned.
+- **Which commands do not yet.** These stay the owner's at a terminal, so on this machine they
+  are refused until they take an answer: `team daemon restart` and `fault-watch`, `team grant`
+  (outside its `--client` form), `revoke`,
+  `delegate`, `policy set|unset`, `settings set|unset`, `tempo`, `broker`, `start`,
+  `swap --now`, `mcp setup`, `approve`, `remove --abandon`, `rename` (a team, `--rekey`),
+  `migrate --root`, and `init --approval-mode` and `--revoke-approval` (no `always` rule is kept
+  here, so there is none to change). `team owner-seat` (its pins are trust on first use or
+  signed exports) and `team setup` (below) never take one.
+- **What an answer binds.** The request's action, its argument words as the command read them
+  (for the daemon, the resolved home, checkouts, opt-ins and route; for an entity's record, the
+  operation, key, value and file), the folder it acts in, its team or entity, HEAD in a
+  repository, this machine and, on a shared server, the account. An entity's record and the
+  daemon are answered once or denied, never by a standing rule. A file a
+  command names is bound by its path, not its contents (as under a general grant); inside a
+  repository HEAD binds the repository's own files.
+- **No owner signer and no charter are made here.** `team owner-seat setup` and `team setup` are
+  refused, and no `always` rule is kept here yet: `always` admits the one request once. The
+  machine keeps no charter of its own: a charter is standing consent signed for one machine's
+  folders, and every owner-only action here runs on its own answer instead.
 - **Where the owner state lives.** The pin, the machine record and the approval ledger are found
   by one rule, which never reads the environment's home: a system folder (`/etc/teamcli`) first,
   when it is present, owned by the system's administrator and writable by no one else, then the
@@ -89,8 +113,7 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
 - **The limit of the account's own folder.** On macOS, in the account's own folder, the owner
   state is as safe as the account's files: a process of the account can replace the pin, copy a
   machine record, or remove a ledger entry. A shared Linux server keeps all three out of the
-  agents' reach (below). Commands that have no `--request` door (`team daemon install`,
-  `team grant`) are refused from a terminal here until they have one.
+  agents' reach (below).
 
 ## A shared Linux server
 

@@ -2016,11 +2016,17 @@
           ],
           "who": {
             "gate": "owner-only",
-            "why": "the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr"
+            "why": "the team's record, and an entity's record in the owner's entities file, are the owner's: editing either is the owner's act, as editing the team file was, from a terminal outside herdr, or the owner's signed answer to that exact edit (`--request`, `--approval`)"
           }
         },
         {
           "flags": [
+            {
+              "hidden": false,
+              "name": "--approval",
+              "repeatable": false,
+              "takesValue": true
+            },
             {
               "hidden": false,
               "name": "--general",
@@ -2046,6 +2052,18 @@
               "takesValue": true
             },
             {
+              "hidden": false,
+              "name": "--reason",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--request",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -2064,11 +2082,13 @@
           "subcommands": [],
           "usage": [
             "team config unset <path>",
+            "team config unset <path> --request [--reason <text>] [--json]",
+            "team config unset <path> --approval <request-id> [--json]",
             "team config unset <path> --general <grant.json> --key <client.key> [--json]"
           ],
           "who": {
             "gate": "owner-only",
-            "why": "the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr"
+            "why": "the team's record, and an entity's record in the owner's entities file, are the owner's: editing either is the owner's act, as editing the team file was, from a terminal outside herdr, or the owner's signed answer to that exact edit (`--request`, `--approval`)"
           }
         }
       ],
@@ -2079,6 +2099,8 @@
         "team config unset <path>",
         "team config set <path> <value> --request [--reason <text>] [--json]",
         "team config set <path> <value> --approval <request-id> [--json]",
+        "team config unset <path> --request [--reason <text>] [--json]",
+        "team config unset <path> --approval <request-id> [--json]",
         "team config set <path> <value> --general <grant.json> --key <client.key> [--json]",
         "team config unset <path> --general <grant.json> --key <client.key> [--json]",
         "team config edit"
@@ -2241,6 +2263,12 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--approval",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--dry-run",
               "repeatable": false,
               "takesValue": false
@@ -2283,6 +2311,18 @@
             },
             {
               "hidden": false,
+              "name": "--reason",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--request",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--root",
               "repeatable": false,
               "takesValue": true
@@ -2305,11 +2345,11 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]"
+            "team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]"
           ],
           "who": {
             "gate": "owner-only",
-            "why": "registering the user service unit is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way"
+            "why": "registering the user service unit is the owner's act; a verified general grant whose ops name `daemon`, the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact install (`--request`, `--approval`) are the other ways"
           }
         },
         {
@@ -2475,6 +2515,12 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--approval",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--general",
               "repeatable": false,
               "takesValue": true
@@ -2504,6 +2550,18 @@
               "takesValue": true
             },
             {
+              "hidden": false,
+              "name": "--reason",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--request",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -2515,25 +2573,25 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon uninstall [--home <folder>] [--json]"
+            "team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]"
           ],
           "who": {
             "gate": "owner-only",
-            "why": "removing the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way"
+            "why": "removing the user service unit is the owner's act; the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact removal (`--request`, `--approval`), are the other ways"
           }
         }
       ],
       "usage": [
         "team daemon status [--json]",
         "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]",
-        "team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]",
+        "team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]",
         "team daemon restart [--dry-run] [--json]",
-        "team daemon uninstall [--home <folder>] [--json]",
+        "team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]",
         "team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]"
       ],
       "who": {
         "gate": "owner-only",
-        "why": "the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager's no-terminal start is the owner's own login session"
+        "why": "the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, or to the owner's signed answer to that exact install or uninstall, and the system service manager's no-terminal start is the owner's own login session"
       }
     },
     {

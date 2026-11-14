@@ -60,6 +60,13 @@ Its owner-only actions run on the owner's signed answer, carried as files by an 
 The files carry the request record and the signed answer unchanged; neither file grants anything
 on its own, and neither is ever written over an existing file.
 
+Before `sign --answer` signs, it prints the request's card and its exact change, whole, from the
+one record it then signs (a request that changed since is refused). When the confirmation prompt
+cannot carry an exact change itself (an entity's record or a daemon plan too long for it, which
+the prompt then names by length and digest), `sign` signs only at a terminal; elsewhere the owner
+answers on the owner page, which shows the change whole. Each carried request is signed on its
+own; signing several with one confirmation is planned.
+
 ## Who may run it
 
 Anyone may list or read details. Revoking is the owner's, from a terminal outside the terminal host, or an

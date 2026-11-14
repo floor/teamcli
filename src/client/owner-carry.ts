@@ -29,6 +29,7 @@ import {
   readOwnerActionRecord,
   carriedAnswerTimeProblem,
   carriedRequestTimeProblem,
+  carriedOwnerAnswerCheck,
   recordCarriedOwnerAnswer,
   recordForeignOwnerAction,
   OWNER_ACTION_ID_PATTERN,
@@ -137,6 +138,28 @@ export function readOwnerRequestFile(raw: unknown): { ok: true; file: OwnerReque
   return { ok: true, file: { format: OWNER_REQUEST_FILE_FORMAT, machine, owner_seat: raw.owner_seat, request: record } };
 }
 
+/**
+ * What the signer machine asks of one carried request before its card is recorded or shown: this
+ * machine holds the owner's signers, the request is another machine's, it carries its signed
+ * window and full argument words, it is dated no later than now, and its window is open.
+ */
+function carriedRequestProblem(home: string, file: OwnerRequestFile, store: OwnerSeatKeyStore, now: Date): string | null {
+  if (ownerMachinePinned(home)) return "this machine's owner seat is pinned from another machine: it holds no owner signer to answer with";
+  if (readOwnerSeat(home) === null) return 'no owner seat is registered on this machine';
+  const here = readMachine(home);
+  if (here !== null && here.id === file.machine.id) return `request ${file.request.request_id} is this machine's own; it is answered here, not carried`;
+  // Before its card is recorded or shown: the signed window and the full argument words, each
+  // action's hash matching the words the card will show (checked as the file was read).
+  const binding = ownerActionBindingProblem(home, file.request);
+  if (binding !== null) return binding;
+  // A request dated ahead of this machine's clock would keep its window open for as long as it
+  // says: it is never recorded or signed here.
+  const dated = carriedRequestTimeProblem(file.request, now);
+  if (dated !== null) return dated;
+  if (ownerActionDeadline(home, file.request, store, now) <= now.getTime()) return `request ${file.request.request_id} expired at ${file.request.expires_at}`;
+  return null;
+}
+
 export type SignOutcome =
   | { ok: true; kind: 'answered'; file: OwnerAnswerFile; choice: OwnerSeatAnswer['choice']; signer: string; fresh: boolean; stalePin: boolean }
   | { ok: true; kind: 'waiting'; text: string; fresh: boolean; stalePin: boolean }
@@ -158,20 +181,9 @@ export function signCarriedRequest(
   answer: ((record: OwnerActionRecord) => { ok: true } | { ok: false; why: string }) | null,
   fingerprint: string | null,
 ): SignOutcome {
-  if (ownerMachinePinned(home)) return { ok: false, why: "this machine's owner seat is pinned from another machine: it holds no owner signer to answer with" };
-  if (readOwnerSeat(home) === null) return { ok: false, why: 'no owner seat is registered on this machine' };
-  const here = readMachine(home);
-  if (here !== null && here.id === file.machine.id) return { ok: false, why: `request ${file.request.request_id} is this machine's own; it is answered here, not carried` };
+  const problem = carriedRequestProblem(home, file, store, now);
+  if (problem !== null) return { ok: false, why: problem };
   const stalePin = fingerprint !== null && fingerprint !== file.owner_seat;
-  // Before its card is recorded or shown: the signed window and the full argument words, each
-  // action's hash matching the words the card will show (checked as the file was read).
-  const binding = ownerActionBindingProblem(home, file.request);
-  if (binding !== null) return { ok: false, why: binding };
-  // A request dated ahead of this machine's clock would keep its window open for as long as it
-  // says: it is never recorded or signed here.
-  const dated = carriedRequestTimeProblem(file.request, now);
-  if (dated !== null) return { ok: false, why: dated };
-  if (ownerActionDeadline(home, file.request, store, now) <= now.getTime()) return { ok: false, why: `request ${file.request.request_id} expired at ${file.request.expires_at}` };
   const recorded = recordForeignOwnerAction(home, file.request, now);
   if (!recorded.ok) return recorded;
   const record = readOwnerActionRecord(home, file.request.request_id);
@@ -205,6 +217,17 @@ export function signCarriedRequest(
  * `--approval <id>`, which checks all of it again and claims the request single-use.
  */
 export function acceptCarriedAnswer(home: string, raw: unknown, store: OwnerSeatKeyStore, now: Date = new Date()): { ok: true; id: string; choice: OwnerSeatAnswer['choice']; signer: string; fingerprint: string; record: OwnerActionRecord } | { ok: false; why: string } {
+  const checked = checkCarriedAnswer(home, raw, store, now);
+  if (!checked.ok) return checked;
+  const recorded = recordCarriedOwnerAnswer(home, checked.record, checked.signed, store, now);
+  if (!recorded.ok) return recorded;
+  return { ok: true, id: checked.id, choice: recorded.answer.choice, signer: recorded.signer, fingerprint: checked.fingerprint, record: checked.record };
+}
+
+type CheckedAnswer = { ok: true; id: string; record: OwnerActionRecord; signed: SignedOwnerAnswer; choice: OwnerSeatAnswer['choice']; signer: string; fingerprint: string };
+
+/** Every check `acceptCarriedAnswer` makes on one carried answer, writing nothing. */
+function checkCarriedAnswer(home: string, raw: unknown, store: OwnerSeatKeyStore, now: Date): CheckedAnswer | { ok: false; why: string } {
   if (!plainObject(raw) || raw.format !== OWNER_ANSWER_FILE_FORMAT) return { ok: false, why: `the file is not a ${OWNER_ANSWER_FILE_FORMAT} record` };
   if (typeof raw.request_id !== 'string' || !OWNER_ACTION_ID_PATTERN.test(raw.request_id)) return { ok: false, why: 'the answer file names no owner-seat request' };
   if (!validMachineBinding(raw.machine)) return { ok: false, why: 'the answer file names no machine this build can read' };
@@ -226,7 +249,7 @@ export function acceptCarriedAnswer(home: string, raw: unknown, store: OwnerSeat
   // Made no later than now, and answered inside its signed window, not ahead of this machine's clock.
   const dated = carriedRequestTimeProblem(record, now) ?? carriedAnswerTimeProblem(record, (signed.owner_seat_answer as { at?: unknown } | undefined)?.at, now);
   if (dated !== null) return { ok: false, why: dated };
-  const recorded = recordCarriedOwnerAnswer(home, record, signed, store, now);
-  if (!recorded.ok) return recorded;
-  return { ok: true, id, choice: recorded.answer.choice, signer: recorded.signer, fingerprint: pin.fingerprint, record };
+  const checked = carriedOwnerAnswerCheck(home, record, signed, store, now);
+  if (!checked.ok) return checked;
+  return { ok: true, id, record, signed, choice: checked.answer.choice, signer: checked.signer, fingerprint: pin.fingerprint };
 }

@@ -281,6 +281,8 @@ describe('owner page', () => {
       'team-config': "Change the team's record",
       'team-general-grant': 'Issue a general grant',
       'development-mode': 'Set the development mode',
+      'team-entity-config': "Change an entity's record",
+      'team-daemon': 'Change the machine daemon',
     };
     for (const action of OWNER_ACTIONS) {
       const card = ownerPageRequest({
@@ -291,7 +293,8 @@ describe('owner page', () => {
       });
       expect(card.title).toBe(titles[action] ?? '');
       expect(card.description).not.toMatch(/oui|non|Always allow/);
-      expect(card.onceOnly).toBe(action === 'team-migrate');
+      // A migration, an entity's record and the machine daemon offer no standing rule.
+      expect(card.onceOnly).toBe(action === 'team-migrate' || action === 'team-entity-config' || action === 'team-daemon');
     }
     const migration = ownerPageRequest({
       request_id: `oa_${'cd'.repeat(12)}`,

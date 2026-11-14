@@ -853,14 +853,17 @@ export function setProjectRules(
   home: string,
   projectId: string,
   rules: string[],
-  opts: { dryRun?: boolean; allowDisplayName?: boolean } = {},
-): RulesEditPlan & { written: boolean } {
+  opts: { dryRun?: boolean; allowDisplayName?: boolean; claim?: () => boolean } = {},
+): RulesEditPlan & { written: boolean; claimRefused?: true } {
   if (opts.dryRun) {
     const plan = planProjectRulesSet(home, projectId, rules, opts);
     return { ...plan, written: false };
   }
   return locked(home, () => {
     const plan = planProjectRulesSet(home, projectId, rules, opts);
+    // A caller that spends an approval on this write claims it here, under the lock, after the
+    // plan stands and before anything is written; a claim refused writes nothing.
+    if (opts.claim !== undefined && !opts.claim()) return { ...plan, written: false, claimRefused: true as const };
     if (!plan.changed) {
       return { ...plan, written: false };
     }

@@ -125,13 +125,25 @@ the default is in force.
 A set is the owner's, at a terminal, or a seat's under the owner's general grant: 0.5.10 admits a
 wildcard grant only, so one that lists entities is refused until 0.5.11, and the grant's
 operations must admit `config`. The charter is the owner's word for one folder and does not reach
-it. There is no owner-seat request for this word: the grant is the standing answer, and the owner
-sets it directly when no grant admits it.
+it. The owner's signed answer is the third way, for every entity key and for a project's rules:
+`--request [--reason <text>]` records the exact `set` or `unset` for the owner seat, and
+`--approval <request-id>` applies it once the owner has answered. The answer binds the entities
+file's folder, the entity and every word of the change; it is checked first, the write is then
+tried with nothing written, and only a write that would go through (or that finds the value
+already in place) spends it, so a write refused for a missing entry keeps the answer for a
+corrected run. The write is planned, the answer spent and the planned text written under the
+file's one lock, so a file that changes in between cannot spend an answer for a write that is
+then refused. The owner's card names the exact change: set or unset, the key, the value in full
+and the file. An entity's record is answered once or denied: `always` is refused, and no
+standing rule ever admits one. A project's rules through an answer name the project by its id
+(`project.<id>.rules`), never its display name, and the write under the lock requires that id. `--request` and `--approval` take no `get`, never go together, and never go
+with `--general`. On a machine whose owner seat is pinned from another machine this is the only
+way, and the request is carried with `team approvals export`.
 
 | Outcome | Exit |
 | --- | --- |
 | the key printed, set, or already written | 0 |
-| the caller is neither the owner nor admitted by the grant, the word is not one of the four, a reminder list the parser refuses, or the file declares no such entry or key | 1 |
+| the caller is neither the owner nor admitted by the grant or an answer, an answer is refused, the word is not one of the four, a reminder list the parser refuses, or the file declares no such entry or key | 1 |
 | the invocation is not one of the forms, or the entities file cannot be read | 2 |
 
 ## The settings registry: keys

@@ -88,7 +88,7 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^(?:approve|approvals|approve-as-owner-seat|revoke-approval)$/, why: 'a grant or init flag name: an owner answer or a standing rule, not an approval copy' },
   { literal: /^--approvals takes no other arguments$/, why: "the grant flag's invocation refusal" },
   { literal: /^init\.approval-refused$/, why: "init's owner-seat refusal id, a key in the JSON envelope" },
-  { literal: /^(?:(?:up|add|import|migrate)\.)?approval-(?:requested|refused)$/, why: "the owner-seat door's outcome and refusal ids (src/client/owner-action.ts): keys, not an approval copy" },
+  { literal: /^(?:(?:up|add|import|migrate|daemon)\.)?approval-(?:requested|refused)$/, why: "the owner-seat door's outcome and refusal ids (src/client/owner-action.ts): keys, not an approval copy" },
   { literal: /^owner-seat-approved$/, why: "up's log word for a run an owner-seat answer admitted" },
   { literal: /^Usage: team (?:up|down) .*--approval <request-id>/s, why: "up and down usage, naming the owner-seat door's --approval flag" },
   // `team approvals` lists and revokes owner-seat always rules. The word is the command's own,
@@ -102,6 +102,13 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // `development-mode set`'s own invocation refusal: a switch is applied by `--request` or by an
   // answered `--approval`, and `--show` only prints what it would change. It names the flags.
   { literal: /^--request and --approval apply a switch, and --show only prints what it would change: pass one$/, why: "development-mode's refusal to combine a switch's flags with --show: the flags' own names" },
+  // A carried request whose exact change the prompt cannot carry: sign names where to sign it.
+  { literal: /^request \$\{record\.request_id\} changes more than the confirmation prompt can show, .*run team approvals sign at a terminal, or answer it on the owner page; nothing was signed$/, why: "approvals sign's refusal without a terminal names the command to run at one" },
+  // The daemon's owner-seat door: its options belong to the owner-gated verbs, and never to the chores child.
+  { literal: /^--approval belongs to install or uninstall$/, why: "daemon's invocation refusal: the owner-seat door's --approval flag belongs to install and uninstall" },
+  { literal: /^chores takes no --approval or --reason$/, why: "daemon's chores child takes none of the owner-seat door's options" },
+  // A pinned machine's setup: no charter there, and the refusal names the carried way instead.
+  { literal: /^this machine's owner seat is pinned from another machine, and it keeps no charter of its own; .* then run it with --approval <id>; nothing was written$/, why: "setup's refusal on a pinned machine names the owner-seat door's --approval flag" },
   { literal: /^team migrate: owner-seat approval \$\{(?:id|args\.values\.approval)\} \(signed by \$\{admitted\.signer\}\)\\n$/, why: "migrate names the owner-seat signature that admitted this record" },
   { literal: /^team migrate\$\{keepFile \? ' --keep-file' : ''\} --approval \$\{id\}$/, why: "migrate's replay line names the owner-seat door's --approval flag" },
   { literal: /^team migrate: owner-seat request \$\{id\} recorded; \$\{where\}\\n\$\{made\.text\}\\nwaiting for the signed approval\\n$/, why: "migrate shows the owner-seat card and waits for the signature" },

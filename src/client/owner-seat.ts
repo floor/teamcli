@@ -383,6 +383,9 @@ export function signOwnerAnswer(home: string, answer: OwnerSeatAnswer, signerNam
     if (assertion === undefined) return { ok: false, why: `signer "${signer.name}" is a passkey: sign challenge ${webauthnChallenge(answer)} and pass --assertion <file>` };
     return { ok: true, signed: { owner_seat_answer: answer, signer: signer.name, signature: assertion.signature, webauthn: { authenticator_data: assertion.authenticator_data, client_data_json: assertion.client_data_json } } };
   }
+  // A device key signs with its own prompt over these bytes: an assertion beside it would be
+  // ignored, so it is refused rather than read as if it said something.
+  if (assertion !== undefined) return { ok: false, why: `signer "${signer.name}" holds a device key: it signs with its own prompt and takes no passkey assertion` };
   if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available` };
   const signed = store.sign(signer.label, ownerSeatAnswerBytes(answer), reason);
   if (!signed.ok) return signed;
