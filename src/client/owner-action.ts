@@ -29,12 +29,14 @@ import { answerCard, cardPrompt, ownerActionCard } from './approval-card.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
 import { answerDeadline, deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type AnswerWindow, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { accountBindingOf, claimInLedger, ledgerSpent, machineBindingOf, readOwnerPin, requestMachineProblem, verifyPinnedOwnerAnswer } from './owner-pin.ts';
-import { ownerSpendShared, spendThroughHelper } from './owner-spend.ts';
+import { ownerSpendShared, spendThroughHelper } from './owner-spend-client.ts';
 import { ownerMachinePinned } from './owner-pin-path.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 import {
   actionArgsHash,
+  carriedAnswerTimeProblem,
   carriedBindingProblem,
+  carriedRequestTimeProblem,
   OWNER_ACTION_ID_PATTERN,
   OWNER_ACTION_TTL_MS,
   OWNER_ACTIONS,
@@ -45,7 +47,7 @@ import {
   type OwnerActionRecord,
 } from './owner-request-record.ts';
 
-export { actionArgsHash, carriedBindingProblem, OWNER_ACTION_ID_PATTERN, OWNER_ACTION_TTL_MS, OWNER_ACTIONS, ownerActionHash, ownerActionRecordOf };
+export { actionArgsHash, carriedAnswerTimeProblem, carriedBindingProblem, carriedRequestTimeProblem, OWNER_ACTION_ID_PATTERN, OWNER_ACTION_TTL_MS, OWNER_ACTIONS, ownerActionHash, ownerActionRecordOf };
 export type { OwnerAction, OwnerActionParams, OwnerActionRecord };
 
 /** The words of a command that an approval binds: everything but how it is asked and shown. */
@@ -465,9 +467,14 @@ export function approveOwnerAction(
   // there): a request without either is not signed. An answer given before stays verifiable.
   if (record.params.window === undefined) return { ok: false, why: windowlessRefusal(id) };
   if (record.params.words === undefined) return { ok: false, why: `request ${id} carries no argument words, so its card cannot show what it admits and it is not signed; record it again with --request` };
-  // Before any card is shown or signed: a request for another machine carries all it must.
+  // Before any card is shown or signed: a request for another machine carries all it must, and
+  // says it was made no later than now by this machine's clock.
   const binding = ownerActionBindingProblem(home, record);
   if (binding !== null) return { ok: false, why: binding };
+  if (record.params.machine !== undefined) {
+    const dated = carriedRequestTimeProblem(record, now);
+    if (dated !== null) return { ok: false, why: dated };
+  }
   const deadline = answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, OWNER_ACTION_TTL_MS);
   if (deadline <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   const seat = readOwnerSeat(home);
@@ -647,9 +654,14 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
   // seat is pinned runs no request that names none.
   const elsewhere = requestMachineProblem(home, p.machine, id, p.account);
   if (elsewhere !== null) return { ok: false, why: elsewhere };
-  // Then what it must carry to have been answered across machines: its signed window and words.
+  // Then what it must carry to have been answered across machines: its signed window and words,
+  // and a time it was made that is not ahead of this machine's clock.
   const binding = ownerActionBindingProblem(home, record);
   if (binding !== null) return { ok: false, why: binding };
+  if (p.machine !== undefined) {
+    const dated = carriedRequestTimeProblem(record, now);
+    if (dated !== null) return { ok: false, why: dated };
+  }
   if (!p.actions.includes(ask.action)) return { ok: false, why: `request ${id} does not approve ${ask.action} (it names ${p.actions.join(', ')})` };
   if (p.root !== canonicalRoot(ask.root)) return { ok: false, why: `request ${id} is for ${p.root}, not this repository` };
   if (p.team !== ask.team) return { ok: false, why: `request ${id} is for team "${p.team}", not "${ask.team}"` };
@@ -672,6 +684,11 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
     const bound = boundAnswer(home, signed!, record, store, now);
     if (!bound.ok) return bound;
     if (!(Date.parse(bound.answer.at) <= answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, OWNER_ACTION_TTL_MS))) return { ok: false, why: `the owner-seat answer to ${id} was given after the request expired` };
+    // An answer carried across machines was given inside the signed window, and not ahead of now.
+    if (p.machine !== undefined) {
+      const given = carriedAnswerTimeProblem(record, bound.answer.at, now);
+      if (given !== null) return { ok: false, why: given };
+    }
     // A request recorded before the signed window, answered then: its expiry is not signed, so the
     // answer stands only for the default window after its own signed time.
     if (p.window === undefined && !(now.getTime() < Date.parse(bound.answer.at) + WINDOWLESS_ANSWER_MS)) {

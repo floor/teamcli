@@ -38,4 +38,12 @@ export const SUITE_OWNER_STATE_ROOTS = {
 ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
 afterEach(() => {
   ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+  setOwnerHelperForTests(null);
 });
+// The owner helper of a machine whose accounts share one owner is started through the system's
+// privilege rule (src/client/owner-spend-exec.ts). No scene starts it: the module is replaced for
+// the whole suite, and a scene says what the helper answers (test/helpers/owner-helper-exec.ts).
+import { mock } from 'bun:test';
+import { fileURLToPath } from 'node:url';
+import { execOwnerHelperInTests, setOwnerHelperForTests } from '../helpers/owner-helper-exec.ts';
+mock.module(fileURLToPath(new URL('../../src/client/owner-spend-exec.ts', import.meta.url)), () => ({ execOwnerHelper: execOwnerHelperInTests }));

@@ -158,6 +158,41 @@ export function carriedBindingProblem(record: OwnerActionRecord): string | null 
   return null;
 }
 
+/** How far ahead of a reader's clock a request may say it was made, or an answer that it was
+ *  given: two machines' clocks differ a little, never by more. */
+export const OWNER_CLOCK_SKEW_MS = 2 * 60 * 1000;
+
+/**
+ * A request answered across machines, by the reader's own clock: it was made no later than now
+ * (within the skew). A request dated ahead would keep a fifteen-minute window open for as long
+ * as it likes, so it is never shown, signed, recorded or spent. Asked after
+ * `carriedBindingProblem`, which makes sure the window is whole.
+ */
+export function carriedRequestTimeProblem(record: OwnerActionRecord, now: Date): string | null {
+  const created = Date.parse(record.params.window?.created ?? record.created);
+  if (!Number.isFinite(created)) return `request ${record.request_id} carries no time it was made`;
+  if (created > now.getTime() + OWNER_CLOCK_SKEW_MS) return `request ${record.request_id} says it was made at ${record.params.window?.created ?? record.created}, ahead of this machine's clock; it is not answered or run`;
+  return null;
+}
+
+/**
+ * The time a signed answer to a request answered across machines says it was given: inside the
+ * request's signed window (from when it was made, within the skew, to when it expires) and not
+ * ahead of the reader's clock. Null when it may stand.
+ */
+export function carriedAnswerTimeProblem(record: OwnerActionRecord, at: unknown, now: Date): string | null {
+  const id = record.request_id;
+  const given = typeof at === 'string' && at.length <= 40 ? Date.parse(at) : NaN;
+  if (!Number.isFinite(given)) return `the answer to ${id} carries no time it was given`;
+  if (given > now.getTime() + OWNER_CLOCK_SKEW_MS) return `the answer to ${id} says it was given at ${at}, ahead of this machine's clock`;
+  const window = record.params.window;
+  const created = Date.parse(window?.created ?? record.created);
+  if (!(given >= created - OWNER_CLOCK_SKEW_MS)) return `the answer to ${id} says it was given before the request was made`;
+  const expires = window?.expires_at === null || window === undefined ? Infinity : Date.parse(window.expires_at);
+  if (!(given <= expires)) return `the answer to ${id} was given after the request expired`;
+  return null;
+}
+
 /** One owner-action record read from anywhere — the requests folder, or a file carried from
  *  another machine — whole and bound to its own hash, or why not. */
 export function ownerActionRecordOf(raw: unknown, id: string): OwnerActionRecord | string {

@@ -10,12 +10,15 @@ import { generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:cr
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
-import { actionArgsHash, admitOwnerAction, approveOwnerAction, createOwnerActionRequest, ownerActionHash, readOwnerActionRecord, type OwnerActionRecord } from '../src/client/owner-action.ts';
-import { acceptCarriedAnswer, ownerRequestFile, signCarriedRequest, type OwnerAnswerFile } from '../src/client/owner-carry.ts';
-import { ownerMachinePinned, ownerStateOf, ownerStateRootsForTests, productionOwnerStateRoots, type OwnerStateRoots } from '../src/client/owner-pin-path.ts';
+import { actionArgsHash, admitOwnerAction, approveOwnerAction, createOwnerActionRequest, ownerActionHash, readOwnerActionRecord, recordForeignOwnerAction, type OwnerActionRecord } from '../src/client/owner-action.ts';
+import { acceptCarriedAnswer, OWNER_ANSWER_FILE_FORMAT, ownerRequestFile, signCarriedRequest, type OwnerAnswerFile, type OwnerRequestFile } from '../src/client/owner-carry.ts';
+import { ownerMachinePinned, ownerSetupNoteOnThisAccount, ownerStateOf, ownerStateRootsForTests, productionOwnerStateRoots, type OwnerStateRoots } from '../src/client/owner-pin-path.ts';
 import { claimInLedger, exportOwnerSeat, ledgerSpent, localOwnerSeatFingerprint, pinOwnerSeat, readOwnerPin, type SignedOwnerSeatExport } from '../src/client/owner-pin.ts';
-import { judgeSpend, OWNER_SPEND_FORMAT, ownerSpendRunnerForTests, runOwnerSpend, verdictLine, type SpendRunner } from '../src/client/owner-spend.ts';
-import { registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
+import { judgeSpend, OWNER_SPEND_FORMAT, readCappedInput, runOwnerSpend, verdictLine } from '../src/client/owner-spend.ts';
+import { setOwnerHelperForTests } from './helpers/owner-helper-exec.ts';
+
+type SpendRunner = (stdin: string) => { status: number | null; stdout: string };
+import { registerOwnerSeat, signOwnerAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from '../src/client/owner-seat.ts';
 import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { keyOf } from '../src/store/keys.ts';
@@ -28,7 +31,6 @@ const ACCOUNT_UIDS: Record<string, number> = { floor: 5001, studio: 5002 };
 const made: string[] = [];
 afterEach(() => {
   ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
-  ownerSpendRunnerForTests(null);
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -314,7 +316,7 @@ describe('an approval is spent once, by the helper, for the account that asked',
 
     const account = 'floor';
     const sent: string[] = [];
-    ownerSpendRunnerForTests(helperRunner(() => account, () => LATER(60_000), sent));
+    setOwnerHelperForTests(helperRunner(() => account, () => LATER(60_000), sent));
     const ask = { action: 'team-import' as const, root: r.record.params.root, team: 'acme', head: null, words: [] as string[], claim: true };
     const admitted = admitOwnerAction(r.home, r.id, ask, r.store, LATER(60_000));
     expect(admitted.ok, admitted.ok ? '' : admitted.why).toBe(true);
@@ -349,7 +351,7 @@ describe('an approval is spent once, by the helper, for the account that asked',
     mkdirSync(actionRequestsFolder(theirs), { recursive: true });
     for (const name of [`${r.id}.json`, `${r.id}.seat-answer.json`]) writeFileSync(join(actionRequestsFolder(theirs), name), readFileSync(join(actionRequestsFolder(r.home), name)));
     const sent: string[] = [];
-    ownerSpendRunnerForTests(helperRunner(() => 'studio', () => LATER(60_000), sent));
+    setOwnerHelperForTests(helperRunner(() => 'studio', () => LATER(60_000), sent));
     const ask = { action: 'team-import' as const, root: r.record.params.root, team: 'acme', head: null, words: [] as string[], claim: true };
     const run = admitOwnerAction(theirs, r.id, ask, r.store, LATER(60_000));
     expect(run.ok).toBe(false);
@@ -424,16 +426,128 @@ describe('an approval is spent once, by the helper, for the account that asked',
     const ask = { action: 'team-import' as const, root: r.record.params.root, team: 'acme', head: null, words: [] as string[], claim: true };
     const verdict = (over: Record<string, unknown>) => (): { status: number; stdout: string } => ({ status: 0, stdout: `${JSON.stringify({ format: 'team-owner-spend-verdict-v1', ok: true, request_id: r.id, action: 'team-import', params_sha256: r.record.params_sha256, account: 'floor', signer: 'mac', ...over })}\n` });
     for (const over of [{ request_id: 'oa_000000000000000000000000' }, { params_sha256: '0'.repeat(64) }, { action: 'team-up' }]) {
-      ownerSpendRunnerForTests(verdict(over));
+      setOwnerHelperForTests(verdict(over));
       const run = admitOwnerAction(r.home, r.id, ask, r.store, LATER(60_000));
       expect(run.ok).toBe(false);
       if (!run.ok) expect(run.why).toContain('does not name request');
     }
-    ownerSpendRunnerForTests(() => ({ status: 1, stdout: '' }));
+    setOwnerHelperForTests(() => ({ status: 1, stdout: '' }));
     const silent = admitOwnerAction(r.home, r.id, ask, r.store, LATER(60_000));
     expect(silent.ok).toBe(false);
     if (!silent.ok) expect(silent.why).toContain('no verdict');
-    ownerSpendRunnerForTests(verdict({}));
+    setOwnerHelperForTests(verdict({}));
     expect(admitOwnerAction(r.home, r.id, ask, r.store, LATER(60_000)).ok).toBe(true);
+  });
+});
+
+/** The same request, dated `ms` from NOW and hashed again: what an account could write by hand. */
+function redated(record: OwnerActionRecord, ms: number): OwnerActionRecord {
+  const created = new Date(NOW.getTime() + ms).toISOString();
+  const expires = new Date(NOW.getTime() + ms + 15 * 60_000).toISOString();
+  const params = { ...record.params, window: { created, expires_at: expires } };
+  return { ...record, params, params_sha256: ownerActionHash(params), created, expires_at: expires };
+}
+
+/** An answer the signer machine signs for `record`, said to be given at `at`. */
+function answerAt(mac: ReturnType<typeof signerMachine>, record: OwnerActionRecord, at: Date): SignedOwnerAnswer {
+  ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+  const signed = signOwnerAnswer(mac.home, { kind: 'owner-action', request_id: record.request_id, params_sha256: record.params_sha256, choice: 'once', team: 'floor', seat: 'owner', at: at.toISOString() }, 'mac', mac.store, 'test');
+  if (!signed.ok) throw new Error(signed.why);
+  return signed.signed;
+}
+
+describe('a request dated ahead, or an answer given outside its window, is refused everywhere', () => {
+  test('the signer machine never records or signs a request dated ahead of its clock', () => {
+    const mac = signerMachine();
+    const m = sharedMachine();
+    pinShared(m, mac.exported);
+    const r = answeredRequest(m, mac, 'floor');
+    const future = redated(r.record, 365 * 24 * 3600_000);
+    const file: OwnerRequestFile = { format: 'team-owner-request-file-v1', machine: future.params.machine!, owner_seat: (readOwnerPin(r.home) as { fingerprint: string }).fingerprint, request: future };
+    ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+    const signed = signCarriedRequest(mac.home, file, mac.store, NOW, () => ({ ok: true }), null);
+    expect(signed.ok).toBe(false);
+    if (!signed.ok) expect(signed.why).toContain("ahead of this machine's clock");
+    expect(existsSync(join(actionRequestsFolder(mac.home), `${future.request_id}.seat-answer.json`))).toBe(false);
+    // Recorded some other way (copied into the requests folder), the owner page still never signs it.
+    const id = 'oa_00000000000000000000beef';
+    const other = { ...future, request_id: id };
+    expect(recordForeignOwnerAction(mac.home, other, NOW).ok).toBe(true);
+    const approved = approveOwnerAction(mac.home, id, 'oui', mac.store, NOW);
+    expect(approved.ok).toBe(false);
+    if (!approved.ok) expect(approved.why).toContain("ahead of this machine's clock");
+    // Within the skew, it is signed as any other.
+    const near = redated(r.record, 60_000);
+    const nearFile: OwnerRequestFile = { ...file, request: { ...near, request_id: 'oa_00000000000000000000cafe' } };
+    expect(signCarriedRequest(mac.home, nearFile, mac.store, NOW, null, null).ok).toBe(true);
+  });
+
+  test('the helper and the account refuse a request dated ahead, and an answer ahead of now or before the request', () => {
+    const mac = signerMachine();
+    const m = sharedMachine();
+    pinShared(m, mac.exported);
+    const r = answeredRequest(m, mac, 'floor');
+    const pin = readOwnerPin(r.home);
+    if (pin.kind !== 'pinned') throw new Error('pin');
+    const record = readOwnerActionRecord(r.home, r.id) as OwnerActionRecord;
+    const ask = { action: 'team-import', root: record.params.root, team: 'acme', head: null, args_sha256: actionArgsHash('team-import', []) };
+    const judge = (rec: OwnerActionRecord, answer: SignedOwnerAnswer, now: Date) => {
+      const judged = judgeSpend({ format: OWNER_SPEND_FORMAT, record: rec, answer, ask }, pin, 'floor', now);
+      return judged.ok ? 'admitted' : judged.why;
+    };
+    // Dated a year ahead and answered today: never spent.
+    const future = redated(record, 365 * 24 * 3600_000);
+    expect(judge(future, answerAt(mac, future, NOW), NOW)).toContain("ahead of this machine's clock");
+    // Answered "ten minutes from now": refused now, admitted once that time has come (inside the window).
+    const ahead = answerAt(mac, record, LATER(10 * 60_000));
+    expect(judge(record, ahead, NOW)).toContain("ahead of this machine's clock");
+    expect(judge(record, ahead, LATER(10 * 60_000))).toBe('admitted');
+    // Answered before the request was made.
+    expect(judge(record, answerAt(mac, record, LATER(-10 * 60_000)), NOW)).toContain('before the request was made');
+    // Answered after it expired.
+    expect(judge(record, answerAt(mac, record, LATER(16 * 60_000)), LATER(16 * 60_000))).toContain('expired');
+    // The account refuses the same answer when it is carried back.
+    m.use('floor');
+    const carried: OwnerAnswerFile = { format: OWNER_ANSWER_FILE_FORMAT, machine: record.params.machine!, request_id: r.id, answer: ahead };
+    const accepted = acceptCarriedAnswer(r.home, carried, r.store, NOW);
+    expect(accepted.ok).toBe(false);
+    if (!accepted.ok) expect(accepted.why).toContain("ahead of this machine's clock");
+  });
+});
+
+describe("the helper's input, and what the account may replace", () => {
+  test('input past the size cap, or a stream still open at the deadline, is refused while it is read', async () => {
+    const small = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode('{"a":1}')); controller.close(); } });
+    expect(await readCappedInput(small, 64, 1_000)).toEqual({ ok: true, text: '{"a":1}' });
+    let pulled = 0;
+    const endless = new ReadableStream<Uint8Array>({ pull(controller) { pulled += 1; controller.enqueue(new Uint8Array(1024)); } });
+    const big = await readCappedInput(endless, 4096, 1_000);
+    expect(big.ok).toBe(false);
+    if (!big.ok) expect(big.why).toContain('larger than one can be');
+    expect(pulled).toBeLessThan(10);
+    const open = new ReadableStream<Uint8Array>({ start() {} });
+    const late = await readCappedInput(open, 4096, 50);
+    expect(late.ok).toBe(false);
+    if (!late.ok) expect(late.why).toContain('did not arrive in time');
+  });
+
+  test('no module of TeamCLI exports a way to replace how the helper is started', async () => {
+    for (const path of ['../src/client/owner-spend.ts', '../src/client/owner-spend-client.ts', '../src/client/owner-spend-exec.ts']) {
+      const names = Object.keys(await import(path));
+      expect(names.filter((name) => /ForTests|Runner|runner/.test(name)), path).toEqual([]);
+    }
+    const exec = readFileSync(join(import.meta.dir, '..', 'src', 'client', 'owner-spend-exec.ts'), 'utf8');
+    expect(exec).not.toMatch(/\blet\b/);
+  });
+
+  test('a machine not set up names the install the owner runs, in full, as the administrator', () => {
+    const linux = productionOwnerStateRoots('linux');
+    ownerStateRootsForTests({ ...linux, system: join(temp('nothing'), 'teamcli'), shared: { ledger: join(temp('no-ledger'), 'ledger'), account: () => 'floor' } });
+    const note = ownerSetupNoteOnThisAccount();
+    expect(note).toContain('sudo ');
+    expect(note).toContain('owner-seat install --account floor');
+    expect(note).toContain(process.execPath);
+    ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+    expect(ownerSetupNoteOnThisAccount()).toBeNull();
   });
 });

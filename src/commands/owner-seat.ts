@@ -24,6 +24,7 @@ import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { readCarriedFile, writeCarriedFile } from '../client/owner-carry.ts';
 import { exportOwnerSeat, fingerprintText, pinOwnerSeat, readOwnerPin } from '../client/owner-pin.ts';
 import { installOwnerState, realInstallSystem, type InstallSystem } from '../client/owner-state-install.ts';
+import { ownerPinCommand } from '../client/owner-pin-path.ts';
 import { ownerSeatFile, ownerSeatPublicKey, readOwnerSeat, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { writePolicySet } from '../policy/sources.ts';
@@ -97,7 +98,7 @@ async function ownerSeatOutcome(argv: string[], rawIo: Io, options: OwnerSeatOpt
     if (!outcome.ok) return refuse(outcome.why);
     io.stdout(dryRun
       ? 'nothing was changed (--dry-run)\n'
-      : `owner state set up for ${accounts.join(', ')}; next, pin the owner seat as the administrator: sudo team owner-seat pin --from <export file>\n`);
+      : `owner state set up for ${accounts.join(', ')}; next, pin the owner seat as the administrator: ${ownerPinCommand()}\n`);
     return 'done';
   }
 

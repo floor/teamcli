@@ -75,7 +75,7 @@ import {
 
 export { CARRIED_FILE_MAX_BYTES, fingerprintText, MACHINE_FORMAT, OWNER_SEAT_EXPORT_FORMAT, OWNER_SEAT_PIN_FORMAT, ownerSeatExportBytes, ownerSeatExportChallenge, ownerSeatFingerprint, readOwnerPinIn, verifyOwnerSeatExport, verifyPinnedOwnerAnswer };
 export type { MachineRecord, OwnerPin, OwnerPinRead, OwnerSeatExport, SignedOwnerSeatExport };
-import { ownerMachinePinned, ownerStateOf, systemOwnerUid, type OwnerStatePlace, type OwnerStateRead } from './owner-pin-path.ts';
+import { ownerMachinePinned, ownerPinCommand, ownerStateOf, systemOwnerUid, type OwnerStatePlace, type OwnerStateRead } from './owner-pin-path.ts';
 
 /** An export dated further ahead than this is refused: a pin must never wait on a future clock. */
 const FUTURE_SKEW_MS = 5 * 60 * 1000;
@@ -269,7 +269,7 @@ export function pinOwnerSeat(home: string, raw: unknown, now: Date = new Date(),
   // A machine whose accounts share one owner: the administrator pins in the system folder, the
   // first time into a folder its install set up, and no entity account ever does.
   const shared = state.kind === 'present' ? state.place.shared !== undefined : state.kind === 'refused' && state.setup !== undefined;
-  if (shared && process.getuid?.() !== systemOwnerUid()) return { ok: false, why: "this machine's owner state is kept in the system folder for all its accounts; only its administrator pins there (sudo team owner-seat pin --from <file>, from the owner's own account); nothing was changed" };
+  if (shared && process.getuid?.() !== systemOwnerUid()) return { ok: false, why: `this machine's owner state is kept in the system folder for all its accounts; only its administrator pins there, from the owner's own account: ${ownerPinCommand()}; nothing was changed` };
   if (state.kind === 'refused' && state.setup === undefined) return { ok: false, why: `${state.why}; nothing was changed` };
   const place = state.kind === 'present' ? state.place : state.kind === 'refused' ? state.setup! : state.write;
   if (place === null) return { ok: false, why: 'this account has no home folder the pin can be kept in; nothing was pinned' };

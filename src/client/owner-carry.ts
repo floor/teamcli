@@ -27,6 +27,8 @@ import {
   ownerActionDeadline,
   ownerActionRecordOf,
   readOwnerActionRecord,
+  carriedAnswerTimeProblem,
+  carriedRequestTimeProblem,
   recordCarriedOwnerAnswer,
   recordForeignOwnerAction,
   OWNER_ACTION_ID_PATTERN,
@@ -165,6 +167,10 @@ export function signCarriedRequest(
   // action's hash matching the words the card will show (checked as the file was read).
   const binding = ownerActionBindingProblem(home, file.request);
   if (binding !== null) return { ok: false, why: binding };
+  // A request dated ahead of this machine's clock would keep its window open for as long as it
+  // says: it is never recorded or signed here.
+  const dated = carriedRequestTimeProblem(file.request, now);
+  if (dated !== null) return { ok: false, why: dated };
   if (ownerActionDeadline(home, file.request, store, now) <= now.getTime()) return { ok: false, why: `request ${file.request.request_id} expired at ${file.request.expires_at}` };
   const recorded = recordForeignOwnerAction(home, file.request, now);
   if (!recorded.ok) return recorded;
@@ -217,6 +223,9 @@ export function acceptCarriedAnswer(home: string, raw: unknown, store: OwnerSeat
   const signed = raw.answer as unknown as SignedOwnerAnswer;
   const answerAt = Date.parse(String((signed.owner_seat_answer as { at?: unknown } | undefined)?.at));
   if (!(answerAt <= deadline)) return { ok: false, why: `the answer to ${id} was given after the request expired` };
+  // Made no later than now, and answered inside its signed window, not ahead of this machine's clock.
+  const dated = carriedRequestTimeProblem(record, now) ?? carriedAnswerTimeProblem(record, (signed.owner_seat_answer as { at?: unknown } | undefined)?.at, now);
+  if (dated !== null) return { ok: false, why: dated };
   const recorded = recordCarriedOwnerAnswer(home, record, signed, store, now);
   if (!recorded.ok) return recorded;
   return { ok: true, id, choice: recorded.answer.choice, signer: recorded.signer, fingerprint: pin.fingerprint, record };

@@ -187,7 +187,29 @@ function systemState(dir: string, owner: number): OwnerStateRead | null {
   return any ? { kind: 'present', place } : null;
 }
 
-const NOT_SET_UP = "this machine's owner state is kept in a system folder for all its accounts, and it is not set up (the owner runs team owner-seat install, then team owner-seat pin, from the administrator's account)";
+/**
+ * The command the owner runs as the administrator, with this process's own Bun and TeamCLI named
+ * in full: the administrator's search path under sudo seldom reaches an account's own install.
+ */
+function adminCommand(words: string): string {
+  const cli = process.argv[1];
+  const team = typeof cli === 'string' && cli.startsWith('/') ? `${process.execPath} ${cli}` : 'team';
+  return `sudo ${team} ${words}`;
+}
+
+/** The install, as the owner runs it from the administrator's own account. */
+export function ownerInstallCommand(account: string | null = accountName()): string {
+  return adminCommand(`owner-seat install --account ${account ?? '<entity accounts>'}`);
+}
+
+/** The first pin, as the owner runs it from the administrator's own account. */
+export function ownerPinCommand(): string {
+  return adminCommand('owner-seat pin --from <export file>');
+}
+
+function notSetUp(account: string | null): string {
+  return `this machine's owner state is not set up, so no owner answer is accepted here and no terminal is the owner. The owner sets it up once, from the administrator's own account: ${ownerInstallCommand(account)}, then ${ownerPinCommand()}`;
+}
 
 function readHelperRecord(path: string, owner: number): OwnerHelperRecord | 'absent' | 'refused' {
   const entry = probe(path);
@@ -212,16 +234,16 @@ function readHelperRecord(path: string, owner: number): OwnerHelperRecord | 'abs
  * that called it, not its own.
  */
 export function sharedOwnerStateFor(account: string | null, shared: SharedOwnerRoots | null | undefined = roots.shared, dir: string | null = roots.system, owner: number = roots.systemOwner): OwnerStateRead {
-  if (shared === null || shared === undefined || dir === null) return { kind: 'refused', why: NOT_SET_UP };
+  if (shared === null || shared === undefined || dir === null) return { kind: 'refused', why: notSetUp(account) };
   const folder = probe(dir);
-  if (folder.kind === 'absent') return { kind: 'refused', why: NOT_SET_UP };
+  if (folder.kind === 'absent') return { kind: 'refused', why: notSetUp(account) };
   if (folder.kind === 'refused') return { kind: 'refused', why: 'the system owner folder cannot be read' };
   if (!folder.stat.isDirectory() || !protectedBy(folder.stat, owner)) return { kind: 'refused', why: 'the system owner folder is not a folder only its administrator can write' };
   const helper = readHelperRecord(join(dir, HELPER), owner);
-  if (helper === 'absent') return { kind: 'refused', why: NOT_SET_UP };
+  if (helper === 'absent') return { kind: 'refused', why: notSetUp(account) };
   if (helper === 'refused') return { kind: 'refused', why: "the owner helper's record in the system owner folder cannot be read or is not one only its administrator can write" };
   const ledger = probe(shared.ledger);
-  if (ledger.kind === 'absent') return { kind: 'refused', why: NOT_SET_UP };
+  if (ledger.kind === 'absent') return { kind: 'refused', why: notSetUp(account) };
   if (ledger.kind === 'refused' || !ledger.stat.isDirectory() || !protectedBy(ledger.stat, helper.uid)) return { kind: 'refused', why: "the approval ledger is not a folder only the owner helper can write" };
   if (account === null || !ACCOUNT_NAME_PATTERN.test(account)) return { kind: 'refused', why: "this account's name cannot be read from the user database" };
   const place: OwnerStatePlace = { ...placeAt('system', dir), ledger: join(shared.ledger, account), shared: { account, helper, ledgerRoot: shared.ledger } };
@@ -237,7 +259,7 @@ export function sharedOwnerStateFor(account: string | null, shared: SharedOwnerR
   if (own.kind === 'refused' || (own.kind === 'present' && (!own.stat.isDirectory() || !protectedBy(own.stat, helper.uid)))) {
     return { kind: 'refused', why: "this account's approval ledger is not a folder only the owner helper can write" };
   }
-  if (!any) return { kind: 'refused', why: "no owner seat is pinned on this machine yet (the owner pins it from the administrator's account: sudo team owner-seat pin --from <file>)", setup: place };
+  if (!any) return { kind: 'refused', why: `no owner seat is pinned on this machine yet, so no owner answer is accepted here; the owner pins it from the administrator's own account: ${ownerPinCommand()}`, setup: place };
   return { kind: 'present', place };
 }
 
@@ -288,6 +310,17 @@ export function ownerSeatPinFile(home: string = homedir()): string {
 /** The machine record's path in an account home (`~/.config/team/machine.json`). */
 export function machineFile(home: string = homedir()): string {
   return accountPlace(home).machine;
+}
+
+/**
+ * On a machine whose accounts share one owner, why its owner state refuses when it is not set up
+ * or not pinned yet — naming the step the owner takes — for the caller placement; null anywhere
+ * else, and when the state stands.
+ */
+export function ownerSetupNoteOnThisAccount(): string | null {
+  if (!ownerStateShared()) return null;
+  const state = ownerStateOf(undefined);
+  return state.kind === 'refused' ? state.why : null;
 }
 
 /**

@@ -20,17 +20,21 @@
 //
 // Why the privilege tool, not a socket service: it needs no long-running process and no reading
 // of a socket peer's credentials (which Bun does not offer), and the caller's identity comes from
-// the tool, which the caller cannot set. The rule fixes the command, its folder (`/`, so no
-// configuration file or `.env` of the caller's folder is read) and a reset environment.
+// the tool, which the caller cannot set. The rule names one program and no arguments: a small
+// launcher the administrator owns, which starts Bun in `/` with an environment it writes out in
+// full (nothing the caller or the machine's rule keeps reaches Bun) and passes on only the
+// caller's identity as the tool gave it.
+//
+// This file is the helper's side, and the account side's shared formats; the account side's
+// call is src/client/owner-spend-client.ts.
 
-import { closeSync, mkdirSync, openSync, readFileSync, statSync, writeSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 // Only the leaf rules: the helper's program is bundled from this file, and nothing it loads reads
 // a file of TeamCLI's own or the caller's at its start.
-import { carriedBindingProblem, ownerActionRecordOf, OWNER_ACTION_ID_PATTERN, OWNER_ACTIONS, type OwnerAction, type OwnerActionRecord } from './owner-request-record.ts';
+import { carriedAnswerTimeProblem, carriedBindingProblem, carriedRequestTimeProblem, ownerActionRecordOf, OWNER_ACTION_ID_PATTERN, OWNER_ACTIONS, type OwnerAction, type OwnerActionRecord } from './owner-request-record.ts';
 import { CARRIED_FILE_MAX_BYTES, readOwnerPinIn, verifyPinnedOwnerAnswer, type OwnerPin } from './owner-pin-verify.ts';
-import { ACCOUNT_NAME_PATTERN, ownerStateOf, sharedOwnerStateFor, type OwnerStateRead } from './owner-pin-path.ts';
+import { ACCOUNT_NAME_PATTERN, sharedOwnerStateFor, type OwnerStateRead } from './owner-pin-path.ts';
 import type { SignedOwnerAnswer } from './owner-signature.ts';
 
 export const OWNER_SPEND_FORMAT = 'team-owner-spend-v1';
@@ -41,7 +45,16 @@ export const OWNER_HELPER_USER = 'teamcli-owner';
 export const OWNER_HELPER_ROOT = '/usr/local/teamcli-owner';
 export const OWNER_HELPER_BUN = `${OWNER_HELPER_ROOT}/bin/bun`;
 export const OWNER_HELPER_APP = `${OWNER_HELPER_ROOT}/app/owner-spend.js`;
+/** The one program the privilege rule names: it starts Bun with an environment of its own. */
+export const OWNER_HELPER_LAUNCHER = `${OWNER_HELPER_ROOT}/bin/owner-spend`;
+/** The helper user's own folder: its home, and its temporary and cache folder under it. */
+export const OWNER_HELPER_HOME = '/var/lib/teamcli-owner';
+export const OWNER_HELPER_TMP = `${OWNER_HELPER_HOME}/tmp`;
 export const OWNER_HELPER_SUDO = '/usr/bin/sudo';
+/** The most a spend may be: a request, its answer and the ask, all small. */
+export const OWNER_SPEND_MAX_BYTES = 2 * CARRIED_FILE_MAX_BYTES;
+/** How long the helper waits for its whole input before it refuses. */
+export const OWNER_SPEND_INPUT_MS = 5_000;
 
 /** What the account is about to run, as the request's own fields name it. */
 export type SpendAsk = { action: OwnerAction; root: string; team: string; head: string | null; args_sha256: string };
@@ -85,6 +98,8 @@ export function judgeSpend(raw: unknown, pin: OwnerPin, account: string, now: Da
   if (p.account !== account) return { ok: false, why: p.account === undefined ? `request ${id} names no account; on this machine every owner request names the account it was made by` : `request ${id} is for account ${p.account}, not ${account}` };
   const binding = carriedBindingProblem(record);
   if (binding !== null) return { ok: false, why: binding };
+  const dated = carriedRequestTimeProblem(record, now);
+  if (dated !== null) return { ok: false, why: dated };
   // The signed window alone: a pinned machine keeps no deferral of its own.
   const deadline = Date.parse(p.window!.expires_at!);
   if (!(now.getTime() < deadline)) return { ok: false, why: `request ${id} expired at ${p.window!.expires_at}` };
@@ -99,16 +114,40 @@ export function judgeSpend(raw: unknown, pin: OwnerPin, account: string, now: Da
   if (!verified.ok) return verified;
   const a = verified.answer;
   if (a.kind !== 'owner-action' || a.request_id !== id || a.params_sha256 !== record.params_sha256) return { ok: false, why: `the owner-seat answer is not bound to request ${id} and its parameters` };
-  if (!(Date.parse(a.at) <= deadline)) return { ok: false, why: `the answer to ${id} was given after the request expired` };
+  const given = carriedAnswerTimeProblem(record, a.at, now);
+  if (given !== null) return { ok: false, why: given };
   if (a.choice === 'deny') return { ok: false, why: `the owner seat denied request ${id}` };
   if ((p.requesters ?? [p.requested_by]).includes(verified.signer.name)) return { ok: false, why: `signer "${verified.signer.name}" asked for request ${id}; no principal approves its own request` };
   return { ok: true, input: { record, answer: signed, ask }, signer: verified.signer.name };
 }
 
-/** Spends `<id>.<action>` once in one account's ledger folder: created once, never replaced. */
+/** Flushes one folder's entries to disk, so an entry made in it survives a power loss. */
+function syncFolder(path: string): boolean {
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    fsyncSync(fd);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Spends `<id>.<action>` once in one account's ledger folder: created once, never replaced, and
+ * on disk — the entry, the folder that holds it, and a folder made for it in the ledger — before
+ * it answers that it was spent.
+ */
 export function spendInLedgerFolder(folder: string, id: string, action: OwnerAction, entry: Record<string, unknown>): { ok: true } | { ok: false; why: string } {
   try {
     mkdirSync(folder, { mode: 0o755 });
+    if (!syncFolder(join(folder, '..'))) return { ok: false, why: 'the approval ledger cannot be made durable; nothing was spent' };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return { ok: false, why: 'the approval ledger cannot be made; nothing was spent' };
   }
@@ -122,9 +161,15 @@ export function spendInLedgerFolder(folder: string, id: string, action: OwnerAct
   }
   try {
     writeSync(fd, `${JSON.stringify(entry)}\n`);
+    fsyncSync(fd);
+  } catch {
+    // The entry stands (it is created, so the approval is spent), but it was not confirmed on
+    // disk: no verdict says spent, so nothing runs on it.
+    return { ok: false, why: 'the approval ledger entry could not be written to disk; nothing runs on it' };
   } finally {
     closeSync(fd);
   }
+  if (!syncFolder(folder)) return { ok: false, why: 'the approval ledger entry could not be written to disk; nothing runs on it' };
   return { ok: true };
 }
 
@@ -193,64 +238,36 @@ export function passwdNameOf(uid: number, file = '/etc/passwd'): string | null {
   return names.length === 1 ? names[0]! : null;
 }
 
-/** Starts the helper with one spend on stdin and returns its stdout and status. */
-export type SpendRunner = (stdin: string) => { status: number | null; stdout: string };
-
-const sudoRunner: SpendRunner = (stdin) => {
-  // Exactly the command the privilege rule names, nothing after it, with no prompt: a machine
-  // whose rule is missing refuses rather than asking for a password.
-  const run = spawnSync(OWNER_HELPER_SUDO, ['-n', '-u', OWNER_HELPER_USER, '--', OWNER_HELPER_BUN, OWNER_HELPER_APP], {
-    input: stdin,
-    encoding: 'utf8',
-    cwd: '/',
-    env: { PATH: '/usr/bin:/bin', LANG: 'C' },
-    timeout: 30_000,
-    maxBuffer: 64 * 1024,
-  });
-  return { status: run.status, stdout: typeof run.stdout === 'string' ? run.stdout : '' };
-};
-let runner: SpendRunner = sudoRunner;
-
-/** Replaces how the helper is started, for the test suite only. `null` restores the real one. */
-export function ownerSpendRunnerForTests(next: SpendRunner | null): void {
-  runner = next ?? sudoRunner;
-}
-
-/** Whether approvals here are spent through the owner helper: a machine whose accounts share one owner, pinned. */
-export function ownerSpendShared(home: string): boolean {
-  const state = ownerStateOf(home);
-  return state.kind === 'present' && state.place.shared !== undefined;
-}
-
-/**
- * On the account's side: asks the helper to spend one approval and reads its verdict. The verdict
- * must name exactly the request id, action and parameter hash sent; anything else spends nothing
- * the account will act on.
- */
-export function spendThroughHelper(input: SpendInput): { ok: true; signer: string } | { ok: false; why: string } {
-  const sent = JSON.stringify({ format: OWNER_SPEND_FORMAT, record: input.record, answer: input.answer, ask: input.ask });
-  let out: { status: number | null; stdout: string };
-  try {
-    out = runner(sent);
-  } catch {
-    return { ok: false, why: 'the owner helper cannot be started; nothing was spent' };
-  }
-  let verdict: unknown;
-  try {
-    verdict = JSON.parse(out.stdout);
-  } catch {
-    return { ok: false, why: "the owner helper gave no verdict (is it installed? the owner runs sudo team owner-seat install from the administrator's account); nothing was spent" };
-  }
-  if (!plainObject(verdict) || verdict.format !== OWNER_SPEND_VERDICT_FORMAT) return { ok: false, why: 'the owner helper gave no verdict this build reads; nothing was spent' };
-  if (verdict.ok !== true) return { ok: false, why: typeof verdict.why === 'string' ? verdict.why : 'the owner helper refused the spend' };
-  if (out.status !== 0 || verdict.request_id !== input.record.request_id || verdict.action !== input.ask.action || verdict.params_sha256 !== input.record.params_sha256 || typeof verdict.signer !== 'string') {
-    return { ok: false, why: `the owner helper's verdict does not name request ${input.record.request_id} as it was sent; it does not run` };
-  }
-  return { ok: true, signer: verdict.signer };
-}
-
 /** The helper's stdout: one verdict line. */
 export function verdictLine(verdict: SpendVerdict): string {
   return `${JSON.stringify({ format: OWNER_SPEND_VERDICT_FORMAT, ...verdict })}\n`;
 }
 
+/**
+ * Reads the helper's whole input from `stream`, at most `max` bytes and within `ms`: one byte
+ * more, or a stream still open at the deadline, refuses at once, so no caller holds the helper
+ * or fills its memory.
+ */
+export async function readCappedInput(stream: ReadableStream<Uint8Array>, max: number = OWNER_SPEND_MAX_BYTES, ms: number = OWNER_SPEND_INPUT_MS): Promise<{ ok: true; text: string } | { ok: false; why: string }> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), ms); });
+  try {
+    while (true) {
+      const next = await Promise.race([reader.read(), deadline]);
+      if (next === 'late') return { ok: false, why: 'the spend did not arrive in time; nothing was spent' };
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > max) return { ok: false, why: 'the spend is larger than one can be; nothing was spent' };
+      chunks.push(next.value);
+    }
+  } catch {
+    return { ok: false, why: 'the spend cannot be read; nothing was spent' };
+  } finally {
+    clearTimeout(timer);
+    reader.cancel().catch(() => {});
+  }
+  return { ok: true, text: Buffer.concat(chunks).toString('utf8') };
+}
