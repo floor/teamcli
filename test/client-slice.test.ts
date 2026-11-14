@@ -336,17 +336,26 @@ describe('client grant and key records', () => {
     expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
   });
 
-  test('a registry entry whose root is gone refuses, naming the entry and its repair; the doctor names it first', () => {
+  test('a registry root that is genuinely not there is passed over with a doctor warning; a root that is a link to nothing refuses', () => {
     const f = fixture('stale-root');
-    rmSync(join(f.base, 'teamcli'), { recursive: true, force: true });
+    const missing = join(f.base, 'teamcli');
+    rmSync(missing, { recursive: true, force: true });
+    // Not there at all: no folder below it can hold the key, so the placement passes it over.
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+    expect(staleRegistryRoots(f.home)).toEqual([
+      `the team registry records team "teamcli" (${OTHER_TEAM_ID}) at ${missing}, which is not there: a client key's placement passes it over; restore the folder, or remove the stale entry with \`team forget ${OTHER_TEAM_ID}\``,
+    ]);
+    // A link to nothing may lead anywhere: refused, naming the entry and its repair.
+    symlinkSync(join(f.base, 'nowhere'), missing);
     const said = clientKeyPlacementProblem(f.home, f.keyDir);
-    expect(said).toContain(`the team registry records team "teamcli" (${OTHER_TEAM_ID}) at ${join(f.base, 'teamcli')}, which does not resolve`);
+    expect(said).toContain(`the team registry records team "teamcli" (${OTHER_TEAM_ID}) at ${missing}, which cannot be read`);
     expect(said).toContain(`\`team forget ${OTHER_TEAM_ID}\``);
-    expect(staleRegistryRoots(f.home)).toHaveLength(1);
     expect(staleRegistryRoots(f.home)[0]).toContain('every client send on this machine is refused');
     // Restored, nothing is said.
-    mkdirSync(join(f.base, 'teamcli'));
+    rmSync(missing);
+    mkdirSync(missing);
     expect(staleRegistryRoots(f.home)).toEqual([]);
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
   });
 
   test('a registry root that is not absolute refuses', () => {

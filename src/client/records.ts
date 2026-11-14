@@ -500,7 +500,7 @@ export function startFolderProblems(root: string): string[] {
 
 /** The refusal for a registry entry whose root does not resolve, with its repair. */
 function staleRootRefusal(teamId: string, project: string, root: string): string {
-  return `the team registry records team "${project}" (${teamId}) at ${root}, which does not resolve: where its seats run cannot be checked, so client key placement cannot be checked; restore the folder, or remove the stale entry with \`team forget ${teamId}\``;
+  return `the team registry records team "${project}" (${teamId}) at ${root}, which cannot be read (a link to nothing, or an unreadable folder on the way): where its seats run cannot be checked, so client key placement cannot be checked; repair the folder, or remove the stale entry with \`team forget ${teamId}\``;
 }
 
 /**
@@ -524,7 +524,11 @@ export function staleRegistryRoots(home: string): string[] {
     try {
       realpathSync(team.root);
     } catch {
-      out.push(`${staleRootRefusal(teamId, team.project, team.root)}; until then every client send on this machine is refused`);
+      if (pathPresence(team.root).kind === 'absent') {
+        out.push(`the team registry records team "${team.project}" (${teamId}) at ${team.root}, which is not there: a client key's placement passes it over; restore the folder, or remove the stale entry with \`team forget ${teamId}\``);
+      } else {
+        out.push(`${staleRootRefusal(teamId, team.project, team.root)}; until then every client send on this machine is refused`);
+      }
     }
   }
   return out;
@@ -556,13 +560,24 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
     }
     // The team root as it is on disk, read once: every folder this decision derives from it — the
     // root itself, a recorded relative folder, a declared one — is read from this one path, never
-    // from the registry spelling, which a link could carry elsewhere. A root that does not
-    // resolve is a stale registry entry, and where its seats run cannot be told: refused.
+    // from the registry spelling, which a link could carry elsewhere.
     let realRoot: string;
     try {
       realRoot = realpathSync(team.root);
     } catch {
-      return staleRootRefusal(teamId, team.project, team.root);
+      // A root that is genuinely not there (its first missing part sits in a real folder that
+      // could be searched) holds no folder at all, so none of its seats' folders below it can
+      // hold the key folder being read: the team is passed over, its recorded lobbies still
+      // checked, and `team doctor` names the stale entry. A root that only cannot be read — a
+      // link to nothing, an unreadable folder on the way, a file where a folder must be — may
+      // lead anywhere, and refuses.
+      if (pathPresence(team.root).kind !== 'absent') return staleRootRefusal(teamId, team.project, team.root);
+      for (const lobby of Object.values(team.lobbies ?? {})) {
+        if (lobby && overlaps(canonical(lobby), target)) {
+          return `the key directory "${dir}" is inside a team lobby; a client key sits outside every lobby`;
+        }
+      }
+      continue;
     }
     const root = realRoot;
     const againstRoot = (relativePath: string): string => resolve(realRoot, relativePath);
