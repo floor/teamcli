@@ -228,11 +228,18 @@ function whatOf(action: string, words: readonly string[] | undefined): string {
               : null;
     return msg((key === null ? 'card.what.team-entity-config' : `card.what.team-entity-config.${key}`) as MessageId);
   }
+  if (action === 'team-owner-command') {
+    // The command's own name, and nothing else of its line: a value can be a path or a secret.
+    const command = words?.[0];
+    return typeof command === 'string' && /^[a-z][a-z-]{0,31}$/.test(command)
+      ? msg('card.what.team-owner-command.named', { command })
+      : msg('card.what.team-owner-command');
+  }
   return msg(`card.what.${action}` as MessageId);
 }
 
 /** The kinds whose answer changes something beyond the team's own running state. */
-const CHANGED: ReadonlySet<string> = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant']);
+const CHANGED: ReadonlySet<string> = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant', 'team-owner-command']);
 
 /** One owner-action request, as the owner reads it before answering. */
 export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by' | 'requesters' | 'reason' | 'words' | 'machine' | 'account'>): ApprovalCard {

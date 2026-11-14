@@ -151,7 +151,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
 const GENERAL_DENIED_OPTIONS: Readonly<Record<string, readonly string[]>> = { drops: ['id'] };
 
 /** What one command line carries once it is read the way its own parser reads it. */
-type Scan = {
+export type Scan = {
   /** The options written without a value. */
   flags: Set<string>;
   /** How many times each option is written, in either spelling (`--name v` and `--name=v`). */
@@ -162,7 +162,7 @@ type Scan = {
 
 /** Read the words as `readArgs` does: a valued option consumes the next word, whatever it spells;
  *  an option without a value is a flag. */
-function scan(argv: readonly string[], valued: readonly string[] | undefined): Scan {
+export function scan(argv: readonly string[], valued: readonly string[] | undefined): Scan {
   const flags = new Set<string>();
   const counts: Record<string, number> = {};
   const equal = new Set<string>();
@@ -185,7 +185,7 @@ function scan(argv: readonly string[], valued: readonly string[] | undefined): S
  * grouped verb to the top-level command (src/commands/seat.ts), moving the options it shares
  * ahead of the verb; the op is then the dispatched command's.
  */
-function dispatchedCommand(name: string, rest: readonly string[]): { command: string; words: string[] } {
+export function dispatchedCommand(name: string, rest: readonly string[]): { command: string; words: string[] } {
   if (name !== 'seat') return { command: name, words: [...rest] };
   const ahead: string[] = [];
   let index = 0;
