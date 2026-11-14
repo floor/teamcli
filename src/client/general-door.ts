@@ -106,7 +106,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   migrate: ['approval', 'reason'],
   next: [],
   order: ['file', 'session'],
-  'owner-seat': ['days', 'entity', 'from', 'grant-emission', 'name', 'out', 'owner-signers', 'policy-entity', 'port', 'reason', 'signer', 'team'],
+  'owner-seat': ['account', 'days', 'entity', 'from', 'grant-emission', 'name', 'out', 'owner-signers', 'policy-entity', 'port', 'reason', 'signer', 'team'],
   pause: ['client', 'reason', 'seat', 'team'],
   peek: ['lines'],
   plan: [],
