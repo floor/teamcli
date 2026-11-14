@@ -24,10 +24,10 @@ const ROOT = '/synthetic/repo';
 const WORDS = ['set', 'seats.lead', '{"role":"builder","cli":"fake"}'];
 
 /** The first word of every title: an action verb, in plain words. */
-const VERBS = ['Add', 'Approve', 'Change', 'Create', 'Forget', 'Import', 'Issue', 'Migrate', 'Revoke', 'Send', 'Set', 'Start', 'Stop', 'Turn', 'Use'];
+const VERBS = ['Add', 'Approve', 'Change', 'Create', 'Forget', 'Import', 'Install', 'Issue', 'Migrate', 'Remove', 'Restart', 'Revoke', 'Run', 'Send', 'Set', 'Start', 'Stop', 'Test', 'Turn', 'Use'];
 
 /** The kinds whose answer changes more than the team's own running state. */
-const CHANGING = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant']);
+const CHANGING = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant', 'team-owner-command']);
 
 /** What no card line may ever carry, and the words for why it is refused. */
 const BANNED: ReadonlyArray<readonly [RegExp | string, string]> = [
@@ -86,6 +86,12 @@ describe('the approval card', () => {
       if (action === 'development-mode') {
         // The one switch that is the machine's, not a team's: fixed words, no team.
         expect(scope).toBe('This Mac · all teams');
+      } else if (action === 'team-daemon') {
+        // The machine daemon is the machine's too, and names no team.
+        expect(scope).toBe('This machine · the machine daemon');
+      } else if (action === 'team-entity-config') {
+        // An entity's record is the entity's, not a team's.
+        expect(scope).toBe('Entity demo · changes its record');
       } else {
         expect(scope.startsWith('Team demo · '), `${action}: ${scope}`).toBe(true);
         expect(scope === 'Team demo · no permission change', `${action}: ${scope}`).toBe(!CHANGING.has(action));

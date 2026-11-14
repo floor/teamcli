@@ -102,6 +102,13 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // `development-mode set`'s own invocation refusal: a switch is applied by `--request` or by an
   // answered `--approval`, and `--show` only prints what it would change. It names the flags.
   { literal: /^--request and --approval apply a switch, and --show only prints what it would change: pass one$/, why: "development-mode's refusal to combine a switch's flags with --show: the flags' own names" },
+  // A carried batch: each recorded answer's line names the --approval that runs its command.
+  { literal: /^ {2}\$\{one\.id\}: \$\{one\.choice\} by \$\{one\.signer\}; run its command again with --approval \$\{one\.id\}\\n$/, why: "approvals answer, for each request of a batch: names the owner-seat door's --approval flag that runs it" },
+  // The daemon's owner-seat door: its options belong to the owner-gated verbs, and never to the chores child.
+  { literal: /^--approval belongs to install, restart, uninstall or fault-watch$/, why: "daemon's invocation refusal: the owner-seat door's --approval flag belongs to the owner-gated verbs" },
+  { literal: /^chores takes no --approval or --reason$/, why: "daemon's chores child takes none of the owner-seat door's options" },
+  // A pinned machine's setup: no charter there, and the refusal names the carried way instead.
+  { literal: /^this machine's owner seat is pinned from another machine, and it keeps no charter of its own; .* then run it with --approval <id>; nothing was written$/, why: "setup's refusal on a pinned machine names the owner-seat door's --approval flag" },
   { literal: /^team migrate: owner-seat approval \$\{(?:id|args\.values\.approval)\} \(signed by \$\{admitted\.signer\}\)\\n$/, why: "migrate names the owner-seat signature that admitted this record" },
   { literal: /^team migrate\$\{keepFile \? ' --keep-file' : ''\} --approval \$\{id\}$/, why: "migrate's replay line names the owner-seat door's --approval flag" },
   { literal: /^team migrate: owner-seat request \$\{id\} recorded; \$\{where\}\\n\$\{made\.text\}\\nwaiting for the signed approval\\n$/, why: "migrate shows the owner-seat card and waits for the signature" },

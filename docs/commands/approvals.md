@@ -133,7 +133,7 @@ Usage: team approvals list [--json]
        team approvals revoke <id...> [--json]
        team approvals revoke <id...> --request [--reason <text>] [--json]
        team approvals revoke <id...> --approval <request-id> [--json]
-       team approvals export <id> --out <file> [--json]
+       team approvals export <id...> --out <file> [--json]
        team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
        team approvals answer --from <file> [--json]
 

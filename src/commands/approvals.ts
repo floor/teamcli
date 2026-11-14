@@ -312,7 +312,8 @@ function signBatch(io: Io, json: boolean, home: string, now: Date, store: OwnerS
   if (!written.ok) return refused(io, json, written.why);
   const prompts = signed.prompts > 1 ? `note: the credential helper predates signing several answers at once, so each was signed with its own Touch ID; rebuild it to sign a batch with one\n` : '';
   if (json) io.stdout(`${JSON.stringify({ format: 1, status: 'answered', request_ids: ids, machine, answers: signed.answered.map((one) => ({ request_id: one.id, choice: one.choice, signer: one.signer })), prompts: signed.prompts, file: written.path, stale_pin: signed.stalePin })}\n`);
-  else io.stdout(`team approvals: ${ids.length} requests for machine ${machine.name} answered (${signed.answered.map((one) => `${one.id} ${one.choice}`).join(', ')}); answers written to ${written.path}\non machine ${machine.name} run: team approvals answer --from <file>\n${prompts}${stale}`);
+  const choices = signed.answered.map((one) => `${one.id} ${one.choice}`).join(', ');
+  if (!json) io.stdout(`team approvals: ${ids.length} requests for machine ${machine.name} answered (${choices}); answers written to ${written.path}\non machine ${machine.name} run: team approvals answer --from <file>\n${prompts}${stale}`);
   // exit: approvals.signed
   return 0;
 }

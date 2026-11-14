@@ -1091,25 +1091,33 @@ describe('inherited entity-wide and project-wide rules', () => {
     expect(badProjAtIo.err).toContain('"@composed" is not an entity name');
   });
 
-  test('11. rules paths refuse --request and --approval, and a wildcard general grant still writes them', async () => {
-    writeEntitiesYaml(['entities:', '  acme-corp:', '    name: Acme Corp', ''].join('\n'));
-    writeProjectsYaml(['projects:', '  beacon:', '    name: Beacon', ''].join('\n'));
+  test('11. rules paths take the owner-seat door (--request records and writes nothing, an unanswered --approval writes nothing), and a wildcard general grant still writes them', async () => {
+    const entities = ['entities:', '  acme-corp:', '    name: Acme Corp', ''].join('\n');
+    const projects = ['projects:', '  beacon:', '    name: Beacon', ''].join('\n');
+    writeEntitiesYaml(entities);
+    writeProjectsYaml(projects);
+    const entitiesFile = join(home, '.config', 'team', 'entities.yaml');
+    const projectsFile = join(home, '.config', 'team', 'projects.yaml');
 
+    // A request records a card for the owner seat and changes neither file.
     const entityRequest = testIo(teamRoot, { kind: 'owner' });
-    expect(await runConfig(['set', 'acme-corp.rules', '[ "one" ]', '--request'], entityRequest, { home })).toBe(2);
-    expect(entityRequest.err).toContain('take no --request or --approval');
+    expect(await runConfig(['set', 'acme-corp.rules', '[ "one" ]', '--request'], entityRequest, { home }), entityRequest.err).toBe(0);
+    expect(entityRequest.out).toContain('owner-seat request oa_');
+    expect(readFileSync(entitiesFile, 'utf8')).toBe(entities);
 
+    // An approval that names no answered request is refused and writes nothing.
     const entityApproval = testIo(teamRoot, { kind: 'owner' });
-    expect(await runConfig(['set', 'acme-corp.rules', '[ "one" ]', '--approval', 'oa_missing'], entityApproval, { home })).toBe(2);
-    expect(entityApproval.err).toContain('take no --request or --approval');
+    expect(await runConfig(['set', 'acme-corp.rules', '[ "one" ]', '--approval', 'oa_missing'], entityApproval, { home })).toBe(1);
+    expect(entityApproval.err).toContain('is not an owner-seat request id');
+    expect(readFileSync(entitiesFile, 'utf8')).toBe(entities);
 
     const projectRequest = testIo(teamRoot, { kind: 'owner' });
-    expect(await runConfig(['set', 'project.beacon.rules', '[ "one" ]', '--request'], projectRequest, { home })).toBe(2);
-    expect(projectRequest.err).toContain("a project's rules take no --request or --approval");
+    expect(await runConfig(['set', 'project.beacon.rules', '[ "one" ]', '--request'], projectRequest, { home }), projectRequest.err).toBe(0);
+    expect(readFileSync(projectsFile, 'utf8')).toBe(projects);
 
     const projectApproval = testIo(teamRoot, { kind: 'owner' });
-    expect(await runConfig(['set', 'project.beacon.rules', '[ "one" ]', '--approval', 'oa_missing'], projectApproval, { home })).toBe(2);
-    expect(projectApproval.err).toContain("a project's rules take no --request or --approval");
+    expect(await runConfig(['set', 'project.beacon.rules', '[ "one" ]', '--approval', 'oa_missing'], projectApproval, { home })).toBe(1);
+    expect(readFileSync(projectsFile, 'utf8')).toBe(projects);
 
     // The door the refusal names: a wildcard general grant admitting config writes the same path.
     const base = fixtureBase('.inherited-rules-grant-');

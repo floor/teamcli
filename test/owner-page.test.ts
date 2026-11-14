@@ -281,6 +281,9 @@ describe('owner page', () => {
       'team-config': "Change the team's record",
       'team-general-grant': 'Issue a general grant',
       'development-mode': 'Set the development mode',
+      'team-entity-config': "Change an entity's record",
+      'team-daemon': 'Change the machine daemon',
+      'team-owner-command': 'Run an owner-only command',
     };
     for (const action of OWNER_ACTIONS) {
       const card = ownerPageRequest({
