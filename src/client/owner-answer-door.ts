@@ -17,7 +17,8 @@
 //
 // Left to the command itself: a command whose own parser reads `--approval`, `--request` or
 // `--reason` (the lifecycle commands, `config`, `daemon`, `development-mode`, `client`, `init`,
-// `grant`; `migrate --root` is the door's, as its parser takes none of them), and two the owner's answer never stands in for: `owner-seat`, whose first pin is
+// `grant --client`; `migrate --root` and every other form of `grant` are the door's, as their
+// parsers take none of them), and two the owner's answer never stands in for: `owner-seat`, whose first pin is
 // trust on first use and whose later pins are signed exports, and `setup`, since a pinned machine
 // keeps no charter. On a machine with its own owner seat the door is closed: every line passes.
 
@@ -27,7 +28,7 @@ import { dispatchedCommand, VALUED } from './general-door.ts';
 import { ownerMachinePinned } from './owner-pin-path.ts';
 
 /** Commands whose own line reads the owner-seat options, or that the owner's answer never admits. */
-const ANSWER_OWN = new Set(['init', 'grant', 'owner-seat', 'setup', 'batch']);
+const ANSWER_OWN = new Set(['init', 'owner-seat', 'setup', 'batch']);
 
 export type AnswerDoor =
   | { kind: 'pass' }
@@ -41,6 +42,9 @@ function doorCommand(name: string, rest: readonly string[]): boolean {
   // `team migrate --root` is its own step, whose parser refuses every owner-seat option the
   // import step reads: the door is the way its write runs here.
   if (name === 'migrate' && rest.includes('--root')) return true;
+  // `team grant` reads `--request` only in its `--client` form, and never `--approval` or
+  // `--reason`: every other form of it is the door's.
+  if (name === 'grant') return !rest.some((word) => word === '--client' || word.startsWith('--client='));
   const { command } = dispatchedCommand(name, rest);
   for (const one of [name, command]) {
     if (ANSWER_OWN.has(one)) return false;

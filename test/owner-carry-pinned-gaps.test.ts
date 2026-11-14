@@ -571,9 +571,12 @@ describe('every other owner-only command on a pinned machine: the dispatcher doo
 
   test('a command that reads the options itself, and a machine with its own owner, pass the line untouched', async () => {
     const s = scene();
-    for (const name of ['config', 'daemon', 'import', 'init', 'grant', 'owner-seat', 'setup', 'batch', 'approvals']) {
+    for (const name of ['config', 'daemon', 'import', 'init', 'owner-seat', 'setup', 'batch', 'approvals']) {
       expect((await ownerAnswerDoor(name, ['x', '--request'], pinnedIo(s), NOW)).kind).toBe('pass');
     }
+    // grant's own --request is its --client form's; every other grant line is the door's.
+    expect((await ownerAnswerDoor('grant', ['--client', 'app', '--request'], pinnedIo(s), NOW)).kind).toBe('pass');
+    expect((await ownerAnswerDoor('grant', ['--scope', 'acme', '--request'], pinnedIo(s), NOW)).kind).toBe('requested');
     // `migrate --root` takes none of the options itself, so the door reads them there.
     const root = pinnedIo(s);
     expect((await ownerAnswerDoor('migrate', ['--root', '--request'], root, NOW)).kind).toBe('requested');
