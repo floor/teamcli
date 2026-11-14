@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PINNED_TERMINAL_REASON, type Caller } from '../src/caller.ts';
 import { createOwnerActionRequest, ownerActionHash, type OwnerActionParams } from '../src/client/owner-action.ts';
-import { machineFile, ownerPinPresent, ownerSeatPinFile } from '../src/client/owner-pin-path.ts';
+import { machineFile, ownerMachinePinned, ownerSeatPinFile } from '../src/client/owner-pin-path.ts';
 import {
   exportOwnerSeat,
   fingerprintText,
@@ -165,7 +165,7 @@ describe('export and pin', () => {
       const io = testIo(server, caller);
       expect(await runOwnerSeat(['pin', '--from', out], io, { home: server, now: () => NOW })).toBe(1);
       expect(io.err).toContain("the first pin is the owner's");
-      expect(ownerPinPresent(server)).toBe(false);
+      expect(ownerMachinePinned(server)).toBe(false);
       expect(existsSync(machineFile(server))).toBe(false);
     }
   });
@@ -188,7 +188,7 @@ describe('export and pin', () => {
       expect(verifyOwnerSeatExport(copy).ok).toBe(false);
       const server = tempHome('tamper-server');
       expect(pinOwnerSeat(server, copy, NOW).ok).toBe(false);
-      expect(ownerPinPresent(server)).toBe(false);
+      expect(ownerMachinePinned(server)).toBe(false);
     }
   });
 
@@ -274,7 +274,7 @@ describe('export and pin', () => {
     for (const text of ['not json', JSON.stringify({ ...JSON.parse(good), fingerprint: 'f'.repeat(64) }), '{}']) {
       writeFileSync(ownerSeatPinFile(server), text);
       expect(readOwnerPin(server).kind).toBe('refused');
-      expect(ownerPinPresent(server)).toBe(true);
+      expect(ownerMachinePinned(server)).toBe(true);
       const again = pinOwnerSeat(server, exported(mac), NOW);
       expect(again.ok).toBe(false);
     }
@@ -282,12 +282,20 @@ describe('export and pin', () => {
     rmSync(ownerSeatPinFile(server));
     symlinkSync(join(server, 'elsewhere.json'), ownerSeatPinFile(server));
     expect(readOwnerPin(server).kind).toBe('refused');
-    expect(ownerPinPresent(server)).toBe(true);
+    expect(ownerMachinePinned(server)).toBe(true);
+    // The pin removed outright: the machine record beside it says the machine was pinned, so the
+    // machine stays pinned, refuses every answer, and is never pinned afresh by this command.
+    rmSync(ownerSeatPinFile(server));
+    const missing = readOwnerPin(server);
+    expect(missing.kind).toBe('refused');
+    if (missing.kind === 'refused') expect(missing.why).toContain('missing');
+    expect(ownerMachinePinned(server)).toBe(true);
+    expect(pinOwnerSeat(server, exported(mac), NOW).ok).toBe(false);
   });
 });
 
 describe('requests name the pinned machine; a local owner\'s requests are unchanged', () => {
-  test('a request on a pinned machine names it, inside the signed hash; one on a local machine names none and hashes as before', () => {
+  test('a request on a pinned machine names it, inside the signed hash; one on a local machine names none, and its window is signed too', () => {
     const mac = signerMachine('names');
     const server = tempHome('names-server');
     const pinned = pinOwnerSeat(server, exported(mac), NOW);
@@ -305,14 +313,20 @@ describe('requests name the pinned machine; a local owner\'s requests are unchan
     const onMac = createOwnerActionRequest(mac.home, { ...input, root: join(mac.home, 'repo'), actions: [...input.actions] }, NOW);
     if (!onMac.ok) throw new Error(onMac.why);
     expect(onMac.record.params.machine).toBeUndefined();
-    // The hash a local request had before machines existed: the same fields, in the same order.
+    // The hash a local request had before machines existed, plus its signed window, last.
     const p = onMac.record.params;
+    expect(p.window).toEqual({ created: onMac.record.created, expires_at: onMac.record.expires_at });
     const words: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
     words['team-up'] = [];
     const args: Record<string, string> = Object.create(null) as Record<string, string>;
     args['team-up'] = p.args['team-up']!;
-    const before = createHash('sha256').update(JSON.stringify({ kind: p.kind, actions: [...p.actions], root: p.root, team: p.team, head: p.head, args, requested_by: p.requested_by, words }), 'utf8').digest('hex');
-    expect(onMac.record.params_sha256).toBe(before);
+    const fields = { kind: p.kind, actions: [...p.actions], root: p.root, team: p.team, head: p.head, args, requested_by: p.requested_by, words };
+    const signed = createHash('sha256').update(JSON.stringify({ ...fields, window: { created: onMac.record.created, expires_at: onMac.record.expires_at } }), 'utf8').digest('hex');
+    expect(onMac.record.params_sha256).toBe(signed);
+    // A record written before the window existed hashes exactly as it did then.
+    const legacy: OwnerActionParams = { ...p };
+    delete legacy.window;
+    expect(ownerActionHash(legacy)).toBe(createHash('sha256').update(JSON.stringify(fields), 'utf8').digest('hex'));
     expect(requestMachineProblem(mac.home, undefined, onMac.record.request_id)).toBeNull();
     expect(requestMachineProblem(mac.home, onServer.record.params.machine, onServer.record.request_id)).toContain('runs only there');
   });

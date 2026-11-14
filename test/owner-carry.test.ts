@@ -12,8 +12,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PINNED_TERMINAL_REASON, type Caller } from '../src/caller.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
-import { admitOwnerAction, approveOwnerAction, createOwnerActionRequest, ownerActionHash, readOwnerActionRecord, type OwnerActionRecord } from '../src/client/owner-action.ts';
+import { actionArgsHash, admitOwnerAction, approveOwnerAction, createOwnerActionRequest, ownerActionHash, readOwnerActionRecord, type OwnerActionParams, type OwnerActionRecord } from '../src/client/owner-action.ts';
 import type { OwnerAnswerFile, OwnerRequestFile } from '../src/client/owner-carry.ts';
+import { generalDoor, PINNED_GENERAL_REFUSAL } from '../src/client/general-door.ts';
+import { readGeneralGrant } from '../src/client/general-grant.ts';
+import { ownerAuthorized } from '../src/approve/owner-token.ts';
+import { runDevelopmentMode } from '../src/commands/development-mode.ts';
+import { readDevelopmentMode } from '../src/development_mode.ts';
+import { ownerSeatPinFile } from '../src/client/owner-pin-path.ts';
 import { exportOwnerSeat, pinOwnerSeat, type SignedOwnerSeatExport } from '../src/client/owner-pin.ts';
 import { ownerSeatInbox, registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { actionApprovalsFolder, actionRequestsFolder } from '../src/client/team-create.ts';
@@ -430,5 +436,198 @@ describe('refusals', () => {
     const io = testIo(s.mac.home);
     expect(await runApprovals(['sign', '--from', request.path, '--out', taken, '--answer', 'oui'], io, { home: s.mac.home, now: () => NOW, ownerSeatStore: s.mac.store })).toBe(1);
     expect(readFileSync(taken, 'utf8')).toBe('keep\n');
+  });
+});
+
+describe('the signed window (review finding 5)', () => {
+  test('a changed expiry or creation is refused when the answer is recorded and when it runs', async () => {
+    const s = await scene();
+    const request = await exportRequest(s);
+    const signed = await sign(s, request.path, 'oui');
+    expect(signed.code, signed.io.err).toBe(0);
+    const path = join(actionRequestsFolder(s.server.home), `${s.id}.json`);
+    const original = readFileSync(path, 'utf8');
+    const record = JSON.parse(original) as OwnerActionRecord;
+    expect(record.params.window).toEqual({ created: record.created, expires_at: record.expires_at });
+    // The record's own expiry moved to never, the signed window left as it was.
+    writeFileSync(path, JSON.stringify({ ...record, expires_at: null }));
+    const moved = await answer(s.server.home, s.server.root, signed.path);
+    expect(moved.code).toBe(1);
+    expect(moved.io.err).toContain('not the one it was signed with');
+    // Both moved, the hash recomputed: never-expiring is refused, and so is a longer window.
+    const widened: OwnerActionRecord = { ...record, expires_at: null, params: { ...record.params, window: { created: record.created, expires_at: null } } };
+    widened.params_sha256 = ownerActionHash(widened.params);
+    writeFileSync(path, JSON.stringify(widened));
+    expect((await answer(s.server.home, s.server.root, signed.path)).code).toBe(1);
+    const later = LATER(60 * 60_000).toISOString();
+    const stretched: OwnerActionRecord = { ...record, expires_at: later, params: { ...record.params, window: { created: record.created, expires_at: later } } };
+    stretched.params_sha256 = ownerActionHash(stretched.params);
+    writeFileSync(path, JSON.stringify(stretched));
+    const longer = await answer(s.server.home, s.server.root, signed.path);
+    expect(longer.code).toBe(1);
+    expect(longer.io.err).toContain('longer than');
+    // The true record takes the answer; a window moved after that is refused when it runs.
+    writeFileSync(path, original);
+    expect((await answer(s.server.home, s.server.root, signed.path)).code).toBe(0);
+    writeFileSync(path, JSON.stringify({ ...record, expires_at: later }));
+    const run = testIo(s.server.root, TERMINAL);
+    expect(await runImport(['--approval', s.id], run, { home: s.server.home, now: () => LATER(20 * 60_000) })).toBe(1);
+    expect(run.err + run.out).toContain('not the one it was signed with');
+    writeFileSync(path, original);
+    const late = testIo(s.server.root, TERMINAL);
+    expect(await runImport(['--approval', s.id], late, { home: s.server.home, now: () => LATER(20 * 60_000) })).toBe(1);
+    expect(late.err + late.out).toContain('expired');
+    expect(registered(s.server.home, s.server.root)).toBe(false);
+  });
+
+  test('a carried request longer than the default window is refused before its card is shown', async () => {
+    const s = await scene();
+    const request = await exportRequest(s);
+    const file = JSON.parse(readFileSync(request.path, 'utf8')) as OwnerRequestFile;
+    const later = LATER(60 * 60_000).toISOString();
+    file.request.expires_at = later;
+    file.request.params.window = { created: file.request.created, expires_at: later };
+    file.request.params_sha256 = ownerActionHash(file.request.params);
+    const longer = join(s.files, 'longer.json');
+    writeFileSync(longer, JSON.stringify(file));
+    const before = s.mac.store.reasons.length;
+    const refused = await sign(s, longer, 'oui');
+    expect(refused.code).toBe(1);
+    expect(refused.io.err).toContain('longer than');
+    expect(s.mac.store.reasons.length).toBe(before);
+    expect(existsSync(join(actionRequestsFolder(s.mac.home), `${s.id}.json`))).toBe(false);
+  });
+
+  test('a record from before the window: refused on a pinned machine, read as before on a machine with a local owner', async () => {
+    const s = await scene();
+    const path = join(actionRequestsFolder(s.server.home), `${s.id}.json`);
+    const record = JSON.parse(readFileSync(path, 'utf8')) as OwnerActionRecord;
+    const params: OwnerActionParams = { ...record.params };
+    delete params.window;
+    writeFileSync(path, JSON.stringify({ ...record, params, params_sha256: ownerActionHash(params) }));
+    const io = testIo(s.server.root, TERMINAL);
+    expect(await runApprovals(['export', s.id, '--out', join(s.files, 'old.json')], io, { home: s.server.home, now: () => NOW })).toBe(1);
+    expect(io.err).toContain('carries no signed answer window');
+
+    // On the signer machine, a request recorded before the window existed answers and runs as before.
+    const root = join(s.mac.home, 'repo');
+    const made = createOwnerActionRequest(s.mac.home, { actions: ['team-up'], root, team: 'floor', head: null, args: { 'team-up': [] }, requestedBy: 'probe' }, NOW);
+    if (!made.ok) throw new Error(made.why);
+    const localPath = join(actionRequestsFolder(s.mac.home), `${made.record.request_id}.json`);
+    const localParams: OwnerActionParams = { ...made.record.params };
+    delete localParams.window;
+    writeFileSync(localPath, JSON.stringify({ ...made.record, params: localParams, params_sha256: ownerActionHash(localParams) }));
+    expect(approveOwnerAction(s.mac.home, made.record.request_id, 'oui', s.mac.store, NOW)).toMatchObject({ ok: true, choice: 'once' });
+    expect(admitOwnerAction(s.mac.home, made.record.request_id, { action: 'team-up', root, team: 'floor', head: null, words: [], claim: true }, s.mac.store, LATER(60_000))).toMatchObject({ ok: true, via: 'owner-seat' });
+  });
+});
+
+describe('the words a card shows are the words it admits (review finding 8)', () => {
+  test('a carried request whose argument hash is not the hash of its words, or that carries no words, is refused before any card', async () => {
+    const s = await scene();
+    const request = await exportRequest(s);
+    const file = JSON.parse(readFileSync(request.path, 'utf8')) as OwnerRequestFile;
+    const before = s.mac.store.reasons.length;
+    // Shows one argument list, admits another (the empty one the server will run), hash recomputed.
+    const shown = JSON.parse(JSON.stringify(file)) as OwnerRequestFile;
+    shown.request.params.words = { 'team-import': ['--file', 'shown.yaml'] };
+    shown.request.params_sha256 = ownerActionHash(shown.request.params);
+    const shownPath = join(s.files, 'shown.json');
+    writeFileSync(shownPath, JSON.stringify(shown));
+    const mismatch = await sign(s, shownPath, 'oui');
+    expect(mismatch.code).toBe(1);
+    expect(mismatch.io.err).toContain('are not the words it shows');
+    // No words at all, hash recomputed.
+    const bare = JSON.parse(JSON.stringify(file)) as OwnerRequestFile;
+    delete bare.request.params.words;
+    bare.request.params_sha256 = ownerActionHash(bare.request.params);
+    const barePath = join(s.files, 'bare.json');
+    writeFileSync(barePath, JSON.stringify(bare));
+    const wordless = await sign(s, barePath, 'oui');
+    expect(wordless.code).toBe(1);
+    expect(wordless.io.err).toContain('carries no argument words');
+    expect(s.mac.store.reasons.length).toBe(before);
+    expect(existsSync(join(actionRequestsFolder(s.mac.home), `${s.id}.json`))).toBe(false);
+    // The same forgery written into the pinned machine's own record is refused where it runs.
+    writeFileSync(join(actionRequestsFolder(s.server.home), `${s.id}.json`), JSON.stringify(shown.request));
+    const run = testIo(s.server.root, TERMINAL);
+    expect(await runImport(['--approval', s.id], run, { home: s.server.home, now: () => NOW })).toBe(1);
+    expect(run.err + run.out).toContain('are not the words it shows');
+  });
+
+  test('the same gap on a machine with a local owner: a record showing "set off" while admitting "set local-fast" is never signed or run', () => {
+    const mac = signerMachine();
+    const root = join(mac.home, 'repo');
+    const made = createOwnerActionRequest(mac.home, { actions: ['development-mode'], root, team: 'floor', head: null, args: { 'development-mode': ['set', 'off'] }, requestedBy: 'probe' }, NOW);
+    if (!made.ok) throw new Error(made.why);
+    const path = join(actionRequestsFolder(mac.home), `${made.record.request_id}.json`);
+    const forged: OwnerActionRecord = JSON.parse(JSON.stringify(made.record));
+    forged.params.args['development-mode'] = actionArgsHash('development-mode', ['set', 'local-fast']);
+    forged.params_sha256 = ownerActionHash(forged.params);
+    writeFileSync(path, JSON.stringify(forged));
+    const before = mac.store.reasons.length;
+    const answered = approveOwnerAction(mac.home, made.record.request_id, 'oui', mac.store, NOW);
+    expect(answered.ok).toBe(false);
+    if (!answered.ok) expect(answered.why).toContain('are not the words it shows');
+    expect(mac.store.reasons.length).toBe(before);
+    expect(admitOwnerAction(mac.home, made.record.request_id, { action: 'development-mode', root, team: 'floor', head: null, words: ['set', 'local-fast'], claim: true }, mac.store, NOW).ok).toBe(false);
+  });
+});
+
+describe('owner elevations a pinned machine refuses (review findings 3 and 4)', () => {
+  test('the general door refuses any line that carries a grant, and no grant verifies there', async () => {
+    const s = await scene();
+    const io = testIo(s.server.root);
+    io.env = { HOME: s.server.home };
+    const lines: Array<[string, string[]]> = [
+      ['policy', ['set', 'x', 'y', '--general', 'g.json', '--key', 'k.key']],
+      ['status', ['--general', 'g.json', '--key', 'k.key']],
+      ['up', ['--general', 'g.json']],
+      ['config', ['set', 'a', 'b', '--general', 'g.json']],
+    ];
+    for (const [name, rest] of lines) {
+      const door = generalDoor(name, [...rest], io);
+      expect(door.kind, name).toBe('refused');
+      if (door.kind === 'refused') expect(door.why).toBe(PINNED_GENERAL_REFUSAL);
+    }
+    const read = readGeneralGrant(s.server.home, join(s.files, 'none.json'));
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.why).toContain('does not stand in for the owner');
+    // A machine with a local owner keeps its door: the same line is judged on the grant itself.
+    const local = testIo(s.mac.home);
+    local.env = { HOME: s.mac.home };
+    const door = generalDoor('status', ['--general', join(s.files, 'none.json'), '--key', 'k.key'], local);
+    expect(door.kind === 'refused' ? door.why : '').not.toBe(PINNED_GENERAL_REFUSAL);
+  });
+
+  test('the owner-authorization fingerprint admits nothing on a pinned machine', async () => {
+    const home = join(tempBase('token'), 'home');
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    keyOf(home);
+    const show = testIo(home);
+    expect(await runDevelopmentMode(['set', 'local-fast', '--show'], show, { home })).toBe(0);
+    const fingerprint = /Owner-authorization fingerprint: ([0-9a-f]+)/.exec(show.out)?.[1];
+    if (fingerprint === undefined) throw new Error(show.out);
+    expect(ownerAuthorized({ TEAM_OWNER_APPROVAL: fingerprint }, fingerprint, home)).toBe(true);
+    writeFileSync(ownerSeatPinFile(home), 'pinned');
+    expect(ownerAuthorized({ TEAM_OWNER_APPROVAL: fingerprint }, fingerprint, home)).toBe(false);
+    const token = testIo(home);
+    token.env = { TEAM_OWNER_APPROVAL: fingerprint };
+    expect(await runDevelopmentMode(['set', 'local-fast'], token, { home, now: NOW })).toBe(1);
+    expect(token.err).toContain('only the owner switches the machine development mode');
+    expect(readDevelopmentMode(home).kind).not.toBe('set');
+  });
+});
+
+describe('the ledger spends a carried approval (where the account split will move it)', () => {
+  test('the run is spent in the ledger the resolver names, not beside the request', async () => {
+    const s = await scene();
+    const request = await exportRequest(s);
+    const signed = await sign(s, request.path, 'oui');
+    expect((await answer(s.server.home, s.server.root, signed.path)).code).toBe(0);
+    const run = testIo(s.server.root, TERMINAL);
+    expect(await runImport(['--approval', s.id], run, { home: s.server.home, now: () => LATER(60_000) }), run.err).toBe(0);
+    expect(existsSync(join(s.server.home, '.config', 'team', 'owner-ledger', `${s.id}.team-import`))).toBe(true);
+    expect(readdirSync(actionRequestsFolder(s.server.home)).some((name) => name.startsWith(`${s.id}.used-`))).toBe(false);
   });
 });

@@ -23,6 +23,7 @@
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Io } from '../io.ts';
+import { ownerMachinePinned } from './owner-pin-path.ts';
 import { FLAG_OPS, GENERAL_REFUSED_COMMANDS, grantCoversOp, grantIsWildcard, grantKeyMatches, readGeneralGrant, VERB_OPS, type GeneralGrant, type GeneralOp } from './general-grant.ts';
 
 /** Commands that parse `--general` themselves. */
@@ -312,8 +313,18 @@ function ownGeneral(name: string, rest: string[], io: Io, now: Date): Door | nul
   return { kind: 'pass', argv: rest, io };
 }
 
+/** The refusal on a machine whose owner seat is pinned: a grant is signed with this account's own
+ *  key, which any process of the account can read, so it never stands in for the owner there. */
+export const PINNED_GENERAL_REFUSAL = "this machine's owner signs on another machine, and a general grant does not stand in for the owner here; the command runs on the owner's signed answer (--request, then --approval)";
+
 /** The door's verdict for `team <name> <rest>`. Without `--general` it passes the line untouched. */
 export function generalDoor(name: string, rest: string[], io: Io, now: Date = new Date()): Door {
+  // Before anything else is read, for every command, its own door's commands included: on a
+  // pinned machine a line that carries a grant is refused.
+  if (take(rest, 'general').present && ownerMachinePinned(io.env.HOME ?? homedir())) {
+    const json = rest.includes('--json') || rest.some((word) => word.startsWith('--json='));
+    return { kind: 'refused', why: PINNED_GENERAL_REFUSAL, json };
+  }
   if (OWN_GENERAL.has(name)) return ownGeneral(name, rest, io, now) ?? { kind: 'pass', argv: rest, io };
   const general = take(rest, 'general');
   if (!general.present) return { kind: 'pass', argv: rest, io };

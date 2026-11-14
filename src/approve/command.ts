@@ -417,7 +417,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   // write — with the provenance on the log line. A token for any other change never matches.
   // A foreign `--file` was not loaded, so the token is the default file's only. A token for
   // some other file does not sign this one, and does not open the path the seat named.
-  tokenAuthorized = !isOwner(caller) && !foreignFile && ownerAuthorized(io.env, approveFp);
+  tokenAuthorized = !isOwner(caller) && !foreignFile && ownerAuthorized(io.env, approveFp, sources.home);
   // The approved delegate's pane, when this is a delegated approval: the gate passed it, and
   // the run goes on through the same key guards and the same write the owner's run uses.
   // Absent, this is the owner's run, or the granted seat's.

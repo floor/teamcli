@@ -2572,7 +2572,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     grantedSeat === null &&
     grantRefusal === null &&
     upFp !== undefined &&
-    ownerAuthorized(io.env, upFp);
+    ownerAuthorized(io.env, upFp, sources.home);
   // A verified owner-seat answer for this run, or a signed always rule asked only where every
   // other door refused.
   const ownerSeat = seatApproved || (

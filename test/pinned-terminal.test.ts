@@ -1,15 +1,15 @@
 // A terminal on a machine whose owner seat is pinned from another machine is not the owner, in any
-// mode: the placement reads it as unplaced, dev mode lifts nothing for it, and an owner-only
-// command refuses it. A machine with a local owner (macOS with its own signer today) places the
-// terminal as the owner, exactly as before. Process sources are fakes; homes are temporary; no
-// terminal host is started.
+// mode: the placement reads it as unplaced, dev mode lifts nothing on that machine for any caller,
+// and an owner-only command refuses it. A machine with a local owner places the terminal as the
+// owner, exactly as before. Process sources are fakes; homes are temporary (the suite's preload
+// keeps each scene's owner state in the home it passes); no terminal host is started.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isPinnedTerminal, PINNED_TERMINAL_REASON, placeCaller, walkCaller, type Caller, type CallerSources } from '../src/caller.ts';
-import { ownerPinPresent, ownerSeatPinFile } from '../src/client/owner-pin-path.ts';
+import { machineFile, ownerMachinePinned, ownerSeatPinFile, ownerStateOf } from '../src/client/owner-pin-path.ts';
 import { runInit } from '../src/commands/init.ts';
 import { devModeState, resolveDevMode } from '../src/dev_mode.ts';
 import { testIo } from './helpers.ts';
@@ -28,7 +28,13 @@ function tempHome(label: string): string {
   return home;
 }
 
-const OWNER: Caller = { kind: 'owner' };
+/** A home whose machine counts as pinned: something stands at the pin's path. */
+function pinnedHome(label: string): string {
+  const home = tempHome(label);
+  writeFileSync(ownerSeatPinFile(home), 'pinned');
+  return home;
+}
+
 const LEAD: Caller = { kind: 'seat', name: 'lead', pane: 'p1', session: 'acme' };
 const PINNED: Caller = { kind: 'unplaced', reason: PINNED_TERMINAL_REASON, pinned: true };
 
@@ -68,45 +74,74 @@ describe('a terminal on a pinned machine is not the owner', () => {
     }
   });
 
-  test('dev mode lifts nothing for the pinned terminal; a placed seat and a local owner keep it', () => {
+  test('dev mode lifts nothing on a pinned machine, decided by the machine and not the caller', () => {
     const env = { TEAMCLI_DEV_MODE: '1' };
-    const pinnedRun = resolveDevMode('init', { env, stdinIsTTY: true, caller: PINNED });
-    expect(pinnedRun.on).toBe(false);
-    expect(pinnedRun.pinnedTerminal).toBe(true);
-    expect(devModeState({ env, stdinIsTTY: true, caller: PINNED }).on).toBe(false);
-    // The pinned terminal placed by its own sources, not handed in: the same answer.
-    expect(resolveDevMode('up', { env, stdinIsTTY: true, callerSources: () => terminalSources({ ownerSignsElsewhere: () => true }) }).on).toBe(false);
-    expect(resolveDevMode('init', { env, stdinIsTTY: true, caller: LEAD }).on).toBe(true);
-    expect(resolveDevMode('init', { env, stdinIsTTY: true, caller: OWNER }).on).toBe(true);
-    expect(resolveDevMode('up', { env, stdinIsTTY: true, callerSources: () => terminalSources() }).on).toBe(true);
-    expect(devModeState({ env, stdinIsTTY: true, caller: LEAD }).on).toBe(true);
+    const pinned = pinnedHome('dev');
+    const local = tempHome('dev-local');
+    for (const command of ['init', 'up', 'add', 'remove'] as const) {
+      const run = resolveDevMode(command, { env }, { home: pinned });
+      expect(run.on, command).toBe(false);
+      expect(run.pinnedMachine).toBe(true);
+      expect(resolveDevMode(command, { env }, { home: local }).on, command).toBe(true);
+    }
+    expect(devModeState({ env }, { home: pinned }).on).toBe(false);
+    expect(devModeState({ env }, { home: local }).on).toBe(true);
   });
 
-  test('team init from the pinned terminal is refused in dev mode, with the owner line, and writes nothing', async () => {
-    const home = tempHome('init');
+  test('on a pinned machine, team init in dev mode is refused for every caller: the terminal, an agent outside herdr, an unattended run, a placed lead', async () => {
+    const callers: Caller[] = [
+      PINNED,
+      { kind: 'unplaced', reason: 'it is run by an agent (claude) outside herdr' },
+      { kind: 'unplaced', reason: 'AGENT_UNATTENDED is set' },
+      LEAD,
+    ];
+    for (const caller of callers) {
+      const home = pinnedHome('init');
+      const root = join(home, 'code', 'fresh');
+      mkdirSync(root, { recursive: true });
+      execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+      const io = testIo(root, caller);
+      io.env = { TEAMCLI_DEV_MODE: '1', AGENT_UNATTENDED: '1' };
+      expect(await runInit([], io, home, undefined, { loggedIn: () => true, now: () => NOW }), JSON.stringify(caller)).toBe(1);
+      expect(io.err + io.out).toContain('only the owner runs this');
+      expect(io.err + io.out).not.toContain('dev mode continues');
+      expect(existsSync(join(root, '.agents', 'team.yaml'))).toBe(false);
+    }
+    // The same agent on a machine that is not pinned: dev mode folds the gate, as before.
+    const home = tempHome('init-local');
     const root = join(home, 'code', 'fresh');
     mkdirSync(root, { recursive: true });
     execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-    const io = testIo(root, PINNED);
+    const io = testIo(root, { kind: 'unplaced', reason: 'it is run by an agent (claude) outside herdr' });
     io.env = { TEAMCLI_DEV_MODE: '1' };
-    expect(await runInit([], io, home, undefined, { loggedIn: () => true, now: () => NOW })).toBe(1);
-    expect(io.err + io.out).toContain('only the owner runs this');
-    expect(io.err + io.out).toContain(PINNED_TERMINAL_REASON);
-    expect(io.err + io.out).not.toContain('dev mode continues');
-    expect(existsSync(join(root, '.agents', 'team.yaml'))).toBe(false);
+    await runInit([], io, home, undefined, { loggedIn: () => true, now: () => NOW });
+    expect(io.err + io.out).toContain('dev mode continues');
   });
 });
 
-describe('what counts as a pin', () => {
-  test('anything at the pin\'s path counts, so damaging it never turns a terminal back into the owner', () => {
+describe('what counts as a pinned machine', () => {
+  test('anything at the pin\'s, the machine record\'s or the ledger\'s path counts, and a parent that is not a folder fails closed', () => {
     const home = tempHome('present');
-    expect(ownerPinPresent(home)).toBe(false);
+    expect(ownerMachinePinned(home)).toBe(false);
     writeFileSync(ownerSeatPinFile(home), 'not a pin at all');
-    expect(ownerPinPresent(home)).toBe(true);
+    expect(ownerMachinePinned(home)).toBe(true);
     rmSync(ownerSeatPinFile(home));
     mkdirSync(ownerSeatPinFile(home));
-    expect(ownerPinPresent(home)).toBe(true);
-    // A home with no config folder at all has no pin.
-    expect(ownerPinPresent(join(home, 'missing'))).toBe(false);
+    expect(ownerMachinePinned(home)).toBe(true);
+    // The pin gone, the machine record left: pinned once, so still pinned.
+    const once = tempHome('once');
+    writeFileSync(machineFile(once), '{}');
+    expect(ownerMachinePinned(once)).toBe(true);
+    const ledger = tempHome('ledger');
+    mkdirSync(join(ledger, '.config', 'team', 'owner-ledger'));
+    expect(ownerMachinePinned(ledger)).toBe(true);
+    // The config folder replaced by a file: the state cannot be read, so the machine is pinned.
+    const broken = tempHome('broken');
+    rmSync(join(broken, '.config', 'team'), { recursive: true });
+    writeFileSync(join(broken, '.config', 'team'), 'a file');
+    expect(ownerStateOf(broken).kind).toBe('refused');
+    expect(ownerMachinePinned(broken)).toBe(true);
+    // A home with no config folder at all was never pinned.
+    expect(ownerMachinePinned(join(home, 'missing'))).toBe(false);
   });
 });

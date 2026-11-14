@@ -23,6 +23,7 @@ import { resolve } from 'node:path';
 import {
   boundOwnerActionAnswer,
   heldOwnerActionAnswer,
+  ownerActionBindingProblem,
   ownerActionDeadline,
   ownerActionRecordOf,
   readOwnerActionRecord,
@@ -39,7 +40,7 @@ import {
   validMachineBinding,
   type MachineBinding,
 } from './owner-pin.ts';
-import { ownerPinPresent } from './owner-pin-path.ts';
+import { ownerMachinePinned } from './owner-pin-path.ts';
 import { readOwnerSeat, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 
 export const OWNER_REQUEST_FILE_FORMAT = 'team-owner-request-file-v1';
@@ -113,6 +114,8 @@ export function ownerRequestFile(home: string, id: string, store: OwnerSeatKeySt
   if (typeof record === 'string') return { ok: false, why: record };
   const elsewhere = requestMachineProblem(home, record.params.machine, id);
   if (elsewhere !== null) return { ok: false, why: elsewhere };
+  const binding = ownerActionBindingProblem(home, record);
+  if (binding !== null) return { ok: false, why: binding };
   if (ownerActionDeadline(home, record, store, now) <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   if (heldOwnerActionAnswer(home, record, store, now) !== null) return { ok: false, why: `request ${id} is answered already` };
   return { ok: true, file: { format: OWNER_REQUEST_FILE_FORMAT, machine: record.params.machine!, owner_seat: pin.fingerprint, request: record } };
@@ -153,11 +156,16 @@ export function signCarriedRequest(
   answer: ((record: OwnerActionRecord) => { ok: true } | { ok: false; why: string }) | null,
   fingerprint: string | null,
 ): SignOutcome {
-  if (ownerPinPresent(home)) return { ok: false, why: "this machine's owner seat is pinned from another machine: it holds no owner signer to answer with" };
+  if (ownerMachinePinned(home)) return { ok: false, why: "this machine's owner seat is pinned from another machine: it holds no owner signer to answer with" };
   if (readOwnerSeat(home) === null) return { ok: false, why: 'no owner seat is registered on this machine' };
   const here = readMachine(home);
   if (here !== null && here.id === file.machine.id) return { ok: false, why: `request ${file.request.request_id} is this machine's own; it is answered here, not carried` };
   const stalePin = fingerprint !== null && fingerprint !== file.owner_seat;
+  // Before its card is recorded or shown: the signed window and the full argument words, each
+  // action's hash matching the words the card will show (checked as the file was read).
+  const binding = ownerActionBindingProblem(home, file.request);
+  if (binding !== null) return { ok: false, why: binding };
+  if (ownerActionDeadline(home, file.request, store, now) <= now.getTime()) return { ok: false, why: `request ${file.request.request_id} expired at ${file.request.expires_at}` };
   const recorded = recordForeignOwnerAction(home, file.request, now);
   if (!recorded.ok) return recorded;
   const record = readOwnerActionRecord(home, file.request.request_id);

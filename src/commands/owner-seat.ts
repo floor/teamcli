@@ -137,7 +137,7 @@ async function ownerSeatOutcome(argv: string[], rawIo: Io, options: OwnerSeatOpt
       : pinned.kind === 'repinned'
         ? `owner seat: owner@${pinned.team} pinned again, from an export signed by a signer pinned here (was ${fingerprintText(pinned.previous!)})`
         : `owner seat: owner@${pinned.team} pinned from another machine (trust on first use: this machine believes the first export its owner gives it)`;
-    io.stdout(`${said}\nfingerprint: ${fingerprintText(pinned.fingerprint)}; compare it with the one the export printed\nthis machine: ${pinned.machine.name} (${pinned.machine.id}); signers: ${pinned.signers.join(', ')}\nfrom now on a terminal on this machine is not the owner: an owner-only action runs on the owner's signed answer, carried as files from the machine that holds the signers\nnote: the pin is kept in this account's config folder, where a process of the account can move it aside\n`);
+    io.stdout(`${said}\nfingerprint: ${fingerprintText(pinned.fingerprint)}; compare it with the one the export printed\nthis machine: ${pinned.machine.name} (${pinned.machine.id}); signers: ${pinned.signers.join(', ')}\nfrom now on a terminal on this machine is not the owner: an owner-only action runs on the owner's signed answer, carried as files from the machine that holds the signers\nnote: the pin is kept in this account's config folder, where a process of the account can still replace it, until a separate account keeps it\n`);
     return 'done';
   }
 

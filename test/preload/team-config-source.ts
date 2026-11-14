@@ -24,3 +24,14 @@ afterEach(() => {
 // The real registry is read once, before any scene: a scene that wrote there is then caught by
 // realRegistryTouched(), whichever test file asks.
 import '../helpers/real-registry.ts';
+// The owner-state resolver (src/client/owner-pin-path.ts) reads the account's own home and a
+// system folder in real use, whatever home a command is given. Each scene keeps its owner state
+// in the home it passes instead, and no scene reads the real account or the system folder, so
+// pinning the machine the suite runs on changes no scene. test/owner-state-resolver.test.ts
+// covers the real roots' rules with roots of its own.
+import { ownerStateRootsForTests } from '../../src/client/owner-pin-path.ts';
+export const SUITE_OWNER_STATE_ROOTS = { system: null, account: (given: string | undefined) => given ?? null, systemOwner: process.getuid?.() ?? 0 };
+ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+afterEach(() => {
+  ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+});
