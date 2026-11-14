@@ -71,7 +71,7 @@ function fixture(): Fixture {
   updateState(dir, (state) => {
     const session = (state.sessions.acme ??= emptySession());
     session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
-    session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', presence_binding: 'prs_000000000001' };
+    session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', launched: { shell: 1, cli: [2] }, presence_binding: 'prs_000000000001' };
   });
   return { root, home, dir };
 }
@@ -142,7 +142,7 @@ describe('a seat whose inherited rules name a folder this machine cannot fill', 
       home: f.home,
       sessionRunning: () => true,
       sessionState: () => 'running',
-      agents: () => upLaunch.agents(),
+      agents: () => upLaunch.agents('acme'),
       workspaces: () => [{ id: 'ws-lead' }, { id: 'ws-old' }],
       alive: () => true,
       screen: () => ({ kind: 'idle' }),
