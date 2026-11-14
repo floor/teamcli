@@ -17,7 +17,7 @@
 //
 // Left to the command itself: a command whose own parser reads `--approval`, `--request` or
 // `--reason` (the lifecycle commands, `config`, `daemon`, `development-mode`, `client`, `init`,
-// `grant`), and two the owner's answer never stands in for: `owner-seat`, whose first pin is
+// `grant`; `migrate --root` is the door's, as its parser takes none of them), and two the owner's answer never stands in for: `owner-seat`, whose first pin is
 // trust on first use and whose later pins are signed exports, and `setup`, since a pinned machine
 // keeps no charter. On a machine with its own owner seat the door is closed: every line passes.
 
@@ -38,6 +38,9 @@ export type AnswerDoor =
 
 /** Whether the command line is one this door reads: not a command that reads the options itself. */
 function doorCommand(name: string, rest: readonly string[]): boolean {
+  // `team migrate --root` is its own step, whose parser refuses every owner-seat option the
+  // import step reads: the door is the way its write runs here.
+  if (name === 'migrate' && rest.includes('--root')) return true;
   const { command } = dispatchedCommand(name, rest);
   for (const one of [name, command]) {
     if (ANSWER_OWN.has(one)) return false;

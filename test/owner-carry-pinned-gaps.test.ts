@@ -574,6 +574,9 @@ describe('every other owner-only command on a pinned machine: the dispatcher doo
     for (const name of ['config', 'daemon', 'import', 'init', 'grant', 'owner-seat', 'setup', 'batch', 'approvals']) {
       expect((await ownerAnswerDoor(name, ['x', '--request'], pinnedIo(s), NOW)).kind).toBe('pass');
     }
+    // `migrate --root` takes none of the options itself, so the door reads them there.
+    const root = pinnedIo(s);
+    expect((await ownerAnswerDoor('migrate', ['--root', '--request'], root, NOW)).kind).toBe('requested');
     const local = testIo(s.mac.home, SEAT);
     local.env = { HOME: s.mac.home };
     expect((await ownerAnswerDoor('policy', ['set', 'acme', 'x', '--request'], local, NOW)).kind).toBe('pass');
