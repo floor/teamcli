@@ -131,7 +131,10 @@ pinned owner seat counts for every entity account, and none of them can change i
   folder and file is created with its owner and mode. It refuses a user of the helper's name it
   did not make, and running it again is safe; to add an entity account, run it again naming every
   account. The pin is then made by the administrator, with the same first-pin and re-pin rules as
-  anywhere else; no entity account can pin or re-pin.
+  anywhere else; no entity account can pin or re-pin. The administrator's search path is narrower
+  than the account's own, so name `team` and Bun by their full paths when it does not find them.
+  The helper runs the Bun and the TeamCLI build the install copied: after upgrading either, run
+  the install again.
 - **macOS is unchanged.** The Mac keeps its own owner signer, and a pinned Mac reads the system
   folder when present, else the account's own folder, as before.
 
