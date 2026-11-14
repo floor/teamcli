@@ -92,7 +92,7 @@ export function fillRootWords(tree: YamlNode, home: string): Problem[] {
  * An entity's or project's rules (the owner's entities and projects files) with the word filled
  * with the entity's projects root at `home`. These rules are not a team file's and are not
  * validated with one, so a rule that writes the word where no root is named keeps it as written,
- * and `team doctor` names it (`unfilledRuleWarnings`). Rules without the word come back as they are.
+ * and `team doctor` names it (`rootWordFindings` in src/commands/doctor.ts). Rules without the word come back as they are.
  */
 export function filledRules(rules: string[], home: string | undefined, entity: string | null): string[] {
   if (home === undefined || entity === null || !rules.some(hasRootWord)) return rules;
