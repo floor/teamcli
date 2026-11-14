@@ -321,6 +321,7 @@ const SEAT_WAKE_SCHEMA: JsonSchema = {
     listener: { type: 'boolean' },
     unread: { type: ['integer', 'null'], minimum: 0 },
     oldest_unread_seconds: { type: ['integer', 'null'] },
+    legacy_unsigned: { type: 'integer', minimum: 1 },
   },
 };
 

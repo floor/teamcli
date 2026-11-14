@@ -34,6 +34,8 @@ export type SeatWake = {
   /** The age of the oldest unread drop in the seat's inbox, in seconds; null when nothing waits
    *  or the home that holds the read receipts could not be named. */
   oldest_unread_seconds: number | null;
+  /** Plain-text drops an earlier build wrote: never served, counted apart from `unread`. */
+  legacy_unsigned?: number;
 };
 
 /** One seat's wakeability reading: where its records live, its declared row and runtime record,
@@ -72,8 +74,9 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
   const listener = inboxLive(dropDir, input.root, input.session, input.seat).live;
   let oldest: number | null = null;
   let unreadCount: number | null = null;
+  let legacyCount = 0;
   if (input.home !== undefined) {
-    const unread = listUnread(
+    const listed = listUnread(
       dropDir,
       {
         to: input.seat,
@@ -82,7 +85,14 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
         ...(input.lead === undefined ? {} : { lead: input.lead }),
       },
       input.home,
+      undefined,
+      undefined,
+      { legacy: 'include' },
     );
+    // A plain-text drop an earlier build wrote is never served: it is counted on its own, and the
+    // unread count is the mail a reader can serve.
+    const unread = listed.filter((one) => one.legacy !== true);
+    legacyCount = listed.length - unread.length;
     unreadCount = unread.length;
     const first = unread[0];
     if (first !== undefined) {
@@ -99,6 +109,7 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
       listener,
       unread: unreadCount,
       oldest_unread_seconds: oldest,
+      ...(legacyCount > 0 ? { legacy_unsigned: legacyCount } : {}),
     },
     words: delivery.words,
     watchWake: delivery.evidence.watchWake,
@@ -128,6 +139,7 @@ export function wakeCell(wake: SeatWake): string {
   if (wake.endpoint && !wake.conversation) notes.push('endpoint, no bound conversation');
   if (wake.listener) notes.push('inbox');
   if (wake.oldest_unread_seconds !== null) notes.push(`unread ${wakeAge(wake.oldest_unread_seconds)}`);
+  if (wake.legacy_unsigned !== undefined) notes.push(`${String(wake.legacy_unsigned)} unsigned old drop(s), not served`);
   const word = `${wake.wakeable ? '' : '!'}${wake.class}`;
   return notes.length === 0 ? word : `${word} (${notes.join(', ')})`;
 }

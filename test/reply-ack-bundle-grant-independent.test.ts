@@ -730,8 +730,8 @@ describe('5. another client inbox, wrong seat, mismatched recipient, or roster c
   });
 });
 
-describe('6. expired or revoked bundle grants are refused on both reply and ack', () => {
-  test('an expired bundle grant is refused by both team reply and team ack', async () => {
+describe('6. expired or revoked bundle grants refuse a reply; the seat still marks the record read', () => {
+  test('an expired bundle grant refuses team reply, and team ack still writes the seat\'s read receipt', async () => {
     // Issued 91 days before NOW (90-day default TTL -> expired 1 day before NOW);
     // message sent 2 days before NOW (before expiry, and still within the 72h thread TTL).
     const f = makeFixture({
@@ -749,15 +749,15 @@ describe('6. expired or revoked bundle grants are refused on both reply and ack'
     expect(replied.doc.error.message).toContain('nothing was written');
     expect(listClientInboxFiles(f)).toEqual([]);
 
+    // The seat's own read receipt does not depend on the grant still being active: the record
+    // was admitted while it was, and a receipt grants the client nothing.
     const acked = await ackFromSeat(f, 'orchestrator', sent.id);
-    expect(acked.code).toBe(1);
-    expect(acked.doc.error.message).toContain(`the originating grant ${f.grantId} is not active`);
-    expect(acked.doc.error.message).toContain('expired at');
-    expect(acked.doc.error.message).toContain('nothing was written');
-    expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent.id}.read.json`))).toBe(false);
+    expect(acked.code).toBe(0);
+    expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent.id}.read.json`))).toBe(true);
+    expect(listClientInboxFiles(f)).toEqual([]);
   });
 
-  test('a revoked bundle grant is refused by both team reply and team ack', async () => {
+  test('a revoked bundle grant refuses team reply, and team ack still writes the seat\'s read receipt', async () => {
     const f = makeFixture({ kind: 'bundle', ops: ['send', 'reply', 'ack'] });
     const sent = await sendFromClient(f, 'orchestrator', 'opened before revocation');
     expect(sent.code).toBe(0);
@@ -775,12 +775,12 @@ describe('6. expired or revoked bundle grants are refused on both reply and ack'
     expect(replied.doc.error.message).toContain('nothing was written');
     expect(listClientInboxFiles(f)).toEqual([]);
 
+    // The seat's own read receipt does not depend on the grant still being active: the record
+    // was admitted while it was, and a receipt grants the client nothing.
     const acked = await ackFromSeat(f, 'orchestrator', sent.id);
-    expect(acked.code).toBe(1);
-    expect(acked.doc.error.message).toContain(`the originating grant ${f.grantId} is not active`);
-    expect(acked.doc.error.message).toContain('was revoked');
-    expect(acked.doc.error.message).toContain('nothing was written');
-    expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent.id}.read.json`))).toBe(false);
+    expect(acked.code).toBe(0);
+    expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent.id}.read.json`))).toBe(true);
+    expect(listClientInboxFiles(f)).toEqual([]);
   });
 });
 

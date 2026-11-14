@@ -16,7 +16,7 @@ import { currentTeam, rememberCurrent } from '../file/current.ts';
 import { isParseError, launchTeamFile, loadTeamFile } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceRename, type PaneProcesses } from '../herdr.ts';
@@ -2102,6 +2102,7 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
       cli: seat?.cli ?? '',
       screen: agent ? live.screens[agent.pane] : undefined,
       served: waitingIds(record.to).has(record.id),
+      inDrops: existsSync(join(scan.dropDir(record.to), record.id)),
       text,
     };
   });
