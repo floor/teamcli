@@ -26,10 +26,12 @@
 import { closeSync, mkdirSync, openSync, readFileSync, statSync, writeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { carriedBindingProblem, ownerActionRecordOf, OWNER_ACTION_ID_PATTERN, OWNER_ACTIONS, type OwnerAction, type OwnerActionRecord } from './owner-action.ts';
-import { CARRIED_FILE_MAX_BYTES, readOwnerPinIn, verifyPinnedOwnerAnswer, type OwnerPin } from './owner-pin.ts';
+// Only the leaf rules: the helper's program is bundled from this file, and nothing it loads reads
+// a file of TeamCLI's own or the caller's at its start.
+import { carriedBindingProblem, ownerActionRecordOf, OWNER_ACTION_ID_PATTERN, OWNER_ACTIONS, type OwnerAction, type OwnerActionRecord } from './owner-request-record.ts';
+import { CARRIED_FILE_MAX_BYTES, readOwnerPinIn, verifyPinnedOwnerAnswer, type OwnerPin } from './owner-pin-verify.ts';
 import { ACCOUNT_NAME_PATTERN, ownerStateOf, sharedOwnerStateFor, type OwnerStateRead } from './owner-pin-path.ts';
-import type { SignedOwnerAnswer } from './owner-seat.ts';
+import type { SignedOwnerAnswer } from './owner-signature.ts';
 
 export const OWNER_SPEND_FORMAT = 'team-owner-spend-v1';
 export const OWNER_SPEND_VERDICT_FORMAT = 'team-owner-spend-verdict-v1';

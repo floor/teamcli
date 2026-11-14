@@ -2,7 +2,7 @@
 // owner state. Run against a fake system that records every command: nothing here makes a user,
 // a folder outside the test's own, or a privilege rule.
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installOwnerState, sudoersText, type InstallSystem } from '../src/client/owner-state-install.ts';
@@ -124,9 +124,32 @@ describe('team owner-seat install', () => {
     }
   });
 
-  test('the helper program the install bundles is this build\'s own entry', () => {
-    const entry = readFileSync(join(import.meta.dir, '..', 'src', 'client', 'owner-spend-main.ts'), 'utf8');
-    expect(entry).toContain('runOwnerSpend');
-    expect(entry).toContain('passwdNameOf');
+  test('the helper program bundles only the leaf rules, and runs: started for no account, it spends nothing', async () => {
+    const entry = join(import.meta.dir, '..', 'src', 'client', 'owner-spend-main.ts');
+    const built = await Bun.build({ entrypoints: [entry], target: 'bun' });
+    expect(built.success).toBe(true);
+    const text = await built.outputs[0]!.text();
+    const modules = [...new Set(text.match(/^\/\/ src\/[a-z/._-]+$/gm) ?? [])].sort();
+    expect(modules).toEqual([
+      '// src/client/owner-pin-path.ts',
+      '// src/client/owner-pin-verify.ts',
+      '// src/client/owner-request-record.ts',
+      '// src/client/owner-signature.ts',
+      '// src/client/owner-spend-main.ts',
+      '// src/client/owner-spend.ts',
+    ]);
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), 'owner-helper-')));
+    try {
+      const program = join(folder, 'owner-spend.js');
+      writeFileSync(program, text);
+      const run = Bun.spawnSync([process.execPath, program], { cwd: '/', stdin: Buffer.from('{}'), env: { PATH: '/usr/bin:/bin' } });
+      expect(run.exitCode).toBe(1);
+      const verdict = JSON.parse(run.stdout.toString()) as { format: string; ok: boolean; why: string };
+      expect(verdict.format).toBe('team-owner-spend-verdict-v1');
+      expect(verdict.ok).toBe(false);
+      expect(verdict.why).toContain('not started for an account');
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 });
