@@ -27,17 +27,14 @@ import '../helpers/real-registry.ts';
 // The owner-state resolver (src/client/owner-pin-path.ts) reads the account's own home and a
 // system folder in real use, whatever home a command is given. Each scene keeps its owner state
 // in the home it passes instead, and no scene reads the real account or the system folder, so
-// pinning the machine the suite runs on changes no scene. test/owner-state-resolver.test.ts
-// covers the real roots' rules with roots of its own.
-import { ownerStateRootsForTests } from '../../src/client/owner-pin-path.ts';
-export const SUITE_OWNER_STATE_ROOTS = {
-  system: null,
-  account: (given: string | undefined) => (given === undefined ? 'none' as const : { home: given }),
-  systemOwner: process.getuid?.() ?? 0,
-};
-ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+// pinning the machine the suite runs on changes no scene. The roots module, which no code of
+// TeamCLI's own can change, is replaced for the whole suite (test/helpers/owner-state-roots.ts);
+// test/owner-state-resolver.test.ts covers the real roots' rules with roots of its own.
+import { installOwnerStateRootsForTests, setOwnerStateRootsForTests, SUITE_OWNER_STATE_ROOTS } from '../helpers/owner-state-roots.ts';
+export { SUITE_OWNER_STATE_ROOTS };
+installOwnerStateRootsForTests();
 afterEach(() => {
-  ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+  setOwnerStateRootsForTests(null);
   setOwnerHelperForTests(null);
 });
 // The owner helper of a machine whose accounts share one owner is started through the system's

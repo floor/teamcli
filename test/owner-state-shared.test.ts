@@ -12,9 +12,11 @@ import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { actionArgsHash, admitOwnerAction, approveOwnerAction, createOwnerActionRequest, ownerActionHash, readOwnerActionRecord, recordForeignOwnerAction, type OwnerActionRecord } from '../src/client/owner-action.ts';
 import { acceptCarriedAnswer, OWNER_ANSWER_FILE_FORMAT, ownerRequestFile, signCarriedRequest, type OwnerAnswerFile, type OwnerRequestFile } from '../src/client/owner-carry.ts';
-import { ownerMachinePinned, ownerSetupNoteOnThisAccount, ownerStateOf, ownerStateRootsForTests, productionOwnerStateRoots, type OwnerStateRoots } from '../src/client/owner-pin-path.ts';
+import { ownerMachinePinned, ownerSetupNoteOnThisAccount, ownerStateOf, productionOwnerStateRoots, type OwnerStateRoots } from '../src/client/owner-pin-path.ts';
+import { setOwnerStateRootsForTests } from './helpers/owner-state-roots.ts';
 import { claimInLedger, exportOwnerSeat, ledgerSpent, localOwnerSeatFingerprint, pinOwnerSeat, readOwnerPin, type SignedOwnerSeatExport } from '../src/client/owner-pin.ts';
 import { judgeSpend, OWNER_SPEND_FORMAT, readCappedInput, runOwnerSpend, verdictLine } from '../src/client/owner-spend.ts';
+import { holdSpendLock } from '../src/client/owner-spend-lock.ts';
 import { setOwnerHelperForTests } from './helpers/owner-helper-exec.ts';
 
 type SpendRunner = (stdin: string) => { status: number | null; stdout: string };
@@ -30,7 +32,7 @@ const UID = process.getuid?.() ?? 0;
 const ACCOUNT_UIDS: Record<string, number> = { floor: 5001, studio: 5002 };
 const made: string[] = [];
 afterEach(() => {
-  ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+  setOwnerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -64,7 +66,7 @@ function fakeStore(): OwnerSeatKeyStore {
 
 /** The signer machine (the Mac), under the suite's roots: one seat, one device key `mac`. */
 function signerMachine() {
-  ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+  setOwnerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
   const home = join(temp('mac'), 'home');
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
   keyOf(home);
@@ -94,7 +96,7 @@ function sharedMachine(options: { helper?: boolean; ledger?: boolean } = {}) {
   const roots: OwnerStateRoots = { system, account: () => 'none', systemOwner: UID, shared: { ledger, account: () => account } };
   const use = (name: string) => {
     account = name;
-    ownerStateRootsForTests(roots);
+    setOwnerStateRootsForTests(roots);
   };
   return { base, system, ledger, homes, roots, use };
 }
@@ -135,7 +137,7 @@ function answeredRequest(m: ReturnType<typeof sharedMachine>, mac: ReturnType<ty
   const id = asked.record.request_id;
   const file = ownerRequestFile(home, id, store, NOW);
   if (!file.ok) throw new Error(file.why);
-  ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+  setOwnerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
   const signed = signCarriedRequest(mac.home, file.file, mac.store, NOW, (record) => {
     const answered = approveOwnerAction(mac.home, record.request_id, word, mac.store, NOW);
     return answered.ok ? { ok: true } : answered;
@@ -162,7 +164,7 @@ describe('the macOS roots are the ones before shared machines', () => {
     const signer = signerMachine();
     const account = temp('mac-account');
     mkdirSync(join(account, '.config', 'team'), { recursive: true });
-    ownerStateRootsForTests({ ...mac, system: join(temp('no-etc'), 'teamcli'), account: () => ({ home: account }) });
+    setOwnerStateRootsForTests({ ...mac, system: join(temp('no-etc'), 'teamcli'), account: () => ({ home: account }) });
     expect(ownerStateOf().kind).toBe('none');
     expect(ownerMachinePinned()).toBe(false);
     const pinned = pinOwnerSeat(account, signer.exported, NOW);
@@ -192,7 +194,7 @@ describe('a missing or unprotected system folder refuses: never unpinned, never 
     const signer = signerMachine();
     const linux = productionOwnerStateRoots('linux');
     const home = temp('acct');
-    ownerStateRootsForTests({ ...linux, system: join(temp('missing'), 'teamcli'), shared: { ledger: join(temp('missing-ledger'), 'ledger'), account: () => 'floor' } });
+    setOwnerStateRootsForTests({ ...linux, system: join(temp('missing'), 'teamcli'), shared: { ledger: join(temp('missing-ledger'), 'ledger'), account: () => 'floor' } });
     expect(ownerStateOf().kind).toBe('refused');
     expect(ownerMachinePinned()).toBe(true);
     expect(ownerMachinePinned(home)).toBe(true);
@@ -245,7 +247,7 @@ describe('a missing or unprotected system folder refuses: never unpinned, never 
     writeFileSync(join(m.system, 'owner-helper.json'), `${JSON.stringify({ format: 'team-owner-helper-v1', user: 'teamcli-owner', uid: UID + 1 })}\n`);
     expect(ownerStateOf().kind).toBe('refused');
     // A system folder the administrator does not own.
-    ownerStateRootsForTests({ ...m.roots, systemOwner: UID + 1 });
+    setOwnerStateRootsForTests({ ...m.roots, systemOwner: UID + 1 });
     expect(ownerStateOf().kind).toBe('refused');
   });
 });
@@ -272,9 +274,9 @@ describe('only the administrator writes the pin, and only the helper the ledger'
     }
     // A process that is not the administrator cannot pin or re-pin, whatever it passes.
     const before = readFileSync(join(m.system, 'owner-seat-pin.json'), 'utf8');
-    ownerStateRootsForTests({ ...m.roots, systemOwner: UID + 1 });
+    setOwnerStateRootsForTests({ ...m.roots, systemOwner: UID + 1 });
     const other = signerMachine();
-    ownerStateRootsForTests({ ...m.roots, systemOwner: UID + 1 });
+    setOwnerStateRootsForTests({ ...m.roots, systemOwner: UID + 1 });
     expect(pinOwnerSeat(m.homes.floor!, other.exported, NOW).ok).toBe(false);
     expect(readFileSync(join(m.system, 'owner-seat-pin.json'), 'utf8')).toBe(before);
     // The account's own ledger write is refused: the helper alone spends.
@@ -413,8 +415,11 @@ describe('an approval is spent once, by the helper, for the account that asked',
     expect(why(runOwnerSpend({ ...base, env: { SUDO_UID: '5001', SUDO_USER: 'studio' } }))).toContain('cannot be read from the user database');
     expect(why(runOwnerSpend({ ...base, env: { SUDO_UID: '4242', SUDO_USER: 'floor' } }))).toContain('cannot be read from the user database');
     expect(why(runOwnerSpend({ ...base, env: { SUDO_UID: String(UID), SUDO_USER: 'teamcli-owner' }, nameOf: () => 'teamcli-owner' }))).toContain('not for itself');
+    expect(why(runOwnerSpend({ ...base, env: { SUDO_UID: '5001', SUDO_USER: 'floor' }, lock: () => ({ ok: false, why: 'another spend is running' }) }))).toContain('another spend is running');
     expect(existsSync(join(m.ledger, 'floor'))).toBe(false);
-    expect(why(runOwnerSpend({ ...base, env: { SUDO_UID: '5001', SUDO_USER: 'floor' } }))).toBe('spent');
+    let locked = 0;
+    expect(why(runOwnerSpend({ ...base, env: { SUDO_UID: '5001', SUDO_USER: 'floor' }, lock: () => { locked += 1; return { ok: true }; } }))).toBe('spent');
+    expect(locked).toBe(1);
   });
 
   test("the account runs only on a verdict naming exactly the record it sent", () => {
@@ -450,7 +455,7 @@ function redated(record: OwnerActionRecord, ms: number): OwnerActionRecord {
 
 /** An answer the signer machine signs for `record`, said to be given at `at`. */
 function answerAt(mac: ReturnType<typeof signerMachine>, record: OwnerActionRecord, at: Date): SignedOwnerAnswer {
-  ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+  setOwnerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
   const signed = signOwnerAnswer(mac.home, { kind: 'owner-action', request_id: record.request_id, params_sha256: record.params_sha256, choice: 'once', team: 'floor', seat: 'owner', at: at.toISOString() }, 'mac', mac.store, 'test');
   if (!signed.ok) throw new Error(signed.why);
   return signed.signed;
@@ -464,7 +469,7 @@ describe('a request dated ahead, or an answer given outside its window, is refus
     const r = answeredRequest(m, mac, 'floor');
     const future = { ...redated(r.record, 365 * 24 * 3600_000), request_id: 'oa_000000000000000000000f00' };
     const file: OwnerRequestFile = { format: 'team-owner-request-file-v1', machine: future.params.machine!, owner_seat: (readOwnerPin(r.home) as { fingerprint: string }).fingerprint, request: future };
-    ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+    setOwnerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
     const signed = signCarriedRequest(mac.home, file, mac.store, NOW, () => ({ ok: true }), null);
     expect(signed.ok).toBe(false);
     if (!signed.ok) expect(signed.why).toContain("ahead of this machine's clock");
@@ -531,18 +536,38 @@ describe("the helper's input, and what the account may replace", () => {
     if (!late.ok) expect(late.why).toContain('did not arrive in time');
   });
 
-  test('no module of TeamCLI exports a way to replace how the helper is started', async () => {
-    for (const path of ['../src/client/owner-spend.ts', '../src/client/owner-spend-client.ts', '../src/client/owner-spend-exec.ts']) {
-      const names = Object.keys(await import(path));
-      expect(names.filter((name) => /ForTests|Runner|runner/.test(name)), path).toEqual([]);
+  test('no owner-state module of TeamCLI exports a way to replace its roots or how the helper is started', async () => {
+    const modules = ['owner-state-roots', 'owner-pin-path', 'owner-pin', 'owner-pin-verify', 'owner-request-record', 'owner-signature', 'owner-spend', 'owner-spend-client', 'owner-spend-exec', 'owner-spend-lock', 'owner-carry', 'owner-state-install'];
+    for (const name of modules) {
+      const names = Object.keys(await import(`../src/client/${name}.ts`));
+      expect(names.filter((exported) => /ForTests|Runner|runner|setRoots|setOwner/.test(exported)), name).toEqual([]);
     }
-    const exec = readFileSync(join(import.meta.dir, '..', 'src', 'client', 'owner-spend-exec.ts'), 'utf8');
-    expect(exec).not.toMatch(/\blet\b/);
+    // The two modules the suite stands in for hold no state that could be swapped.
+    for (const name of ['owner-spend-exec', 'owner-state-roots']) {
+      const text = readFileSync(join(import.meta.dir, '..', 'src', 'client', `${name}.ts`), 'utf8');
+      expect(text, name).not.toMatch(/\blet\b/);
+    }
+  });
+
+  test('one spend at a time: a second lock waits for its deadline, then refuses; the helper spends nothing without it', () => {
+    const folder = temp('lock');
+    const path = join(folder, 'spend.lock');
+    const first = holdSpendLock(path, 1_000);
+    expect(first.ok).toBe(true);
+    const started = Date.now();
+    const second = holdSpendLock(path, 150);
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.why).toContain('another spend is running');
+    expect(Date.now() - started).toBeGreaterThanOrEqual(140);
+    if (first.ok) first.release();
+    const third = holdSpendLock(path, 150);
+    expect(third.ok).toBe(true);
+    if (third.ok) third.release();
   });
 
   test('a machine not set up names the install the owner runs, in full, as the administrator', () => {
     const linux = productionOwnerStateRoots('linux');
-    ownerStateRootsForTests({ ...linux, system: join(temp('nothing'), 'teamcli'), shared: { ledger: join(temp('no-ledger'), 'ledger'), account: () => 'floor' } });
+    setOwnerStateRootsForTests({ ...linux, system: join(temp('nothing'), 'teamcli'), shared: { ledger: join(temp('no-ledger'), 'ledger'), account: () => 'floor' } });
     const saved = process.argv[1];
     try {
       // Run as TeamCLI's own command line: the install is named with this Bun and this CLI in full.
@@ -555,7 +580,7 @@ describe("the helper's input, and what the account may replace", () => {
     } finally {
       process.argv[1] = saved!;
     }
-    ownerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
+    setOwnerStateRootsForTests(SUITE_OWNER_STATE_ROOTS);
     expect(ownerSetupNoteOnThisAccount()).toBeNull();
   });
 });

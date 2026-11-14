@@ -3,10 +3,6 @@
 // scenes. The child then reads its owner state in the home it is given and never the machine's
 // own system folder — which, on Linux, would refuse every owner answer on a machine never set up.
 // Only a test passes this file; no command line, variable or file of a real run reaches it.
-import { ownerStateRootsForTests } from '../../src/client/owner-pin-path.ts';
+import { installOwnerStateRootsForTests } from '../helpers/owner-state-roots.ts';
 
-ownerStateRootsForTests({
-  system: null,
-  account: (given) => (given === undefined ? 'none' : { home: given }),
-  systemOwner: process.getuid?.() ?? 0,
-});
+installOwnerStateRootsForTests();
