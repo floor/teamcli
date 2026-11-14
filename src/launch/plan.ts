@@ -427,6 +427,9 @@ export interface UpSeat {
   human?: true;
   /** The seat's rules, as one text: what a launch option embeds and what its file holds. */
   rules: string;
+  /** Why those rules cannot launch: an inherited rule writes `{root}` or `{worktrees}` this machine
+   *  cannot fill (`inheritedRulesProblem`, src/launch/rules.ts). The seat is refused. */
+  rulesProblem?: string;
   /**
    * The display name the seat's session carries, when its CLI takes one (Claude Code's `--name`):
    * the seat's readable name under the project's `sender_name` word (`src/send/names.ts`), so a
@@ -1535,6 +1538,11 @@ export function upPlan(input: UpInput): Step[] {
           do: { do: 'refuse', seat: seat.name, why: problem } });
         continue;
       }
+    }
+    // Rules that name a folder this machine cannot fill are refused before anything is made.
+    if (seat.rulesProblem !== undefined) {
+      steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${seat.rulesProblem}`, do: { do: 'refuse', seat: seat.name, why: seat.rulesProblem } });
+      continue;
     }
     // The line is built before the steps that create or close a workspace: a refusal must come
     // before any of them, and the warnings it produces are said on the launch step where they

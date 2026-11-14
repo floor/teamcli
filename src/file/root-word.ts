@@ -22,8 +22,7 @@
 // sets one: a launch never runs a literal `{root}` path. `team down` and `team status` read a
 // team without filling what cannot be filled, so a team whose folder was removed can still be
 // stopped. A file that writes neither word is read exactly as before.
-import { lstatSync } from 'node:fs';
-import { boundRoot, charterPath, pathInsideRoot } from '../charter/body.ts';
+import { boundRoot, pathInsideRoot } from '../charter/body.ts';
 import { readCharter, type CharterRead } from '../charter/store.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { canonicalFolder, entityFolders, entityRules, entitiesPath } from '../entities.ts';
@@ -106,23 +105,10 @@ function unnamed(word: Word, entity: string): string {
     : `entity "${entity}" names no worktrees folder on this machine, nor a projects root it would sit under: run \`team config set ${entity}.worktrees <folder>\` or \`${setRootCommand(entity)}\``;
 }
 
-/** The charter as this process last read it, by its file's identity: a run reads many teams, and
- *  each read verifies the signature only once while the file stays the same. */
-let charterMemo: { key: string; read: CharterRead } | null = null;
-
+/** The charter, verified on every read: a verdict is never kept, since a file's size and times
+ *  can be put back after its bytes change, and the signer's key can change beside it. */
 function charterOn(home: string, store: OwnerSeatKeyStore | undefined): CharterRead {
-  if (store !== undefined) return readCharter(home, store);
-  let key: string;
-  try {
-    const held = lstatSync(charterPath(home));
-    key = `${home}\u0000${String(held.mtimeMs)}\u0000${String(held.size)}\u0000${String(held.ino)}`;
-  } catch {
-    return { kind: 'absent' };
-  }
-  if (charterMemo?.key === key) return charterMemo.read;
-  const read = readCharter(home);
-  charterMemo = { key, read };
-  return read;
+  return store !== undefined ? readCharter(home, store) : readCharter(home);
 }
 
 /** How the folders are bound: to the charter's roots, or to nothing on a machine with none. */
@@ -198,13 +184,13 @@ export function fillRootWords(tree: YamlNode, home: string, options: FillOptions
   if (holding.length === 0 && inherited.length === 0) return empty;
   const line = holding[0]?.node.line ?? 0;
   if (entity === null) {
-    return keep ? empty : { ...empty, problems: [{ line, message: `the file writes ${ROOT_WORD} or ${WORKTREES_WORD}, and names no entity: each is a folder of an entity, so the file needs \`entity:\`` }] };
+    return keep ? keptForReading(tree) : { ...empty, problems: [{ line, message: `the file writes ${ROOT_WORD} or ${WORKTREES_WORD}, and names no entity: each is a folder of an entity, so the file needs \`entity:\`` }] };
   }
   const needed = new Set<Word>(inherited);
   for (const { node } of holding) for (const word of wordsIn(node.value)) needed.add(word);
   const resolved = resolvedFolders(home, entity, [...needed], options.ownerSeatStore);
   if (!resolved.ok) {
-    if (keep) return empty;
+    if (keep) return keptForReading(tree);
     const first = holding.find(({ node }) => wordsIn(node.value).length > 0);
     const where = first === undefined ? "the entity's or project's rules write" : 'the file writes';
     return { ...empty, problems: [{ line: first?.node.line ?? 0, message: `${where} ${[...needed].map((word) => `{${word}}`).join(' and ')}, and ${resolved.why}` }] };
@@ -217,6 +203,22 @@ export function fillRootWords(tree: YamlNode, home: string, options: FillOptions
   }
   const folders = [resolved.folders.root, resolved.folders.worktrees].filter((folder): folder is string => folder !== null);
   return { problems: [], nodes, folders };
+}
+
+/**
+ * A team read to be stopped or shown (`keep`) whose words cannot be filled: every value keeps its
+ * word as written, and a `trust` entry that writes one is left out of the read. A trust path is
+ * for placing a seat, which such a read never does, and an entry that is not yet a path would make
+ * the whole list read as an older form the reader refuses.
+ */
+function keptForReading(tree: YamlNode): FilledTree {
+  if (tree.kind === 'map') {
+    const trust = tree.entries.find((entry) => entry.key === 'trust');
+    if (trust !== undefined && trust.value.kind === 'seq') {
+      trust.value.items = trust.value.items.filter((item) => !(item.kind === 'scalar' && typeof item.value === 'string' && hasRootWord(item.value)));
+    }
+  }
+  return { problems: [], nodes: new Set(), folders: [] };
 }
 
 /** The words the entity's and home project's rules write, each once. */
@@ -344,15 +346,28 @@ function shellKeepsMeaning(text: string, index: number, literal: string): boolea
   return quoting !== 'single';
 }
 
-/** One spelling found in a value, where it stands, and whether it may be written as its word. */
-type Found = { index: number; literal: string; word: string; keeps: boolean };
+/** One spelling found in a value, where it stands, whether it may be written as its word, and
+ *  why not when it may not. */
+type Found = { index: number; literal: string; word: string; keeps: boolean; why?: string };
+
+/** Shell constructs the quote reading does not follow: a command or process substitution, a
+ *  here-document, `eval`. A shell line holding one is never rewritten: what quotes a path stands in
+ *  inside them is not read here, so no spelling in it is taken to keep its meaning. */
+const UNREAD_SHELL = /\$\(|`|<\(|>\(|<<|\beval\b/;
 
 function found(value: string, forms: Forms, shell: boolean): Found[] {
   const out: Found[] = [];
+  const unread = shell && UNREAD_SHELL.test(value);
   for (const match of value.matchAll(new RegExp(forms.pattern.source, 'g'))) {
     const literal = match[0];
     const index = match.index ?? 0;
-    out.push({ index, literal, word: forms.wordOf.get(literal) ?? ROOT_WORD, keeps: !shell || shellKeepsMeaning(value, index, literal) });
+    const word = forms.wordOf.get(literal) ?? ROOT_WORD;
+    if (unread) {
+      out.push({ index, literal, word, keeps: false, why: 'the line holds a command substitution, a here-document or eval, which the rewrite does not read' });
+      continue;
+    }
+    const keeps = !shell || shellKeepsMeaning(value, index, literal);
+    out.push({ index, literal, word, keeps, ...(keeps ? {} : { why: 'the shell does not expand it there, so the word would change what the line runs' }) });
   }
   return out;
 }
@@ -471,7 +486,7 @@ export function planRootRewrite(text: string, home: string, lines?: ReadonlySet<
     const spots = found(node.value, forms, isShellField(field));
     if (spots.length === 0) continue;
     for (const spot of spots) {
-      if (!spot.keeps) kept.push({ line: node.line, field: field.join('.'), written: spot.literal, why: 'the shell does not expand it there, so the word would change what the line runs' });
+      if (!spot.keeps) kept.push({ line: node.line, field: field.join('.'), written: spot.literal, why: spot.why ?? 'the word would change what the line runs' });
     }
     if (spots.some((spot) => spot.keeps)) plans.set(node, spots.map((spot) => spot.keeps));
   }

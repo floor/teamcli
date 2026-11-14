@@ -3,10 +3,9 @@
 // `team setup --edit`. The owner is never refused: one warning names the charter and the repair,
 // and the same words are the audit line.
 
-import { realpathSync } from 'node:fs';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { logLine } from '../log.ts';
-import { boundRoot, pathInsideRoot, type CharterLifetimes, type CharterOp } from './body.ts';
+import { boundRoot, pathInsideRoot, resolvedTarget, type CharterLifetimes, type CharterOp } from './body.ts';
 import { readCharter } from './store.ts';
 
 export type CharterAsk = {
@@ -25,17 +24,17 @@ export type CharterGate =
 
 const EDIT = 'team setup --edit';
 
-function located(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
+/** The path a check is asked about, as it is on disk (`resolvedTarget`), or null: never the
+ *  written spelling, which a link could carry outside a root. */
+function located(path: string): string | null {
+  return resolvedTarget(path.startsWith('/') ? path : `${process.cwd()}/${path}`);
 }
 
 /** Whether a signed root covers `path`: only while the root still resolves to what was signed
- *  (`boundRoot`). A root a link has moved since, or one that is gone, covers nothing. */
-function covers(root: string, path: string): boolean {
+ *  (`boundRoot`), and only a path that resolves. A root a link has moved since, a root that is
+ *  gone and a path that does not resolve cover nothing. */
+function covers(root: string, path: string | null): boolean {
+  if (path === null) return false;
   const bound = boundRoot(root);
   return bound !== null && pathInsideRoot(bound, path);
 }
@@ -92,7 +91,7 @@ export function charterGate(home: string, ask: CharterAsk, store?: OwnerSeatKeyS
   const path = located(ask.path ?? ask.cwd);
   const inside = body.roots.some((root) => covers(root, path));
   if (!inside) {
-    return { kind: 'block', message: `this is outside the owner charter (${path} is not under a charter root); the owner widens it with ${EDIT}` };
+    return { kind: 'block', message: `this is outside the owner charter (${path ?? (ask.path ?? ask.cwd)} is not under a charter root); the owner widens it with ${EDIT}` };
   }
   return { kind: 'admit', signer: read.charter.signer };
 }
@@ -114,7 +113,7 @@ export function charterRootsGate(home: string, folder: string, store?: OwnerSeat
   const path = located(folder);
   const inside = body.roots.some((root) => covers(root, path));
   if (!inside) {
-    return { kind: 'block', message: `this is outside the owner charter (${path} is not under a charter root); the owner widens it with ${EDIT}` };
+    return { kind: 'block', message: `this is outside the owner charter (${path ?? folder} is not under a charter root); the owner widens it with ${EDIT}` };
   }
   return { kind: 'admit', signer: read.charter.signer };
 }
@@ -150,7 +149,7 @@ export function charterGrantBound(
   for (const place of places) {
     const at = located(place);
     if (!body.roots.some((root) => covers(root, at))) {
-      return `the grant path ${at} is outside the owner charter; the owner widens it with ${EDIT}`;
+      return `the grant path ${at ?? place} is outside the owner charter; the owner widens it with ${EDIT}`;
     }
   }
   const cap = body.lifetimes.grant;

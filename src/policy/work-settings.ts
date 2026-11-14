@@ -12,7 +12,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { entityRules } from '../entities.ts';
-import { filledPath, filledRules } from '../file/root-word.ts';
+import { filledPath, filledRules, hasRootWord } from '../file/root-word.ts';
 import type { Mode, TeamFile } from '../file/types.ts';
 import { projectRules } from '../registry/projects.ts';
 import { parseYaml, type YamlNode } from '../yaml.ts';
@@ -45,6 +45,11 @@ export type WorkSettings = {
   /** Why a `vault-root` that names `{root}` or `{worktrees}` names no vault on this machine: the
    *  entity names no such folder here. The vault then reads as none, and `team doctor` says so. */
   vaultProblem?: string;
+  /** Set when `vault-root` names `{root}` or `{worktrees}`: the vault is one of the entity's
+   *  folders, and `team doctor` says so when those folders are bound to no signature. */
+  vaultWords?: true;
+  /** Set when the entity's or project's rules, as their files write them, name a word. */
+  ruleWords?: true;
 };
 
 function effective<V>(chain: PolicyChainResult, name: string, fallback: V): { value: V; from: SettingFrom } {
@@ -103,6 +108,8 @@ export function resolveWorkSettings(
     landingMode: effective<LandingMode>(chain, 'landing-mode', 'batch'),
     vaultRoot: vaultPath === null || !vaultPath.ok ? { value: null, from: vault.from } : { value: expandVaultRoot(vaultPath.path, options.home), from: vault.from },
     ...(vaultPath !== null && !vaultPath.ok ? { vaultProblem: `vault-root ${vault.value}: ${vaultPath.why}` } : {}),
+    ...(vault.value !== '' && hasRootWord(vault.value) ? { vaultWords: true as const } : {}),
+    ...([...entityRules(options.home, entityName), ...projectRules(options.home, projectName)].some(hasRootWord) ? { ruleWords: true as const } : {}),
     entityOrchestrator: effective<EntityOrchestrator>(chain, 'entity-orchestrator', 'auto'),
     relaysOwner: effective<OnOff>(chain, 'entity.main-orchestrator.relays-owner', 'on'),
     paneActions: effective<OnOff>(chain, 'leads.pane-actions', 'on'),

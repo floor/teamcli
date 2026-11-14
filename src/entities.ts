@@ -140,11 +140,12 @@ export const ENTITY_WORKTREES_KEY = 'worktrees';
  *  as an absolute path; null when the entry writes none; or why the word it writes does not read. */
 export type EntityRootRead = { ok: true; root: string | null } | { ok: false; why: string };
 
-/** The characters a folder of an entity may hold: letters, digits and `/ . _ - ~ @ +`. A folder is
+/** The characters a folder of an entity may hold: letters, digits and `/ . _ - @ +`. A folder is
  *  pasted into launch lines, which a shell reads, so a space, a quote, `$`, a backtick, a
- *  backslash or any of `;|&<>()*?[]{}` would change what the line runs: such a folder is refused,
- *  never quoted on the way in. */
-const FOLDER_CHARACTERS = /^[A-Za-z0-9/._~@+-]+$/;
+ *  backslash, a `~` (a pattern word to zsh's extended globbing) or any of `;|&<>()*?[]{}` would
+ *  change what the line runs: such a folder is refused, never quoted on the way in. The owner may
+ *  write a leading `~/`, which is the home and is gone once the folder is read. */
+const FOLDER_CHARACTERS = /^[A-Za-z0-9/._@+-]+$/;
 
 /** Why `path` is too wide to be a folder of an entity: the filesystem's root, the home itself, or
  *  a folder above the home. Null when it is narrower. */
@@ -161,20 +162,20 @@ function tooWide(path: string, home: string): string | null {
  * checked and made absolute: an absolute path, or `~/…` under `home`. Trailing slashes are
  * dropped, so `{root}/docs` never doubles one. Refused: a relative path, a `..` segment, the
  * filesystem's root, the home itself or a folder above it, a path that names a word itself, and
- * any character outside letters, digits and `/ . _ - ~ @ +`. The path is lexical: `canonicalFolder`
+ * any character outside letters, digits and `/ . _ - @ +` after a leading `~/`. The path is lexical: `canonicalFolder`
  * resolves it where the folder must exist.
  */
 export function checkedRootPath(value: string, home: string): { ok: true; root: string } | { ok: false; why: string } {
   const written = value.trim();
   if (written === '') return { ok: false, why: 'a folder of the entity must name a folder' };
   if (/\{(root|worktrees)\}/.test(written)) return { ok: false, why: 'a folder of the entity cannot name {root} or {worktrees} itself' };
-  if (!FOLDER_CHARACTERS.test(written)) {
-    return { ok: false, why: 'a folder of the entity holds only letters, digits and / . _ - ~ @ + (no space, quote, $, backtick, backslash or other shell character)' };
+  const body = written.startsWith('~/') ? written.slice(2) : written;
+  if (!FOLDER_CHARACTERS.test(body)) {
+    return { ok: false, why: 'a folder of the entity holds only letters, digits and / . _ - @ +, after a leading ~/ (no space, quote, $, backtick, backslash, other ~ or other shell character)' };
   }
   if (written.split('/').includes('..')) return { ok: false, why: 'a folder of the entity names no ".." segment' };
   let path: string;
   if (written.startsWith('~/')) path = join(home, written.slice(2));
-  else if (written === '~') path = home;
   else if (written.startsWith('/')) path = written;
   else return { ok: false, why: `"${written}" is not an absolute path: write /… or ~/…` };
   path = normalize(path).replace(/\/+$/, '');
@@ -251,11 +252,11 @@ export function entityFolders(home: string, entity: string | null): EntityFolder
  * lists the entities; and why each entity whose word does not read is left out. Nothing is
  * derived: an entity that writes no `root:` names no folder, whatever sits under the home.
  */
-export function declaredProjectRoots(home: string): { roots: Array<{ entity: string; root: string }>; problems: string[] } {
-  const roots: Array<{ entity: string; root: string }> = [];
+export function declaredProjectRoots(home: string): { roots: Array<{ entity: string; root: string; optional?: true }>; problems: string[] } {
+  const roots: Array<{ entity: string; root: string; optional?: true }> = [];
   const problems: string[] = [];
-  const add = (entity: string, root: string) => {
-    if (!roots.some((known) => known.root === root)) roots.push({ entity, root });
+  const add = (entity: string, root: string, optional = false) => {
+    if (!roots.some((known) => known.root === root)) roots.push({ entity, root, ...(optional ? { optional: true as const } : {}) });
   };
   for (const entry of entityEntries(home)) {
     const read = entityFolders(home, entry.key);
@@ -264,9 +265,11 @@ export function declaredProjectRoots(home: string): { roots: Array<{ entity: str
       continue;
     }
     if (read.root !== null) add(entry.key, read.root);
-    // The worktrees folder is a root of its own only where it sits outside the projects root (a
-    // server keeps it beside `~/repos`); inside it, the root already covers it.
-    if (read.worktrees !== null && (read.root === null || !insideFolder(read.worktrees, read.root))) add(entry.key, read.worktrees);
+    // The worktrees folder too, as written: whether it lies inside the root is a question for
+    // the folders on disk (`signedRoots` resolves both), since a link can put `<root>/worktrees`
+    // anywhere. The default `<root>/worktrees`, named by no word, is optional: a machine that has
+    // not made it yet signs the root alone.
+    if (read.worktrees !== null) add(entry.key, read.worktrees, !read.worktreesWritten);
   }
   return { roots, problems };
 }

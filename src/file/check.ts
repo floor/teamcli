@@ -1,27 +1,9 @@
-import { realpathSync } from 'node:fs';
-import { normalize } from 'node:path';
+import { resolvedTarget } from '../charter/body.ts';
 import type { YamlEntry, YamlNode } from '../yaml.ts';
 import { parseMeasure } from './sections/units.ts';
 import type { Deprecation, Problem } from './types.ts';
 
 export type Fields = Map<string, YamlEntry>;
-
-/** A path as it is on disk: its deepest existing folder resolved, the rest appended, so a path
- *  that does not exist yet (a worktree's `{task}`) is still compared on real folders. */
-function realFolderOf(path: string): string {
-  const parts = normalize(path).split('/');
-  for (let cut = parts.length; cut > 0; cut -= 1) {
-    const head = parts.slice(0, cut).join('/') || '/';
-    try {
-      const real = realpathSync(head);
-      const rest = parts.slice(cut);
-      return rest.length === 0 ? real : `${real === '/' ? '' : real}/${rest.join('/')}`;
-    } catch {
-      // not there yet: look one folder up
-    }
-  }
-  return normalize(path);
-}
 
 export class Check {
   problems: Problem[] = [];
@@ -37,7 +19,10 @@ export class Check {
   /** Whether `node` came from a word and its absolute `path` lies inside the entity's folders. */
   insideWordFolder(node: YamlNode | undefined, path: string): boolean {
     if (node === undefined || !this.wordNodes.has(node) || !path.startsWith('/')) return false;
-    const real = realFolderOf(path);
+    // On disk, as a charter check reads it: a link on the way is followed, and a path that does
+    // not resolve that way lies inside nothing.
+    const real = resolvedTarget(path);
+    if (real === null) return false;
     return this.wordFolders.some((folder) => real === folder || real.startsWith(`${folder}/`));
   }
 

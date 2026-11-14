@@ -104,7 +104,7 @@ import { recordWhat, progressWriter, classificationOf } from '../launch/progress
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { processSignals, terminalReader, type Terminal } from '../launch/terminal.ts';
-import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
+import { inheritedRulesProblem, rulesOf, rulesOriginOf, type RulesOrigin, withRulesProblem } from '../launch/rules.ts';
 import { quietRulesDelivery, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
@@ -833,6 +833,7 @@ function seatPlan(
     // An option seat's launch line and a message seat's rules file both come from the live
     // file. A stored copy is not the text a seat is told to obey.
     rules: rulesOf(team, seat, root, undefined, origin, home),
+    ...withRulesProblem(inheritedRulesProblem(team, root, home)),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,

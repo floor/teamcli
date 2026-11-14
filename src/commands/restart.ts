@@ -84,7 +84,7 @@ import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
 import { isShippedLauncher } from '../launchers/shipped.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
-import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
+import { inheritedRulesProblem, rulesOf, rulesOriginOf, type RulesOrigin, withRulesProblem } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { acquireRunLockWithin, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
@@ -2026,6 +2026,7 @@ function buildUpSeat(
     // A human's pane: no launch, no key, no line. The plan skips it before any of that.
     ...(seat.human ? { human: true as const } : {}),
     rules: rulesOf(team, seat, root, undefined, origin, home),
+    ...withRulesProblem(inheritedRulesProblem(team, root, home)),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,

@@ -20,7 +20,7 @@ import { leadsOwnTeamAdmits, orchestratorSeatStaysOwner } from '../leads-authori
 import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
-import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
+import { inheritedRulesProblem, rulesOf, rulesOriginOf, type RulesOrigin, withRulesProblem } from '../launch/rules.ts';
 import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
@@ -1698,6 +1698,7 @@ function seatPlan(
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root, undefined, origin, home),
+    ...withRulesProblem(inheritedRulesProblem(team, root, home)),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,

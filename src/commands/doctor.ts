@@ -1010,11 +1010,13 @@ export function rootWordFindings(text: string, team: TeamFile, root: string, hom
     level: 'warn',
     text: plainLine(`the file, line ${use.line}: ${rootPathWarning(use)}`),
   }));
-  // With no charter the entities file's folders are filled as written: say they are unsigned.
-  if (team.entity !== null && hasRootWord(text) && foldersUnsigned(home)) {
-    findings.push({ level: 'warn', text: plainLine(`the file writes ${ROOT_WORD} or {worktrees}, and this machine has no owner charter: entity "${team.entity}"'s folders are filled from the entities file as written, bound to no signature; \`team setup\` signs one`) });
-  }
   const work = workSettingsFor(team, root, home);
+  // With no charter the entities file's folders are filled as written: say they are unsigned,
+  // wherever a word stands — the team file, the entity's or project's rules, the vault.
+  const words = hasRootWord(text) || work?.ruleWords === true || work?.vaultWords === true;
+  if (team.entity !== null && words && foldersUnsigned(home)) {
+    findings.push({ level: 'warn', text: plainLine(`the team's words ${ROOT_WORD} or {worktrees} are filled on this machine, and it has no owner charter: entity "${team.entity}"'s folders are filled from the entities file as written, bound to no signature; \`team setup\` signs one`) });
+  }
   if (work?.vaultProblem !== undefined) findings.push({ level: 'warn', text: plainLine(`${work.vaultProblem}: seats get no vault rule`) });
   if (work !== null && team.entity !== null) {
     const held = [...(work.entityRules ?? []), ...(work.projectRules ?? [])].some(hasRootWord);

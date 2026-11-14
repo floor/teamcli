@@ -5,7 +5,7 @@
 // `team setup --edit`. Nothing in this file signs or reads a key.
 
 import { createHash } from 'node:crypto';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, normalize, sep } from 'node:path';
 import { canonicalFolder, declaredProjectRoots } from '../entities.ts';
@@ -73,7 +73,8 @@ export function defaultProjectRoots(home: string): DefaultRoots {
   if (declared.problems.length > 0) {
     return { ok: false, why: `${declared.problems.join('; ')}: set it again with \`team config set <entity>.root <folder>\`, or name the charter's roots with --roots <dirs>; nothing was written` };
   }
-  if (declared.roots.length > 0) return signedRoots(declared.roots.map((one) => one.root), home);
+  const present = declared.roots.filter((one) => one.optional !== true || canonicalFolder(one.root, home).ok);
+  if (present.length > 0) return signedRoots(present.map((one) => one.root), home);
   const found = SUGGESTED_NAMES.map((name) => join(home, name)).filter((path) => existsSync(path));
   const hint = found.length > 0 ? ` (folders found under the home: ${found.join(', ')})` : '';
   return {
@@ -111,6 +112,40 @@ export function boundRoot(root: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * A path a charter check is asked about, as it is on disk: its deepest existing folder resolved
+ * (every link followed), the rest of the path appended as written. The rest may only name plain
+ * segments that do not exist yet: a `..` anywhere, a link (dangling or not) on the way, a
+ * permission error, a loop or a relative path is no answer at all (null), and a null target is
+ * covered by no root — so a link inside a root cannot carry a path that does not exist yet out of
+ * it.
+ */
+export function resolvedTarget(path: string): string | null {
+  if (!path.startsWith('/')) return null;
+  const parts = path.split('/').filter((part) => part !== '' && part !== '.');
+  if (parts.includes('..')) return null;
+  for (let cut = parts.length; cut >= 0; cut -= 1) {
+    const head = `/${parts.slice(0, cut).join('/')}`;
+    let real: string;
+    try {
+      real = realpathSync(head);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+      // Not there: a dangling link here is a link, not a folder still to make.
+      try {
+        lstatSync(head);
+        return null;
+      } catch (missing) {
+        if ((missing as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+      }
+      continue;
+    }
+    const rest = parts.slice(cut);
+    return rest.length === 0 ? real : `${real === '/' ? '' : real}/${rest.join('/')}`;
+  }
+  return null;
 }
 
 const DEFAULT_LIFETIMES: CharterLifetimes = { request: null, rule: null, grant: null, unattended: null };

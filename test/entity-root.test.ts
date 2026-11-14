@@ -4,9 +4,11 @@
 // registry, entities file or store is read, and no launch runs.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { boundRoot, charterPath, defaultProjectRoots, signedRoots } from '../src/charter/body.ts';
+import { boundRoot, charterPath, defaultProjectRoots, resolvedTarget, signedRoots } from '../src/charter/body.ts';
+import { charterRootsGate } from '../src/charter/check.ts';
+import { inheritedRulesProblem } from '../src/launch/rules.ts';
 import { readCharter } from '../src/charter/store.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { runSetup } from '../src/commands/setup.ts';
@@ -578,7 +580,7 @@ describe('round 1 of the review: folders bound to what is signed', () => {
     expect(checked.ok).toBe(true);
     if (!checked.ok) return;
     const findings = rootWordFindings(text, checked.team, '/srv/acme/repos/web', home);
-    expect(findings.some((finding) => finding.text.includes('this machine has no owner charter'))).toBe(true);
+    expect(findings.some((finding) => finding.text.includes('it has no owner charter'))).toBe(true);
   });
 
   test('a shell line is rewritten only where the word keeps what it runs; the rest is left and listed', () => {
@@ -631,5 +633,118 @@ describe('round 1 of the review: folders bound to what is signed', () => {
     if (!unset.ok) expect(unset.errors[0]!.message).toBe('the entity\'s or project\'s rules write {root}, and entity "acme" names no projects root on this machine: run `team config set acme.root <folder>`');
     const set = validateTeamFile(text, { home: homeWith('acme:\n  root: /srv/acme/repos\n  rules:\n    - "Never edit {root}/production."\n') });
     expect(set.ok).toBe(true);
+  });
+});
+
+describe('round 2 of the review', () => {
+  const NOW = new Date('2026-11-14T12:00:00.000Z');
+  const AGENT = { kind: 'unplaced' as const, reason: 'the agent that launched setup' };
+
+  async function signed(entities: string, folders: string[]): Promise<{ home: string; store: ReturnType<typeof fakeOwnerStore> }> {
+    const home = homeWith(entities);
+    for (const folder of folders) mkdirSync(join(home, folder), { recursive: true });
+    const store = fakeOwnerStore();
+    const io = testIo(home, AGENT);
+    const code = await runSetup(['--signer', 'touch-id', '--team', 'acme'], io, { home, store, now: () => NOW });
+    if (code !== 0) throw new Error(io.err);
+    return { home, store };
+  }
+
+  test('a path that does not exist yet is resolved through its deepest folder: a link inside a root cannot carry it out', async () => {
+    const { home, store } = await signed('acme:\n  root: ~/repos\n', ['repos/web', 'outside']);
+    symlinkSync(join(home, 'outside'), join(home, 'repos', 'link'));
+    symlinkSync(join(home, 'nowhere'), join(home, 'repos', 'dangling'));
+    expect(resolvedTarget(join(home, 'repos', 'link', 'not-yet'))).toBe(join(home, 'outside', 'not-yet'));
+    expect(resolvedTarget(join(home, 'repos', 'dangling', 'x'))).toBeNull();
+    expect(resolvedTarget(join(home, 'repos', 'web', '..', '..', 'outside'))).toBeNull();
+    expect(charterRootsGate(home, join(home, 'repos', 'web', 'not-yet'), store).kind).toBe('admit');
+    expect(charterRootsGate(home, join(home, 'repos', 'link', 'not-yet'), store).kind).toBe('block');
+    expect(charterRootsGate(home, join(home, 'repos', 'dangling', 'x'), store).kind).toBe('block');
+  });
+
+  test('the charter is verified on every read: bytes changed with size and times put back are refused', async () => {
+    const { home, store } = await signed('acme:\n  root: ~/repos\n', ['repos/web']);
+    const text = teamText();
+    expect(validateTeamFile(text, { home, ownerSeatStore: store }).ok).toBe(true);
+    const path = charterPath(home);
+    const held = statSync(path);
+    const bytes = readFileSync(path, 'utf8');
+    const signature = /"signature":\s*"([0-9a-f])/.exec(bytes)!;
+    const swapped = signature[1] === '0' ? '1' : '0';
+    writeFileSync(path, bytes.replace(signature[0], signature[0].slice(0, -1) + swapped));
+    utimesSync(path, held.atime, held.mtime);
+    const after = validateTeamFile(text, { home, ownerSeatStore: store });
+    expect(after.ok).toBe(false);
+    if (!after.ok) expect(after.errors[0]!.message).toContain('the owner charter does not verify');
+  });
+
+  test('a ~ is only a leading ~/: one anywhere else in a folder is refused', () => {
+    for (const value of ['/srv/run~exclude', '~/repos~x', '~/~', '/srv/~/x']) {
+      expect(checkedRootPath(value, '/home/owner').ok, value).toBe(false);
+    }
+    expect(checkedRootPath('~/repos', '/home/owner')).toEqual({ ok: true, root: '/home/owner/repos' });
+  });
+
+  test('a shell line with a substitution, a here-document or eval is left as written, and listed', () => {
+    const home = homeWith('acme:\n  root: ~/repos\n');
+    for (const launch of [`codex --arg "$(printf '%s' '$HOME/repos')"`, 'codex --arg `echo ~/repos/x`', 'eval codex ~/repos/x', 'codex --x <(cat ~/repos/x)']) {
+      const plan = planRootRewrite(teamText({ launch }), home);
+      expect(plan.ok, launch).toBe(true);
+      if (!plan.ok) continue;
+      expect(plan.changes.filter((change) => change.after.includes('launch:')), launch).toEqual([]);
+      expect(plan.kept.length, launch).toBe(1);
+      expect(plan.kept[0]!.why).toContain('command substitution');
+    }
+  });
+
+  test('the launch refuses a seat whose inherited rule names a word this machine cannot fill', () => {
+    const home = homeWith('acme:\n  rules:\n    - "Never edit {root}/production."\n');
+    const read = validateTeamFile(teamText({ launch: 'codex', rules: ['Keep it short.'] }), { home, unfilled: 'keep' });
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    const problem = inheritedRulesProblem(read.team, join(home, '..', 'web'), home);
+    expect(problem).toBe('its entity\'s or project\'s rules write {root} or {worktrees}, and entity "acme" names no projects root on this machine: run `team config set acme.root <folder>`');
+    const seat: UpSeat = {
+      name: 'lead', cli: 'claude-code', launch: 'claude', vendor: 'anthropic', role: 'orchestrator',
+      model: 'Claude Opus', version: '5.5', cwd: '.', label: 'lead · orchestrator', displayAgent: 'Claude Opus 5.5',
+      repairLine: '`team down` then `team up`', stopped: false, rules: '', rulesProblem: problem!,
+    };
+    const plan = formatPlan(upPlan({ root: '/srv/acme/web', session: 'acme-web', sessionRunning: true, seats: [seat], watchAlive: true, watchLabel: 'Watch · acme-web' }));
+    expect(plan).toContain(`lead: would refuse: ${problem}`);
+    expect(plan).not.toContain('workspace create');
+    // With the root set, nothing is left to refuse.
+    const set = homeWith('acme:\n  root: /srv/acme/repos\n  rules:\n    - "Never edit {root}/production."\n');
+    const ok = validateTeamFile(teamText({ launch: 'codex', rules: ['Keep it short.'] }), { home: set });
+    expect(ok.ok && inheritedRulesProblem(ok.team, join(set, '..', 'web'), set)).toBeUndefined();
+  });
+
+  test('a read to stop or show a team leaves out a trust entry whose word cannot be filled', () => {
+    const home = homeWith('acme:\n  roots: [/x]\n');
+    const text = teamText().replace('workspace:\n', `trust:\n  - ${home}/.config/team/lobbies/acme\n  - "{root}/web"\nworkspace:\n`);
+    expect(validateTeamFile(text, { home }).ok).toBe(false);
+    const kept = validateTeamFile(text, { home, unfilled: 'keep' });
+    expect(kept.ok, JSON.stringify(kept)).toBe(true);
+    if (kept.ok) expect(kept.team.trust).toEqual([`${home}/.config/team/lobbies/acme`]);
+  });
+
+  test('a worktrees folder linked out of the root is signed where it really is', () => {
+    const home = homeWith('acme:\n  root: ~/repos\n');
+    mkdirSync(join(home, 'repos'), { recursive: true });
+    mkdirSync(join(home, 'elsewhere', 'worktrees'), { recursive: true });
+    symlinkSync(join(home, 'elsewhere', 'worktrees'), join(home, 'repos', 'worktrees'));
+    expect(defaultProjectRoots(home)).toEqual({ ok: true, roots: [join(home, 'repos'), join(home, 'elsewhere', 'worktrees')] });
+    // The default worktrees folder that does not exist yet adds nothing.
+    const fresh = homeWith('acme:\n  root: ~/repos\n');
+    mkdirSync(join(fresh, 'repos'), { recursive: true });
+    expect(defaultProjectRoots(fresh)).toEqual({ ok: true, roots: [join(fresh, 'repos')] });
+  });
+
+  test('the doctor says the folders are unsigned when only an entity rule names one', () => {
+    const home = homeWith('acme:\n  root: /srv/acme/repos\n  rules:\n    - "Never edit {root}/production."\n');
+    const text = teamText({ launch: 'codex', rules: ['Keep it short.'] });
+    const read = validateTeamFile(text, { home });
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(rootWordFindings(text, read.team, '/srv/acme/repos/web', home).some((finding) => finding.text.includes('it has no owner charter'))).toBe(true);
   });
 });

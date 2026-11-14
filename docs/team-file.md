@@ -417,9 +417,10 @@ team config unset acme.root
   is left alone, and a `{secret:<entry>}` word on the same launch line is filled as before.
 - A value that starts with the word is quoted (`"{root}/site"`): unquoted, YAML reads the brace as
   a map, and the reader says so.
-- A folder of an entity holds only letters, digits and `/ . _ - ~ @ +`: a launch line carries it as
-  it is, so a space, a quote, `$`, a backtick, a backslash or any of `;|&<>()*?[]{}` is refused
-  when the folder is set. It is an absolute path or `~/…`, never the filesystem's root, the home
+- A folder of an entity holds only letters, digits and `/ . _ - @ +` after a leading `~/`: a
+  launch line carries it as it is, so a space, a quote, `$`, a backtick, a backslash, any other
+  `~` (a pattern word to some shells' globbing) or any of `;|&<>()*?[]{}` is refused when the
+  folder is set. It is an absolute path or `~/…`, never the filesystem's root, the home
   itself, a folder above the home, or a path with a `..` segment.
 - The entities file is not signed, so a folder is bound to the owner's charter where there is one:
   the word is filled with the folder's real path (every link resolved), and that path must exist
@@ -430,15 +431,18 @@ team config unset acme.root
   inside the entity's folders (`cwd: "{root}/site"`, `path: "{worktrees}/site/{task}"`); an
   absolute path the file writes itself is still refused.
 - `team down` and `team status` read a team whose folder this machine no longer names, leaving
-  the word as written, so a running team can still be shown and stopped; every command that
-  launches refuses it.
+  the word as written and leaving out any `trust` entry that writes it, so a running team can
+  still be shown and stopped; every command that launches refuses it.
 - A file that writes `{root}` on a machine where its entity names no root, or that names no
   `entity:`, is refused when it is read — by `up`, `doctor`, `check` and every other command — on
   the first line that writes it, with the command that sets one. A launch never runs a literal
   `{root}`. A file that does not write the word reads exactly as before.
 - The entity's and the home project's rules (`<entity>.rules`, `project.<id>.rules`) read the word
   the same way, and a rule whose word this machine cannot fill refuses the team as the file's own
-  word would, even when the team file writes none.
+  word would, even when the team file writes none; a launch refuses the seat on the same rules
+  it would compose, the registry's home project included.
+- In a launch line or a setup step, a line that holds a command substitution, a here-document or
+  `eval` is never rewritten by `team migrate --root` or an editor: its paths are listed and left.
 - Setting the root of an entity, or moving it, changes what its `{root}` teams read at their next
   read: a running seat keeps the line it was launched with until it is launched again. An
   approval is bound to the paths as they were filled in when it was signed, so moving a root needs
@@ -454,6 +458,19 @@ team config unset acme.root
 - [`team doctor`](commands/doctor.md) warns about every value that writes a full path inside the
   entity's folders on this machine, and [`team migrate --root`](commands/migrate.md) rewrites those
   paths as `{root}/…` and `{worktrees}/…`: `--dry-run` first lists each line it would change.
+
+### What the root check protects, and what it does not
+
+The checks bind the words to what the owner signed: a folder is filled only with a real path that
+holds no shell character, and, on a machine with a charter, only inside a charter root that still
+resolves to what was signed. A link put in place of a signed root, a link inside a root that leads
+out of it, and an edit of the entities file to a folder outside the charter are each refused when
+the team is read, and the charter is verified on every read. What they do not do is hold a folder
+still between that read and the moment a seat's shell runs its line: a process of the same account
+can rename a checked folder and put a link in its place in between. An account can always change
+its own folders; these checks keep the team's words and the owner's signature in step, and are no
+boundary between processes of one account. A machine with no charter binds the folders to nothing,
+and `team doctor` says so.
 
 ### The worktrees folder: `{worktrees}`
 

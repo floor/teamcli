@@ -60,7 +60,7 @@ import { registryLaunches, upPlan } from '../launch/plan.ts';
 import { recordText } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
-import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
+import { inheritedRulesProblem, rulesOf, rulesOriginOf, withRulesProblem } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
@@ -695,6 +695,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       repairLine: relaunchRepair(team, seat.name, 'markdown'),
       stopped: false,
       rules: rulesOf(team, seat, root, undefined, rulesOriginOf(loaded.source), home),
+      ...withRulesProblem(inheritedRulesProblem(team, root, home)),
       // The same session display name a fresh `up` gives the seat: a relaunched claude session
       // reads its sender like every other surface, and a reload is how most seats get relaunched.
       sessionName: seatSessionName(seat, {
