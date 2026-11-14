@@ -31,6 +31,8 @@ const EN = {
   'page.approve_once': 'Approve once',
   'page.always_allow': 'Always allow',
   'page.deny': 'Deny',
+  'page.unreadable': 'This request cannot be read, so it cannot be answered here: {why}',
+  'page.changed': 'This request changed since it was shown; nothing was signed. Read the card again.',
   // The approval card (src/client/approval-card.ts): the owner must know instantly what she
   // accepts or rejects, with no extra context. The title is an action verb and its object in plain
   // words; the question is who wants it and why, ending `OK?`; the scope names the team and says

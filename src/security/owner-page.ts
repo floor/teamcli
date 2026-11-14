@@ -20,8 +20,8 @@ import { clearOwnerPageLink, writeOwnerPageLink } from '../client/owner-page-lin
 import { noteDeferral } from '../client/owner-later-notice.ts';
 import { addOwnerSigner, answerDeadline, deferralUntil, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, signOwnerLater, type AnswerWindow, type OwnerSeatKeyStore, type OwnerSeatLater } from '../client/owner-seat.ts';
 import { grantCard, ownerActionCard, ownerActionDetails, teamCreateCard, teamCreateDetails } from '../client/approval-card.ts';
-import { actionRequestsFolder, approveTeamCreate, TEAM_CREATE_TTL_MS, type TeamCreateParams } from '../client/team-create.ts';
-import { approveOwnerAction, OWNER_ACTION_ID_PATTERN, OWNER_ACTION_TTL_MS, OWNER_ACTIONS, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
+import { actionRequestsFolder, approveTeamCreate, readTeamCreateRecord, TEAM_CREATE_ID_PATTERN, TEAM_CREATE_TTL_MS, teamCreateSummary, type TeamCreateParams } from '../client/team-create.ts';
+import { approveOwnerAction, OWNER_ACTION_ID_PATTERN, OWNER_ACTION_TTL_MS, OWNER_ACTIONS, ownerActionSummary, readOwnerActionRecord, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
 import { answerChoiceOf, approveAsOwnerSeat, deferUntilOf, GRANT_REQUEST_ID_PATTERN, GRANT_REQUEST_TTL_MS, grantRequestsFolder, pendingGrantPrompt } from '../client/emission.ts';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { openRequestLink } from '../client/request-link.ts';
@@ -65,6 +65,12 @@ export type OwnerPageRequest = {
    * is never a card line; the card carries at most three plain lines.
    */
   details?: string;
+  /**
+   * The parameter hash of the request record this card was drawn from. The page sends it back
+   * with the answer, and a request that no longer has it is not signed. Absent on a card that
+   * cannot be answered (a record that cannot be read).
+   */
+  shown?: string;
 };
 
 /** The refusal the page shows when the passkey or signer is already on the owner seat. */
@@ -140,7 +146,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
   const { home, store, token } = options;
   const now = options.now ?? (() => new Date());
   const registrations = new Map<string, number>();
-  const pendingAnswers = new Map<string, { at: Date; challenge: string }>();
+  const pendingAnswers = new Map<string, { at: Date; challenge: string; shown?: string }>();
 
   const signerOfCredential = (credentialId: string) => readOwnerSeat(home)?.signers.find((s) => s.type === 'webauthn' && s.credential_id === credentialId);
   const assertionOf = (a: Assertion) => ({ authenticator_data: a.authenticatorData, client_data_json: a.clientDataJSON, signature: derB64urlToHex(a.signature) });
@@ -198,10 +204,12 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     id: string,
     word: string,
     at: Date,
-    via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } },
+    via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; expect?: string },
   ) => {
-    if (GRANT_REQUEST_ID_PATTERN.test(id)) return approveAsOwnerSeat(home, id, word, store, at, via);
+    // An owner action checks the hash it was shown inside its own answer; the others here.
     if (OWNER_ACTION_ID_PATTERN.test(id)) return approveOwnerAction(home, id, word, store, at, via);
+    if (via.expect !== undefined && currentHash(id) !== via.expect) return { ok: false as const, why: msg('page.changed') };
+    if (GRANT_REQUEST_ID_PATTERN.test(id)) return approveAsOwnerSeat(home, id, word, store, at, via);
     return approveTeamCreate(home, id, word, store, at, via);
   };
   // A later word is never an answer: it writes one signed deferral, and nothing is approved,
@@ -211,10 +219,11 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     id: string,
     word: string,
     at: Date,
-    via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } },
+    via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; expect?: string },
   ): { ok: true; choice: 'later'; until: string; notice: string } | { ok: false; why: string } => {
     const resolved = recordWindow(id);
     if (resolved === null) return { ok: false, why: `request ${id} has no readable record to defer` };
+    if (via.expect !== undefined && (resolved.window.params_sha256 !== via.expect || currentHash(id) !== via.expect)) return { ok: false, why: msg('page.changed') };
     if (!(answerDeadline(home, resolved.folder, id, resolved.window, store, at, ttlOf(id), resolved.entity) > at.getTime())) {
       return { ok: false, why: `request ${id} expired at ${resolved.window.expires_at}` };
     }
@@ -262,7 +271,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     id: string,
     word: string,
     at: Date,
-    via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } },
+    via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; expect?: string },
   ) => answerChoiceOf(word) === null ? deferAny(id, word, at, via) : approveAny(id, word, at, via);
   // The three later buttons, each with the exact instant it returns the card.
   const deferChoices = (): Record<string, string> => {
@@ -276,6 +285,52 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
   };
   // The page signs with a passkey: the first webauthn owner signer is the one the prompt names.
   const webauthnSignerName = () => readOwnerSeat(home)?.signers.find((s) => s.type === 'webauthn')?.name ?? null;
+  // The hash of the request record as it stands now: an owner action or a team-create request read
+  // whole (bound to its hash, its words matching its argument hashes), a grant from its signed
+  // record. Null when it cannot be read.
+  const currentHash = (id: string): string | null => {
+    if (OWNER_ACTION_ID_PATTERN.test(id)) {
+      const record = readOwnerActionRecord(home, id);
+      return typeof record === 'string' ? null : record.params_sha256;
+    }
+    if (TEAM_CREATE_ID_PATTERN.test(id)) {
+      const record = readTeamCreateRecord(home, id);
+      return typeof record === 'string' ? null : record.params_sha256;
+    }
+    return GRANT_REQUEST_ID_PATTERN.test(id) ? recordWindow(id)?.window.params_sha256 ?? null : null;
+  };
+  // The card for one inbox message. An owner action or a team-create request is drawn from its own
+  // record, never from the inbox copy beside it, which any process of the account can write; a
+  // record that cannot be read is shown as such and cannot be answered. A grant's prompt is read
+  // from its signed record. Each card carries the hash it was drawn from.
+  const pageCard = (m: { request_id: string; text?: string; kind?: string; summary?: unknown }): OwnerPageRequest => {
+    const id = m.request_id;
+    const unreadable = (why: string): OwnerPageRequest => ({
+      id, text: '', title: msg('card.title.approval'), description: msg('page.unreadable', { why }), onceOnly: true, details: msg('card.details.request', { id }),
+    });
+    if (OWNER_ACTION_ID_PATTERN.test(id)) {
+      const record = readOwnerActionRecord(home, id);
+      if (typeof record === 'string') return unreadable(record);
+      const text = `Request ${id}: ${ownerActionSummary(record.params)}`;
+      return { ...ownerPageRequest({ request_id: id, kind: 'owner-action-confirmation', text, summary: record.params, params_sha256: record.params_sha256 }), shown: record.params_sha256 };
+    }
+    if (TEAM_CREATE_ID_PATTERN.test(id)) {
+      const record = readTeamCreateRecord(home, id);
+      if (typeof record === 'string') return unreadable(record);
+      const text = `Team request ${id}: ${teamCreateSummary(record.params)}`;
+      return { ...ownerPageRequest({ request_id: id, kind: 'team-create-confirmation', text, summary: record.params, params_sha256: record.params_sha256 }), shown: record.params_sha256 };
+    }
+    const card = ownerPageRequest(m, GRANT_REQUEST_ID_PATTERN.test(id) ? pendingGrantPrompt(home, id, now(), webauthnSignerName()) : null);
+    const shown = currentHash(id);
+    return shown === null ? card : { ...card, shown };
+  };
+  // Whether an answer may be asked for or signed: the request still has the hash its card showed.
+  // An owner action or team-create request must name it; a grant is checked when it does.
+  const stillShown = (id: string, shown: unknown): boolean => {
+    const needed = OWNER_ACTION_ID_PATTERN.test(id) || TEAM_CREATE_ID_PATTERN.test(id);
+    if (typeof shown !== 'string') return !needed;
+    return currentHash(id) === shown;
+  };
   const state = () => {
     const seat = readOwnerSeat(home);
     const proposal = readProposal(home);
@@ -286,7 +341,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       requests: ownerSeatMessages(home)
         .filter((m) => SHOWN_KINDS.has((m as { kind?: string }).kind ?? ''))
         .filter((m) => !answeredOrHidden(m.request_id))
-        .map((m) => ({ ...ownerPageRequest(m as { request_id: string; text?: string; kind?: string; summary?: unknown }, GRANT_REQUEST_ID_PATTERN.test(m.request_id) ? pendingGrantPrompt(home, m.request_id, now(), webauthnSignerName()) : null), defer: deferChoices() })),
+        .map((m) => ({ ...pageCard(m as { request_id: string; text?: string; kind?: string; summary?: unknown }), defer: deferChoices() })),
       rp_id: OWNER_PAGE_RP_ID,
     };
   };
@@ -338,12 +393,15 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       const word = String(b.word ?? '');
       const signer = signerOfCredential(String(b.credentialId ?? ''));
       if (signer === undefined) return { status: 400, body: { error: 'unknown passkey' } };
+      // The hash the card showed, before any challenge: a request that changed since is not asked.
+      if (!stillShown(id, b.shown)) return { status: 409, body: { error: msg('page.changed') } };
+      const shown = typeof b.shown === 'string' ? b.shown : undefined;
       const at = now();
       // Asked without an assertion, the signer names the exact challenge; nothing is written.
-      const probe = answerOrDefer(id, word, at, { signer: signer.name });
+      const probe = answerOrDefer(id, word, at, { signer: signer.name, ...(shown !== undefined ? { expect: shown } : {}) });
       const challenge = !probe.ok ? /sign challenge (\S+)/.exec(probe.why)?.[1] : undefined;
       if (challenge === undefined) return { status: 400, body: { error: probe.ok ? 'unexpected' : probe.why } };
-      pendingAnswers.set(`${id}:${word}:${signer.name}`, { at, challenge });
+      pendingAnswers.set(`${id}:${word}:${signer.name}`, { at, challenge, ...(shown !== undefined ? { shown } : {}) });
       return { status: 200, body: { challenge } };
     },
     'POST /api/team-create/answer': (b) => {
@@ -352,7 +410,9 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       const pending = signer === undefined ? undefined : pendingAnswers.get(`${a.id}:${a.word}:${signer.name}`);
       if (signer === undefined || pending === undefined) return { status: 400, body: { error: 'no challenge was issued for this answer' } };
       pendingAnswers.delete(`${a.id}:${a.word}:${signer.name}`);
-      const answered = answerOrDefer(a.id, a.word, pending.at, { signer: signer.name, assertion: assertionOf(a) });
+      // The challenge was issued for the hash the card showed; the request must still have it.
+      if (!stillShown(a.id, pending.shown)) return { status: 409, body: { error: msg('page.changed') } };
+      const answered = answerOrDefer(a.id, a.word, pending.at, { signer: signer.name, assertion: assertionOf(a), ...(pending.shown !== undefined ? { expect: pending.shown } : {}) });
       return answered.ok
         ? { status: 200, body: { ok: true, choice: answered.choice, ...('until' in answered ? { until: answered.until, notice: answered.notice } : {}) } }
         : { status: 400, body: { error: answered.why } };
@@ -370,8 +430,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
   };
   const cardOf = (id: string) => {
     const message = ownerSeatMessages(home).find((m) => m.request_id === id) as { request_id: string; text?: string; kind?: string; summary?: unknown } | undefined;
-    const prompt = pendingGrantPrompt(home, id, now(), webauthnSignerName());
-    return ownerPageRequest(message ?? { request_id: id, kind: 'grant-confirmation' }, prompt);
+    return pageCard(message ?? { request_id: id, kind: 'grant-confirmation' });
   };
   const linkRoute = (method: string, id: string, action: string, b: Record<string, unknown>): { status: number; body: unknown } => {
     if (method === 'POST' && action === 'open') {
@@ -384,13 +443,15 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     }
     if (method !== 'POST' || !sessionFor(id, b)) return { status: 403, body: { error: 'open this request from its link first' } };
     const word = String(b.word ?? '');
-    if (action === 'challenge') return routes['POST /api/team-create/challenge']!({ id, word, credentialId: b.credentialId });
+    if (action === 'challenge') return routes['POST /api/team-create/challenge']!({ id, word, credentialId: b.credentialId, ...(b.shown !== undefined ? { shown: b.shown } : {}) });
     if (action === 'answer') return routes['POST /api/team-create/answer']!({ ...b, id, word });
     if (action === 'touch-id') {
-      // The Mac's Secure Enclave signer: Touch ID in the owner's session signs the answer.
+      // The Mac's Secure Enclave signer: Touch ID in the owner's session signs the answer, for the
+      // request the card showed and no other.
       const signer = readOwnerSeat(home)?.signers.find((x) => x.type === 'mac-keystore');
       if (signer === undefined) return { status: 400, body: { error: 'no Touch ID signer on the owner seat' } };
-      const answered = answerOrDefer(id, word, now(), { signer: signer.name });
+      if (!stillShown(id, b.shown)) return { status: 409, body: { error: msg('page.changed') } };
+      const answered = answerOrDefer(id, word, now(), { signer: signer.name, ...(typeof b.shown === 'string' ? { expect: b.shown } : {}) });
       return answered.ok
         ? { status: 200, body: { ok: true, choice: answered.choice, ...('until' in answered ? { until: answered.until, notice: answered.notice } : {}) } }
         : { status: 400, body: { error: answered.why } };
@@ -500,9 +561,10 @@ async function register() {
   log('Passkey ' + name + ' saved.'); load();
 }
 async function signProfile() { const a = await assertOver(S.proposal.challenge); const r = await api('POST', '/api/profile/sign', a); log('Profile signed. ' + r.profile); load(); }
-async function answer(id, word) {
+async function answer(card, word) {
   const first = S.seat.signers.find(s => s.type === 'webauthn');
-  const ch = await api('POST', '/api/team-create/challenge', { id, word, credentialId: first.credential_id });
+  const id = card.id;
+  const ch = await api('POST', '/api/team-create/challenge', { id, word, credentialId: first.credential_id, shown: card.shown });
   const a = await assertOver(ch.challenge);
   const r = await api('POST', '/api/team-create/answer', { ...a, id, word }); log('Answer saved: ' + r.choice); load();
 }
@@ -512,7 +574,7 @@ let stamp = '';
 async function load() {
   if (busy) return;
   const next = await api('GET', '/api/state');
-  const mark = JSON.stringify([next.profile, next.proposal, (next.requests || []).map(r => r.id + '\\n' + (r.title || '') + '\\n' + r.onceOnly + '\\n' + (r.description || '') + '\\n' + (r.scope || '') + '\\n' + (r.details || '') + '\\n' + r.text), next.seat]);
+  const mark = JSON.stringify([next.profile, next.proposal, (next.requests || []).map(r => r.id + '\\n' + (r.title || '') + '\\n' + r.onceOnly + '\\n' + (r.description || '') + '\\n' + (r.scope || '') + '\\n' + (r.details || '') + '\\n' + r.text + '\\n' + (r.shown || '')), next.seat]);
   S = next;
   if (mark === stamp) return;
   stamp = mark;
@@ -534,7 +596,7 @@ async function load() {
       const always = r.onceOnly ? '' : '<button data-w="always">${msg('page.always_allow')}</button>';
       const details = '<details><summary>${msg('page.details')}</summary><p class="hint">' + esc(r.details || '') + '</p></details>';
       const d = card('<b>' + esc(r.title || '${msg('page.title.grant')}') + '</b><p>' + esc(r.description) + '</p>' + scope + details + '<button data-w="oui">${msg('page.approve_once')}</button>' + always + '<button data-w="non">${msg('page.deny')}</button>' + '<button data-w="later">Later</button><button data-w="tomorrow">Tomorrow</button><button data-w="monday">Monday</button>');
-      d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r.id, btn.dataset.w)));
+      d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r, btn.dataset.w)));
       continue;
     }
     const hint = r.onceOnly
@@ -543,7 +605,7 @@ async function load() {
     const details = r.details ? '<details><summary>Details</summary><p class="hint">' + esc(r.details) + '</p></details>' : '';
     const always = r.onceOnly ? '' : '<button data-w="always">Always allow</button>';
     const d = card('<b>' + esc(r.title || 'Approval') + '</b><p>' + esc(r.description) + '</p>' + scope + details + '<p class="hint">' + hint + '</p><button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button><button data-w="later">Later</button><button data-w="tomorrow">Tomorrow</button><button data-w="monday">Monday</button>');
-    d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r.id, btn.dataset.w)));
+    d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r, btn.dataset.w)));
   }
 }
 load().catch(e => log(e.message));
@@ -572,13 +634,13 @@ let S;
 async function answer(word) {
   const passkey = S.signers.find(s => s.type === 'webauthn');
   if (passkey) {
-    const ch = await post('challenge', { session: S.session, word, credentialId: passkey.credential_id });
+    const ch = await post('challenge', { session: S.session, word, credentialId: passkey.credential_id, shown: S.request.shown });
     const c = await navigator.credentials.get({ publicKey: { challenge: unb64u(ch.challenge), rpId: S.rp_id, allowCredentials: [{ type: 'public-key', id: unb64u(passkey.credential_id) }], userVerification: 'required', timeout: 120000 } });
     const r = await post('answer', { session: S.session, word, credentialId: b64u(c.rawId), authenticatorData: b64u(c.response.authenticatorData), clientDataJSON: b64u(c.response.clientDataJSON), signature: b64u(c.response.signature) });
     return log('Answer saved: ' + r.choice);
   }
   log('Confirm with Touch ID on the Mac…');
-  const r = await post('touch-id', { session: S.session, word });
+  const r = await post('touch-id', { session: S.session, word, shown: S.request.shown });
   log('Answer saved: ' + r.choice);
 }
 (async () => {
