@@ -12,6 +12,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { entityRules } from '../entities.ts';
+import { filledRules } from '../file/root-word.ts';
 import type { Mode, TeamFile } from '../file/types.ts';
 import { projectRules } from '../registry/projects.ts';
 import { parseYaml, type YamlNode } from '../yaml.ts';
@@ -102,9 +103,11 @@ export function resolveWorkSettings(
     leadSelfService: effective<OnOff>(chain, 'leads.self-service', 'on'),
     ownerReservedScope: { value: withReservedFloor(reserved.value), from: reserved.from },
     entityName,
-    entityRules: entityRules(options.home, entityName),
+    // `{root}` in an entity's or project's rules reads as the team file's does: this machine's
+    // projects root of the entity (src/file/root-word.ts).
+    entityRules: filledRules(entityRules(options.home, entityName), options.home, entityName),
     projectName,
-    projectRules: projectRules(options.home, projectName),
+    projectRules: filledRules(projectRules(options.home, projectName), options.home, entityName),
     ...(chain.ok ? {} : { unreadable: chain.refusals.map((r) => r.message).join('; ') }),
   };
 }

@@ -291,7 +291,11 @@ function readFlow(text: string, at: number, n: number): { node: YamlNode; end: n
       const key = readFlowScalar(text, i, n, true);
       if (key.node.kind !== 'scalar') throw new YamlError(n, 'a key in "{ }" must be a plain or quoted word');
       i = skipSpaces(text, key.end);
-      if (text[i] !== ':') throw new YamlError(n, 'expected "key: value" inside "{ }"');
+      if (text[i] !== ':') {
+        // `{root}/…` unquoted reads as a flow map: say what the writer meant (src/file/root-word.ts).
+        if (text.startsWith('{root}', at)) throw new YamlError(n, 'a value that starts with {root} must be quoted: write "{root}/…"');
+        throw new YamlError(n, 'expected "key: value" inside "{ }"');
+      }
       const name = key.node.quoted ? String(key.node.value) : key.node.raw;
       refuseKeyName(name, n);
       if (seen.has(name)) throw new YamlError(n, `duplicate key "${name}"`);

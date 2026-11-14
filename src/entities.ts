@@ -15,7 +15,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, normalize } from 'node:path';
 import { editedRecordText, getAt, withValue } from './config/team-record.ts';
 import { leadWordProblem } from './lead.ts';
 import { cloneRulesMap, currentRunMemo } from './run-memo.ts';
@@ -127,6 +127,54 @@ export function declaredRoots(home: string): Map<string, string[]> {
     if (list.length > 0) out.set(entry.key, list);
   }
   return out;
+}
+
+/** The key of an entity's projects root in its entry: `<entity>: { root: <path> }`. */
+export const ENTITY_ROOT_KEY = 'root';
+
+/** One entity's projects root on this machine: the folder its repositories sit directly under,
+ *  as an absolute path; null when the entry writes none; or why the word it writes does not read. */
+export type EntityRootRead = { ok: true; root: string | null } | { ok: false; why: string };
+
+/**
+ * A projects root as the owner writes it, checked and made absolute: an absolute path, or `~` or
+ * `~/…` under `home`. Trailing slashes are dropped, so `{root}/docs` never doubles one. A relative
+ * path, the filesystem's own root, a path that names the root word itself, and a value with a
+ * control character are refused: each would make `{root}` mean something the owner did not write.
+ */
+export function checkedRootPath(value: string, home: string): { ok: true; root: string } | { ok: false; why: string } {
+  const written = value.trim();
+  if (written === '') return { ok: false, why: 'a projects root must name a folder' };
+  if (/[\u0000-\u001f\u007f]/.test(written)) return { ok: false, why: 'a projects root holds no control character' };
+  if (written.includes('{root}')) return { ok: false, why: 'a projects root cannot name {root} itself' };
+  let path: string;
+  if (written === '~') path = home;
+  else if (written.startsWith('~/')) path = join(home, written.slice(2));
+  else if (written.startsWith('/')) path = written;
+  else return { ok: false, why: `"${written}" is not an absolute path: write /… or ~/…` };
+  path = normalize(path).replace(/\/+$/, '');
+  if (path === '') return { ok: false, why: 'a projects root cannot be the filesystem root' };
+  return { ok: true, root: path };
+}
+
+/**
+ * The entity's projects root on this machine, from its entry's `root:` word in the owner's
+ * entities file. The file is the machine's own, never a team's, so a team that writes `{root}`
+ * launches wherever its entity's entry names the folder. Absent when the file, the entry or the
+ * word is absent; a word that does not read is refused, never read as no word, so a typo does not
+ * fill `{root}` with a guess.
+ */
+export function entityProjectsRoot(home: string, entity: string | null): EntityRootRead {
+  if (entity === null) return { ok: true, root: null };
+  const entry = entityEntries(home).find((candidate) => candidate.key === entity);
+  if (entry === undefined || entry.value.kind !== 'map') return { ok: true, root: null };
+  const field = entry.value.entries.find((candidate) => candidate.key === ENTITY_ROOT_KEY);
+  if (field === undefined) return { ok: true, root: null };
+  const value = field.value.kind === 'scalar' ? field.value.value : undefined;
+  if (typeof value !== 'string') return { ok: false, why: `entity "${entity}" root must be one folder path` };
+  const checked = checkedRootPath(value, home);
+  if (!checked.ok) return { ok: false, why: `entity "${entity}" root: ${checked.why}` };
+  return { ok: true, root: checked.root };
 }
 
 /**

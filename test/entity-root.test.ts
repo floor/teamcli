@@ -1,0 +1,341 @@
+// Each entity has one projects root per machine, named in the machine's own entities file
+// (`<entity>: { root: <folder> }`), and a team file names it `{root}` (src/file/root-word.ts): the
+// same file reads on every machine. Every scene is a synthetic home under a scratch root; no live
+// registry, entities file or store is read, and no launch runs.
+import { afterAll, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { runConfig } from '../src/commands/config.ts';
+import { rootWordFindings } from '../src/commands/doctor.ts';
+import { runMigrate } from '../src/commands/migrate.ts';
+import { checkedRootPath, entitiesPath, entityProjectsRoot } from '../src/entities.ts';
+import { fillRootWord, filledRules, hasRootWord, planRootRewrite, rootPathUses } from '../src/file/root-word.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
+import { fillSecretWords } from '../src/launch/secret-words.ts';
+import type { SecretStore } from '../src/secrets/store.ts';
+import { formatPlan, upPlan, type UpSeat } from '../src/launch/plan.ts';
+import { rulesOf } from '../src/launch/rules.ts';
+import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
+import { parseYaml } from '../src/yaml.ts';
+import { intoRegistry } from './helpers/registry-team.ts';
+import { fixtureBase, gitEnv, testIo } from './helpers.ts';
+
+const made: string[] = [];
+afterAll(() => {
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+/** A scratch home whose entities file says `entities` (absent: no file). */
+function homeWith(entities?: string): string {
+  const base = fixtureBase('.entity-root-');
+  made.push(base);
+  const home = join(base, 'home');
+  mkdirSync(join(home, '.config', 'team'), { recursive: true });
+  if (entities !== undefined) writeFileSync(entitiesPath(home), entities);
+  return home;
+}
+
+/** A team of entity `acme` (or none) whose launch line, rules and brief name `{root}`. */
+function teamText(options: { entity?: string | null; launch?: string; rules?: string[]; brief?: string } = {}): string {
+  const entity = options.entity === undefined ? 'acme' : options.entity;
+  return [
+    'format: 1',
+    'project: web',
+    ...(entity === null ? [] : [`entity: ${entity}`]),
+    'operator: lead',
+    '# the knowledge base sits beside the code',
+    'rules:',
+    ...(options.rules ?? ['"Docs for this team live in {root}/docs/web/."']).map((rule) => `  - ${rule}`),
+    'workspace:',
+    '  mode: shared',
+    'seats:',
+    '  - role: orchestrator',
+    '    name: lead',
+    '    leads: true',
+    '    cli: codex',
+    '    vendor: openai',
+    '    model: GPT Sol',
+    '    version: "6.1"',
+    `    launch: ${options.launch ?? 'zsh {root}/docs/tools/as-acme.sh codex -m gpt-6.1-sol'}`,
+    ...(options.brief === undefined ? [] : [`    brief: ${options.brief}`]),
+    '',
+  ].join('\n');
+}
+
+describe('the projects root an entity names on this machine', () => {
+  test('an absolute path or one under the home reads as an absolute folder, trailing slash dropped', () => {
+    expect(checkedRootPath('/home/acme', '/home/owner')).toEqual({ ok: true, root: '/home/acme' });
+    expect(checkedRootPath('~/Code/acme/', '/home/owner')).toEqual({ ok: true, root: '/home/owner/Code/acme' });
+    expect(checkedRootPath('~', '/home/acme')).toEqual({ ok: true, root: '/home/acme' });
+  });
+
+  test('a relative path, the filesystem root, the word itself and a control character are refused', () => {
+    for (const value of ['Code/acme', './acme', '/', '', '{root}/x', '/home/a\nb']) {
+      expect(checkedRootPath(value, '/home/owner').ok, JSON.stringify(value)).toBe(false);
+    }
+  });
+
+  test('the entities file holds it under the entity; absent reads as none, a bad word is refused', () => {
+    const home = homeWith('acme:\n  root: ~/Code/acme\nother:\n  roots: [/x]\nbroken:\n  root: Code/broken\n');
+    expect(entityProjectsRoot(home, 'acme')).toEqual({ ok: true, root: join(home, 'Code', 'acme') });
+    expect(entityProjectsRoot(home, 'other')).toEqual({ ok: true, root: null });
+    expect(entityProjectsRoot(home, 'missing')).toEqual({ ok: true, root: null });
+    expect(entityProjectsRoot(home, null)).toEqual({ ok: true, root: null });
+    expect(entityProjectsRoot(home, 'broken').ok).toBe(false);
+  });
+});
+
+describe('the word', () => {
+  test('{root} is filled wherever it stands; the shell\'s ${root} is left alone', () => {
+    expect(hasRootWord('zsh {root}/x.sh')).toBe(true);
+    expect(hasRootWord('echo ${root}/x')).toBe(false);
+    expect(fillRootWord('cd {root}/a && ls ${root} {root}', '/srv/acme')).toBe('cd /srv/acme/a && ls ${root} /srv/acme');
+    // A folder holding `$&` is placed as written, never read as a replacement pattern.
+    expect(fillRootWord('{root}/x', '/srv/$&')).toBe('/srv/$&/x');
+  });
+
+  test('an unquoted value that starts with the word is refused with the repair', () => {
+    expect(() => parseYaml('cwd: {root}/app')).toThrow('a value that starts with {root} must be quoted');
+  });
+});
+
+describe('a team file that writes {root}', () => {
+  test('its launch line, rules and brief read this machine\'s folder', () => {
+    const home = homeWith('acme:\n  root: /srv/acme\n');
+    const checked = validateTeamFile(teamText({ brief: '"{root}/docs/briefs/lead.md"' }), { home });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const seat = checked.team.seats[0]!;
+    expect(seat.launch).toBe('zsh /srv/acme/docs/tools/as-acme.sh codex -m gpt-6.1-sol');
+    expect(seat.brief).toBe('/srv/acme/docs/briefs/lead.md');
+    expect(checked.team.rules).toEqual(['Docs for this team live in /srv/acme/docs/web/.']);
+    const rules = rulesOf(checked.team, seat, '/srv/acme/web', undefined, 'file', home);
+    expect(rules).toContain('- Docs for this team live in /srv/acme/docs/web/.');
+    expect(rules).toContain('/srv/acme/docs/briefs/lead.md');
+    expect(rules).not.toContain('{root}');
+  });
+
+  test('the same text reads each machine\'s own folder', () => {
+    const text = teamText();
+    const mac = validateTeamFile(text, { home: homeWith('acme:\n  root: ~/Code/acme\n') });
+    const server = validateTeamFile(text, { home: homeWith('acme:\n  root: /home/acme\n') });
+    expect(mac.ok && mac.team.seats[0]!.launch).toMatch(/^zsh \/.+\/home\/Code\/acme\/docs\/tools\/as-acme\.sh /);
+    expect(server.ok && server.team.seats[0]!.launch).toBe('zsh /home/acme/docs/tools/as-acme.sh codex -m gpt-6.1-sol');
+  });
+
+  test('no root on this machine refuses the file, naming the line and the command that sets one', () => {
+    for (const entities of [undefined, 'acme:\n  roots: [/srv]\n']) {
+      const checked = validateTeamFile(teamText(), { home: homeWith(entities) });
+      expect(checked.ok).toBe(false);
+      if (checked.ok) continue;
+      expect(checked.errors).toEqual([{
+        line: 7,
+        message: 'the file writes {root}, and entity "acme" names no projects root on this machine: run `team config set acme.root <folder>`',
+      }]);
+    }
+  });
+
+  test('a team with no entity, and an entity whose root does not read, are refused too', () => {
+    const none = validateTeamFile(teamText({ entity: null }), { home: homeWith('acme:\n  root: /srv/acme\n') });
+    expect(none.ok).toBe(false);
+    if (!none.ok) expect(none.errors[0]!.message).toContain('names no entity');
+    const bad = validateTeamFile(teamText(), { home: homeWith('acme:\n  root: srv/acme\n') });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.errors[0]!.message).toContain('{root} cannot be filled: entity "acme" root:');
+  });
+
+  test('a file without the word reads exactly as before, with or without a root', () => {
+    const text = teamText({ launch: 'codex -m gpt-6.1-sol', rules: ['Run the tests your change touches.'] });
+    const before = validateTeamFile(text, { home: homeWith() });
+    const after = validateTeamFile(text, { home: homeWith('acme:\n  root: /srv/acme\n') });
+    expect(before.ok && after.ok).toBe(true);
+    if (before.ok && after.ok) expect(after.team).toEqual(before.team);
+  });
+
+  test('a secret word on the same line is still filled from the store', () => {
+    const home = homeWith('acme:\n  root: /srv/acme\n');
+    const checked = validateTeamFile(teamText({ launch: 'OPENAI_API_KEY={secret:openai-acme} zsh {root}/docs/tools/as-acme.sh codex' }), { home });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const line = checked.team.seats[0]!.launch;
+    expect(line).toBe('OPENAI_API_KEY={secret:openai-acme} zsh /srv/acme/docs/tools/as-acme.sh codex');
+    const store: SecretStore = { read: async () => ({ ok: false, reason: 'not read' }), lookupCommand: (name: string) => ({ ok: true, command: `lookup ${name}` }) };
+    expect(fillSecretWords(line, store)).toEqual({ ok: true, line: 'OPENAI_API_KEY="$(lookup openai-acme)" zsh /srv/acme/docs/tools/as-acme.sh codex', entries: ['openai-acme'] });
+  });
+
+  test('the launch plan runs the filled line, never a literal {root}', () => {
+    const home = homeWith('acme:\n  root: /srv/acme\n');
+    const checked = validateTeamFile(teamText({ launch: 'zsh {root}/docs/tools/as-acme.sh claude' }), { home });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const seat: UpSeat = {
+      name: 'lead', cli: 'claude-code', launch: checked.team.seats[0]!.launch, vendor: 'anthropic', role: 'orchestrator',
+      model: 'Claude Opus', version: '5.5', cwd: '.', label: 'lead · orchestrator', displayAgent: 'Claude Opus 5.5',
+      repairLine: '`team down` then `team up` (to restart the whole team)', stopped: false, rules: '',
+    };
+    const text = formatPlan(upPlan({ root: '/srv/acme/web', session: 'acme-web', sessionRunning: true, seats: [seat], watchAlive: true, watchLabel: 'Watch · acme-web' }));
+    expect(text).toContain('/srv/acme/docs/tools/as-acme.sh');
+    expect(text).not.toContain('{root}');
+  });
+
+  test('an entity\'s and a project\'s rules read the word the same way', () => {
+    const home = homeWith('acme:\n  root: /srv/acme\n');
+    expect(filledRules(['Notes go in {root}/docs/notes.', 'Keep it short.'], home, 'acme')).toEqual(['Notes go in /srv/acme/docs/notes.', 'Keep it short.']);
+    // No root here: the rule keeps the word, and the doctor names it (below).
+    expect(filledRules(['Notes go in {root}/docs.'], homeWith(), 'acme')).toEqual(['Notes go in {root}/docs.']);
+  });
+});
+
+describe('the doctor names full paths inside the root', () => {
+  test('the absolute and the home forms are named, once per value; a longer path is not', () => {
+    const home = homeWith('acme:\n  root: ~/Code/acme\n');
+    const text = teamText({
+      launch: `zsh ~/Code/acme/docs/tools/as-acme.sh codex`,
+      rules: [`"Never commit in ${home}/Code/acme/site itself."`, `"Scratch lives in ${home}/Code/acme-scratch."`, '"Docs: {root}/docs."'],
+    });
+    const uses = rootPathUses(text, home);
+    expect(uses.map((use) => [use.line, use.field, use.written])).toEqual([
+      [7, 'rules.0', `${home}/Code/acme`],
+      [20, 'seats.0.launch', '~/Code/acme'],
+    ]);
+    const checked = validateTeamFile(text, { home });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const findings = rootWordFindings(text, checked.team, join(home, 'Code', 'acme', 'web'), home);
+    expect(findings.map((finding) => finding.level)).toEqual(['warn', 'warn']);
+    expect(findings[1]!.text).toContain('the file, line 20: seats.0.launch writes ~/Code/acme, the entity\'s projects root on this machine: write {root} in its place');
+  });
+
+  test('no root on this machine: nothing to compare with, so nothing is named', () => {
+    const home = homeWith();
+    expect(rootPathUses(teamText({ launch: `zsh ${home}/Code/acme/x.sh` }), home)).toEqual([]);
+  });
+});
+
+describe('rewriting full paths as {root}', () => {
+  test('a dry plan rewrites only the root paths, keeps comments, and quotes a value that starts with the word', () => {
+    const home = homeWith('acme:\n  root: ~/Code/acme\n');
+    const text = teamText({
+      launch: 'zsh ~/Code/acme/docs/tools/as-acme.sh codex # the wrapper',
+      rules: [`${home}/Code/acme/docs/web is the knowledge base`, `"Never commit in ${home}/Code/acme/site itself."`],
+      brief: `${home}/Code/acme/docs/briefs/lead.md`,
+    });
+    const plan = planRootRewrite(text, home);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.changes.map((change) => [change.line, change.after.trim()])).toEqual([
+      [7, "- '{root}/docs/web is the knowledge base'"],
+      [8, '- "Never commit in {root}/site itself."'],
+      [19, 'launch: zsh {root}/docs/tools/as-acme.sh codex # the wrapper'],
+      [20, "brief: '{root}/docs/briefs/lead.md'"],
+    ]);
+    expect(plan.text).toContain('# the knowledge base sits beside the code');
+    // Read back on this machine, the rewrite is the same team, every root path absolute.
+    const before = validateTeamFile(text, { home });
+    const after = validateTeamFile(plan.text, { home });
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(after.team.rules).toEqual(before.team.rules);
+    expect(after.team.seats[0]!.brief).toBe(before.team.seats[0]!.brief);
+    expect(after.team.seats[0]!.launch).toBe(`zsh ${home}/Code/acme/docs/tools/as-acme.sh codex`);
+  });
+
+  test('with no root set, the plan is refused with the command that sets one', () => {
+    const plan = planRootRewrite(teamText(), homeWith());
+    expect(plan).toEqual({ ok: false, why: 'entity "acme" names no projects root on this machine: run `team config set acme.root <folder>`' });
+  });
+});
+
+/** A home with an entities file, and one team checkout moved into its registry. */
+function world(text: (home: string) => string, entities: string): { home: string; root: string } {
+  const home = homeWith(entities);
+  const root = join(home, '..', 'web');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore', env: gitEnv() });
+  writeFileSync(join(root, '.agents', 'team.yaml'), text(home));
+  intoRegistry(root, home);
+  return { home, root };
+}
+
+const SEAT_CALLER = { kind: 'seat' as const, name: 'lead', pane: 'w1:p1' };
+
+describe('team migrate --root', () => {
+  test('--dry-run lists every line and writes nothing; the owner\'s run writes those lines and says each', async () => {
+    const { home, root } = world(
+      (at) => teamText({ launch: `zsh ${at}/Code/acme/docs/tools/as-acme.sh codex`, rules: ['Keep it short.'] }),
+      'acme:\n  roots: [/x]\n',
+    );
+    const record = (): string => readStoredTeamConfig(home, teamIdOf(root))!.text;
+    const stored = record();
+
+    // No root yet: the dry run is refused, and says how to set one.
+    const unset = testIo(root, { kind: 'owner' });
+    expect(await runMigrate(['--root', '--dry-run'], unset, { home })).toBe(1);
+    expect(unset.err).toContain('run `team config set acme.root <folder>`');
+
+    const set = testIo(root, { kind: 'owner' });
+    expect(await runConfig(['set', 'acme.root', '~/Code/acme'], set, { home })).toBe(0);
+    expect(set.out).toContain(`set acme.root: ~/Code/acme (${home}/Code/acme)`);
+    expect(readFileSync(entitiesPath(home), 'utf8')).toContain('root: ~/Code/acme');
+
+    const dry = testIo(root, { kind: 'owner' });
+    expect(await runMigrate(['--root', '--dry-run'], dry, { home })).toBe(0);
+    expect(dry.out).toContain('would rewrite 1 line to {root}');
+    expect(dry.out).toContain('+ launch: zsh {root}/docs/tools/as-acme.sh codex');
+    expect(record()).toBe(stored);
+
+    // Only the owner writes it.
+    const seat = testIo(root, SEAT_CALLER);
+    expect(await runMigrate(['--root'], seat, { home })).toBe(1);
+    expect(seat.err).toContain('only the owner rewrites');
+    expect(record()).toBe(stored);
+
+    const apply = testIo(root, { kind: 'owner' });
+    expect(await runMigrate(['--root'], apply, { home })).toBe(0);
+    expect(apply.out).toContain('rewrote 1 line to {root}');
+    expect(record()).toContain('launch: zsh {root}/docs/tools/as-acme.sh codex');
+    expect(record()).toContain('# the knowledge base sits beside the code');
+
+    const again = testIo(root, { kind: 'owner' });
+    expect(await runMigrate(['--root', '--dry-run', '--json'], again, { home })).toBe(0);
+    expect(JSON.parse(again.out)).toMatchObject({ dry_run: true, written: false, entity: 'acme', changes: [] });
+
+    // The root form takes no import option.
+    const mixed = testIo(root, { kind: 'owner' });
+    expect(await runMigrate(['--root', '--keep-file'], mixed, { home })).toBe(2);
+  });
+});
+
+describe('team config <entity>.root', () => {
+  test('get, set and unset, the owner\'s; a team path ending in root stays the team\'s', async () => {
+    const home = homeWith('acme:\n  roots: [/x]\n');
+    const cwd = join(home, '..');
+    const get = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['get', 'acme.root'], get, { home })).toBe(1);
+    const bad = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['set', 'acme.root', 'Code/acme'], bad, { home })).toBe(1);
+    expect(bad.err).toContain('is not an absolute path');
+    const dry = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['set', 'acme.root', '/srv/acme/', '--dry-run'], dry, { home })).toBe(0);
+    expect(readFileSync(entitiesPath(home), 'utf8')).not.toContain('root: /srv/acme');
+    const set = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['set', 'acme.root', '/srv/acme/'], set, { home })).toBe(0);
+    expect(readFileSync(entitiesPath(home), 'utf8')).toContain('root: /srv/acme\n');
+    expect(set.err).toContain('teams of entity "acme" read {root} as /srv/acme');
+    const json = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['get', 'acme.root', '--json'], json, { home })).toBe(0);
+    expect(JSON.parse(json.out)).toMatchObject({ path: 'acme.root', value: '/srv/acme', resolved: '/srv/acme' });
+    const other = testIo(cwd, SEAT_CALLER);
+    expect(await runConfig(['set', 'acme.root', '/elsewhere'], other, { home })).toBe(1);
+    expect(readFileSync(entitiesPath(home), 'utf8')).toContain('root: /srv/acme\n');
+    const unset = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['unset', 'acme.root'], unset, { home })).toBe(0);
+    expect(readFileSync(entitiesPath(home), 'utf8')).not.toContain('root:');
+    // `seats.root` is a seat named root, in the team's record: not an entity's.
+    const seatPath = testIo(cwd, { kind: 'owner' });
+    await runConfig(['get', 'seats.root'], seatPath, { home });
+    expect(seatPath.err).not.toContain('projects root');
+  });
+});

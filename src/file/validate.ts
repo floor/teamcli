@@ -1,7 +1,9 @@
 import type { FsReader } from '../lobby/gate.ts';
 import { YamlError, parseYaml } from '../yaml.ts';
 import type { YamlNode } from '../yaml.ts';
+import { homedir } from 'node:os';
 import { findSecrets } from './secrets.ts';
+import { fillRootWords } from './root-word.ts';
 import { Check } from './check.ts';
 import { SECTIONS } from './sections/index.ts';
 import type { Ctx } from './sections/section.ts';
@@ -28,6 +30,10 @@ export function validateTeamFile(text: string, options: { home?: string; lead?: 
     if (error instanceof YamlError) return { ok: false, parse: true, errors: [{ line: error.line, message: error.message }] };
     throw error;
   }
+  // `{root}` is filled with this machine's projects root of the file's entity before any section
+  // reads a value (src/file/root-word.ts); a file that writes it where no root is named is refused.
+  const unfilled = fillRootWords(root, options.home ?? options.leadHome ?? homedir());
+  if (unfilled.length > 0) return { ok: false, errors: unfilled };
   const check = new Check();
   const secrets = findSecrets(root, options.fs);
   check.problems.push(...secrets.refused);

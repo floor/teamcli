@@ -17,10 +17,12 @@ import { sha256 } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import type { Command, Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { runRootMigrate } from './migrate-root.ts';
 
 export const USAGE = `Usage: team migrate [--keep-file] [--dry-run] [--json]
        team migrate [--keep-file] --request [--reason <text>] [--json]
        team migrate [--keep-file] --approval <request-id> [--json]
+       team migrate --root [--dry-run] [--json]
 
 Moves this team's definition from .agents/team.yaml into the registry, once. The team
 is imported, read back from the registry and compared with the file by canonical record;
@@ -41,6 +43,12 @@ match writes nothing. No signer approves a request they asked for.
 Run again on a team the registry already holds, it moves a leftover file that says
 what the registry says, and refuses one that does not (team import replaces the record).
 
+--root rewrites, in this team's record, every full path inside its entity's projects root on
+this machine (team config set <entity>.root) as {root}/…, so the same record reads on every
+machine. With --dry-run it lists each line it would change and writes nothing; without it, the
+owner's run writes those lines and prints each one. Comments and every other line are kept byte
+for byte, and a rewrite that does not read back as the same team is refused.
+
   --keep-file  import and verify, and leave .agents/team.yaml where it is
   --dry-run    say what would be imported, and write nothing; anyone in the project may run it
   --reason <text>
@@ -48,6 +56,7 @@ what the registry says, and refuses one that does not (team import replaces the 
   --request    record this migrate for the owner seat and do not import yet
   --approval <request-id>
                run the migrate the owner seat signed for, once
+  --root       rewrite full paths inside the entity's projects root as {root}
   --json       the result as one JSON document on stdout
 
 Exits 0 when the team is in the registry (or would be, with --dry-run) or a request
@@ -70,7 +79,17 @@ export type ImportSources = {
 
 /** The command with its home and clock named, for tests that keep the registry in a temp home. */
 export async function runMigrate(argv: string[], io: Io, sources: ImportSources = {}): Promise<number> {
-  const ended = await runTeamImport('migrate', argv, readArgs(argv, ['approval', 'reason'], ['json', 'dry-run', 'keep-file', 'request']), io, sources);
+  const args = readArgs(argv, ['approval', 'reason'], ['json', 'dry-run', 'keep-file', 'request', 'root']);
+  // `--root` is its own step: the record's full paths inside the entity's projects root, as {root}.
+  if (args.flags.has('root') && args.error === undefined) {
+    const others = [
+      ...(['keep-file', 'request'] as const).filter((flag) => args.flags.has(flag)).map((flag) => `--${flag}`),
+      ...(['approval', 'reason'] as const).filter((name) => args.values[name] !== undefined).map((name) => `--${name}`),
+      ...args.rest.map((word) => `"${word}"`),
+    ];
+    return runRootMigrate({ dryRun: args.flags.has('dry-run'), json: args.flags.has('json'), others }, io, sources.home ?? homedir());
+  }
+  const ended = await runTeamImport('migrate', argv, args, io, sources);
   switch (ended) {
     case 'done':
       // exit: migrate.done

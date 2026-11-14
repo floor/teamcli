@@ -1,6 +1,8 @@
-// `team config get|set <entity>.<key> …` for the two keys of an entity's own record: the
-// `names.unique` word on seat nicknames (src/entities.ts reads it back) and the `reminders` list
-// the reminder chore fires (src/reminder/config.ts reads it back). The entity's entry lives in the
+// `team config get|set <entity>.<key> …` for the keys of an entity's own record: the
+// `names.unique` word on seat nicknames (src/entities.ts reads it back), the `reminders` list
+// the reminder chore fires (src/reminder/config.ts reads it back), and the `root` folder the
+// entity's projects sit under on this machine, which a team file names as `{root}`
+// (src/file/root-word.ts reads it back; `unset` removes it). The entity's entry lives in the
 // owner's entities file; this command changes that one key of an entry the file already declares,
 // and nothing else — not the file, not the entry, not a sibling key. A reminder list is held to
 // the daemon's own parser before it is written, so a list the daemon would refuse is never
@@ -20,7 +22,7 @@ import { resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
-import { entitiesPath, lockedEntities, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
+import { checkedRootPath, ENTITY_ROOT_KEY, entitiesPath, lockedEntities, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { isEntityName } from '../file/sections/entity.ts';
 import { cleanedIo, type Io } from '../io.ts';
@@ -35,12 +37,14 @@ import type { ConfigSources } from '../commands/config.ts';
 const NAMES_KEY = 'names.unique';
 const REMINDERS_KEY = 'reminders';
 const RULES_KEY = 'rules';
+const ROOT_KEY = ENTITY_ROOT_KEY;
 /** The reserved path the composed view answers to. A leading `@` is a shape no entity name can
  *  take (`isEntityName` starts with a letter or a digit), so the view cannot shadow an entity
  *  called `composed`, and `composed.rules` stays that entity's own stored rules. */
 const COMPOSED_PATH = '@composed.rules';
-type EntityKey = typeof NAMES_KEY | typeof REMINDERS_KEY | typeof RULES_KEY;
+type EntityKey = typeof NAMES_KEY | typeof REMINDERS_KEY | typeof RULES_KEY | typeof ROOT_KEY;
 const FORM: Record<EntityKey, string> = {
+  [ROOT_KEY]: `team config set <entity>.${ROOT_KEY} <folder> [--dry-run]`,
   [NAMES_KEY]: `team config set <entity>.${NAMES_KEY} <word>`,
   [REMINDERS_KEY]: `team config set <entity>.${REMINDERS_KEY} <yaml list>`,
   [RULES_KEY]: `team config set <entity>.${RULES_KEY} <yaml list> [--dry-run]`,
@@ -170,11 +174,12 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     key === RULES_KEY && (entityName.startsWith('project.') || entityName.startsWith('projects.'));
   const targetName = isProjectRules ? entityName.replace(/^projects?\./, '') : entityName;
   let why: string | null = args.error ?? null;
-  if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${REMINDERS_KEY}, or ${RULES_KEY}`;
+  if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${REMINDERS_KEY}, ${RULES_KEY}, or ${ROOT_KEY}`;
+  if (why === null && key === ROOT_KEY && isProjectRules) why = `a projects root is an entity's, not a project's: ${FORM[ROOT_KEY]}`;
   if (why === null && verb !== 'get' && path === COMPOSED_PATH) {
     why = `${COMPOSED_PATH} is a view of the rules in force, not a stored value: it takes no set or unset; \`team config get ${COMPOSED_PATH}\` reads it`;
   }
-  if (why === null && verb === 'unset') {
+  if (why === null && verb === 'unset' && key !== ROOT_KEY) {
     why =
       key === NAMES_KEY
         ? `an entity's word has no unset: ${FORM[NAMES_KEY]} with the word you want (${NICKNAME_SCOPE_DEFAULT} is the default)`
@@ -182,7 +187,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
           ? `rules have no unset: ${FORM[RULES_KEY]} with an empty list ([] clears them)`
           : `an entity's reminders have no unset: ${FORM[REMINDERS_KEY]} with an empty list ([] clears them)`;
   }
-  if (why === null && verb !== 'get' && verb !== 'set') why = 'the entity form takes get or set';
+  if (why === null && verb !== 'get' && verb !== 'set' && !(verb === 'unset' && key === ROOT_KEY)) why = 'the entity form takes get or set';
+  if (why === null && verb === 'unset' && given > 2) why = `unexpected "${args.rest[2] ?? ''}"`;
   if (why === null && verb === 'get' && given > 2) why = `unexpected "${args.rest[2] ?? ''}"`;
   if (why === null && verb === 'set' && given === 2) why = `a value is required: ${FORM[key as EntityKey]}`;
   if (why === null && verb === 'set' && given > 3) why = `unexpected "${args.rest[3] ?? ''}"`;
@@ -190,15 +196,17 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     const what =
       key === NAMES_KEY
         ? "an entity's word"
+        : key === ROOT_KEY
+          ? "an entity's projects root"
         : key === RULES_KEY
           ? isProjectRules
             ? "a project's rules"
             : "an entity's rules"
           : "an entity's reminders";
-    why = `${what} take${key === NAMES_KEY ? 's' : ''} no --request or --approval: the owner runs it, or a seat under the owner's general grant`;
+    why = `${what} take${key === NAMES_KEY || key === ROOT_KEY ? 's' : ''} no --request or --approval: the owner runs it, or a seat under the owner's general grant`;
   }
   if (why === null && (args.values.general !== undefined) !== (args.values.key !== undefined)) why = '--general and --key go together';
-  if (why === null && args.values.general !== undefined && verb === 'get') why = '--general takes set';
+  if (why === null && args.values.general !== undefined && verb === 'get') why = `--general takes set${key === ROOT_KEY ? ' or unset' : ''}`;
   if (why === null && path !== COMPOSED_PATH && !isEntityName(targetName)) {
     why = `"${targetName}" is not an entity name: letters, digits, ".", "_" and "-", starting with a letter or a digit, 128 at most`;
   }
@@ -209,7 +217,24 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   // is judged for shape here and for content by the daemon's own parser after the file is read.
   let word: NicknameScope | null = null;
   let list: YamlValue[] | null = null;
-  if (key === NAMES_KEY) {
+  // The folder as the owner writes it (`~/…` stays `~/…` in the file), and the path it reads as here.
+  let folder: { written: string; path: string } | null = null;
+  const home = sources.home ?? homedir();
+  if (key === ROOT_KEY) {
+    if (verb === 'set') {
+      const checked = checkedRootPath(rawValue as string, home);
+      if (!checked.ok) {
+        refuse(io, json, 'config', {
+          id: 'config.entity.root-value',
+          message: `${checked.why}; nothing was written`,
+          repair: null,
+        });
+        // exit: config.entity.root-value
+        return 1;
+      }
+      folder = { written: (rawValue as string).trim().replace(/(.)\/+$/, '$1'), path: checked.root };
+    }
+  } else if (key === NAMES_KEY) {
     if (verb === 'set' && !(NICKNAME_SCOPES as readonly string[]).includes(rawValue as string)) {
       refuse(io, json, 'config', {
         id: 'config.entity.names-value',
@@ -245,7 +270,6 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     list = value;
   }
 
-  const home = sources.home ?? homedir();
   const file = isProjectRules ? projectsFile(home) : entitiesPath(home);
 
   if (verb === 'get' && path === COMPOSED_PATH) {
@@ -314,6 +338,25 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       }
       if (json) writeJson(io, 'team.config-value', { format: 1, path: `${entityName}.${key}`, value: got.value, source: isProjectRules ? 'project' : 'entity' });
       else io.stdout(shownValue(got.value));
+    } else if (key === ROOT_KEY) {
+      const got = getAt(record, hasEntitiesWrapper(record) ? ['entities', entityName, ROOT_KEY] : [entityName, ROOT_KEY]);
+      if (!got.found || typeof got.value !== 'string') {
+        return noValue(io, json, `entity "${entityName}" names no projects root in ${file}`);
+      }
+      const checked = checkedRootPath(got.value, home);
+      if (json) {
+        writeJson(io, 'team.config-value', {
+          format: 1,
+          path: `${entityName}.${ROOT_KEY}`,
+          value: got.value,
+          source: 'entity',
+          ...(checked.ok ? { resolved: checked.root } : { problem: checked.why }),
+        });
+      } else {
+        io.stdout(`${got.value}\n`);
+        // A word the reader refuses is what the file says, not what is in force: say so.
+        if (!checked.ok) io.stderr(`team config: ${checked.why}: a team that writes {root} is refused until it is set again\n`);
+      }
     } else {
       const lookupPath = hasEntitiesWrapper(record)
         ? ['entities', entityName, 'names', 'unique']
@@ -348,6 +391,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       const actionLabel =
         key === NAMES_KEY
           ? "sets an entity's word"
+          : key === ROOT_KEY
+            ? "sets an entity's projects root"
           : key === RULES_KEY
             ? isProjectRules
               ? "writes a project's rules"
@@ -452,7 +497,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       key === NAMES_KEY
         ? [...entryLookup, 'names', 'unique']
         : [...entryLookup, key as string];
-    const value: YamlValue | undefined = key === NAMES_KEY ? (word as string) : (list as YamlValue[]);
+    const value: YamlValue | undefined =
+      key === NAMES_KEY ? (word as string) : key === ROOT_KEY ? folder?.written : (list as YamlValue[]);
     const changed = withValue(record, recordPath, value);
     if (!changed.ok) {
       return {
@@ -513,11 +559,24 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   } else {
     const count = list?.length ?? 0;
     const itemLabel = key === RULES_KEY ? 'rule' : 'reminder';
-    const shown = key === NAMES_KEY ? (word as string) : `${String(count)} ${itemLabel}${count === 1 ? '' : 's'}`;
+    const shown =
+      key === NAMES_KEY
+        ? (word as string)
+        : key === ROOT_KEY
+          ? folder === null ? 'removed' : folder.written === folder.path ? folder.path : `${folder.written} (${folder.path})`
+          : `${String(count)} ${itemLabel}${count === 1 ? '' : 's'}`;
+    const done = key === ROOT_KEY && verb === 'unset' ? 'unset' : 'set';
     if (dryRun) {
-      io.stdout(`dry-run: would set ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n${entityOutcome.text}`);
+      io.stdout(`dry-run: would ${done} ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n${entityOutcome.text}`);
     } else {
-      io.stdout(`set ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n`);
+      io.stdout(`${done} ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n`);
+      // What the change means for the entity's teams: `{root}` in their files reads the new folder,
+      // and the records an approval signed hold the folder they read then.
+      if (key === ROOT_KEY) {
+        io.stderr(folder === null
+          ? `team config: a team of entity "${entityName}" that writes {root} is now refused until a root is set again\n`
+          : `team config: teams of entity "${entityName}" read {root} as ${folder.path}; a team approved with another root needs \`team approve\` again\n`);
+      }
       if (!entityOutcome.kept) io.stderr(`team config: the entities file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
     }
   }
@@ -535,6 +594,7 @@ function problemKey(problem: { entity: string | null; name: string | null; why: 
 function entityKeyOf(path: string | undefined): EntityKey | null {
   if (path === undefined) return null;
   if (path.endsWith(`.${NAMES_KEY}`)) return NAMES_KEY;
+  if (path.endsWith(`.${ROOT_KEY}`) && path.length > ROOT_KEY.length + 1) return ROOT_KEY;
   if (path.endsWith(`.${REMINDERS_KEY}`)) return REMINDERS_KEY;
   if (path.endsWith(`.${RULES_KEY}`) && path.length > RULES_KEY.length + 1) return RULES_KEY;
   return null;
