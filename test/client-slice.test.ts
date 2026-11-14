@@ -355,6 +355,61 @@ describe('client grant and key records', () => {
     expect(startFolderProblems(none.teamRoot)).toEqual([]);
   });
 
+  test('a folder a relaunch carries for a dropped record is checked as the seat\'s own, malformed values too', () => {
+    const f = fixture('carried');
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      state.sessions.floor = { ...emptySession(), retained_start_cwd: { worker: dirname(f.keyDir) } } as SessionState;
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
+    for (const value of [null, false, 0, '']) {
+      updateState(join(f.teamRoot, '.agents'), (state) => {
+        (state.sessions.floor as unknown as { retained_start_cwd: Record<string, unknown> }).retained_start_cwd = { worker: value };
+      });
+      expect(clientKeyPlacementProblem(f.home, f.keyDir), JSON.stringify(value)).toContain('is not a path');
+      expect(startFolderProblems(f.teamRoot).length, JSON.stringify(value)).toBe(1);
+    }
+  });
+
+  test('a dangling .agents link is not an absent state: it refuses', () => {
+    const f = fixture('agents-dangling');
+    symlinkSync(join(f.base, 'gone-agents'), join(f.teamRoot, '.agents'));
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('cannot be read');
+    expect(startFolderProblems(f.teamRoot)[0]).toContain('is a link to nothing');
+  });
+
+  test('a lobby seat\'s declared lobby is checked even when the registry records another', () => {
+    const f = fixture('declared-lobby');
+    mkdirSync(join(f.teamRoot, '.agents'), { recursive: true });
+    writeFileSync(join(f.teamRoot, '.agents', 'team.yaml'), `format: 1
+project: floor
+entity: floor
+operator: steward
+lobby: ${dirname(f.keyDir)}
+workspace:
+  mode: shared
+seats:
+  - role: orchestrator
+    name: steward
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    leads: true
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    cwd: .
+`);
+    const said = clientKeyPlacementProblem(f.home, f.keyDir);
+    expect(said).not.toBeNull();
+    expect(said).toMatch(/inside the folder seat "worker" starts in|cannot be checked/);
+  });
+
   test('a relative start folder an older version recorded is read against the team root, not refused', () => {
     const f = fixture('relative-cwd');
     updateState(join(f.teamRoot, '.agents'), (state) => {

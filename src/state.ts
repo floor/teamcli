@@ -35,9 +35,6 @@ export function mintSeatId(): string {
 export type RetainedSeat = {
   id: string;
   last_active?: string;
-  /** The folder the seat ran in when its record was dropped for a relaunch: a line that runs
-   *  again in the same pane runs there, and the new record keeps it (`keptStartFolder`). */
-  start_cwd?: string;
   /** The conversation the seat ran when `team down` stopped it: the state's half of the resume
    *  binding (`recordedSeatSession`), so the next `up` resumes the registry's recorded session
    *  rather than minting a fresh one. */
@@ -399,6 +396,14 @@ export type SessionState = {
    * its `id` and `last_active` when relaunched, while `seats` holds only active runtime records.
    */
   retained_seats?: Record<string, RetainedSeat>;
+  /**
+   * The start folder of a seat whose record a relaunch dropped while its pane may still run,
+   * by seat name, exactly as the record held it (a value that is no path is kept as it is). It is
+   * held apart from `retained_seats`, so a record with no id keeps it too. The client key's
+   * placement check reads it as a seat's own folder until the relaunch writes the seat's record
+   * again, which takes it (`keptStartFolder`) and removes it.
+   */
+  retained_start_cwd?: Record<string, unknown>;
   /**
    * The general seat brief delivered to each seat: the record's id and when it landed, written by
    * the launch that wrote the drop. `team check` reads it to name a seat the brief never reached;

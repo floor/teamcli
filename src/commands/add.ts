@@ -1976,7 +1976,7 @@ function hostOf(input: {
           ...(launch_line ? { launch_line } : {}),
           ...(last_active ? { last_active } : {}),
           ...(temporary && isTarget ? { temporary } : {}),
-          ...(start_cwd ? { start_cwd } : {}),
+          ...(start_cwd !== undefined ? { start_cwd } : {}),
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;

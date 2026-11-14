@@ -1,7 +1,7 @@
 import { evictHerdrAgentList, evictHerdrPaneProcessInfo } from '../herdr.ts';
-import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
@@ -96,7 +96,7 @@ import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
-import { emptySession, mintSeatId, readState, keptStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, keptStartFolder, recordedStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { findAgent as findRegisteredAgent, recordProvenAgentAddress, updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
@@ -1385,7 +1385,12 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       const keptShell = keptPane === undefined ? null : sources.upLaunch.processInfo?.(session, keptPane.pane) ?? null;
       // At a bare shell herdr names the shell itself as the foreground process.
       const atShell = keptShell !== null && keptShell.foreground.every((pid) => pid === keptShell.shell);
-      if (keptPane !== undefined && atShell) {
+      // The pane is reused only where it provably runs in the folder today's launch plans: its
+      // record names that same folder. A pane recorded elsewhere, or with no folder (or one that
+      // is no path) on record, is closed and the seat starts in a fresh workspace, so the folder
+      // its record keeps is always the one its process runs in.
+      const plannedFolder = sameFolderOnDisk(recordedStartFolder(freshRecorded), resolve(root, planSeat.cwd));
+      if (keptPane !== undefined && atShell && plannedFolder) {
         planSeat.repair = { pane: keptPane.pane, workspace: keptPane.workspace, launched: { shell: keptShell!.shell, cli: [] }, cli: next.cli, reuse: true };
       } else if (keptPane !== undefined && !sources.upLaunch.closeWorkspace(session, keptPane.workspace)) {
         return { kind: 'busy', message: `${name} did not close its old pane; left as it is${keptAt(draftCopy)}` };
@@ -1402,9 +1407,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           (current.retained_seats ??= {})[name] = {
             id: prior.id,
             ...(prior.last_active ? { last_active: prior.last_active } : {}),
-            ...(prior.start_cwd !== undefined ? { start_cwd: prior.start_cwd } : {}),
           };
         }
+        // Where the seat ran stays on record, id or not, until the relaunch records it again: the
+        // pane may still run there, and the client key's placement check reads it meanwhile.
+        if (prior !== undefined && prior.start_cwd !== undefined) (current.retained_start_cwd ??= {})[name] = prior.start_cwd;
         delete current.seats[name];
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
@@ -2205,11 +2212,17 @@ function hostOf(input: {
         // A workspace this write made records its own folder; otherwise the folder the seat already
         // ran in stands — the record's, or the one kept beside its id when the close dropped the
         // record and the line runs again in the same pane — never today's declaration.
+        const carried = current.retained_start_cwd?.[name];
         const start_cwd = keptStartFolder(
           input.root,
           patch.createdWorkspace ? (patch.start_cwd ?? input.startCwd) : patch.start_cwd,
-          prior.start_cwd ?? retained?.start_cwd,
+          prior.start_cwd !== undefined ? prior.start_cwd : carried,
         );
+        // The seat's record holds its folder again from here on.
+        if (current.retained_start_cwd !== undefined) {
+          delete current.retained_start_cwd[name];
+          if (Object.keys(current.retained_start_cwd).length === 0) delete current.retained_start_cwd;
+        }
         const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
@@ -2221,7 +2234,8 @@ function hostOf(input: {
           ...(effort ? { effort } : {}),
           ...(launch_line ? { launch_line } : {}),
           ...(last_active ? { last_active } : {}),
-          ...(start_cwd ? { start_cwd } : {}),
+          // Any value present is kept, a malformed one too: only fresh evidence replaces it.
+          ...(start_cwd !== undefined ? { start_cwd } : {}),
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
@@ -2316,9 +2330,9 @@ function hostOf(input: {
           (current.retained_seats ??= {})[name] = {
             id: prior.id,
             ...(prior.last_active ? { last_active: prior.last_active } : {}),
-            ...(prior.start_cwd !== undefined ? { start_cwd: prior.start_cwd } : {}),
           };
         }
+        if (prior !== undefined && prior.start_cwd !== undefined) (current.retained_start_cwd ??= {})[name] = prior.start_cwd;
         delete current.seats[name];
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
@@ -2747,4 +2761,15 @@ function readyExit(
   }
   // exit: restart.ready
   return 0;
+}
+
+/** Whether a recorded folder is the planned one on disk (links followed): a folder missing on
+ *  either side, or no recorded folder at all, is not the same folder. */
+function sameFolderOnDisk(recorded: string | undefined, planned: string): boolean {
+  if (recorded === undefined) return false;
+  try {
+    return realpathSync(recorded) === realpathSync(planned);
+  } catch {
+    return false;
+  }
 }

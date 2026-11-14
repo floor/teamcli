@@ -4234,7 +4234,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
             ...(effort ? { effort } : {}),
             ...(launch_line ? { launch_line } : {}),
             ...(last_active ? { last_active } : {}),
-            ...(start_cwd ? { start_cwd } : {}),
+            ...(start_cwd !== undefined ? { start_cwd } : {}),
           };
           if (written === null) delete seat.waiting;
           else if (written) seat.waiting = written;

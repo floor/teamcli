@@ -29,9 +29,10 @@ import type { Fingerprints } from '../approve/fingerprint.ts';
 import { approvalStanding } from '../store/store.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { getAgent } from '../registry/agents.ts';
-import { readStoredTeamConfig, TeamConfigStoreError } from '../registry/team-config-store.ts';
+import { readStoredTeamConfig, teamConfigRecordPath, TeamConfigStoreError } from '../registry/team-config-store.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { STATE_FILE } from '../state.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { DAY_MS, GRANT_DURATION_DEFAULT_DAYS, endsAtMs } from './duration-policy.ts';
 import { chooseGrantExpiry, projectIdOfTeamId } from './grant-duration.ts';
@@ -298,6 +299,46 @@ export function newClientKeyPair(): ClientKeyPair {
  * older record does not carry are the same value. A placement check must tell a broken record
  * from an old one, so it reads the raw record and refuses a present map of an unknown shape.
  */
+/**
+ * Whether `path` is genuinely not there: walking down from the filesystem root, the first missing
+ * component sits in a real folder that could be searched. A component that cannot be read, a link
+ * whose target is gone, or a file where a folder must be is not absence: the answer is why the
+ * path cannot be read, and the caller refuses rather than read it as missing.
+ */
+export type PathPresence = { kind: 'absent' } | { kind: 'present' } | { kind: 'unreadable'; why: string };
+
+export function pathPresence(path: string): PathPresence {
+  const parts = resolve(path).split('/').filter((part) => part !== '');
+  let at = '';
+  for (let index = 0; index < parts.length; index += 1) {
+    at = `${at}/${parts[index]}`;
+    let held: ReturnType<typeof lstatSync>;
+    try {
+      held = lstatSync(at);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === 'ENOENT' ? { kind: 'absent' } : { kind: 'unreadable', why: `${at} cannot be read (${code ?? 'read error'})` };
+    }
+    if (held.isSymbolicLink()) {
+      try {
+        statSync(at);
+      } catch {
+        return { kind: 'unreadable', why: `${at} is a link to nothing` };
+      }
+    }
+    if (index < parts.length - 1) {
+      let folder = false;
+      try {
+        folder = statSync(at).isDirectory();
+      } catch {
+        folder = false;
+      }
+      if (!folder) return { kind: 'unreadable', why: `${at} is not a folder` };
+    }
+  }
+  return { kind: 'present' };
+}
+
 function readPlacementSessions(dir: string): Record<string, unknown> | null {
   const path = join(dir, STATE_FILE);
   // Read directly: only a file that is genuinely not there is an absent state. A folder on the
@@ -309,15 +350,12 @@ function readPlacementSessions(dir: string): Record<string, unknown> | null {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== 'ENOENT') throw new Error(`${path} cannot be read (${code ?? 'read error'})`);
-    let dangling = false;
-    try {
-      lstatSync(path);
-      dangling = true;
-    } catch (missing) {
-      const why = (missing as NodeJS.ErrnoException).code;
-      if (why !== 'ENOENT') throw new Error(`${path} cannot be read (${why ?? 'read error'})`);
-    }
-    if (dangling) throw new Error(`${path} is a link to nothing`);
+    // Missing for sure, or only unreadable on the way (a dangling `.agents` link, a folder that
+    // cannot be searched): only the first is no state.
+    const presence = pathPresence(path);
+    if (presence.kind === 'unreadable') throw new Error(presence.why);
+    // There after all (it appeared between the reads): not an absence to trust.
+    if (presence.kind === 'present') throw new Error(`${path} could not be read`);
     return null;
   }
   let parsed: unknown;
@@ -359,12 +397,18 @@ function readDeclarations(root: string, home: string): DeclaredTeam {
     if (error instanceof TeamConfigStoreError) return { kind: 'unreadable' };
     throw error;
   }
+  if (stored === null) {
+    // No registry record, for sure: a record path that only cannot be read is no absence.
+    if (pathPresence(teamConfigRecordPath(home, teamIdOf(root))).kind !== 'absent') return { kind: 'unreadable' };
+  }
   if (stored !== null) {
     const loaded = loadTeamText(stored.text, root, file, { home, checkOnly: true });
     if (loaded.ok) return { kind: 'read', team: withRecordedSession(loaded.team, loaded.text, home, root) };
     return loaded.errors.some((problem) => problem.unreadable) ? { kind: 'unreadable' } : { kind: 'invalid' };
   }
-  if (!existsSync(file)) return { kind: 'absent' };
+  const presence = pathPresence(file);
+  if (presence.kind === 'absent') return { kind: 'absent' };
+  if (presence.kind === 'unreadable') return { kind: 'unreadable' };
   let loaded: ReturnType<typeof readTeamConfig>;
   try {
     loaded = readTeamConfig(root, { file, home, checkOnly: true });
@@ -432,11 +476,19 @@ export function startFolderProblems(root: string): string[] {
   }
   const out: string[] = [];
   for (const [sessionName, rawSession] of Object.entries(sessions ?? {})) {
-    const seats = rawSession !== null && typeof rawSession === 'object' && !Array.isArray(rawSession) ? (rawSession as { seats?: unknown }).seats : undefined;
-    if (seats === null || typeof seats !== 'object' || Array.isArray(seats)) continue;
-    for (const [seatName, rawSeat] of Object.entries(seats as Record<string, unknown>)) {
-      if (rawSeat === null || typeof rawSeat !== 'object' || Array.isArray(rawSeat)) continue;
-      const cwd = (rawSeat as { start_cwd?: unknown }).start_cwd;
+    const held = rawSession !== null && typeof rawSession === 'object' && !Array.isArray(rawSession) ? rawSession as { seats?: unknown; retained_start_cwd?: unknown } : undefined;
+    const recorded: Array<[string, unknown]> = [];
+    const seats = held?.seats;
+    if (seats !== null && typeof seats === 'object' && !Array.isArray(seats)) {
+      for (const [seatName, rawSeat] of Object.entries(seats as Record<string, unknown>)) {
+        if (rawSeat === null || typeof rawSeat !== 'object' || Array.isArray(rawSeat)) continue;
+        recorded.push([seatName, (rawSeat as { start_cwd?: unknown }).start_cwd]);
+      }
+    }
+    // The folder a relaunch carries for a seat whose record it dropped is read the same way.
+    const carried = held?.retained_start_cwd;
+    if (carried !== null && typeof carried === 'object' && !Array.isArray(carried)) recorded.push(...Object.entries(carried as Record<string, unknown>));
+    for (const [seatName, cwd] of recorded) {
       if (cwd === undefined) continue;
       if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) {
         out.push(`${seatName} (session ${sessionName}): its recorded start folder is not a path, so every client send on this machine is refused; run \`team restart ${seatName}\``);
@@ -481,6 +533,21 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
       realRoot = null;
     }
     const againstRoot = (relativePath: string): string | null => (realRoot === null ? null : resolve(realRoot, relativePath));
+    // One recorded start folder, the record's or the one a relaunch carries: no path is no
+    // evidence (refused, with its repair); a relative one is read against the real root.
+    const startFolderRefusal = (seatName: string, sessionName: string, cwd: unknown): string | null => {
+      if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) {
+        return `the recorded start folder of seat "${seatName}" of team "${team.project}" (session "${sessionName}", ${join(team.root, '.agents', 'team.state.json')}) is not a path: client key placement cannot be checked; \`team restart ${seatName}\` records it again`;
+      }
+      const startFolder = isAbsolute(cwd) ? cwd : againstRoot(cwd);
+      if (startFolder === null) {
+        return `the recorded start folder of seat "${seatName}" of team "${team.project}" is relative, and the team root ${team.root} does not resolve to read it against: client key placement cannot be checked`;
+      }
+      if (overlaps(canonical(startFolder), target)) {
+        return `the key directory "${dir}" is inside the folder seat "${seatName}" ran in; a client key sits outside every seat folder`;
+      }
+      return null;
+    };
     // The declarations are read once per team: the declared seats' own folders below, and the
     // launch folder a record an older version wrote falls back to when it carries no `start_cwd`.
     // A file that is present but does not read leaves the placement unknown, and so does a
@@ -579,17 +646,19 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
         // is no placement evidence, and the check still refuses rather than skip the seat: a key
         // the check cannot place could sit inside that seat's folder, readable by it, so one bad
         // record costs a refusal that names it and its repair, never a key placed blind.
-        const cwd = seat.start_cwd;
-        if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) {
-          return `the recorded start folder of seat "${seatName}" of team "${team.project}" (session "${sessionName}", ${join(team.root, '.agents', 'team.state.json')}) is not a path: client key placement cannot be checked; \`team restart ${seatName}\` records it again`;
-        }
-        const startFolder = isAbsolute(cwd) ? cwd : againstRoot(cwd);
-        if (startFolder === null) {
-          return `the recorded start folder of seat "${seatName}" of team "${team.project}" is relative, and the team root ${team.root} does not resolve to read it against: client key placement cannot be checked`;
-        }
-        if (overlaps(canonical(startFolder), target)) {
-          return `the key directory "${dir}" is inside the folder seat "${seatName}" ran in; a client key sits outside every seat folder`;
-        }
+        const refused = startFolderRefusal(seatName, sessionName, seat.start_cwd);
+        if (refused !== null) return refused;
+      }
+      // A seat whose record a relaunch dropped while its pane may still run: the folder it ran in
+      // is held beside the session until the relaunch records the seat again, and is checked as
+      // the seat's own folder meanwhile.
+      const carried = (session as { retained_start_cwd?: unknown }).retained_start_cwd;
+      if (carried !== undefined && (carried === null || typeof carried !== 'object' || Array.isArray(carried))) {
+        return `the carried start folders of session "${sessionName}" cannot be read: client key placement cannot be checked`;
+      }
+      for (const [seatName, cwd] of Object.entries((carried ?? {}) as Record<string, unknown>)) {
+        const refused = startFolderRefusal(seatName, sessionName, cwd);
+        if (refused !== null) return refused;
       }
       if (session.worktrees !== undefined && (session.worktrees === null || typeof session.worktrees !== 'object' || Array.isArray(session.worktrees))) {
         return `the recorded worktrees of session "${sessionName}" cannot be read: client key placement cannot be checked`;
@@ -627,10 +696,27 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
       return `the team file of "${team.project}" does not validate: client key placement cannot be checked`;
     }
     if (file.kind === 'read') {
+      // Read against the team root as it is on disk. A root that does not resolve holds nothing
+      // that exists, so no folder below it can hold the key that is being read: its spelling is
+      // the only one left, and it cannot widen what the check lets through.
+      const base = realRoot ?? resolve(team.root);
       for (const seat of file.team.seats) {
-        const cwd = canonical(resolve(team.root, seat.cwd));
-        if (overlaps(cwd, target)) {
-          return `the key directory "${dir}" is inside the folder seat "${seat.name}" starts in; a client key sits outside every seat folder`;
+        // Every folder the seat may start in: its declared cwd, and for a lobby seat each lobby
+        // it can be given — the recorded lobbies, the declared one, the derived default — so
+        // a stale or missing registry lobby never hides one.
+        const folders = [resolve(base, seat.cwd)];
+        if (seat.cwd === '.' && !isLeadSeat(file.team, seat.name)) {
+          for (const lobby of Object.values(team.lobbies ?? {})) if (lobby) folders.push(lobby);
+          if (file.team.lobby !== null && file.team.lobby !== '') {
+            const expanded = file.team.lobby.replace(/^~(?=$|\/)/, home);
+            folders.push(isAbsolute(expanded) ? expanded : resolve(base, expanded));
+          }
+          folders.push(lobbyOf(home, base, file.team));
+        }
+        for (const folder of folders) {
+          if (overlaps(canonical(folder), target)) {
+            return `the key directory "${dir}" is inside the folder seat "${seat.name}" starts in; a client key sits outside every seat folder`;
+          }
         }
       }
     }
