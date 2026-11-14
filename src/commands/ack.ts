@@ -304,8 +304,11 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
         // and a read receipt grants nothing. Without it the record stayed unread for good, and
         // every reader that replays unread mail replayed it forever. A reply stays gated on an
         // active grant.
-        if (!active.ok) return { ok: true, outcome: publish() };
-        const fresh = resolveBundleSendTarget(host.home, active.grant, acknowledged.to);
+        // Only an expiry or a revocation: a grant record that cannot be read or verified now, or
+        // was replaced, still refuses. The recipient is proven again against the grant verified
+        // above, so a roster or session change while this call waited is still seen.
+        if (!active.ok && active.kind === 'other') return { ok: false, why: `the originating grant ${bundleOrigin.grant.grantId} is not active: ${active.why}; nothing was written` };
+        const fresh = resolveBundleSendTarget(host.home, active.ok ? active.grant : bundleOrigin.grant, acknowledged.to);
         if (!fresh.ok) return { ok: false, why: `the bundle grant's recipient can no longer be resolved: ${fresh.why}; nothing was written` };
         if (
           !samePath(fresh.target.teamRoot, root) ||

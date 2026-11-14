@@ -30,8 +30,23 @@ function live(): Live {
   return { running: true, agents: [agent], workspaces: [{ id: 'w3', label: SEAT }], screens: { [PANE]: idleScreen } };
 }
 
-function waiting(served: boolean): MailboxWaiting {
-  return { id: 'aaaaaaaa-0000-4000-8000-000000000001', to: SEAT, at: 0, pane: PANE, status: 'idle', cli: 'claude-code', screen: idleScreen, served };
+function waiting(served: boolean, inDrops = true): MailboxWaiting {
+  return { id: 'aaaaaaaa-0000-4000-8000-000000000001', to: SEAT, at: 0, pane: PANE, status: 'idle', cli: 'claude-code', screen: idleScreen, served, inDrops };
+}
+
+function passWith(record: MailboxWaiting) {
+  const file = team();
+  return pass({
+    team: file,
+    watch: file.watch,
+    state: emptySession(),
+    live: live(),
+    machine: fine,
+    now: 60_000,
+    memory: newMemory(),
+    mailbox: [record],
+    processes: { [PANE]: { shell: 100, foreground: [101] } },
+  });
 }
 
 function cantWorkFor(served: boolean): unknown {
@@ -56,4 +71,16 @@ test('a record the seat\'s drop read would not serve raises no "wake not taken"'
 
 test('an unread drop the seat\'s idle screen has not taken is still "wake not taken"', () => {
   expect(cantWorkFor(true)).toMatchObject({ seat: SEAT });
+});
+
+test('a record in the older mailbox store is reported once to the lead, naming its reader, and is no can\'t-work', () => {
+  const result = passWith(waiting(false, false));
+  expect((result.cantWork ?? []).find((plan) => plan.seat === SEAT)).toBeUndefined();
+  expect(result.reports.map((report) => report.text)).toContain(`${SEAT}: 1 message(s) wait in the older mailbox store; \`team messages\` serves them, a wake does not`);
+});
+
+test('a record its drop receipt already settled raises nothing', () => {
+  const result = passWith(waiting(false, true));
+  expect((result.cantWork ?? []).find((plan) => plan.seat === SEAT)).toBeUndefined();
+  expect(result.reports.some((report) => report.text.includes('older mailbox store'))).toBe(false);
 });

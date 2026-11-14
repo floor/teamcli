@@ -750,8 +750,17 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     // Newest first: the turn reads what has just landed, and the tail of a backlog waits for the
     // next turn. A file that is not a signed record never uses one of the five: a plain-text drop
     // an earlier build wrote is counted and skipped, and the signed records around it are read.
-    for (const message of [...waiting].reverse()) {
+    const newestFirst = [...waiting].reverse();
+    // The messages this run never reached: the rest of the backlog, counted below.
+    let reached = 0;
+    for (const message of newestFirst) {
       if (bodies.length >= DROP_READ_BATCH) break;
+      reached += 1;
+      if (message.legacy === true) {
+        // A drop an earlier build wrote, as the inbox classified it: never served, counted.
+        legacy += 1;
+        continue;
+      }
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const got = peek
         ? peekMessage(target, message.id, sources.home, seatNames, brief)
@@ -794,8 +803,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     }
     // The rest of a backlog is a count, never more bodies: the turn hears how many older messages
     // still wait and where they are listed, and reads them when it chooses.
-    const handled = bodies.length + superseded + receiptRefusals.length + (refusal === null ? 0 : 1);
-    const older = Math.max(0, waiting.filter((one) => one.legacy !== true).length - handled);
+    const older = newestFirst.slice(reached).filter((one) => one.legacy !== true).length;
     if (bodies.length > 0) {
       const tail = older > 0
         ? `\n\n${String(older)} older unread message(s) wait in this inbox; inbox_check or team drops --read lists them`

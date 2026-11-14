@@ -160,6 +160,10 @@ export type MailboxWaiting = {
    *  `team messages`, not for the drop read, so it can raise the owner's waiting note but is
    *  never rung: the line would name a read that serves nothing, and it would fire every pass. */
   served: boolean;
+  /** Whether the record is a file in the seat's own drop folder. A record that is not served and
+   *  is there has been settled by its drop receipt; one that is not there waits in the older
+   *  mailbox store for `team messages`. Absent reads as in the drop folder. */
+  inDrops?: boolean;
   /** The line the ring types: the record's message-display header, then the fixed read hint.
    *  Absent, the shipped nameless ring. */
   text?: string;
@@ -808,6 +812,18 @@ function seatWorkPlans(
   // mailbox store, or one a drop receipt already settled, waits on nothing this seat's wake could
   // take, and counting it flagged seats with an empty inbox as unable to work.
   const waiting = new Set(mailbox.filter((record) => record.served).map((record) => record.to));
+  // Mail in the older store is not lost either: the lead is told once per seat how many records
+  // wait there and which reader serves them, and the seat is not called unable to work.
+  const olderStore = new Map<string, number>();
+  for (const record of mailbox) {
+    if (record.served || record.inDrops !== false) continue;
+    olderStore.set(record.to, (olderStore.get(record.to) ?? 0) + 1);
+  }
+  for (const [seat, count] of olderStore) {
+    const told = once(`older-store:${seat}`, `${seat}: ${String(count)} message(s) wait in the older mailbox store; \`team messages\` serves them, a wake does not`, 'orchestrator');
+    if (told) reports.push(told);
+    else keep(`older-store:${seat}`);
+  }
   const plans: SeatCantWork[] = [];
   for (const obs of observations) {
     if (!obs.agent || obs.lead) continue;
