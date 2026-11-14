@@ -1426,7 +1426,7 @@ export async function runMcpServe(
     if (generation.kind === 'unbound') return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: undefined } };
     if (generation.kind === 'none') {
       if (options.epoch === undefined) return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: undefined } };
-      return { ok: false, wait: true, why: `--epoch ${JSON.stringify(options.epoch)} names a launch the seat's state does not hold yet` };
+      return { ok: false, wait: true, why: `--epoch ${JSON.stringify(options.epoch)} names a launch the seat's state no longer holds` };
     }
     if (options.epoch === generation.epoch) return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: generation.epoch } };
     const claimedAt = Date.parse(generation.at);

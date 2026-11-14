@@ -266,7 +266,10 @@ for (const change of ['stopped', 'dropped', 'moved-session'] as const) test(`a d
 test('a declaration stopped before startup refuses without a listener or state writes', async () => {
   message(); changeDeclaration('stopped'); const before = snapshot(rootB);
   const result = await serve(ownOptions(), ioFor().io);
-  expect(result.code).toBe(2); expect(result.replies).toEqual([]); expect(snapshot(rootB)).toEqual(before);
+  // A team file that cannot be read yet is waited for while the client is answered: every reply
+  // is a refusal, and nothing is opened or written.
+  expect(result.code).toBe(2); expect(result.replies.every(reply => reply.result?.isError === true)).toBe(true);
+  expect(snapshot(rootB)).toEqual(before);
 });
 for (const loss of ['parent', 'declaration'] as const) test(`channel push refuses after ${loss} loss with no new marker or receipt`, async () => {
   writeFileSync(file, readFileSync(file, 'utf8').replace('    launch: claude', '    launch: claude --dangerously-load-development-channels server:team-inbox'));

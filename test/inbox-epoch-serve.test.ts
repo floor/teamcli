@@ -260,7 +260,7 @@ test('a server started before its launch claim waits, refusing calls, and serves
     await until(() => replies.length > 0);
     const early = JSON.parse(replies[0]!) as { result?: { isError?: boolean; content?: { text: string }[] } };
     expect(early.result?.isError).toBe(true);
-    expect(early.result?.content?.[0]?.text).toContain('does not hold yet');
+    expect(early.result?.content?.[0]?.text).toContain('no longer holds');
     const marker = listenerPath(join(at.root, '.agents', 'send-drops', SESSION, 'lead'));
     await until(() => existsSync(marker));
     expect(existsSync(marker), io.err).toBe(true);
