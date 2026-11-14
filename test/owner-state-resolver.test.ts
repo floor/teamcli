@@ -8,7 +8,8 @@ import { generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:cr
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ownerMachinePinned, ownerStateOf, ownerStateRootsForTests, type OwnerStateRoots } from '../src/client/owner-pin-path.ts';
+import { ownerMachinePinned, ownerStateOf, type OwnerStateRoots } from '../src/client/owner-pin-path.ts';
+import { setOwnerStateRootsForTests } from './helpers/owner-state-roots.ts';
 import { claimInLedger, exportOwnerSeat, ledgerSpent, pinOwnerSeat, readMachine, readOwnerPin } from '../src/client/owner-pin.ts';
 import { registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
@@ -19,7 +20,7 @@ const UID = process.getuid?.() ?? 0;
 const made: string[] = [];
 const SUITE: OwnerStateRoots = { system: null, account: (given) => (given === undefined ? 'none' : { home: given }), systemOwner: UID };
 afterEach(() => {
-  ownerStateRootsForTests(SUITE);
+  setOwnerStateRootsForTests(SUITE);
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -66,7 +67,7 @@ function anExport(label: string) {
 
 /** The process's own rule, with folders this test owns: a system folder, and one account home. */
 function realRoots(system: string | null, account: string, owner = UID): void {
-  ownerStateRootsForTests({ system, account: () => ({ home: account }), systemOwner: owner });
+  setOwnerStateRootsForTests({ system, account: () => ({ home: account }), systemOwner: owner });
 }
 
 describe('the account home, whatever home a command passes', () => {
@@ -85,7 +86,7 @@ describe('the account home, whatever home a command passes', () => {
     expect(ownerMachinePinned(undefined)).toBe(true);
     expect(readOwnerPin('/any/other/home').kind).toBe('pinned');
     // A pin planted in the home a command names is never read.
-    ownerStateRootsForTests(SUITE);
+    setOwnerStateRootsForTests(SUITE);
     const planted = anExport('planted');
     expect(pinOwnerSeat(elsewhere, planted.signed, NOW).ok).toBe(true);
     realRoots(null, account);
@@ -103,7 +104,7 @@ describe('the account home, whatever home a command passes', () => {
     expect(ownerMachinePinned()).toBe(true);
     expect(readOwnerPin(account).kind).toBe('refused');
     // The user database does not answer: the pin could be in a home the resolver cannot find.
-    ownerStateRootsForTests({ system: null, account: () => 'unresolved', systemOwner: UID });
+    setOwnerStateRootsForTests({ system: null, account: () => 'unresolved', systemOwner: UID });
     const state = ownerStateOf('/any/home');
     expect(state.kind).toBe('refused');
     if (state.kind === 'refused') expect(state.why).toContain('user database');
@@ -111,7 +112,7 @@ describe('the account home, whatever home a command passes', () => {
     expect(readOwnerPin(account).kind).toBe('refused');
     expect(pinOwnerSeat(account, exported.signed, NOW).ok).toBe(false);
     // A scene that names no account at all (the suite's own roots, no home) was never pinned.
-    ownerStateRootsForTests({ system: null, account: () => 'none', systemOwner: UID });
+    setOwnerStateRootsForTests({ system: null, account: () => 'none', systemOwner: UID });
     expect(ownerStateOf()).toEqual({ kind: 'none', write: null });
   });
 });
@@ -122,7 +123,7 @@ describe('the system folder, read first when it is present and protected', () =>
     const staging = temp('staging');
     mkdirSync(join(staging, '.config', 'team'), { recursive: true });
     // The administrator's own step, done here by hand: the pin and machine record put in place.
-    ownerStateRootsForTests({ system: null, account: () => ({ home: staging }), systemOwner: owner });
+    setOwnerStateRootsForTests({ system: null, account: () => ({ home: staging }), systemOwner: owner });
     if (!pinOwnerSeat(staging, exported.signed, NOW, { name: 'server' }).ok) throw new Error('pin');
     const system = join(temp('etc'), 'teamcli');
     mkdirSync(system, { mode: 0o755 });

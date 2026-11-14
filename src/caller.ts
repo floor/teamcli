@@ -11,7 +11,7 @@ import type { Io } from './io.ts';
 import { readState, type SeatState } from './state.ts';
 import { CLI_PROCESSES, processNameMatches } from './clis.ts';
 import { processStartOf, seatOfManagedEndpoint } from './launch/codex-endpoint.ts';
-import { ownerSignsElsewhereOnThisAccount } from './client/owner-pin-path.ts';
+import { ownerSetupNoteOnThisAccount, ownerSignsElsewhereOnThisAccount } from './client/owner-pin-path.ts';
 
 // Who runs this command, placed by its parent processes, never by its environment. This guards
 // against a mistaken agent, not a hostile one: every seat runs as the owner's user.
@@ -315,7 +315,12 @@ function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 
   // there may be any agent that opened a shell on the account, so it is never the owner, with a
   // terminal or without one: the owner's word on that machine is a signed answer. No mode, policy
   // or variable changes this reading.
-  if (sources.ownerSignsElsewhere?.() === true) return { kind: 'unplaced', reason: PINNED_TERMINAL_REASON, pinned: true };
+  if (sources.ownerSignsElsewhere?.() === true) {
+    // On a machine whose accounts share one owner and that is not set up (or not pinned yet), the
+    // reason also names the one step that sets it up.
+    const note = ownerSetupNoteOnThisAccount();
+    return { kind: 'unplaced', reason: note === null ? PINNED_TERMINAL_REASON : `${PINNED_TERMINAL_REASON}: ${note}`, pinned: true };
+  }
   if (!sources.stdinIsTTY) return { kind: 'owner-no-tty' };
   return { kind: 'owner' };
 }

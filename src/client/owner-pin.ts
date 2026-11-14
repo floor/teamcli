@@ -21,11 +21,16 @@
 // (src/client/owner-pin-path.ts): a protected system folder when one is present, else the
 // account's own config folder, never a folder the environment names. Every owner request made on
 // a pinned machine names that machine in its signed parameters, so an answer is bound to it and
-// is never accepted on another. Until a separate account holds the owner state, it is as safe as
-// the account's own files: a process of the account can replace it (the pin's own output says so).
+// is never accepted on another. In the account's own folder the owner state is as safe as the
+// account's own files: a process of the account can replace it (the pin's own output says so).
+//
+// On a machine whose accounts share one owner (Linux), the system folder is the only place: the
+// administrator pins there (as root), each request also names the account it was made by, and an
+// approval is spent only by the owner helper, in that account's own ledger folder
+// (src/client/owner-spend.ts). No process of an entity account writes any of it.
 
-import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { closeSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import {
@@ -42,204 +47,38 @@ import {
   type OwnerSigner,
   type SignedOwnerAnswer,
 } from './owner-seat.ts';
-import { ownerMachinePinned, ownerStateOf, type OwnerStatePlace } from './owner-pin-path.ts';
+import { MACHINE_ID_PATTERN, MACHINE_NAME_PATTERN, validAccountBinding, validMachineBinding, type MachineBinding } from './owner-request-record.ts';
 
-export const OWNER_SEAT_EXPORT_FORMAT = 'team-owner-seat-export-v1';
-const OWNER_SEAT_EXPORT_DOMAIN = `${OWNER_SEAT_EXPORT_FORMAT}\n`;
-const OWNER_SEAT_FINGERPRINT_DOMAIN = 'team-owner-seat-fingerprint-v1\n';
-export const OWNER_SEAT_PIN_FORMAT = 'team-owner-seat-pin-v1';
-export const MACHINE_FORMAT = 'team-machine-v1';
-export const MACHINE_ID_PATTERN = /^m_[0-9a-f]{24}$/;
-export const MACHINE_NAME_PATTERN = /^[a-z0-9][a-z0-9.-]{0,62}$/;
-/** A file carried between machines (an export, a request, an answer) is small: anything larger is refused unread. */
-export const CARRIED_FILE_MAX_BYTES = 256 * 1024;
+export { MACHINE_ID_PATTERN, MACHINE_NAME_PATTERN, validAccountBinding, validMachineBinding };
+export type { MachineBinding };
+import {
+  CARRIED_FILE_MAX_BYTES,
+  exportBodyOf,
+  fingerprintText,
+  MACHINE_FORMAT,
+  OWNER_SEAT_EXPORT_FORMAT,
+  OWNER_SEAT_PIN_FORMAT,
+  ownerSeatExportBytes,
+  ownerSeatExportChallenge,
+  ownerSeatFingerprint,
+  readMachineAt,
+  readOwnerPinIn,
+  verifyOwnerSeatExport,
+  verifyPinnedOwnerAnswer,
+  type MachineRecord,
+  type OwnerPin,
+  type OwnerPinRead,
+  type OwnerSeatExport,
+  type PinFile,
+  type SignedOwnerSeatExport,
+} from './owner-pin-verify.ts';
+
+export { CARRIED_FILE_MAX_BYTES, fingerprintText, MACHINE_FORMAT, OWNER_SEAT_EXPORT_FORMAT, OWNER_SEAT_PIN_FORMAT, ownerSeatExportBytes, ownerSeatExportChallenge, ownerSeatFingerprint, readOwnerPinIn, verifyOwnerSeatExport, verifyPinnedOwnerAnswer };
+export type { MachineRecord, OwnerPin, OwnerPinRead, OwnerSeatExport, SignedOwnerSeatExport };
+import { ownerMachinePinned, ownerPinCommand, ownerStateOf, systemOwnerUid, type OwnerStatePlace, type OwnerStateRead } from './owner-pin-path.ts';
+
 /** An export dated further ahead than this is refused: a pin must never wait on a future clock. */
 const FUTURE_SKEW_MS = 5 * 60 * 1000;
-
-const TEAM_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const ENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const SIGNER_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const LABEL = /^[A-Za-z0-9._-]{1,160}$/;
-const CREDENTIAL_ID = /^[A-Za-z0-9_-]{8,1024}$/;
-const RP_ID = /^[a-z0-9.-]{1,253}$/;
-const MAX_SIGNERS = 16;
-
-/** The owner seat's public half, as one machine hands it to another. */
-export type OwnerSeatExport = {
-  format: typeof OWNER_SEAT_EXPORT_FORMAT;
-  team: string;
-  entity: string;
-  /** The owner seat file's own signer records: public material and the store label only. */
-  signers: OwnerSigner[];
-  /** The signer names the seat entity's owner-signers policy accepted when it was exported. */
-  accepted: string[];
-  exported_at: string;
-};
-
-/** An export and its signature, in the envelope a signed owner-seat answer uses. */
-export type SignedOwnerSeatExport = {
-  owner_seat_export: OwnerSeatExport;
-  signer: string;
-  signature: string;
-  webauthn?: { authenticator_data: string; client_data_json: string };
-};
-
-/** This machine, as a request names it: a random id and a name the owner reads on the card. */
-export type MachineBinding = { id: string; name: string };
-
-export type MachineRecord = MachineBinding & { format: typeof MACHINE_FORMAT; created: string };
-
-type PinFile = {
-  format: typeof OWNER_SEAT_PIN_FORMAT;
-  fingerprint: string;
-  pinned_at: string;
-  previous: string | null;
-  export: SignedOwnerSeatExport;
-};
-
-export type OwnerPin = {
-  kind: 'pinned';
-  body: OwnerSeatExport;
-  signed: SignedOwnerSeatExport;
-  fingerprint: string;
-  pinnedAt: string;
-  machine: MachineRecord;
-};
-
-export type OwnerPinRead = { kind: 'none' } | OwnerPin | { kind: 'refused'; why: string };
-
-function plainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isoTime(value: unknown): value is string {
-  return typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value));
-}
-
-function canonicalSigner(signer: OwnerSigner, withAdded: boolean): Record<string, string | null> {
-  return {
-    name: signer.name,
-    type: signer.type,
-    public_key: signer.public_key,
-    label: signer.label,
-    credential_id: signer.credential_id ?? null,
-    rp_id: signer.rp_id ?? null,
-    ...(withAdded ? { added: signer.added } : {}),
-  };
-}
-
-function byName(a: OwnerSigner, b: OwnerSigner): number {
-  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
-}
-
-/** The bytes an export's signature covers: the domain, then every field in a fixed order. */
-export function ownerSeatExportBytes(body: OwnerSeatExport): Buffer {
-  const canonical = {
-    format: body.format,
-    team: body.team,
-    entity: body.entity,
-    signers: [...body.signers].sort(byName).map((signer) => canonicalSigner(signer, true)),
-    accepted: [...body.accepted].sort(),
-    exported_at: body.exported_at,
-  };
-  return Buffer.from(OWNER_SEAT_EXPORT_DOMAIN + JSON.stringify(canonical), 'utf8');
-}
-
-/** The challenge a passkey signs an export under: base64url SHA-256 of the export bytes. */
-export function ownerSeatExportChallenge(body: OwnerSeatExport): string {
-  return createHash('sha256').update(ownerSeatExportBytes(body)).digest('base64url');
-}
-
-/**
- * The fingerprint of an owner seat: SHA-256 over the team, the entity, every signer's public
- * material and label, and the accepted names. Not over the export time or when a signer was
- * added: the same seat exported twice has one fingerprint.
- */
-export function ownerSeatFingerprint(body: Pick<OwnerSeatExport, 'team' | 'entity' | 'signers' | 'accepted'>): string {
-  const canonical = {
-    team: body.team,
-    entity: body.entity,
-    signers: [...body.signers].sort(byName).map((signer) => canonicalSigner(signer, false)),
-    accepted: [...body.accepted].sort(),
-  };
-  return createHash('sha256').update(OWNER_SEAT_FINGERPRINT_DOMAIN + JSON.stringify(canonical), 'utf8').digest('hex');
-}
-
-/** A fingerprint as the owner compares it: its first 128 bits, in eight groups of four. */
-export function fingerprintText(hex: string): string {
-  return (hex.slice(0, 32).match(/.{1,4}/g) ?? []).join('-');
-}
-
-function signerProblem(raw: unknown): string | null {
-  if (!plainObject(raw)) return 'a signer record is not an object';
-  if (typeof raw.name !== 'string' || !SIGNER_NAME.test(raw.name)) return 'a signer record has no valid name';
-  if (raw.type !== 'mac-keystore' && raw.type !== 'webauthn') return `signer "${raw.name}" has a type this build does not read`;
-  if (typeof raw.public_key !== 'string' || ownerSeatPublicKey(raw.public_key) === null) return `signer "${raw.name}" carries no P-256 public key`;
-  if (typeof raw.label !== 'string' || !LABEL.test(raw.label)) return `signer "${raw.name}" carries no valid label`;
-  if (!isoTime(raw.added)) return `signer "${raw.name}" carries no time it was added`;
-  if (raw.type === 'webauthn') {
-    if (typeof raw.credential_id !== 'string' || !CREDENTIAL_ID.test(raw.credential_id)) return `passkey "${raw.name}" carries no credential id`;
-    if (typeof raw.rp_id !== 'string' || !RP_ID.test(raw.rp_id)) return `passkey "${raw.name}" carries no relying party`;
-  } else if (raw.credential_id !== undefined || raw.rp_id !== undefined) {
-    return `signer "${raw.name}" is a device key and carries passkey fields`;
-  }
-  const known = new Set(['name', 'type', 'public_key', 'label', 'credential_id', 'rp_id', 'added']);
-  const extra = Object.keys(raw).find((key) => !known.has(key));
-  if (extra !== undefined) return `signer "${raw.name}" carries a field this build does not read (${extra})`;
-  return null;
-}
-
-/** The export body, whole and of known shape, or why not. Nothing about its signature is judged here. */
-function exportBodyOf(raw: unknown): OwnerSeatExport | string {
-  if (!plainObject(raw)) return 'the export carries no owner seat';
-  if (raw.format !== OWNER_SEAT_EXPORT_FORMAT) return `the export is not a ${OWNER_SEAT_EXPORT_FORMAT} record`;
-  if (typeof raw.team !== 'string' || !TEAM_NAME.test(raw.team)) return 'the export names no valid team';
-  if (typeof raw.entity !== 'string' || !ENTITY_NAME.test(raw.entity)) return 'the export names no valid entity';
-  if (!isoTime(raw.exported_at)) return 'the export carries no export time';
-  if (!Array.isArray(raw.signers) || raw.signers.length === 0 || raw.signers.length > MAX_SIGNERS) return `the export carries 1 to ${MAX_SIGNERS} signers`;
-  for (const signer of raw.signers) {
-    const problem = signerProblem(signer);
-    if (problem !== null) return problem;
-  }
-  const signers = raw.signers as OwnerSigner[];
-  if (new Set(signers.map((s) => s.name)).size !== signers.length) return 'the export names one signer twice';
-  if (new Set(signers.map((s) => s.label)).size !== signers.length) return 'the export gives two signers one label';
-  if (!Array.isArray(raw.accepted) || raw.accepted.length === 0 || !raw.accepted.every((name) => typeof name === 'string')) return 'the export accepts no signer';
-  const accepted = raw.accepted as string[];
-  if (new Set(accepted).size !== accepted.length) return 'the export accepts one signer twice';
-  const unknown = accepted.find((name) => !signers.some((s) => s.name === name));
-  if (unknown !== undefined) return `the export accepts "${unknown}", which it does not carry`;
-  const known = new Set(['format', 'team', 'entity', 'signers', 'accepted', 'exported_at']);
-  const extra = Object.keys(raw).find((key) => !known.has(key));
-  if (extra !== undefined) return `the export carries a field this build does not read (${extra})`;
-  return { format: OWNER_SEAT_EXPORT_FORMAT, team: raw.team, entity: raw.entity, signers: signers.map((s) => ({ ...s })), accepted: [...accepted], exported_at: raw.exported_at };
-}
-
-/**
- * Verifies an export on its own: whole, of known shape, and signed by an accepted signer it names,
- * over exactly its bytes (a Secure Enclave signature, or a passkey assertion with its challenge,
- * relying party and user presence). The signature proves the export was made by the holder of that
- * key; whether this machine should believe that key is the pin's question, not this one.
- */
-export function verifyOwnerSeatExport(raw: unknown): { ok: true; signed: SignedOwnerSeatExport; body: OwnerSeatExport; fingerprint: string; signer: OwnerSigner } | { ok: false; why: string } {
-  if (!plainObject(raw)) return { ok: false, why: 'the export is not an object' };
-  const body = exportBodyOf(raw.owner_seat_export);
-  if (typeof body === 'string') return { ok: false, why: body };
-  if (typeof raw.signer !== 'string' || typeof raw.signature !== 'string' || !/^[0-9a-f]{16,512}$/.test(raw.signature)) return { ok: false, why: 'the export is not signed' };
-  const signer = body.signers.find((s) => s.name === raw.signer);
-  if (signer === undefined) return { ok: false, why: `the export is signed by "${raw.signer}", which it does not carry` };
-  if (!body.accepted.includes(signer.name)) return { ok: false, why: `the export is signed by "${signer.name}", which its owner-signers do not accept` };
-  let webauthn: SignedOwnerSeatExport['webauthn'];
-  if (raw.webauthn !== undefined) {
-    if (!plainObject(raw.webauthn) || typeof raw.webauthn.authenticator_data !== 'string' || typeof raw.webauthn.client_data_json !== 'string') return { ok: false, why: 'the export carries a passkey assertion that cannot be read' };
-    webauthn = { authenticator_data: raw.webauthn.authenticator_data, client_data_json: raw.webauthn.client_data_json };
-  }
-  const bytes = ownerSeatExportBytes(body);
-  const sig = signatureOk(signer, signer.public_key, bytes, ownerSeatExportChallenge(body), raw.signature, webauthn, 'owner seat export');
-  if (!sig.ok) return sig;
-  const signed: SignedOwnerSeatExport = { owner_seat_export: body, signer: signer.name, signature: raw.signature, ...(webauthn !== undefined ? { webauthn } : {}) };
-  return { ok: true, signed, body, fingerprint: ownerSeatFingerprint(body), signer };
-}
 
 /** The Touch ID card an export is signed under: what it does, and the fingerprint to compare. */
 export function exportPrompt(fingerprint: string): string {
@@ -327,13 +166,6 @@ export function defaultMachineName(raw: string = hostname()): string {
   return MACHINE_NAME_PATTERN.test(plain) ? plain : 'machine';
 }
 
-export function validMachineBinding(raw: unknown): raw is MachineBinding {
-  return plainObject(raw)
-    && typeof raw.id === 'string' && MACHINE_ID_PATTERN.test(raw.id)
-    && typeof raw.name === 'string' && MACHINE_NAME_PATTERN.test(raw.name)
-    && Object.keys(raw).every((key) => key === 'id' || key === 'name');
-}
-
 /** This machine's record, where the resolver keeps the owner state, or null when there is none or
  *  it cannot be read whole. */
 export function readMachine(home: string): MachineRecord | null {
@@ -341,28 +173,22 @@ export function readMachine(home: string): MachineRecord | null {
   return state.kind === 'present' ? readMachineAt(state.place.machine) : null;
 }
 
-function readMachineAt(path: string): MachineRecord | null {
-  try {
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.size > 4096) return null;
-    const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-    if (!plainObject(raw) || raw.format !== MACHINE_FORMAT || !isoTime(raw.created)) return null;
-    const binding = { id: raw.id, name: raw.name };
-    if (!validMachineBinding(binding)) return null;
-    return { format: MACHINE_FORMAT, id: binding.id, name: binding.name, created: raw.created };
-  } catch {
-    return null;
-  }
+/** A system folder's entries are read by every account of the machine; an account's are its own. */
+function modeFor(place: OwnerStatePlace): number {
+  return place.kind === 'system' ? 0o644 : 0o600;
 }
 
-function writeExclusive(path: string, text: string): 'written' | 'exists' | 'failed' {
+function writeExclusive(path: string, text: string, mode = 0o600): 'written' | 'exists' | 'failed' {
   let fd: number;
   try {
-    fd = openSync(path, 'wx', 0o600);
+    fd = openSync(path, 'wx', mode);
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'exists' : 'failed';
   }
   try {
+    // The mode asked for, whatever the process's file-creation mask: a system entry every
+    // account must read is never left readable by its writer alone.
+    if (mode !== 0o600) fchmodSync(fd, mode);
     writeSync(fd, text);
   } finally {
     closeSync(fd);
@@ -370,9 +196,9 @@ function writeExclusive(path: string, text: string): 'written' | 'exists' | 'fai
   return 'written';
 }
 
-function replaceFile(path: string, text: string): boolean {
+function replaceFile(path: string, text: string, mode = 0o600): boolean {
   const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`;
-  if (writeExclusive(temporary, text) !== 'written') return false;
+  if (writeExclusive(temporary, text, mode) !== 'written') return false;
   try {
     renameSync(temporary, path);
     return true;
@@ -390,8 +216,8 @@ function ensureMachine(place: OwnerStatePlace, name: string | undefined, now: Da
   const chosen = name ?? defaultMachineName();
   if (!MACHINE_NAME_PATTERN.test(chosen)) return `"${chosen}" is not a machine name: lower case letters, digits, dots and dashes`;
   const record: MachineRecord = { format: MACHINE_FORMAT, id: `m_${randomBytes(12).toString('hex')}`, name: chosen, created: now.toISOString() };
-  mkdirSync(place.dir, { recursive: true, mode: 0o700 });
-  const written = writeExclusive(place.machine, `${JSON.stringify(record, null, 2)}\n`);
+  if (place.kind === 'account') mkdirSync(place.dir, { recursive: true, mode: 0o700 });
+  const written = writeExclusive(place.machine, `${JSON.stringify(record, null, 2)}\n`, modeFor(place));
   if (written === 'exists') return readMachineAt(place.machine) ?? "this machine's record cannot be read; nothing was pinned";
   if (written === 'failed') return "this machine's record could not be written; nothing was pinned";
   return record;
@@ -405,34 +231,7 @@ function ensureMachine(place: OwnerStatePlace, name: string | undefined, now: Da
  * removing the pin turns no terminal back into the owner and admits no answer.
  */
 export function readOwnerPin(home: string): OwnerPinRead {
-  const state = ownerStateOf(home);
-  if (state.kind === 'none') return { kind: 'none' };
-  if (state.kind === 'refused') return { kind: 'refused', why: state.why };
-  const path = state.place.pin;
-  let stat;
-  try {
-    stat = lstatSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'refused', why: 'this machine was pinned, and its pinned owner seat is missing' };
-    return { kind: 'refused', why: 'the pinned owner seat cannot be read' };
-  }
-  if (!stat.isFile()) return { kind: 'refused', why: 'the pinned owner seat is not a plain file' };
-  if (stat.size > CARRIED_FILE_MAX_BYTES) return { kind: 'refused', why: 'the pinned owner seat is too large to be one' };
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    return { kind: 'refused', why: 'the pinned owner seat is not whole JSON' };
-  }
-  if (!plainObject(raw) || raw.format !== OWNER_SEAT_PIN_FORMAT || !isoTime(raw.pinned_at) || typeof raw.fingerprint !== 'string') {
-    return { kind: 'refused', why: `the pinned owner seat is not a ${OWNER_SEAT_PIN_FORMAT} record` };
-  }
-  const verified = verifyOwnerSeatExport(raw.export);
-  if (!verified.ok) return { kind: 'refused', why: `the pinned owner seat does not verify (${verified.why})` };
-  if (verified.fingerprint !== raw.fingerprint) return { kind: 'refused', why: 'the pinned owner seat does not match its own fingerprint' };
-  const machine = readMachineAt(state.place.machine);
-  if (machine === null) return { kind: 'refused', why: "the pinned owner seat has no readable machine record beside it" };
-  return { kind: 'pinned', body: verified.body, signed: verified.signed, fingerprint: verified.fingerprint, pinnedAt: raw.pinned_at, machine };
+  return readOwnerPinIn(ownerStateOf(home));
 }
 
 function sameSigner(a: OwnerSigner, b: OwnerSigner): boolean {
@@ -445,6 +244,8 @@ export type PinOutcome = {
   /** `pinned`: the first pin (trust on first use). `repinned`: a changed set, signed by a signer
    *  already pinned. `same`: this set is pinned already, and nothing was written. */
   kind: 'pinned' | 'repinned' | 'same';
+  /** Where the pin is kept: the system folder shared by every account, or this account's own. */
+  place: 'system' | 'account';
   fingerprint: string;
   previous: string | null;
   team: string;
@@ -465,14 +266,18 @@ export function pinOwnerSeat(home: string, raw: unknown, now: Date = new Date(),
   if (!verified.ok) return { ok: false, why: verified.why };
   if (Date.parse(verified.body.exported_at) > now.getTime() + FUTURE_SKEW_MS) return { ok: false, why: `the export is dated ${verified.body.exported_at}, ahead of this machine's clock` };
   const state = ownerStateOf(home);
-  if (state.kind === 'refused') return { ok: false, why: `${state.why}; nothing was changed` };
-  const place = state.kind === 'present' ? state.place : state.write;
+  // A machine whose accounts share one owner: the administrator pins in the system folder, the
+  // first time into a folder its install set up, and no entity account ever does.
+  const shared = state.kind === 'present' ? state.place.shared !== undefined : state.kind === 'refused' && state.setup !== undefined;
+  if (shared && process.getuid?.() !== systemOwnerUid()) return { ok: false, why: `this machine's owner state is kept in the system folder for all its accounts; only its administrator pins there, from the owner's own account: ${ownerPinCommand()}; nothing was changed` };
+  if (state.kind === 'refused' && state.setup === undefined) return { ok: false, why: `${state.why}; nothing was changed` };
+  const place = state.kind === 'present' ? state.place : state.kind === 'refused' ? state.setup! : state.write;
   if (place === null) return { ok: false, why: 'this account has no home folder the pin can be kept in; nothing was pinned' };
-  if (place.kind === 'system') return { ok: false, why: "this machine's owner state is kept in the system folder; it is changed there, not by this command" };
-  const current = readOwnerPin(home);
+  if (place.kind === 'system' && !shared) return { ok: false, why: "this machine's owner state is kept in the system folder; it is changed there, not by this command" };
+  const current = state.kind === 'refused' ? { kind: 'none' as const } : readOwnerPin(home);
   if (current.kind === 'refused') return { ok: false, why: `${current.why}; nothing was changed` };
   if (current.kind === 'pinned') {
-    const result = { team: verified.body.team, signers: verified.body.signers.map((s) => s.name), machine: current.machine };
+    const result = { team: verified.body.team, signers: verified.body.signers.map((s) => s.name), machine: current.machine, place: place.kind };
     if (current.fingerprint === verified.fingerprint) return { ok: true, kind: 'same', fingerprint: current.fingerprint, previous: current.fingerprint, ...result };
     const held = current.body.signers.find((s) => s.name === verified.signer.name);
     if (held === undefined || !sameSigner(held, verified.signer) || !current.body.accepted.includes(held.name)) {
@@ -491,11 +296,12 @@ export function pinOwnerSeat(home: string, raw: unknown, now: Date = new Date(),
     previous: current.kind === 'pinned' ? current.fingerprint : null,
     export: verified.signed,
   };
-  mkdirSync(place.dir, { recursive: true, mode: 0o700 });
-  if (!replaceFile(place.pin, `${JSON.stringify(pin, null, 2)}\n`)) return { ok: false, why: 'the pin could not be written; nothing was changed' };
+  if (place.kind === 'account') mkdirSync(place.dir, { recursive: true, mode: 0o700 });
+  if (!replaceFile(place.pin, `${JSON.stringify(pin, null, 2)}\n`, modeFor(place))) return { ok: false, why: 'the pin could not be written; nothing was changed' };
   return {
     ok: true,
     kind: current.kind === 'pinned' ? 'repinned' : 'pinned',
+    place: place.kind,
     fingerprint: verified.fingerprint,
     previous: pin.previous,
     team: verified.body.team,
@@ -516,6 +322,8 @@ export function claimInLedger(home: string, id: string, action: string, at: Date
   if (!LEDGER_ENTRY.test(entry)) return { ok: false, why: `request ${id} cannot be spent for ${action}` };
   const state = ownerStateOf(home);
   if (state.kind !== 'present') return { ok: false, why: state.kind === 'refused' ? state.why : "this machine's owner seat is not pinned; there is no ledger to spend it in" };
+  // A shared machine's ledger is the owner helper's: an approval is spent there through it, never here.
+  if (state.place.shared !== undefined) return { ok: false, why: 'on this machine an approval is spent only by the owner helper; nothing was spent' };
   if (state.place.kind === 'account') {
     try {
       mkdirSync(state.place.ledger, { mode: 0o700 });
@@ -548,44 +356,34 @@ export function machineBindingOf(home: string): MachineBinding | null {
   return pin.kind === 'pinned' ? { id: pin.machine.id, name: pin.machine.name } : null;
 }
 
+/** The account a request names on a machine whose accounts share one owner, or null elsewhere
+ *  (and when the owner state there cannot be read). */
+export function accountBindingOf(home: string): string | null {
+  const state = ownerStateOf(home);
+  return state.kind === 'present' && state.place.shared !== undefined ? state.place.shared.account : null;
+}
+
 /**
- * Whether a request may run here, by the machine it names. A request that names a machine runs
- * only on that machine, which must be pinned; on a pinned machine a request that names none is
- * refused, because no answer from the signer machine can have been bound to it. A machine with a
- * local owner (no pin) runs its own unnamed requests as before. Null when the request may run.
+ * Whether a request may run here, by the machine (and, on a machine whose accounts share one
+ * owner, the account) it names. A request that names a machine runs only on that machine, which
+ * must be pinned; on a pinned machine a request that names none is refused, because no answer
+ * from the signer machine can have been bound to it. On a shared machine a request runs only for
+ * the account it names. A machine with a local owner (no pin) runs its own unnamed requests as
+ * before. Null when the request may run.
  */
-export function requestMachineProblem(home: string, machine: unknown, id: string): string | null {
+export function requestMachineProblem(home: string, machine: unknown, id: string, account?: unknown): string | null {
+  const here = accountBindingOf(home);
+  if (account !== undefined && !validAccountBinding(account)) return `request ${id} names an account this build cannot read`;
+  if (here !== null && account === undefined) return `request ${id} names no account; on this machine every owner request names the account it was made by (record it again with --request)`;
+  if (account !== undefined && account !== here) return here === null ? `request ${id} is for account ${account} of a machine whose accounts share one owner; it runs only there` : `request ${id} is for account ${account}, not this one (${here})`;
   const pinned = ownerMachinePinned(home);
   if (machine === undefined) {
     return pinned ? `request ${id} names no machine; on a machine whose owner signs on another machine, every owner request names this machine (record it again with --request)` : null;
   }
   if (!validMachineBinding(machine)) return `request ${id} names a machine this build cannot read`;
   if (!pinned) return `request ${id} is for machine ${machine.name} (${machine.id}); it runs only there`;
-  const here = readMachine(home);
-  if (here === null) return `this machine has no readable machine record, so request ${id} for ${machine.name} (${machine.id}) cannot be matched`;
-  if (here.id !== machine.id) return `request ${id} is for machine ${machine.name} (${machine.id}), not this one (${here.name}, ${here.id})`;
+  const record = readMachine(home);
+  if (record === null) return `this machine has no readable machine record, so request ${id} for ${machine.name} (${machine.id}) cannot be matched`;
+  if (record.id !== machine.id) return `request ${id} is for machine ${machine.name} (${machine.id}), not this one (${record.name}, ${record.id})`;
   return null;
-}
-
-/**
- * Verifies one signed owner-seat answer against the pinned owner seat: its signer is pinned and
- * accepted, it names the pinned seat, and its signature (or passkey assertion) holds over exactly
- * this answer — the same bytes and the same check as an answer verified where the signer lives.
- * Which request it answers, and whether that request is for this machine, is the caller's check.
- */
-export function verifyPinnedOwnerAnswer(pin: OwnerPin, signed: SignedOwnerAnswer): { ok: true; answer: OwnerSeatAnswer; signer: OwnerSigner } | { ok: false; why: string } {
-  if (!plainObject(signed)) return { ok: false, why: 'the owner-seat answer is not signed' };
-  const answer = signed.owner_seat_answer as unknown;
-  if (!plainObject(answer) || typeof signed.signature !== 'string' || typeof signed.signer !== 'string') return { ok: false, why: 'the owner-seat answer is not signed' };
-  if (typeof answer.kind !== 'string' || typeof answer.request_id !== 'string' || typeof answer.params_sha256 !== 'string' || typeof answer.choice !== 'string' || !isoTime(answer.at)) {
-    return { ok: false, why: 'the owner-seat answer cannot be read' };
-  }
-  const signer = pin.body.signers.find((s) => s.name === signed.signer);
-  if (signer === undefined) return { ok: false, why: `"${signed.signer}" is not a signer of the owner seat pinned on this machine` };
-  if (!pin.body.accepted.includes(signer.name)) return { ok: false, why: `signer "${signer.name}" is not accepted by the owner seat pinned on this machine (${pin.body.accepted.join(', ')})` };
-  const typed = answer as unknown as OwnerSeatAnswer;
-  if (typed.team !== pin.body.team || typed.seat !== 'owner') return { ok: false, why: 'the owner-seat answer names another seat' };
-  const sig = signatureOk(signer, signer.public_key, ownerSeatAnswerBytes(typed), webauthnChallenge(typed), signed.signature, signed.webauthn, 'answer');
-  if (!sig.ok) return sig;
-  return { ok: true, answer: typed, signer };
 }

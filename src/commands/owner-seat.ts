@@ -14,6 +14,8 @@
 //                                                              machine with no owner signer; one Touch ID
 //   team owner-seat pin --from <file> [--name <machine>]       on that machine: pin the export (trust on
 //                                                              first use; a change needs a pinned signer)
+//   team owner-seat install --account <a,b> [--dry-run]        on a Linux machine whose accounts share one
+//                                                              owner: the system owner state and its helper
 import { verify as cryptoVerify } from 'node:crypto';
 import { renameSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -21,6 +23,8 @@ import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { readCarriedFile, writeCarriedFile } from '../client/owner-carry.ts';
 import { exportOwnerSeat, fingerprintText, pinOwnerSeat, readOwnerPin } from '../client/owner-pin.ts';
+import { installOwnerState, realInstallSystem, type InstallSystem } from '../client/owner-state-install.ts';
+import { ownerPinCommand } from '../client/owner-pin-path.ts';
 import { ownerSeatFile, ownerSeatPublicKey, readOwnerSeat, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { writePolicySet } from '../policy/sources.ts';
@@ -34,6 +38,7 @@ export const USAGE = `Usage: team owner-seat [--json]
        team owner-seat serve [--port <port>]
        team owner-seat export --out <file> [--signer <name>] [--json]
        team owner-seat pin --from <file> [--name <machine>] [--json]
+       team owner-seat install --account <a,b> [--dry-run] [--json]
 
 export writes the seat's public signer records (no private key) for a machine that holds no owner
 signer, signed with one confirmation on the owner's device, and prints their fingerprint. pin, on that machine, trusts the
@@ -41,10 +46,15 @@ first export its owner gives it at a terminal there, and prints the same fingerp
 a changed seat needs a newer export signed by a signer already pinned. Once pinned, a terminal on
 that machine is not the owner: owner-only actions there need the owner's signed answer.
 
+install, on a Linux machine whose accounts share one owner, sets up the owner state every
+account reads and none can change: run it once with sudo from the owner's own account, naming
+the entity accounts; --dry-run prints every step and changes nothing. The pin there is then
+made with sudo too.
+
 Exits 0 when done, 1 when refused, 2 when the invocation is invalid.
 `;
 
-export type OwnerSeatOptions = { home?: string; store?: OwnerSeatKeyStore; now?: () => Date; serve?: boolean };
+export type OwnerSeatOptions = { home?: string; store?: OwnerSeatKeyStore; now?: () => Date; serve?: boolean; installSystem?: InstallSystem };
 
 export const ownerSeat: Command = (argv, io) => runOwnerSeat(argv, io);
 export default ownerSeat;
@@ -64,7 +74,7 @@ type Outcome = 'done' | 'refused' | 'invocation';
 
 async function ownerSeatOutcome(argv: string[], rawIo: Io, options: OwnerSeatOptions): Promise<Outcome> {
   const io = cleanedIo(rawIo);
-  const args = readArgs(argv, ['team', 'signer', 'entity', 'days', 'reason', 'port', 'owner-signers', 'grant-emission', 'policy-entity', 'out', 'from', 'name'], ['json']);
+  const args = readArgs(argv, ['team', 'signer', 'entity', 'days', 'reason', 'port', 'owner-signers', 'grant-emission', 'policy-entity', 'out', 'from', 'name', 'account'], ['json', 'dry-run']);
   const home = options.home ?? homedir();
   const store = options.store ?? systemOwnerSeatKeyStore();
   const now = options.now ?? (() => new Date());
@@ -73,6 +83,24 @@ async function ownerSeatOutcome(argv: string[], rawIo: Io, options: OwnerSeatOpt
   if (args.error !== undefined) return refuse(`${args.error}\n${USAGE}`, 'invocation');
   const carryOptions = ['out', 'from', 'name'].filter((name) => args.values[name] !== undefined);
   if (sub !== 'export' && sub !== 'pin' && carryOptions.length > 0) return refuse(`--${carryOptions[0]} belongs to export or pin\n${USAGE}`, 'invocation');
+  if (sub !== 'install' && (args.values.account !== undefined || args.flags.has('dry-run'))) return refuse(`--${args.values.account !== undefined ? 'account' : 'dry-run'} belongs to install\n${USAGE}`, 'invocation');
+
+  if (sub === 'install') {
+    if (args.values.account === undefined) return refuse('install needs --account <name>[,<name>]: the entity accounts that use this machine\'s owner', 'invocation');
+    const accounts = args.values.account.split(',').map((name) => name.trim()).filter(Boolean);
+    const dryRun = args.flags.has('dry-run');
+    const outcome = await installOwnerState(options.installSystem ?? realInstallSystem(), accounts, dryRun);
+    if (args.flags.has('json')) {
+      io.stdout(`${JSON.stringify({ format: 1, status: outcome.ok ? (outcome.ran ? 'installed' : 'dry-run') : 'refused', ...(outcome.ok ? {} : { why: outcome.why }), accounts, steps: outcome.steps })}\n`);
+      return outcome.ok ? 'done' : 'refused';
+    }
+    if (outcome.steps.length > 0) io.stdout(`${dryRun ? 'owner-seat install would run, as the administrator:' : 'owner-seat install:'}\n${outcome.steps.map((step) => `  ${step.what}\n    ${step.argv.join(' ')}`).join('\n')}\n`);
+    if (!outcome.ok) return refuse(outcome.why);
+    io.stdout(dryRun
+      ? 'nothing was changed (--dry-run)\n'
+      : `owner state set up for ${accounts.join(', ')}; next, pin the owner seat as the administrator: ${ownerPinCommand()}\n`);
+    return 'done';
+  }
 
   if (sub === undefined || sub === 'status') {
     const seat = readOwnerSeat(home);
@@ -137,7 +165,10 @@ async function ownerSeatOutcome(argv: string[], rawIo: Io, options: OwnerSeatOpt
       : pinned.kind === 'repinned'
         ? `owner seat: owner@${pinned.team} pinned again, from an export signed by a signer pinned here (was ${fingerprintText(pinned.previous!)})`
         : `owner seat: owner@${pinned.team} pinned from another machine (trust on first use: this machine believes the first export its owner gives it)`;
-    io.stdout(`${said}\nfingerprint: ${fingerprintText(pinned.fingerprint)}; compare it with the one the export printed\nthis machine: ${pinned.machine.name} (${pinned.machine.id}); signers: ${pinned.signers.join(', ')}\nfrom now on a terminal on this machine is not the owner: an owner-only action runs on the owner's signed answer, carried as files from the machine that holds the signers\nnote: the pin is kept in this account's config folder, where a process of the account can still replace it, until a separate account keeps it\n`);
+    const kept = pinned.place === 'system'
+      ? 'the pin is kept in the system owner folder: every account of this machine reads it, and only the administrator changes it'
+      : "note: the pin is kept in this account's config folder, where a process of the account can still replace it, until a separate account keeps it";
+    io.stdout(`${said}\nfingerprint: ${fingerprintText(pinned.fingerprint)}; compare it with the one the export printed\nthis machine: ${pinned.machine.name} (${pinned.machine.id}); signers: ${pinned.signers.join(', ')}\nfrom now on a terminal on this machine is not the owner: an owner-only action runs on the owner's signed answer, carried as files from the machine that holds the signers\n${kept}\n`);
     return 'done';
   }
 

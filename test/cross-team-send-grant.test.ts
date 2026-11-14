@@ -586,8 +586,10 @@ describe('the general door', () => {
   // A child process, not `main` in this one: the owner home is read through `homedir()`, which
   // this runner fixes at its own start, so only a child with HOME set is the synthetic home.
   const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+  // The suite's owner-state roots, so the child reads its owner state in the synthetic home.
+  const ownerStateChild = fileURLToPath(new URL('./preload/owner-state-child.ts', import.meta.url));
   async function runCli(args: string[], on: { cwd: string; home: string }): Promise<{ code: number; out: string; err: string }> {
-    const proc = Bun.spawn([process.execPath, cli, ...args], {
+    const proc = Bun.spawn([process.execPath, '--preload', ownerStateChild, cli, ...args], {
       cwd: on.cwd, env: { ...process.env, HOME: on.home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' }, stdout: 'pipe', stderr: 'pipe',
     });
     const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);

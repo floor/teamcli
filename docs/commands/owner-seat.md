@@ -16,6 +16,7 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
     team owner-seat serve [--port <port>]
     team owner-seat export --out <file> [--signer <name>] [--json]
     team owner-seat pin --from <file> [--name <machine>] [--json]
+    team owner-seat install --account <a,b> [--dry-run] [--json]
 
 - `status` (the default): the seat, its signers and the security-profile line. A relaxed profile
   prints `SECURITY PROFILE: RELAXED: …` in capitals. On a machine whose owner seat is pinned it
@@ -50,7 +51,11 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   name (`--name`, default this machine's own name). Pinning the same seat again changes nothing;
   a changed seat (a passkey added, a key replaced) is pinned only from a newer export signed by a
   signer already pinned here, whoever runs the command. A pin that cannot be read is never
-  replaced by this command.
+  replaced by this command. On a shared Linux server the pin is made as the administrator (see
+  below).
+- `install`: on a shared Linux server, sets up once the owner state every account reads and none
+  can change (see [A shared Linux server](#a-shared-linux-server)). `--account` names the entity
+  accounts; `--dry-run` prints every step and changes nothing.
 
 ## A machine whose owner seat is pinned
 
@@ -81,11 +86,74 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   three counts as pinned, and a state that cannot be read or trusted — a missing pin beside a
   machine record, a parent that is not a folder, an unprotected system folder — refuses every
   answer and keeps the terminal from being the owner; it never reads as unpinned.
-- **The limit of this step.** In the account's own folder, the owner state is as safe as the
-  account's files: a process of the account can replace the pin, copy a machine record, or remove
-  a ledger entry. A later step keeps all three in the system folder, out of the agents' reach;
-  this command does not write there. Commands that have no `--request` door (`team daemon
-  install`, `team grant`) are refused from a terminal here until they have one.
+- **The limit of the account's own folder.** On macOS, in the account's own folder, the owner
+  state is as safe as the account's files: a process of the account can replace the pin, copy a
+  machine record, or remove a ledger entry. A shared Linux server keeps all three out of the
+  agents' reach (below). Commands that have no `--request` door (`team daemon install`,
+  `team grant`) are refused from a terminal here until they have one.
+
+## A shared Linux server
+
+A Linux server has one owner and several accounts: the owner's own administrator account, and one
+account with no administrator rights per entity, each with its own daemon and seats. The same
+pinned owner seat counts for every entity account, and none of them can change it.
+
+- **The owner state is the system's.** On Linux, the pin and the machine record live only in the
+  system folder (`/etc/teamcli`), which the administrator alone writes and every account reads.
+  The approval ledger lives in a folder of its own (`/var/lib/teamcli-owner/ledger`), written only
+  by the owner helper's own user, with one folder per account. An account's own home is never
+  read for any of them.
+- **Nothing reads as unpinned.** A system folder that is missing, is writable by anyone but the
+  administrator, lacks the helper's record or the ledger, or holds no pin yet, refuses every
+  answer, and a terminal of an entity account is never the owner there. The refusal names the
+  install to run, with this machine's own paths in full.
+- **Each answer is for one account.** A request made by an entity account names that account
+  beside the machine, inside the signed parameters, and the owner's card shows it
+  (`server (account floor)`). An answer for one account is never accepted by another.
+- **An approval is spent by the owner helper alone.** When a command runs with `--approval <id>`,
+  the account hands the request, the answer and what it is about to run to the owner helper. The
+  account can start the helper only through one rule the administrator installed: one launcher,
+  with no arguments, as the helper's own user. The launcher starts the helper with an environment
+  it writes out in full, so nothing the caller sets reaches it, and the system itself tells the
+  helper which account called it; the caller cannot choose. The helper reads at most one small
+  input, for a few seconds, and spends one approval at a time: a call that cannot start within
+  that time spends nothing. It checks everything again against the system pin, for that account
+  — the machine, the account, the signed window, the signer, the parameters and the arguments
+  about to run — and spends the approval once in that account's ledger, on disk before it
+  answers. The command runs only on a verdict that names exactly the request it sent.
+- **Every time is checked against the clock.** A request carried between machines that says it
+  was made later than now (beyond a two-minute allowance for clocks that differ) is never shown,
+  signed, recorded or run, so its fifteen-minute window cannot be stretched. An answer must say it
+  was given inside that window and not later than now.
+- **What this protects, and what it does not.** The helper keeps the pin, the machine record and
+  the ledger out of every entity account's reach, so an account cannot pin another owner, replay a
+  spent approval, or use an answer given for another account. It does not stop an account from
+  acting on its own files: an agent in an entity account can change that account's own TeamCLI,
+  or do by hand what an owner-only command would do there. The boundary between entities, and
+  between an entity and the machine, is the account itself.
+- **Set up once, as the administrator.** From the owner's own account:
+
+  ```console
+  $ sudo team owner-seat install --account floor,studio --dry-run
+  $ sudo team owner-seat install --account floor,studio
+  $ sudo team owner-seat pin --from owner-seat-export.json --name server
+  ```
+
+  The install makes the helper's user (no login, no home of its own) and records at once that it
+  made it, then the system folder, the helper's code folder and launcher (the administrator's),
+  the ledger (the helper's), the helper's record, and the rule that lets the named accounts start
+  the helper, checked before it is put in place. Each folder and file is created with its owner
+  and mode. Before it changes anything, it reads every path it writes and every folder above it:
+  a link, or anything someone other than the administrator owns or may write, refuses it. It never
+  adopts a user of the helper's name that its record does not name; an install stopped right
+  after making the user says so and names the repair. Running it again is safe; to add an entity
+  account, run it again naming every account. The pin is then made by the administrator, with the same first-pin and re-pin rules as
+  anywhere else; no entity account can pin or re-pin. The administrator's search path is narrower
+  than the account's own, so name `team` and Bun by their full paths when it does not find them.
+  The helper runs the Bun and the TeamCLI build the install copied: after upgrading either, run
+  the install again.
+- **macOS is unchanged.** The Mac keeps its own owner signer, and a pinned Mac reads the system
+  folder when present, else the account's own folder, as before.
 
 ## Flags
 
@@ -103,7 +171,9 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
 | `--out` | file | on `export`: the new file the export is written to (never over an existing file) |
 | `--from` | file | on `pin`: the export to pin |
 | `--name` | name | on `pin`: this machine's name on the owner's cards, at the first pin (lower case, digits, dots, dashes) |
-| `--json` | — | on `status`, `export` and `pin`: one JSON document |
+| `--account` | names | on `install`: the entity accounts that use this machine's owner, comma-separated |
+| `--dry-run` | — | on `install`: print every step, change nothing |
+| `--json` | — | on `status`, `export`, `pin` and `install`: one JSON document |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## What it reads and writes
@@ -114,7 +184,12 @@ Secure Enclave key handles), `~/.config/team/security-profile.json` (the signed 
 pinned machine, in the owner-state folder (`/etc/teamcli` when it is present and protected, else
 the account's own `~/.config/team`): `owner-seat-pin.json` (the pinned export, its fingerprint
 and the fingerprint it replaced), `machine.json` (this machine's id and name) and `owner-ledger/`
-(one entry per approval spent). The export, the pin and the re-pin are logged in
+(one entry per approval spent). On a shared Linux server: `/etc/teamcli/owner-seat-pin.json`,
+`/etc/teamcli/machine.json`, `/etc/teamcli/owner-helper.json` (the helper's user and uid) and
+`/etc/teamcli/owner-install.json` (the install's record of the user it made), read by every account; the ledger `/var/lib/teamcli-owner/ledger/<account>/`, written by the helper
+alone; the helper's code under `/usr/local/teamcli-owner/`; the install's own staging folder,
+`/var/lib/teamcli-owner-install/` (the administrator's alone, emptied after each run); and its rule,
+`/etc/sudoers.d/teamcli-owner`. The export, the pin and the re-pin are logged in
 `security-profile.log`.
 
 ## Exit codes

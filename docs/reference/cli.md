@@ -2333,6 +2333,7 @@ Usage:
     team owner-seat serve [--port <port>]
     team owner-seat export --out <file> [--signer <name>] [--json]
     team owner-seat pin --from <file> [--name <machine>] [--json]
+    team owner-seat install --account <a,b> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -2374,6 +2375,34 @@ Usage:
 | `--key` | yes | no | no |
 | `--out` | yes | no | no |
 | `--signer` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `install`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat install --account <a,b> [--dry-run] [--json]
+
+#### Who may run it
+
+`any-caller` — with --dry-run it prints the steps and changes nothing; a real run changes the machine only as the system's administrator, which on a shared Linux machine is the owner's own account alone, and asks for no team file, seat or terminal
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--account` | yes | no | no |
+| `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
