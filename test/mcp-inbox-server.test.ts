@@ -860,7 +860,9 @@ describe('the serve is bound to the seat and launch it was started for', () => {
         setClaim(at.root, SESSION, 'lead', claim);
         const io = testIo(at.root, seatCaller('lead'));
         const feed = closed();
-        const code = await runMcpServe({ seat: 'lead', session: SESSION, file, ...(epoch === undefined ? {} : { epoch }) }, io, feed, { home: at.home });
+        // This server's process started before the claim was written: a later launch's claim,
+        // which it never adopts.
+        const code = await runMcpServe({ seat: 'lead', session: SESSION, file, ...(epoch === undefined ? {} : { epoch }) }, io, feed, { home: at.home }, { startedAtMs: 0 });
         return { code, io, feed };
       };
       const gone = await start(EPOCH_ONE, null);
