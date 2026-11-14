@@ -49,10 +49,11 @@ reach makes the command rewrite the record whole, which does not keep its commen
 command says so on stderr (comments_kept: false in --json). edit keeps the comments it
 leaves.
 
-A path whose last segment is names.unique, reminders or root names one key of an entity's own
-record in the owner's entities file (<entity>.names.unique, <entity>.reminders, <entity>.root).
-root is the folder the entity's projects sit directly under on this machine, an absolute path or
-~/…; a team record names it as {root}, and unset removes it. names.unique is how far
+A path whose last segment is names.unique, reminders, root or worktrees names one key of an
+entity's own record in the owner's entities file (<entity>.names.unique, <entity>.reminders,
+<entity>.root, <entity>.worktrees). root is the folder the entity's projects sit directly under on
+this machine, an absolute path or ~/…; worktrees is the folder its worktrees sit in, <root>/worktrees
+unless set. A team record names them as {root} and {worktrees}, and unset removes either. names.unique is how far
 apart seat nicknames stay — entity, project, team or off. reminders is the list the reminder
 chore fires: each item is {name, at, zone, catchUp, text, to}, the same shape the daemon reads.
 A set is the owner's, or a seat's under the owner's general grant: 0.5.10 admits a wildcard grant
@@ -89,12 +90,14 @@ export type ConfigSources = {
 };
 
 /**
- * `<entity>.root`: one entity's projects root on this machine (src/config/entity-edit.ts). A path
+ * `<entity>.root` and `<entity>.worktrees`: one entity's folders on this machine
+ * (src/config/entity-edit.ts). A path
  * whose first segment is a section of the team's own record (`seats.root`, a seat named root) or a
  * list index stays the team's, so the entity form never takes a team path from it.
  */
 async function isEntityRootPath(path: string): Promise<boolean> {
-  if (!path.endsWith('.root') || path.length <= '.root'.length) return false;
+  const folder = ['.root', '.worktrees'].find((suffix) => path.endsWith(suffix) && path.length > suffix.length);
+  if (folder === undefined) return false;
   const head = path.split('.')[0] ?? '';
   if (/^\d+$/.test(head)) return false;
   const { SECTIONS } = await import('../file/sections/index.ts');

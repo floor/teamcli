@@ -12,7 +12,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { entityRules } from '../entities.ts';
-import { filledRules } from '../file/root-word.ts';
+import { filledPath, filledRules } from '../file/root-word.ts';
 import type { Mode, TeamFile } from '../file/types.ts';
 import { projectRules } from '../registry/projects.ts';
 import { parseYaml, type YamlNode } from '../yaml.ts';
@@ -42,6 +42,9 @@ export type WorkSettings = {
   projectRules?: readonly string[];
   /** Why the chain could not be used, when it could not: the values are then the defaults. */
   unreadable?: string;
+  /** Why a `vault-root` that names `{root}` or `{worktrees}` names no vault on this machine: the
+   *  entity names no such folder here. The vault then reads as none, and `team doctor` says so. */
+  vaultProblem?: string;
 };
 
 function effective<V>(chain: PolicyChainResult, name: string, fallback: V): { value: V; from: SettingFrom } {
@@ -93,10 +96,13 @@ export function resolveWorkSettings(
   const reserved = effective<readonly string[]>(chain, 'owner.reserved-scope', OWNER_RESERVED_SCOPE_DEFAULT);
   const entityName = sourceTarget(sources.entity);
   const projectName = sourceTarget(sources.project);
+  // A vault under the entity's folders reads this machine's folders, as a team file's words do.
+  const vaultPath = vault.value === '' ? null : filledPath(vault.value, options.home ?? homedir(), entityName);
   return {
     workspaceMode,
     landingMode: effective<LandingMode>(chain, 'landing-mode', 'batch'),
-    vaultRoot: vault.value === '' ? { value: null, from: vault.from } : { value: expandVaultRoot(vault.value, options.home), from: vault.from },
+    vaultRoot: vaultPath === null || !vaultPath.ok ? { value: null, from: vault.from } : { value: expandVaultRoot(vaultPath.path, options.home), from: vault.from },
+    ...(vaultPath !== null && !vaultPath.ok ? { vaultProblem: `vault-root ${vault.value}: ${vaultPath.why}` } : {}),
     entityOrchestrator: effective<EntityOrchestrator>(chain, 'entity-orchestrator', 'auto'),
     relaysOwner: effective<OnOff>(chain, 'entity.main-orchestrator.relays-owner', 'on'),
     paneActions: effective<OnOff>(chain, 'leads.pane-actions', 'on'),

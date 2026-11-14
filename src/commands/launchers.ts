@@ -275,7 +275,7 @@ function applyRows(
   configured: ReadonlyMap<string, LauncherDecl>,
 ): { ok: true } | { ok: false; why: string } {
   if (next !== text) {
-    const wrote = writeTeamText(path, next, { home, command: 'launchers migrate' });
+    const wrote = writeTeamText(path, next, { home, command: 'launchers migrate', keepWords: true });
     if (!wrote.ok) {
       return { ok: false, why: `the team record was not written: ${wrote.errors.map((problem) => problem.message).join('; ')}` };
     }

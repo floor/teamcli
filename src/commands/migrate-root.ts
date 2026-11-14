@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { syncAgentLaunches } from '../config/edit.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
-import { planRootRewrite, ROOT_WORD } from '../file/root-word.ts';
+import { planRootRewrite, ROOT_WORD, WORKTREES_WORD } from '../file/root-word.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { readTeamText, writeTeamText } from '../file/team-text.ts';
 import type { Io } from '../io.ts';
@@ -54,15 +54,17 @@ export function runRootMigrate(args: RootMigrateArgs, io: Io, home: string): num
   const lines = plan.changes.map((change) => ({ line: change.line, before: change.before, after: change.after }));
   const say = (written: boolean) => {
     if (json) {
-      writeJson(io, 'team.migrate-root', { format: 1, dry_run: dryRun, written, entity: plan.entity, root: plan.root, changes: lines });
+      writeJson(io, 'team.migrate-root', { format: 1, dry_run: dryRun, written, entity: plan.entity, root: plan.root, worktrees: plan.worktrees, changes: lines });
       return;
     }
+    const folders = [plan.root, plan.worktrees].filter((folder): folder is string => folder !== null);
+    const unique = [...new Set(folders)].join(' and ');
     if (lines.length === 0) {
-      io.stdout(`nothing to rewrite: the team's record writes no full path inside ${plan.root}\n`);
+      io.stdout(`nothing to rewrite: the team's record writes no full path inside ${unique}\n`);
       return;
     }
     const verb = dryRun ? 'would rewrite' : 'rewrote';
-    io.stdout(`${verb} ${String(lines.length)} line${lines.length === 1 ? '' : 's'} to ${ROOT_WORD} (entity "${plan.entity}", ${plan.root} on this machine):\n`);
+    io.stdout(`${verb} ${String(lines.length)} line${lines.length === 1 ? '' : 's'} to ${ROOT_WORD} or ${WORKTREES_WORD} (entity "${plan.entity}", ${unique} on this machine):\n`);
     for (const change of lines) io.stdout(`  line ${String(change.line)}:\n  - ${change.before.trim()}\n  + ${change.after.trim()}\n`);
   };
   if (dryRun || lines.length === 0) {

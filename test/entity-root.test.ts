@@ -12,8 +12,9 @@ import { runConfig } from '../src/commands/config.ts';
 import { runSetup } from '../src/commands/setup.ts';
 import { rootWordFindings } from '../src/commands/doctor.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
-import { checkedRootPath, entitiesPath, entityProjectsRoot } from '../src/entities.ts';
-import { fillRootWord, filledRules, hasRootWord, planRootRewrite, rootPathUses } from '../src/file/root-word.ts';
+import { checkedRootPath, entitiesPath, entityFolders, entityProjectsRoot } from '../src/entities.ts';
+import { fillRootWord, filledPath, filledRules, hasRootWord, keptRootWords, planRootRewrite, rootPathUses } from '../src/file/root-word.ts';
+import { writeTeamText } from '../src/file/team-text.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { fillSecretWords } from '../src/launch/secret-words.ts';
 import type { SecretStore } from '../src/secrets/store.ts';
@@ -415,5 +416,104 @@ describe('the charter team setup signs by default', () => {
     const read = readCharter(home, store);
     expect(read.kind).toBe('ok');
     if (read.kind === 'ok') expect(read.charter.body.roots).toEqual([join(home, 'repos')]);
+  });
+});
+
+describe('the worktrees folder: {worktrees}', () => {
+  // The server layout: repositories under ~/repos, worktrees beside it in ~/worktrees.
+  const SERVER = 'acme:\n  root: ~/repos\n  worktrees: ~/worktrees\n';
+
+  test('it is the entry\'s own word, else <root>/worktrees, else none', () => {
+    const server = homeWith(SERVER);
+    expect(entityFolders(server, 'acme')).toEqual({ ok: true, root: join(server, 'repos'), worktrees: join(server, 'worktrees'), worktreesWritten: true });
+    const mac = homeWith('acme:\n  root: ~/Code/acme\n');
+    expect(entityFolders(mac, 'acme')).toEqual({ ok: true, root: join(mac, 'Code', 'acme'), worktrees: join(mac, 'Code', 'acme', 'worktrees'), worktreesWritten: false });
+    expect(entityFolders(homeWith('acme:\n  roots: [/x]\n'), 'acme')).toEqual({ ok: true, root: null, worktrees: null, worktreesWritten: false });
+    expect(entityFolders(homeWith('acme:\n  root: ~/repos\n  worktrees: worktrees\n'), 'acme').ok).toBe(false);
+  });
+
+  test('a team file writes {worktrees} and reads each machine\'s folder', () => {
+    const text = teamText({ rules: ['"Work only in {worktrees}/web/<task>, never in {root}/web."'] });
+    const server = homeWith(SERVER);
+    const mac = homeWith('acme:\n  root: ~/Code/acme\n');
+    const onServer = validateTeamFile(text, { home: server });
+    const onMac = validateTeamFile(text, { home: mac });
+    expect(onServer.ok && onServer.team.rules).toEqual([`Work only in ${server}/worktrees/web/<task>, never in ${server}/repos/web.`]);
+    expect(onMac.ok && onMac.team.rules).toEqual([`Work only in ${mac}/Code/acme/worktrees/web/<task>, never in ${mac}/Code/acme/web.`]);
+  });
+
+  test('{worktrees} with no folder and no root to sit under is refused, naming both commands', () => {
+    const checked = validateTeamFile(teamText({ launch: 'codex', rules: ['"Worktrees: {worktrees}/web."'] }), { home: homeWith('acme:\n  roots: [/x]\n') });
+    expect(checked.ok).toBe(false);
+    if (!checked.ok) expect(checked.errors[0]!.message).toBe('the file writes {worktrees}, and entity "acme" names no worktrees folder on this machine, nor a projects root it would sit under: run `team config set acme.worktrees <folder>` or `team config set acme.root <folder>`');
+  });
+
+  test('the charter signs a worktrees folder outside the root as a root of its own, and not one inside it', () => {
+    const server = homeWith(SERVER);
+    expect(defaultProjectRoots(server)).toEqual({ ok: true, roots: [join(server, 'repos'), join(server, 'worktrees')] });
+    const mac = homeWith('acme:\n  root: ~/Code/acme\n');
+    expect(defaultProjectRoots(mac)).toEqual({ ok: true, roots: [join(mac, 'Code', 'acme')] });
+  });
+
+  test('the rewrite writes worktree paths as {worktrees}, on the server and inside a root alike', () => {
+    const server = homeWith(SERVER);
+    const onServer = planRootRewrite(teamText({ launch: 'codex', rules: ['"Work in ~/worktrees/web, read ~/repos/docs."'] }), server);
+    expect(onServer.ok && onServer.changes.map((change) => change.after.trim())).toEqual(['- "Work in {worktrees}/web, read {root}/docs."']);
+    const mac = homeWith('acme:\n  root: ~/Code/acme\n');
+    const onMac = planRootRewrite(teamText({ launch: 'codex', rules: ['"Work in ~/Code/acme/worktrees/web, read ~/Code/acme/docs."'] }), mac);
+    expect(onMac.ok && onMac.changes.map((change) => change.after.trim())).toEqual(['- "Work in {worktrees}/web, read {root}/docs."']);
+    expect(rootPathUses(teamText({ launch: 'zsh ~/worktrees/web/run.sh' }), server).map((use) => use.word)).toEqual(['{root}', '{worktrees}']);
+  });
+
+  test('team config set and unset <entity>.worktrees, the owner\'s', async () => {
+    const home = homeWith('acme:\n  root: ~/repos\n');
+    const cwd = join(home, '..');
+    const set = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['set', 'acme.worktrees', '~/worktrees'], set, { home })).toBe(0);
+    expect(set.err).toContain(`teams of entity "acme" read {worktrees} as ${home}/worktrees`);
+    expect(readFileSync(entitiesPath(home), 'utf8')).toContain('worktrees: ~/worktrees');
+    const get = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['get', 'acme.worktrees', '--json'], get, { home })).toBe(0);
+    expect(JSON.parse(get.out)).toMatchObject({ path: 'acme.worktrees', value: '~/worktrees', resolved: `${home}/worktrees` });
+    const unset = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['unset', 'acme.worktrees'], unset, { home })).toBe(0);
+    expect(readFileSync(entitiesPath(home), 'utf8')).not.toContain('worktrees:');
+    const bad = testIo(cwd, { kind: 'owner' });
+    expect(await runConfig(['set', 'acme.worktrees', '{root}/worktrees'], bad, { home })).toBe(1);
+  });
+});
+
+describe('editors keep the words', () => {
+  test('a line an editor builds from the filled team is written back with {root}; other lines are left alone', () => {
+    const home = homeWith('acme:\n  root: /srv/acme/repos\n');
+    const before = teamText({ rules: [`"Never commit in /srv/acme/repos/site itself."`] });
+    const after = before.replace('launch: zsh {root}/docs/tools/as-acme.sh codex -m gpt-6.1-sol', 'launch: zsh /srv/acme/repos/docs/tools/as-acme.sh codex -m gpt-6.2-sol');
+    const kept = keptRootWords(before, after, home);
+    expect(kept).toContain('launch: zsh {root}/docs/tools/as-acme.sh codex -m gpt-6.2-sol');
+    // The owner's own full path on an untouched line is the owner's word, and stays.
+    expect(kept).toContain('/srv/acme/repos/site itself.');
+  });
+
+  test('writeTeamText with keepWords writes the words; without it, the text as given', () => {
+    const home = homeWith('acme:\n  root: /srv/acme/repos\n');
+    const folder = join(home, '..', 'web');
+    mkdirSync(join(folder, '.agents'), { recursive: true });
+    const path = join(folder, '.agents', 'team.yaml');
+    const text = teamText();
+    writeFileSync(path, text);
+    const edited = text.replace('{root}/docs', '/srv/acme/repos/docs');
+    expect(writeTeamText(path, edited, { home, keepWords: true }).ok).toBe(true);
+    expect(readFileSync(path, 'utf8')).toBe(text);
+    expect(writeTeamText(path, edited, { home }).ok).toBe(true);
+    expect(readFileSync(path, 'utf8')).toBe(edited);
+  });
+});
+
+describe('vault-root under the entity\'s folders', () => {
+  test('a {root} vault reads this machine\'s folder; with no root it names no vault and says why', () => {
+    expect(filledPath('{root}/docs', homeWith('acme:\n  root: /srv/acme/repos\n'), 'acme')).toEqual({ ok: true, path: '/srv/acme/repos/docs' });
+    expect(filledPath('/srv/docs', homeWith(), 'acme')).toEqual({ ok: true, path: '/srv/docs' });
+    expect(filledPath('{root}/docs', homeWith(), 'acme')).toEqual({ ok: false, why: 'entity "acme" names no projects root on this machine: run `team config set acme.root <folder>`' });
+    expect(filledPath('{root}/docs', homeWith('acme:\n  root: /srv/acme/repos\n'), null).ok).toBe(false);
   });
 });

@@ -1,8 +1,9 @@
 // `team config get|set <entity>.<key> …` for the keys of an entity's own record: the
 // `names.unique` word on seat nicknames (src/entities.ts reads it back), the `reminders` list
-// the reminder chore fires (src/reminder/config.ts reads it back), and the `root` folder the
-// entity's projects sit under on this machine, which a team file names as `{root}`
-// (src/file/root-word.ts reads it back; `unset` removes it). The entity's entry lives in the
+// the reminder chore fires (src/reminder/config.ts reads it back), and the `root` and
+// `worktrees` folders the entity's projects and worktrees sit in on this machine, which a team
+// file names as `{root}` and `{worktrees}` (src/file/root-word.ts reads them back; `unset`
+// removes either). The entity's entry lives in the
 // owner's entities file; this command changes that one key of an entry the file already declares,
 // and nothing else — not the file, not the entry, not a sibling key. A reminder list is held to
 // the daemon's own parser before it is written, so a list the daemon would refuse is never
@@ -22,7 +23,7 @@ import { resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
-import { checkedRootPath, ENTITY_ROOT_KEY, entitiesPath, lockedEntities, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
+import { checkedRootPath, ENTITY_ROOT_KEY, ENTITY_WORKTREES_KEY, entitiesPath, lockedEntities, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { isEntityName } from '../file/sections/entity.ts';
 import { cleanedIo, type Io } from '../io.ts';
@@ -38,13 +39,23 @@ const NAMES_KEY = 'names.unique';
 const REMINDERS_KEY = 'reminders';
 const RULES_KEY = 'rules';
 const ROOT_KEY = ENTITY_ROOT_KEY;
+const WORKTREES_KEY = ENTITY_WORKTREES_KEY;
+/** The entity's two folders on this machine: the projects root and the worktrees folder. */
+function isFolderKey(key: EntityKey | null): key is typeof ROOT_KEY | typeof WORKTREES_KEY {
+  return key === ROOT_KEY || key === WORKTREES_KEY;
+}
+/** How a refusal or a report names a folder key. */
+function folderLabel(key: EntityKey | null): string {
+  return key === WORKTREES_KEY ? 'worktrees folder' : 'projects root';
+}
 /** The reserved path the composed view answers to. A leading `@` is a shape no entity name can
  *  take (`isEntityName` starts with a letter or a digit), so the view cannot shadow an entity
  *  called `composed`, and `composed.rules` stays that entity's own stored rules. */
 const COMPOSED_PATH = '@composed.rules';
-type EntityKey = typeof NAMES_KEY | typeof REMINDERS_KEY | typeof RULES_KEY | typeof ROOT_KEY;
+type EntityKey = typeof NAMES_KEY | typeof REMINDERS_KEY | typeof RULES_KEY | typeof ROOT_KEY | typeof WORKTREES_KEY;
 const FORM: Record<EntityKey, string> = {
   [ROOT_KEY]: `team config set <entity>.${ROOT_KEY} <folder> [--dry-run]`,
+  [WORKTREES_KEY]: `team config set <entity>.${WORKTREES_KEY} <folder> [--dry-run]`,
   [NAMES_KEY]: `team config set <entity>.${NAMES_KEY} <word>`,
   [REMINDERS_KEY]: `team config set <entity>.${REMINDERS_KEY} <yaml list>`,
   [RULES_KEY]: `team config set <entity>.${RULES_KEY} <yaml list> [--dry-run]`,
@@ -174,12 +185,12 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     key === RULES_KEY && (entityName.startsWith('project.') || entityName.startsWith('projects.'));
   const targetName = isProjectRules ? entityName.replace(/^projects?\./, '') : entityName;
   let why: string | null = args.error ?? null;
-  if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${REMINDERS_KEY}, ${RULES_KEY}, or ${ROOT_KEY}`;
-  if (why === null && key === ROOT_KEY && isProjectRules) why = `a projects root is an entity's, not a project's: ${FORM[ROOT_KEY]}`;
+  if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${REMINDERS_KEY}, ${RULES_KEY}, ${ROOT_KEY}, or ${WORKTREES_KEY}`;
+  if (why === null && isFolderKey(key) && isProjectRules) why = `a ${folderLabel(key)} is an entity's, not a project's: ${FORM[key]}`;
   if (why === null && verb !== 'get' && path === COMPOSED_PATH) {
     why = `${COMPOSED_PATH} is a view of the rules in force, not a stored value: it takes no set or unset; \`team config get ${COMPOSED_PATH}\` reads it`;
   }
-  if (why === null && verb === 'unset' && key !== ROOT_KEY) {
+  if (why === null && verb === 'unset' && !isFolderKey(key)) {
     why =
       key === NAMES_KEY
         ? `an entity's word has no unset: ${FORM[NAMES_KEY]} with the word you want (${NICKNAME_SCOPE_DEFAULT} is the default)`
@@ -187,7 +198,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
           ? `rules have no unset: ${FORM[RULES_KEY]} with an empty list ([] clears them)`
           : `an entity's reminders have no unset: ${FORM[REMINDERS_KEY]} with an empty list ([] clears them)`;
   }
-  if (why === null && verb !== 'get' && verb !== 'set' && !(verb === 'unset' && key === ROOT_KEY)) why = 'the entity form takes get or set';
+  if (why === null && verb !== 'get' && verb !== 'set' && !(verb === 'unset' && isFolderKey(key))) why = 'the entity form takes get or set';
   if (why === null && verb === 'unset' && given > 2) why = `unexpected "${args.rest[2] ?? ''}"`;
   if (why === null && verb === 'get' && given > 2) why = `unexpected "${args.rest[2] ?? ''}"`;
   if (why === null && verb === 'set' && given === 2) why = `a value is required: ${FORM[key as EntityKey]}`;
@@ -196,17 +207,17 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     const what =
       key === NAMES_KEY
         ? "an entity's word"
-        : key === ROOT_KEY
-          ? "an entity's projects root"
+        : isFolderKey(key)
+          ? `an entity's ${folderLabel(key)}`
         : key === RULES_KEY
           ? isProjectRules
             ? "a project's rules"
             : "an entity's rules"
           : "an entity's reminders";
-    why = `${what} take${key === NAMES_KEY || key === ROOT_KEY ? 's' : ''} no --request or --approval: the owner runs it, or a seat under the owner's general grant`;
+    why = `${what} take${key === NAMES_KEY || isFolderKey(key) ? 's' : ''} no --request or --approval: the owner runs it, or a seat under the owner's general grant`;
   }
   if (why === null && (args.values.general !== undefined) !== (args.values.key !== undefined)) why = '--general and --key go together';
-  if (why === null && args.values.general !== undefined && verb === 'get') why = `--general takes set${key === ROOT_KEY ? ' or unset' : ''}`;
+  if (why === null && args.values.general !== undefined && verb === 'get') why = `--general takes set${isFolderKey(key) ? ' or unset' : ''}`;
   if (why === null && path !== COMPOSED_PATH && !isEntityName(targetName)) {
     why = `"${targetName}" is not an entity name: letters, digits, ".", "_" and "-", starting with a letter or a digit, 128 at most`;
   }
@@ -220,7 +231,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   // The folder as the owner writes it (`~/…` stays `~/…` in the file), and the path it reads as here.
   let folder: { written: string; path: string } | null = null;
   const home = sources.home ?? homedir();
-  if (key === ROOT_KEY) {
+  if (isFolderKey(key)) {
     if (verb === 'set') {
       const checked = checkedRootPath(rawValue as string, home);
       if (!checked.ok) {
@@ -338,16 +349,17 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       }
       if (json) writeJson(io, 'team.config-value', { format: 1, path: `${entityName}.${key}`, value: got.value, source: isProjectRules ? 'project' : 'entity' });
       else io.stdout(shownValue(got.value));
-    } else if (key === ROOT_KEY) {
-      const got = getAt(record, hasEntitiesWrapper(record) ? ['entities', entityName, ROOT_KEY] : [entityName, ROOT_KEY]);
+    } else if (isFolderKey(key)) {
+      const got = getAt(record, hasEntitiesWrapper(record) ? ['entities', entityName, key] : [entityName, key]);
       if (!got.found || typeof got.value !== 'string') {
-        return noValue(io, json, `entity "${entityName}" names no projects root in ${file}`);
+        const reads = key === WORKTREES_KEY ? `; its worktrees sit in <root>/worktrees` : '';
+        return noValue(io, json, `entity "${entityName}" names no ${folderLabel(key)} in ${file}${reads}`);
       }
       const checked = checkedRootPath(got.value, home);
       if (json) {
         writeJson(io, 'team.config-value', {
           format: 1,
-          path: `${entityName}.${ROOT_KEY}`,
+          path: `${entityName}.${key}`,
           value: got.value,
           source: 'entity',
           ...(checked.ok ? { resolved: checked.root } : { problem: checked.why }),
@@ -391,8 +403,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       const actionLabel =
         key === NAMES_KEY
           ? "sets an entity's word"
-          : key === ROOT_KEY
-            ? "sets an entity's projects root"
+          : isFolderKey(key)
+            ? `sets an entity's ${folderLabel(key)}`
           : key === RULES_KEY
             ? isProjectRules
               ? "writes a project's rules"
@@ -448,8 +460,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     // A projects root is the first word a fresh machine needs, before any other entry exists: a
     // set makes the file and the entry when they are missing, and an unset of a root that is not
     // there changes nothing. Every other key keeps to an entry the file already declares.
-    const makesEntry = key === ROOT_KEY && verb === 'set';
-    if (key === ROOT_KEY && verb === 'unset' && !existsSync(entitiesFile)) return { kind: 'unchanged' };
+    const makesEntry = isFolderKey(key) && verb === 'set';
+    if (isFolderKey(key) && verb === 'unset' && !existsSync(entitiesFile)) return { kind: 'unchanged' };
     if (!existsSync(entitiesFile) && !makesEntry) {
       return {
         kind: 'path',
@@ -484,7 +496,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     const wrapped = hasEntitiesWrapper(record);
     const entryLookup = wrapped ? ['entities', targetName] : [targetName];
     const entry = getAt(record, entryLookup);
-    if (!entry.found && key === ROOT_KEY && verb === 'unset') return { kind: 'unchanged' };
+    if (!entry.found && isFolderKey(key) && verb === 'unset') return { kind: 'unchanged' };
     if (!entry.found && !makesEntry) {
       return {
         kind: 'path',
@@ -504,7 +516,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
         ? [...entryLookup, 'names', 'unique']
         : [...entryLookup, key as string];
     const value: YamlValue | undefined =
-      key === NAMES_KEY ? (word as string) : key === ROOT_KEY ? folder?.written : (list as YamlValue[]);
+      key === NAMES_KEY ? (word as string) : isFolderKey(key) ? folder?.written : (list as YamlValue[]);
     const changed = withValue(record, recordPath, value);
     if (!changed.ok) {
       return {
@@ -568,19 +580,22 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     const shown =
       key === NAMES_KEY
         ? (word as string)
-        : key === ROOT_KEY
+        : isFolderKey(key)
           ? folder === null ? 'removed' : folder.written === folder.path ? folder.path : `${folder.written} (${folder.path})`
           : `${String(count)} ${itemLabel}${count === 1 ? '' : 's'}`;
-    const done = key === ROOT_KEY && verb === 'unset' ? 'unset' : 'set';
+    const done = isFolderKey(key) && verb === 'unset' ? 'unset' : 'set';
     if (dryRun) {
       io.stdout(`dry-run: would ${done} ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n${entityOutcome.text}`);
     } else {
       io.stdout(`${done} ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n`);
       // What the change means for the entity's teams: `{root}` in their files reads the new folder.
-      if (key === ROOT_KEY) {
+      if (isFolderKey(key)) {
+        const word = key === WORKTREES_KEY ? '{worktrees}' : '{root}';
         io.stderr(folder === null
-          ? `team config: a team of entity "${entityName}" that writes {root} is now refused until a root is set again\n`
-          : `team config: teams of entity "${entityName}" read {root} as ${folder.path}\n`);
+          ? key === WORKTREES_KEY
+            ? `team config: teams of entity "${entityName}" read {worktrees} as <root>/worktrees again\n`
+            : `team config: a team of entity "${entityName}" that writes {root} is now refused until a root is set again\n`
+          : `team config: teams of entity "${entityName}" read ${word} as ${folder.path}\n`);
       }
       if (!entityOutcome.kept) io.stderr(`team config: the entities file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
     }
@@ -600,6 +615,7 @@ function entityKeyOf(path: string | undefined): EntityKey | null {
   if (path === undefined) return null;
   if (path.endsWith(`.${NAMES_KEY}`)) return NAMES_KEY;
   if (path.endsWith(`.${ROOT_KEY}`) && path.length > ROOT_KEY.length + 1) return ROOT_KEY;
+  if (path.endsWith(`.${WORKTREES_KEY}`) && path.length > WORKTREES_KEY.length + 1) return WORKTREES_KEY;
   if (path.endsWith(`.${REMINDERS_KEY}`)) return REMINDERS_KEY;
   if (path.endsWith(`.${RULES_KEY}`) && path.length > RULES_KEY.length + 1) return RULES_KEY;
   return null;

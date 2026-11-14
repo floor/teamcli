@@ -1323,7 +1323,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (built.edited !== original) {
       const written = withLock(dir, () => {
         const where = {
-          home: sources.home ?? homedir(), command: 'add', now: sources.now,
+          // A seat added from another's lines carries its words filled: they are written back as words.
+          home: sources.home ?? homedir(), command: 'add', now: sources.now, keepWords: true,
           audit: {
             caller,
             rule: io.general !== undefined ? `general-grant:${io.general.grantId}`

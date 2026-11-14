@@ -464,7 +464,8 @@ export function seatOf(declared: Seat, swap: QueuedSwap): Seat {
  * file the run could not rewrite (the ruling of 2026-10-19).
  */
 function declareRecipe(path: string, name: string, fields: SeatModelFields, home: string): { ok: true } | { ok: false; why: string } {
-  const where = { home, command: 'swap' };
+  // The new line is built from the team as read, its words filled: they are written back as words.
+  const where = { home, command: 'swap', keepWords: true };
   let text: string;
   try {
     text = readTeamText(path, where);

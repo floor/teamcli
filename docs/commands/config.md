@@ -69,6 +69,9 @@ team runs.
     team config get <entity>.root [--json]
     team config set <entity>.root <folder> [--dry-run] [--json]
     team config unset <entity>.root [--dry-run] [--json]
+    team config get <entity>.worktrees [--json]
+    team config set <entity>.worktrees <folder> [--dry-run] [--json]
+    team config unset <entity>.worktrees [--dry-run] [--json]
 
 A path whose last segment is `names.unique` or `reminders` names one key of an entity's own
 entry, not the team's record. Both live with the rest of the entry in the owner's entities file
@@ -93,6 +96,10 @@ is written. `unset` removes it, after which a team of the entity that writes `{r
 until one is set again. `get --json` adds the folder it reads as (`resolved`). A path whose first
 segment is a section of the team's own record (`seats.root` is a seat named `root`) stays the
 team's. A set says on stderr the folder the entity's teams now read `{root}` as.
+
+`<entity>.worktrees` is the folder the entity's worktrees sit in on this machine, which a team file
+names as `{worktrees}`; unset, it is `<root>/worktrees`. It takes the same values, the same
+refusals and the same door as `<entity>.root`, and `unset` puts it back to `<root>/worktrees`.
 
 `<entity>.names.unique` says how far apart seat nicknames stay — `entity` (the default, across
 every team of the entity), `project` (within one project), `team` (within one team) or `off`.

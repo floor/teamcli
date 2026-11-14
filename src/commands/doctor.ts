@@ -1011,12 +1011,13 @@ export function rootWordFindings(text: string, team: TeamFile, root: string, hom
     text: plainLine(`the file, line ${use.line}: ${rootPathWarning(use)}`),
   }));
   const work = workSettingsFor(team, root, home);
+  if (work?.vaultProblem !== undefined) findings.push({ level: 'warn', text: plainLine(`${work.vaultProblem}: seats get no vault rule`) });
   if (work !== null && team.entity !== null) {
     const held = [...(work.entityRules ?? []), ...(work.projectRules ?? [])].some(hasRootWord);
     if (held) {
       findings.push({
         level: 'warn',
-        text: plainLine(`the entity's or project's rules write ${ROOT_WORD}, and entity "${team.entity}" names no projects root on this machine: seats read the word as written; run \`${setRootCommand(team.entity)}\``),
+        text: plainLine(`the entity's or project's rules write ${ROOT_WORD} or {worktrees}, and entity "${team.entity}" names no such folder on this machine: seats read the word as written; run \`${setRootCommand(team.entity)}\``),
       });
     }
   }

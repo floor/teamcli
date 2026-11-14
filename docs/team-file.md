@@ -425,10 +425,43 @@ team config unset acme.root
   the same way. They are not a team file, so where no root is named they keep the word as written,
   and `team doctor` says so.
 - Setting the root of an entity, or moving it, changes what its `{root}` teams read at their next
-  read: a running seat keeps the line it was launched with until it is launched again.
+  read: a running seat keeps the line it was launched with until it is launched again. An
+  approval is bound to the paths as they were filled in when it was signed, so moving a root needs
+  fresh approvals for the teams that write the word.
+- An editor that writes a value back — `team swap`, `team add`, `team rename`,
+  `team launchers migrate` — writes it with the words: a line it adds or changes that holds a full
+  path inside the entity's folders is written as `{root}/…` or `{worktrees}/…` again, so a seat
+  swapped on one machine keeps a file that reads on every other. A line the editor did not touch,
+  and a value the owner sets with `team config`, is kept as written.
 - [`team doctor`](commands/doctor.md) warns about every value that writes a full path inside the
-  entity's root on this machine, and [`team migrate --root`](commands/migrate.md) rewrites those
-  paths as `{root}/…`: `--dry-run` first lists each line it would change.
+  entity's folders on this machine, and [`team migrate --root`](commands/migrate.md) rewrites those
+  paths as `{root}/…` and `{worktrees}/…`: `--dry-run` first lists each line it would change.
+
+### The worktrees folder: `{worktrees}`
+
+An entity's worktrees sit in one folder per machine too: `<root>/worktrees` unless the entity's
+entry names another. On a laptop that is `~/Code/acme/worktrees`, inside the root; on a server it
+may sit beside the root, `/home/acme/worktrees` next to `/home/acme/repos`. A team file names it
+`{worktrees}`, with the same rules as `{root}`: filled in every value, quoted at the start of a
+value, refused on a machine whose entity names neither a worktrees folder nor a root it sits
+under.
+
+```sh
+team config set acme.worktrees ~/worktrees    # beside the root, on this machine
+team config unset acme.worktrees              # back to <root>/worktrees
+```
+
+A full path inside the worktrees folder is written as `{worktrees}/…` by the rewrite and the
+editors, even where the folder sits inside the root. [`team setup`](commands/setup.md) signs the
+charter over each entity's root, and over its worktrees folder when that folder lies outside the
+root.
+
+### The vault under the root
+
+The `vault-root` policy, the folder seats keep notes and memory under, takes `{root}/…` and
+`{worktrees}/…` as well as an absolute or `~/` path, and reads the entity's folders on the machine
+that reads it. Where the entity names no such folder the policy names no vault there, seats get no
+vault rule, and `team doctor` says why.
 
 ## `tasks`
 

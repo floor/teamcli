@@ -132,6 +132,9 @@ export function declaredRoots(home: string): Map<string, string[]> {
 /** The key of an entity's projects root in its entry: `<entity>: { root: <path> }`. */
 export const ENTITY_ROOT_KEY = 'root';
 
+/** The key of an entity's worktrees folder in its entry: `<entity>: { worktrees: <path> }`. */
+export const ENTITY_WORKTREES_KEY = 'worktrees';
+
 /** One entity's projects root on this machine: the folder its repositories sit directly under,
  *  as an absolute path; null when the entry writes none; or why the word it writes does not read. */
 export type EntityRootRead = { ok: true; root: string | null } | { ok: false; why: string };
@@ -146,7 +149,7 @@ export function checkedRootPath(value: string, home: string): { ok: true; root: 
   const written = value.trim();
   if (written === '') return { ok: false, why: 'a projects root must name a folder' };
   if (/[\u0000-\u001f\u007f]/.test(written)) return { ok: false, why: 'a projects root holds no control character' };
-  if (written.includes('{root}')) return { ok: false, why: 'a projects root cannot name {root} itself' };
+  if (/\{(root|worktrees)\}/.test(written)) return { ok: false, why: 'a folder of the entity cannot name {root} or {worktrees} itself' };
   let path: string;
   if (written === '~') path = home;
   else if (written.startsWith('~/')) path = join(home, written.slice(2));
@@ -165,16 +168,37 @@ export function checkedRootPath(value: string, home: string): { ok: true; root: 
  * fill `{root}` with a guess.
  */
 export function entityProjectsRoot(home: string, entity: string | null): EntityRootRead {
+  return entityFolder(home, entity, ENTITY_ROOT_KEY);
+}
+
+/** One folder word of an entity's entry, read by the projects root's rules. */
+function entityFolder(home: string, entity: string | null, key: string): EntityRootRead {
   if (entity === null) return { ok: true, root: null };
   const entry = entityEntries(home).find((candidate) => candidate.key === entity);
   if (entry === undefined || entry.value.kind !== 'map') return { ok: true, root: null };
-  const field = entry.value.entries.find((candidate) => candidate.key === ENTITY_ROOT_KEY);
+  const field = entry.value.entries.find((candidate) => candidate.key === key);
   if (field === undefined) return { ok: true, root: null };
   const value = field.value.kind === 'scalar' ? field.value.value : undefined;
-  if (typeof value !== 'string') return { ok: false, why: `entity "${entity}" root must be one folder path` };
+  if (typeof value !== 'string') return { ok: false, why: `entity "${entity}" ${key} must be one folder path` };
   const checked = checkedRootPath(value, home);
-  if (!checked.ok) return { ok: false, why: `entity "${entity}" root: ${checked.why}` };
+  if (!checked.ok) return { ok: false, why: `entity "${entity}" ${key}: ${checked.why}` };
   return { ok: true, root: checked.root };
+}
+
+/** An entity's two folders on this machine: its projects root, and the folder its worktrees sit
+ *  in — its own `worktrees:` word, else `<root>/worktrees` (`written` says which). Either is null
+ *  when nothing names it; a word that does not read refuses both, never one guessed. */
+export type EntityFolders =
+  | { ok: true; root: string | null; worktrees: string | null; worktreesWritten: boolean }
+  | { ok: false; why: string };
+
+export function entityFolders(home: string, entity: string | null): EntityFolders {
+  const root = entityFolder(home, entity, ENTITY_ROOT_KEY);
+  if (!root.ok) return root;
+  const worktrees = entityFolder(home, entity, ENTITY_WORKTREES_KEY);
+  if (!worktrees.ok) return { ok: false, why: worktrees.why };
+  if (worktrees.root !== null) return { ok: true, root: root.root, worktrees: worktrees.root, worktreesWritten: true };
+  return { ok: true, root: root.root, worktrees: root.root === null ? null : join(root.root, 'worktrees'), worktreesWritten: false };
 }
 
 /**
@@ -185,12 +209,26 @@ export function entityProjectsRoot(home: string, entity: string | null): EntityR
 export function declaredProjectRoots(home: string): { roots: Array<{ entity: string; root: string }>; problems: string[] } {
   const roots: Array<{ entity: string; root: string }> = [];
   const problems: string[] = [];
+  const add = (entity: string, root: string) => {
+    if (!roots.some((known) => known.root === root)) roots.push({ entity, root });
+  };
   for (const entry of entityEntries(home)) {
-    const read = entityProjectsRoot(home, entry.key);
-    if (!read.ok) problems.push(read.why);
-    else if (read.root !== null && !roots.some((known) => known.root === read.root)) roots.push({ entity: entry.key, root: read.root });
+    const read = entityFolders(home, entry.key);
+    if (!read.ok) {
+      problems.push(read.why);
+      continue;
+    }
+    if (read.root !== null) add(entry.key, read.root);
+    // The worktrees folder is a root of its own only where it sits outside the projects root (a
+    // server keeps it beside `~/repos`); inside it, the root already covers it.
+    if (read.worktrees !== null && (read.root === null || !insideFolder(read.worktrees, read.root))) add(entry.key, read.worktrees);
   }
   return { roots, problems };
+}
+
+/** Whether `path` is `folder` or under it. */
+export function insideFolder(path: string, folder: string): boolean {
+  return path === folder || path.startsWith(`${folder}/`);
 }
 
 /**

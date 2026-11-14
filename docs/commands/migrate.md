@@ -72,7 +72,8 @@ Run by anyone but the owner at a terminal, `team migrate` records that card, wai
 ## Rewriting full paths as `{root}`
 
 `team migrate --root` rewrites, in this team's record, every value that writes a full path inside
-its entity's projects root on this machine — the absolute path, `~/…` or `$HOME/…` — as `{root}/…`
+its entity's projects root or worktrees folder on this machine — the absolute path, `~/…` or
+`$HOME/…` — as `{root}/…` or `{worktrees}/…` (a worktree path inside the root is `{worktrees}/…`)
 ([the team file's reference](../team-file.md#the-entitys-projects-root-root)), so the same record
 reads on every machine. Set the root first: `team config set <entity>.root <folder>`.
 

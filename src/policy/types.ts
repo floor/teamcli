@@ -2337,8 +2337,9 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     valueProblem: (raw: unknown) => `landing-mode is pr-per-change, batch or direct, got ${JSON.stringify(raw)}`,
     isWithin: () => true,
   },
-  // The root of the docs vault where seats keep memory (an absolute path, or `~/` relative to the
-  // home). Empty means no vault: memory stays where each CLI keeps it.
+  // The root of the docs vault where seats keep memory (an absolute path, `~/` relative to the
+  // home, or `{root}/…` / `{worktrees}/…` under the entity's folders on the machine that reads it,
+  // src/file/root-word.ts). Empty means no vault: memory stays where each CLI keeps it.
   'vault-root': {
     name: 'vault-root',
     kind: 'advised',
@@ -2346,8 +2347,8 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     defaultValue: '',
     gateLifting: false,
     lowerLevelChooses: true,
-    parseValue: (raw: unknown) => (typeof raw === 'string' && (raw.startsWith('/') || raw.startsWith('~/')) && !/[\x00-\x1f\x7f]/.test(raw) ? raw.replace(/\/+$/, '') || '/' : null),
-    valueProblem: (raw: unknown) => `vault-root is an absolute path or one under ~/, got ${JSON.stringify(raw)}`,
+    parseValue: (raw: unknown) => (typeof raw === 'string' && (raw.startsWith('/') || raw.startsWith('~/') || /^\{(root|worktrees)\}(\/|$)/.test(raw)) && !/[\x00-\x1f\x7f]/.test(raw) ? raw.replace(/\/+$/, '') || '/' : null),
+    valueProblem: (raw: unknown) => `vault-root is an absolute path, one under ~/, or one under {root}/ or {worktrees}/, got ${JSON.stringify(raw)}`,
     isWithin: () => true,
   },
   // The entity's own orchestrator: `auto` (the root project's team lead plays it), `dedicated` (a

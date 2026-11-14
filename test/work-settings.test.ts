@@ -157,6 +157,22 @@ describe('vault-root: memory in the docs vault', () => {
   });
 });
 
+describe('vault-root under the entity\'s projects root', () => {
+  test('{root}/… is accepted, and reads this machine\'s root; with no root it names no vault and says why', () => {
+    const w = world('workspace:\n  mode: shared\n');
+    expect(set(w.home, 'entity', 'vault-root', '{rootx}/docs').ok).toBe(false);
+    expect(set(w.home, 'entity', 'vault-root', '{root}/docs/').ok).toBe(true);
+    const unset = resolveWorkSettings(chainOf(w), {}, { now: NOW, home: w.home });
+    expect(unset.vaultRoot).toEqual({ value: null, from: 'entity' });
+    expect(unset.vaultProblem).toBe('vault-root {root}/docs: entity "acme-corp" names no projects root on this machine: run `team config set acme-corp.root <folder>`');
+    mkdirSync(join(w.home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(w.home, '.config', 'team', 'entities.yaml'), 'acme-corp:\n  root: /srv/acme/repos\n');
+    const s = resolveWorkSettings(chainOf(w), {}, { now: NOW, home: w.home });
+    expect(s.vaultRoot).toEqual({ value: '/srv/acme/repos/docs', from: 'entity' });
+    expect(s.vaultProblem).toBeUndefined();
+  });
+});
+
 describe('entity-orchestrator: auto, dedicated or off, at the entity only', () => {
   test('values and level, read under its chain name too', () => {
     const w = world('workspace:\n  mode: shared\n');
