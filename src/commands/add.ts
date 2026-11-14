@@ -72,7 +72,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { emptySession, mintSeatId, readState, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, carriedStartFolderProblem, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -761,6 +761,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const recorded = readState(dir).sessions[session] ?? emptySession();
+  // Carried start folders that do not read stop the run here, before anything is launched.
+  const carriedProblem = carriedStartFolderProblem(recorded, session, dir);
+  if (carriedProblem !== null) {
+    refuse(io, json, 'add', { id: 'add.carried-start', message: carriedProblem, repair: null });
+    return 1; // exit: add.carried-start
+  }
 
   const original = loaded.text ?? readTeamText(path, { home: sources.home ?? homedir() });
   // The place the refusals below name: the file this run read, or the registry's record when that
@@ -1014,7 +1020,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     repair || (held?.launched !== undefined && verdict !== 'same')
       ? undefined
       : unnamedIn(built.name, recorded.seats, agents);
-  const resumeCwd = recorded.seats[built.name]?.start_cwd;
+  const resumeCwd = recordedStartFolder(recorded.seats[built.name]);
   const line = !stray
     ? launchLineFinding(prepared.team, built.seat, root, {
         onPath: (binary) => sources.doctor.onPath(binary),
@@ -1955,14 +1961,15 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        let start_cwd = patch.start_cwd ?? prior.start_cwd;
-        if (!start_cwd && patch.createdWorkspace) {
-          if (input.inLobby) {
-            if (input.verifiedLobby) start_cwd = input.verifiedLobby;
-          } else {
-            start_cwd = input.startCwd;
-          }
-        }
+        // A workspace this write made records the folder it was made in (the launch names it);
+        // failing that, the verified lobby for a lobby seat or the planned folder. Otherwise the
+        // folder the seat already ran in stands. Kept absolute, against the team root.
+        const fresh = patch.createdWorkspace
+          ? (patch.start_cwd ?? (input.inLobby ? (input.verifiedLobby ?? undefined) : input.startCwd))
+          : patch.start_cwd;
+        const start_cwd = keptStartFolder(input.root, fresh, prior.start_cwd !== undefined ? prior.start_cwd : current.retained_start_cwd?.[name]);
+        // The record holds its folder again: a folder a relaunch carried for it is retired here.
+        if (start_cwd !== undefined) retireCarriedStartFolder(current, name);
         // `waiting: null` removes the field alone; anything else written replaces it.
         // `effort: null` is a launch that set no word: the stored word goes with it.
         const { waiting: written, effort: patchedEffort, ...rest } = patch;
@@ -1977,7 +1984,7 @@ function hostOf(input: {
           ...(launch_line ? { launch_line } : {}),
           ...(last_active ? { last_active } : {}),
           ...(temporary && isTarget ? { temporary } : {}),
-          ...(start_cwd ? { start_cwd } : {}),
+          ...(start_cwd !== undefined ? { start_cwd } : {}),
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;

@@ -80,7 +80,18 @@ export class TeamsError extends Error {
 /** The team ID: sha256 of the real path of the project root, first 12 hex digits. A root that
  *  does not exist (yet) is hashed as written, resolved to an absolute path. */
 export function teamIdOf(root: string): string {
-  return createHash('sha256').update(realRoot(root)).digest('hex').slice(0, 12);
+  return teamIdOfRealPath(realRoot(root));
+}
+
+/** The team ID of a root already resolved to its real path: hashed as given, never resolved
+ *  again, for a caller that took the real path once and reads everything through it. */
+export function teamIdOfRealPath(real: string): string {
+  return createHash('sha256').update(real).digest('hex').slice(0, 12);
+}
+
+/** Whether a registry key is a team ID (`teamIdOf`'s shape): twelve lowercase hex digits. */
+export function isTeamId(value: string): boolean {
+  return /^[0-9a-f]{12}$/.test(value);
 }
 
 function realRoot(root: string): string {

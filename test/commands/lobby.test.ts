@@ -26,7 +26,7 @@ import { rulesText, seatRules, type RulesInput } from '../../src/launch/rules.ts
 import { defaultFs, findRepoRoot, lobbyDir, recheckLobby, verifyLobby, type FsReader } from '../../src/lobby/gate.ts';
 import { shippedStartupReads } from '../../src/profiles/index.ts';
 import { seatStart } from '../../src/worktree/place.ts';
-import { readState, SEAT_ID_PATTERN, updateState } from '../../src/state.ts';
+import { emptySession, readState, SEAT_ID_PATTERN, updateState } from '../../src/state.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
 import { approvalStanding, LEGACY_LINE, storePath, writeApproval } from '../../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
@@ -2078,6 +2078,32 @@ describe('start_cwd and removal check', () => {
     const workerRow = parsed.rows.find((r: { name: string }) => r.name === 'worker');
     expect(workerRow).toBeDefined();
     expect(workerRow.start_cwd).toBe(canonicalLanding(join(lobby, 'worker')).landing);
+  });
+
+  test('carried start folders that do not read stop up before anything is launched', async () => {
+    approveYaml(migratedTeamYaml());
+    const made = world();
+    updateState(dir, (st) => {
+      st.sessions['acme'] = { ...emptySession(), retained_start_cwd: null } as unknown as typeof st.sessions[string];
+    });
+    const upRes = await runUpCmd([], made);
+    expect(upRes.code).toBe(1);
+    expect(upRes.err).toContain('are not a map by seat name: nothing was launched');
+    expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual([]);
+  });
+
+  test('a fresh launch that records a seat\'s folder retires the folder a relaunch carried for it', async () => {
+    approveYaml(migratedTeamYaml());
+    const made = world();
+    // A relaunch dropped the worker's record and carried where it ran; this up records it again.
+    updateState(dir, (st) => {
+      st.sessions['acme'] = { ...emptySession(), retained_start_cwd: { worker: '/elsewhere/where-it-ran' } } as typeof st.sessions[string];
+    });
+    const upRes = await runUpCmd([], made);
+    expect(upRes.code).toBe(0);
+    const session = readState(dir).sessions['acme'] as { seats: Record<string, { start_cwd?: string }>; retained_start_cwd?: unknown };
+    expect(session.seats['worker']?.start_cwd).toBe(canonicalLanding(join(lobby, 'worker')).landing);
+    expect(session.retained_start_cwd).toBeUndefined();
   });
 
   test('removal check in doctor: states, repairs, and ignoring stopped historical seats', async () => {

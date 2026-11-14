@@ -6,7 +6,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { readArgs } from '../src/args.ts';
@@ -21,6 +21,8 @@ import {
   clientGrantsFolder,
   clientKeyDir,
   clientKeyPlacementProblem,
+  staleRegistryRoots,
+  startFolderProblems,
   clientRevocations,
   newClientKeyPair,
   publicKeyObject,
@@ -41,7 +43,10 @@ import type { Caller } from '../src/caller.ts';
 import type { Io } from '../src/io.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
-import { emptySession, updateState, type SessionState } from '../src/state.ts';
+import { carriedStartFolderProblem, emptySession, keptStartFolder, retireCarriedStartFolder, updateState, type SessionState } from '../src/state.ts';
+import { CANONICAL_RECORD_VERSION } from '../src/file/canonical-record.ts';
+import { canonicalTeam } from '../src/file/team-config.ts';
+import { sha256, TEAM_CONFIG_RECORD_FORMAT, writeStoredTeamConfig } from '../src/registry/team-config-store.ts';
 import { registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { readHistory, type HistoryEntry } from '../src/send/history.ts';
 import { signedRecordOf, verifyRecord } from '../src/send/record.ts';
@@ -49,6 +54,8 @@ import type { SendOutcome } from '../src/send/uds.ts';
 import type { OrderWord } from '../src/settings/inherit.ts';
 import { keyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
 import { fixtureBase, testIo } from './helpers.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 
 const TEAM_ID = 'aaaaaaaaaaaa';
 const OTHER_TEAM_ID = 'bbbbbbbbbbbb';
@@ -84,7 +91,9 @@ function fixture(label: string): Fixture {
   const home = join(base, 'home');
   const teamRoot = join(base, 'floor');
   const lobby = join(base, 'lobby');
-  for (const dir of [home, teamRoot, lobby]) mkdirSync(dir, { recursive: true });
+  // Both registered teams' folders exist: a registry entry whose root is gone refuses every
+  // client key's placement (the stale-root scene below).
+  for (const dir of [home, teamRoot, lobby, join(base, 'teamcli')]) mkdirSync(dir, { recursive: true });
   const ownerKey = keyOf(home);
   const agent = registerAgent(home, {
     name: 'orchestrator',
@@ -307,7 +316,182 @@ describe('client grant and key records', () => {
       // A hand-edited or future record: the field is present, but it is not a path.
       state.sessions.floor = { seats: { worker: { id: 'seat_0123456789ab', stage: 'ready', start_cwd: 42 } }, worktrees: {} } as unknown as SessionState;
     });
-    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('not an absolute path');
+    // Refused, naming the seat, its team's state file and the repair: a key the check cannot
+    // place could sit in that seat's folder, so one bad record is a refusal, never a skip.
+    const said = clientKeyPlacementProblem(f.home, f.keyDir);
+    expect(said).toContain('the recorded start folder of seat "worker"');
+    expect(said).toContain('is not a path: client key placement cannot be checked; `team restart worker` records it again');
+    expect(startFolderProblems(f.teamRoot)).toEqual(['worker (session floor): its recorded start folder is not a path, so every client send on this machine is refused; run `team restart worker`']);
+  });
+
+  test('a relative start folder is read against the team root as it is on disk, never its registry spelling', () => {
+    const f = fixture('alias-root');
+    // The registry names the team root through a link at another depth: the seat ran in the
+    // real root, so its relative record must be read from there.
+    const alias = join(f.base, 'aliases', 'deeper', 'team');
+    mkdirSync(dirname(alias), { recursive: true });
+    symlinkSync(f.teamRoot, alias);
+    const teams = join(f.home, '.config', 'team', 'teams.yaml');
+    writeFileSync(teams, readFileSync(teams, 'utf8').replace(`root: ${f.teamRoot}`, `root: ${alias}`));
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      const session = emptySession();
+      session.seats.worker = { id: 'seat_0123456789ab', stage: 'ready', start_cwd: relative(realpathSync(f.teamRoot), dirname(f.keyDir)) };
+      state.sessions.floor = session;
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
+  });
+
+  test('a registry root that is genuinely not there is passed over with a doctor warning; a root that is a link to nothing refuses', () => {
+    const f = fixture('stale-root');
+    const missing = join(f.base, 'teamcli');
+    rmSync(missing, { recursive: true, force: true });
+    // Not there at all: no folder below it can hold the key, so the placement passes it over.
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+    expect(staleRegistryRoots(f.home)).toEqual([
+      `the team registry records team "teamcli" (${OTHER_TEAM_ID}) at ${missing}, which is not there: a client key's placement passes it over; restore the folder, or remove the stale entry with \`team forget ${OTHER_TEAM_ID}\``,
+    ]);
+    // A link to nothing may lead anywhere: refused, naming the entry and its repair.
+    symlinkSync(join(f.base, 'nowhere'), missing);
+    const said = clientKeyPlacementProblem(f.home, f.keyDir);
+    expect(said).toContain(`the team registry records team "teamcli" (${OTHER_TEAM_ID}) at ${missing}, which cannot be read`);
+    expect(said).toContain(`\`team forget ${OTHER_TEAM_ID}\``);
+    expect(staleRegistryRoots(f.home)[0]).toContain('every client send on this machine is refused');
+    // Restored, nothing is said.
+    rmSync(missing);
+    mkdirSync(missing);
+    expect(staleRegistryRoots(f.home)).toEqual([]);
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+  });
+
+  test('declarations are read by the registry\'s own id for the entry, through the root\'s real path', () => {
+    const f = fixture('registry-id');
+    // The registry keys this team by its recorded id, which is not the hash of today's root
+    // spelling: the record stored under that id is the team's definition, and its seat starts
+    // beside the key's folder.
+    const text = `format: 1
+project: floor
+operator: steward
+workspace:
+  mode: shared
+seats:
+  - role: orchestrator
+    name: steward
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    leads: true
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    cwd: ${relative(realpathSync(f.teamRoot), dirname(f.keyDir))}
+`;
+    const checked = validateTeamFile(text);
+    if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
+    expect(teamIdOf(f.teamRoot)).not.toBe(TEAM_ID);
+    writeStoredTeamConfig(f.home, {
+      format: TEAM_CONFIG_RECORD_FORMAT, id: TEAM_ID, root: f.teamRoot, text, text_sha256: sha256(text),
+      record_version: CANONICAL_RECORD_VERSION, record_sha256: sha256(canonicalTeam(checked.team)), created_by: 'init', created_at: NOW.toISOString(),
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" starts in');
+  });
+
+  test('a registry root that is not absolute refuses', () => {
+    const f = fixture('relative-root');
+    const teams = join(f.home, '.config', 'team', 'teams.yaml');
+    writeFileSync(teams, readFileSync(teams, 'utf8').replace(`root: ${f.teamRoot}`, 'root: floor'));
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('cannot be checked');
+  });
+
+  test('a state that cannot be read, or a state link to nothing, refuses rather than read as no record', () => {
+    const dangling = fixture('state-dangling');
+    mkdirSync(join(dangling.teamRoot, '.agents'), { recursive: true });
+    symlinkSync(join(dangling.base, 'gone.json'), join(dangling.teamRoot, '.agents', 'team.state.json'));
+    expect(clientKeyPlacementProblem(dangling.home, dangling.keyDir)).toContain('cannot be read');
+    expect(startFolderProblems(dangling.teamRoot)[0]).toContain('is a link to nothing');
+    const folder = fixture('state-folder');
+    mkdirSync(join(folder.teamRoot, '.agents', 'team.state.json'), { recursive: true });
+    expect(clientKeyPlacementProblem(folder.home, folder.keyDir)).toContain('cannot be read');
+    expect(startFolderProblems(folder.teamRoot)[0]).toContain('cannot be read');
+    // A state that is genuinely not there is no record, and refuses nothing.
+    const none = fixture('state-none');
+    expect(startFolderProblems(none.teamRoot)).toEqual([]);
+  });
+
+  test('a folder a relaunch carries for a dropped record is checked as the seat\'s own, malformed values too', () => {
+    const f = fixture('carried');
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      state.sessions.floor = { ...emptySession(), retained_start_cwd: { worker: dirname(f.keyDir) } } as SessionState;
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
+    for (const value of [null, false, 0, '']) {
+      updateState(join(f.teamRoot, '.agents'), (state) => {
+        (state.sessions.floor as unknown as { retained_start_cwd: Record<string, unknown> }).retained_start_cwd = { worker: value };
+      });
+      expect(clientKeyPlacementProblem(f.home, f.keyDir), JSON.stringify(value)).toContain('is not a path');
+      expect(startFolderProblems(f.teamRoot).length, JSON.stringify(value)).toBe(1);
+    }
+  });
+
+  test('a dangling .agents link is not an absent state: it refuses', () => {
+    const f = fixture('agents-dangling');
+    symlinkSync(join(f.base, 'gone-agents'), join(f.teamRoot, '.agents'));
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('cannot be read');
+    expect(startFolderProblems(f.teamRoot)[0]).toContain('is a link to nothing');
+  });
+
+  test('a lobby seat\'s declared lobby is checked even when the registry records another', () => {
+    const f = fixture('declared-lobby');
+    mkdirSync(join(f.teamRoot, '.agents'), { recursive: true });
+    writeFileSync(join(f.teamRoot, '.agents', 'team.yaml'), `format: 1
+project: floor
+entity: floor
+operator: steward
+lobby: ${dirname(f.keyDir)}
+workspace:
+  mode: shared
+seats:
+  - role: orchestrator
+    name: steward
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    leads: true
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    cwd: .
+`);
+    const said = clientKeyPlacementProblem(f.home, f.keyDir);
+    expect(said).not.toBeNull();
+    expect(said).toMatch(/inside the folder seat "worker" starts in|cannot be checked/);
+  });
+
+  test('a relative start folder an older version recorded is read against the team root, not refused', () => {
+    const f = fixture('relative-cwd');
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      const session = emptySession();
+      session.seats.worker = { id: 'seat_0123456789ab', stage: 'ready', start_cwd: 'web' };
+      state.sessions.floor = session;
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+    expect(startFolderProblems(f.teamRoot)).toEqual([]);
+    // Still checked: read against the root, a relative folder that reaches the key is refused.
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      state.sessions.floor!.seats.worker!.start_cwd = relative(f.teamRoot, dirname(f.keyDir));
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
   });
 
   test('a present but non-path recorded worktree path is unknown, not accepted', () => {
@@ -1137,4 +1321,30 @@ test('a world built from a temp working directory still places its client key', 
     process.chdir(cwd);
     rmSync(tempCheckout, { recursive: true, force: true });
   }
+});
+
+describe('the start folder a record write keeps', () => {
+  test('fresh workspace evidence wins; without it the prior folder stands, made absolute; a malformed one is kept', () => {
+    expect(keptStartFolder('/srv/team', '/srv/team/web', '/old')).toBe('/srv/team/web');
+    expect(keptStartFolder('/srv/team', 'web', 42)).toBe('/srv/team/web');
+    expect(keptStartFolder('/srv/team', undefined, 'legacy')).toBe('/srv/team/legacy');
+    expect(keptStartFolder('/srv/team', undefined, '/abs')).toBe('/abs');
+    // No path at all, and nothing fresh to repair it: kept as it was, so placement keeps refusing.
+    expect(keptStartFolder('/srv/team', undefined, 42) as unknown).toBe(42);
+    expect(keptStartFolder('/srv/team', undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe('carried start folders that do not read', () => {
+  test('are named before any launch, and a record write never throws on them', () => {
+    for (const value of [null, 42, 'x', []]) {
+      const session = { ...emptySession(), retained_start_cwd: value } as unknown as SessionState;
+      expect(carriedStartFolderProblem(session, 'floor', '/srv/team/.agents'), JSON.stringify(value)).toContain('are not a map by seat name: nothing was launched');
+      expect(() => retireCarriedStartFolder(session, 'worker')).not.toThrow();
+      // Kept as it was: it is placement evidence the client key's check refuses on.
+      expect((session as { retained_start_cwd?: unknown }).retained_start_cwd).toEqual(value);
+    }
+    expect(carriedStartFolderProblem({ ...emptySession(), retained_start_cwd: { worker: 0 } }, 'floor', '/x')).toBeNull();
+    expect(carriedStartFolderProblem(undefined, 'floor', '/x')).toBeNull();
+  });
 });

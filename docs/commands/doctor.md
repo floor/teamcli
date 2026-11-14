@@ -58,6 +58,11 @@ or home project's rules that write `{root}` where this machine names no root for
 named does not load at all, and doctor exits 2 naming the line and `team config set
 <entity>.root <folder>`. Neither warning blocks `up` or `add`.
 
+A seat record of the team whose start folder is no path at all is a `warn`: while it stands, every
+client key's placement check on this machine refuses, so no client can send. `team restart <seat>`
+records the folder again. A relative folder an older version recorded is read against the team
+root and is not named.
+
 A hold on the team ([team hold](hold.md)) is the last `note` line before the summary:
 `hold: <reason>`, or `hold until <instant>: <reason>`, naming `team hold --release` as what clears
 it. It is a note: the summary's counts do not move, and no exit changes. A hold past its `until`

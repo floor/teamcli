@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import type { Caller, CallerSources } from '../src/caller.ts';
 import { standingOf } from '../src/caller.ts';
 import { runTeamCheck } from '../src/check/team.ts';
@@ -672,9 +672,13 @@ describe('team restart <seat>', () => {
     // closed its workspace and opened a new one. A clean exit now leaves the pane at its shell and
     // the launch runs there: nothing is closed and no workspace is created.
     const fixture = makeFixture();
+    // The pane is reused only where its record names the folder today's launch plans: the
+    // worker's own folder in the lobby.
+    const folder = join(fixture.home, '.config', 'team', 'lobby', 'worker');
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
-      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab', start_cwd: folder };
     });
     const { sources, did } = makeHarness(fixture);
     let exited = false;
@@ -692,6 +696,50 @@ describe('team restart <seat>', () => {
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(0);
     expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(folder);
+  });
+
+  test('a legacy relative folder on record is read against the team root before it is compared', async () => {
+    // The record holds the lobby folder relative to the team root, as an older version wrote it.
+    // The runner's own working folder is not the root, so read against it the folder would differ.
+    const fixture = makeFixture();
+    const folder = join(fixture.home, '.config', 'team', 'lobby', 'worker');
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab', start_cwd: relative(realpathSync(fixture.root), folder) };
+    });
+    const { sources, did } = makeHarness(fixture);
+    let exited = false;
+    const typeText = sources.launch!.typeText;
+    sources.launch!.typeText = (session, pane, text) => { if (text === '/exit') exited = true; return typeText(session, pane, text); };
+    sources.upLaunch.processInfo = () => (exited && did.runs.length === 0 ? { shell: 300, foreground: [300] } : { shell: 300, foreground: [exited ? 302 : 301] });
+    sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(process.cwd()).not.toBe(realpathSync(fixture.root));
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(folder);
+  });
+
+  test('a pane with no folder on record is not reused: where it runs is unknown, so the seat starts fresh', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    let exited = false;
+    const typeText = sources.launch!.typeText;
+    sources.launch!.typeText = (session, pane, text) => { if (text === '/exit') exited = true; return typeText(session, pane, text); };
+    sources.upLaunch.processInfo = () => (exited && did.runs.length === 0 ? { shell: 300, foreground: [300] } : { shell: 300, foreground: [exited ? 302 : 301] });
+    sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd?.startsWith('/')).toBe(true);
   });
 
   test('owner restarts a free running seat, prints pre-close facts, updates state, and does not edit team.yaml', async () => {
@@ -2840,6 +2888,105 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       `AGENT_UNATTENDED=1 grok -r ${GROK_SESSION} --trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --sandbox team-seat-acme-worker`,
     );
     expect(io.err).toBe('');
+  });
+
+  test('a restarted seat that declares a relative folder records it absolute, against the team root', async () => {
+    // A Cursor seat's own folder, written relative to the project: the start check returns it as
+    // written, and the record must still hold the absolute folder (a relative one made every
+    // client key's placement check refuse).
+    const yaml = CURSOR_TEAM_YAML
+      .replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      cli: 'cursor',
+      model: 'Grok',
+      version: '4.7',
+      yaml,
+      launch: 'cursor-agent --model cursor-model',
+      foregroundArgv0: 'cursor-agent',
+      newPaneScreen: CURSOR_IDLE,
+      launched: true,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+    const recorded = readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd;
+    expect(recorded).toBe(join(fixture.root, 'web'));
+    expect(isAbsolute(recorded!)).toBe(true);
+  });
+
+  for (const prior of [{ label: 'an older absolute folder', value: '/elsewhere/old-seat-folder' }, { label: 'a malformed value', value: 42 }]) {
+    test(`a replacement workspace records its own folder over ${prior.label}`, async () => {
+      // The prior record named another folder (or no path at all); the restart makes a new
+      // workspace, and that workspace's folder is the one recorded, without a crash.
+      const yaml = CURSOR_TEAM_YAML
+        .replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web')
+        .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+      const { fixture, run } = seeded({
+        registry: 'ses_keep', state: 'ses_keep', cli: 'cursor', model: 'Grok', version: '4.7', yaml,
+        launch: 'cursor-agent --model cursor-model', foregroundArgv0: 'cursor-agent', newPaneScreen: CURSOR_IDLE, launched: true,
+      });
+      updateState(fixture.dir, (state) => {
+        (state.sessions.acme!.seats.worker as { start_cwd?: unknown }).start_cwd = prior.value;
+      });
+      run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+      mkdirSync(join(fixture.root, 'web'), { recursive: true });
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+      expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
+      // The folder carried while the record was dropped is gone once the record holds it again.
+      expect((readState(fixture.dir).sessions.acme as { retained_start_cwd?: unknown }).retained_start_cwd).toBeUndefined();
+    });
+  }
+
+  test('a relaunch that fails after the close keeps the folder the seat ran in on record, id or not', async () => {
+    // A Grok seat whose own folder its sandbox refuses: the old pane is closed, the relaunch is
+    // left out, and the seat's record is gone. Where it ran stays carried for the placement check.
+    const yaml = GROK_TEAM_YAML
+      .replace('    launch: grok', '    launch: grok\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = seeded({
+      registry: GROK_SESSION, cli: 'grok', model: 'Grok', version: '4.7', yaml, launch: 'grok',
+      workerSession: GROK_SESSION, launched: true, foregroundArgv0: 'grok', newPaneScreen: GROK_IDLE,
+    });
+    updateState(fixture.dir, (state) => {
+      const worker = state.sessions.acme!.seats.worker!;
+      delete (worker as { id?: string }).id;
+      worker.start_cwd = '/elsewhere/where-it-ran';
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.doctor = { ...run.sources.doctor, version: () => '1.0.52' };
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? GROK_EXIT_TYPED : GROK_IDLE) : GROK_IDLE;
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    await runRestart(['worker'], io, run.sources);
+    const session = readState(fixture.dir).sessions.acme as { seats: Record<string, unknown>; retained_start_cwd?: Record<string, unknown> };
+    expect(session.seats.worker).toBeUndefined();
+    expect(session.retained_start_cwd).toEqual({ worker: '/elsewhere/where-it-ran' });
+  });
+
+  test('a pane recorded in another folder than today\'s plan is not reused: the seat starts in a fresh workspace', async () => {
+    const yaml = CURSOR_TEAM_YAML
+      .replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = seeded({
+      registry: 'ses_keep', state: 'ses_keep', cli: 'cursor', model: 'Grok', version: '4.7', yaml,
+      launch: 'cursor-agent --model cursor-model', foregroundArgv0: 'cursor-agent', newPaneScreen: CURSOR_IDLE, launched: true,
+    });
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    mkdirSync(join(fixture.root, 'old'), { recursive: true });
+    updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = join(fixture.root, 'old'); });
+    // The old pane returns to its shell after the exit: in the same folder it would be reused.
+    run.sources.upLaunch.processInfo = (_session, pane) => (pane === 'pane-old' ? { shell: 100, foreground: [100] } : { shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+    expect(run.did.closed).toContain('ws-old');
+    expect(run.did.created).toBeGreaterThan(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
   });
 
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {

@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
 import { handoverPath } from './handover/paths.ts';
@@ -96,6 +96,8 @@ export type SeatState = {
   /**
    * The folder the seat's launch line was run in, when the state records it. A resumed seat's
    * pane keeps that folder, so its launch line is checked there, never against the file's.
+   * Always an absolute path (`startFolderOf`): an older record that held the declared relative
+   * cwd is read against the team root.
    */
   start_cwd?: string;
   cli_version?: string;
@@ -394,6 +396,14 @@ export type SessionState = {
    * its `id` and `last_active` when relaunched, while `seats` holds only active runtime records.
    */
   retained_seats?: Record<string, RetainedSeat>;
+  /**
+   * The start folder of a seat whose record a relaunch dropped while its pane may still run,
+   * by seat name, exactly as the record held it (a value that is no path is kept as it is). It is
+   * held apart from `retained_seats`, so a record with no id keeps it too. The client key's
+   * placement check reads it as a seat's own folder until the relaunch writes the seat's record
+   * again, which takes it (`keptStartFolder`) and removes it.
+   */
+  retained_start_cwd?: Record<string, unknown>;
   /**
    * The general seat brief delivered to each seat: the record's id and when it landed, written by
    * the launch that wrote the drop. `team check` reads it to name a seat the brief never reached;
@@ -1410,4 +1420,63 @@ export function reclaimLockDir(dir: string, options: { youngMs?: number } = {}):
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'kept';
   }
+}
+
+/**
+ * The start folder a seat record keeps: absolute, resolved against the team root exactly as a
+ * declared cwd is (`resolve(root, cwd)`), so every reader of the record — a client key's
+ * placement check above all — reads a real folder and never a path relative to its own working
+ * folder. Undefined stays undefined: a record with no folder keeps none.
+ */
+export function startFolderOf(root: string, cwd: unknown): string | undefined {
+  if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) return undefined;
+  return isAbsolute(cwd) ? cwd : resolve(root, cwd);
+}
+
+/**
+ * The start folder a record write keeps. `fresh` is the folder of a workspace this write created
+ * (or one the patch itself names): it always wins, so a replacement workspace never keeps an
+ * older folder, and it repairs a malformed one. Without fresh evidence the prior folder stands,
+ * made absolute; a prior value that is no path at all is kept as it was, never dropped, so the
+ * placement check keeps refusing it (with its repair) rather than fall back to the declaration.
+ */
+export function keptStartFolder(root: string, fresh: unknown, prior: unknown): string | undefined {
+  const now = startFolderOf(root, fresh);
+  if (now !== undefined) return now;
+  if (prior === undefined) return undefined;
+  return startFolderOf(root, prior) ?? (prior as string);
+}
+
+/**
+ * Takes the folder a relaunch carried for `name` (`retained_start_cwd`), when the record being
+ * written holds placement of its own again: the fresh workspace's folder, or a prior one. Removes
+ * the session map once it is empty. The record write calls it in the same state update.
+ */
+export function retireCarriedStartFolder(session: SessionState, name: string): void {
+  const carried = session.retained_start_cwd as unknown;
+  // A map that is not one is left as it is: the launch refused it before any side effect
+  // (`carriedStartFolderProblem`), and the placement check keeps refusing it.
+  if (carried === null || typeof carried !== 'object' || Array.isArray(carried)) return;
+  delete (carried as Record<string, unknown>)[name];
+  if (Object.keys(carried).length === 0) delete session.retained_start_cwd;
+}
+
+/**
+ * Why a session's carried start folders (`retained_start_cwd`) cannot be read: present, and not a
+ * map by seat name. A launch refuses on it before any side effect, with its repair, so a record
+ * write never meets it mid-launch; the map is kept as it is, since it is placement evidence the
+ * client key's check still refuses on. Null when the map is absent or reads.
+ */
+export function carriedStartFolderProblem(session: Pick<SessionState, 'retained_start_cwd'> | undefined, sessionName: string, stateDir: string): string | null {
+  const carried = session?.retained_start_cwd as unknown;
+  if (carried === undefined) return null;
+  if (carried !== null && typeof carried === 'object' && !Array.isArray(carried)) return null;
+  return `the carried start folders of session "${sessionName}" in ${join(stateDir, STATE_FILE)} are not a map by seat name: nothing was launched; fix or remove the \`retained_start_cwd\` field of that session, then run it again`;
+}
+
+/** A seat record's start folder when it is a path: a value an older or hand-edited record holds
+ *  that is no string is no folder to read, and a reader that would use it as one reads none. */
+export function recordedStartFolder(seat: { start_cwd?: unknown } | undefined): string | undefined {
+  const cwd = seat?.start_cwd;
+  return typeof cwd === 'string' && cwd !== '' ? cwd : undefined;
 }

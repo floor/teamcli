@@ -1,7 +1,7 @@
 import { evictHerdrAgentList, evictHerdrPaneProcessInfo } from '../herdr.ts';
-import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
@@ -96,7 +96,7 @@ import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
-import { emptySession, mintSeatId, readState, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, carriedStartFolderProblem, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { findAgent as findRegisteredAgent, recordProvenAgentAddress, updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
@@ -1059,6 +1059,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   if (planSeat.rulesProblem !== undefined) {
     return { kind: 'not-ready', message: `${next.name}: ${planSeat.rulesProblem}` };
   }
+  // Carried start folders that do not read refuse before the seat is stopped or touched.
+  const carriedProblem = carriedStartFolderProblem(recordedSession, session, dir);
+  if (carriedProblem !== null) return { kind: 'not-ready', message: carriedProblem };
   // A named launcher resolves on its own (8cf63fb22), except in a preset swap: the swap resolved
   // its team preset itself and wrote the line, so restarting it resolves nothing again (and asks no
   // launcher-file cover the swap's own resolution did not ask). A shipped launcher always resolves.
@@ -1385,7 +1388,12 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       const keptShell = keptPane === undefined ? null : sources.upLaunch.processInfo?.(session, keptPane.pane) ?? null;
       // At a bare shell herdr names the shell itself as the foreground process.
       const atShell = keptShell !== null && keptShell.foreground.every((pid) => pid === keptShell.shell);
-      if (keptPane !== undefined && atShell) {
+      // The pane is reused only where it provably runs in the folder today's launch plans: its
+      // record names that same folder. A pane recorded elsewhere, or with no folder (or one that
+      // is no path) on record, is closed and the seat starts in a fresh workspace, so the folder
+      // its record keeps is always the one its process runs in.
+      const plannedFolder = sameFolderOnDisk(root, recordedStartFolder(freshRecorded), planSeat.cwd);
+      if (keptPane !== undefined && atShell && plannedFolder) {
         planSeat.repair = { pane: keptPane.pane, workspace: keptPane.workspace, launched: { shell: keptShell!.shell, cli: [] }, cli: next.cli, reuse: true };
       } else if (keptPane !== undefined && !sources.upLaunch.closeWorkspace(session, keptPane.workspace)) {
         return { kind: 'busy', message: `${name} did not close its old pane; left as it is${keptAt(draftCopy)}` };
@@ -1404,6 +1412,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
             ...(prior.last_active ? { last_active: prior.last_active } : {}),
           };
         }
+        // Where the seat ran stays on record, id or not, until the relaunch records it again: the
+        // pane may still run there, and the client key's placement check reads it meanwhile.
+        if (prior !== undefined && prior.start_cwd !== undefined) (current.retained_start_cwd ??= {})[name] = prior.start_cwd;
         delete current.seats[name];
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
@@ -2201,7 +2212,17 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        const start_cwd = patch.start_cwd ?? prior.start_cwd ?? (patch.createdWorkspace ? input.startCwd : undefined);
+        // A workspace this write made records its own folder; otherwise the folder the seat already
+        // ran in stands — the record's, or the one kept beside its id when the close dropped the
+        // record and the line runs again in the same pane — never today's declaration.
+        const carried = current.retained_start_cwd?.[name];
+        const start_cwd = keptStartFolder(
+          input.root,
+          patch.createdWorkspace ? (patch.start_cwd ?? input.startCwd) : patch.start_cwd,
+          prior.start_cwd !== undefined ? prior.start_cwd : carried,
+        );
+        // The seat's record holds its folder again from here on.
+        if (start_cwd !== undefined) retireCarriedStartFolder(current, name);
         const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
@@ -2213,7 +2234,8 @@ function hostOf(input: {
           ...(effort ? { effort } : {}),
           ...(launch_line ? { launch_line } : {}),
           ...(last_active ? { last_active } : {}),
-          ...(start_cwd ? { start_cwd } : {}),
+          // Any value present is kept, a malformed one too: only fresh evidence replaces it.
+          ...(start_cwd !== undefined ? { start_cwd } : {}),
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;
@@ -2310,6 +2332,7 @@ function hostOf(input: {
             ...(prior.last_active ? { last_active: prior.last_active } : {}),
           };
         }
+        if (prior !== undefined && prior.start_cwd !== undefined) (current.retained_start_cwd ??= {})[name] = prior.start_cwd;
         delete current.seats[name];
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
@@ -2738,4 +2761,19 @@ function readyExit(
   }
   // exit: restart.ready
   return 0;
+}
+
+/** Whether a recorded folder is the planned one on disk (links followed). Both are read against
+ *  the team root as it is on disk — a legacy relative record too, never against the caller's
+ *  working folder — and a folder missing on either side, a root that does not resolve, or no
+ *  recorded folder at all, is not the same folder. */
+function sameFolderOnDisk(root: string, recorded: string | undefined, planned: string): boolean {
+  if (recorded === undefined) return false;
+  try {
+    const realRoot = realpathSync(root);
+    const against = (path: string): string => (isAbsolute(path) ? path : resolve(realRoot, path));
+    return realpathSync(against(recorded)) === realpathSync(against(planned));
+  } catch {
+    return false;
+  }
 }

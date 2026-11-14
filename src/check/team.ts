@@ -127,7 +127,7 @@ import {
   type SettingLevel,
 } from '../settings/inherit.ts';
 import { deliveryOrder, resolveOrderSetting } from '../settings/resolve.ts';
-import { emptySession, liveHold, pidAlive, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
+import { emptySession, liveHold, pidAlive, readState, recordedStartFolder, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, paneShowsSeat, seatRecordsOf, socketLegOf, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
@@ -2982,12 +2982,13 @@ function inboxRegistrationNotes(team: TeamFile, state: SessionState, live: Live)
   for (const seat of team.seats) {
     if (seat.human === true) continue;
     const recorded = state.seats[seat.name];
-    if (recorded?.stage !== 'ready' || recorded.start_cwd === undefined) continue;
+    const startFolder = recordedStartFolder(recorded);
+    if (recorded?.stage !== 'ready' || startFolder === undefined) continue;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
     if (agent === undefined || agent.pane !== recorded.pane) continue;
-    const read = inboxRegistration(recorded.cli ?? seat.cli, recorded.start_cwd);
+    const read = inboxRegistration(recorded.cli ?? seat.cli, startFolder);
     if (read === null || read.registered) continue;
-    out.push(`${seat.name}: its CLI registers a team inbox in ${read.target}, and ${join(recorded.start_cwd, read.target)} holds none: sends wait in its drop folder; team reload ${seat.name} registers it`);
+    out.push(`${seat.name}: its CLI registers a team inbox in ${read.target}, and ${join(startFolder, read.target)} holds none: sends wait in its drop folder; team reload ${seat.name} registers it`);
   }
   return out;
 }

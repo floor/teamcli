@@ -130,7 +130,7 @@ import { declaredInboundOf, inboundStaleReason } from '../send/inbound.ts';
 import { defaultSocketsDirs, liveSocketOf } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
+import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, carriedStartFolderProblem, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -2816,6 +2816,12 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   }
 
   const recorded = readState(dir).sessions[session];
+  // Carried start folders that do not read stop the run here, before anything is launched.
+  const carriedProblem = carriedStartFolderProblem(recorded, session, dir);
+  if (carriedProblem !== null) {
+    refuse(io, json, 'up', { id: 'up.carried-start', message: plainText(carriedProblem), repair: null });
+    return 1; // exit: up.carried-start
+  }
   const workspaces = sources.workspaces?.(session) ?? null;
   // What each recorded seat's pane holds, read from its pane: what decides whether the seat is
   // still the seat, or whether it must be launched again. Only a running session has panes, and
@@ -3062,7 +3068,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // (`start_cwd`); without it the line is not checked at all — the file's folder is not
     // where that pane is, so refusing or passing on it would be a guess.
     const doctor = sources.doctor;
-    const resumeCwd = recorded?.seats[seat.name]?.start_cwd;
+    const resumeCwd = recordedStartFolder(recorded?.seats[seat.name]);
     const line = doctor
       ? placed
         ? launchLineFinding(team, seat, root, { onPath: (binary) => doctor.onPath(binary), home: doctor.home, state: recorded })
@@ -4213,15 +4219,16 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
             : (prior.last_active ?? retained?.last_active);
-          let start_cwd = patch.start_cwd ?? prior.start_cwd;
-          if (!start_cwd && patch.createdWorkspace) {
-            const planned = seats.find((item) => item.name === name);
-            if (planned?.lobby) {
-              if (verifiedLobby) start_cwd = verifiedLobby;
-            } else if (planned?.cwd) {
-              start_cwd = planned.cwd;
-            }
-          }
+          // A replacement workspace records the folder it was made in (the launch names it), never
+          // the prior record's; failing that, the verified lobby for a lobby seat or the planned
+          // folder. Otherwise the folder the seat already ran in stands. Kept absolute.
+          const planned = seats.find((item) => item.name === name);
+          const fresh = patch.createdWorkspace
+            ? (patch.start_cwd ?? (planned?.lobby ? (verifiedLobby ?? undefined) : planned?.cwd))
+            : patch.start_cwd;
+          const start_cwd = keptStartFolder(root, fresh, prior.start_cwd !== undefined ? prior.start_cwd : current.retained_start_cwd?.[name]);
+          // The record holds its folder again: a folder a relaunch carried for it is retired here.
+          if (start_cwd !== undefined) retireCarriedStartFolder(current, name);
           // `waiting: null` removes the field alone; anything else written replaces it.
           // `effort: null` is a launch that set no word: the stored word goes with it.
           const { waiting: written, effort: patchedEffort, ...rest } = patch;
@@ -4235,7 +4242,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
             ...(effort ? { effort } : {}),
             ...(launch_line ? { launch_line } : {}),
             ...(last_active ? { last_active } : {}),
-            ...(start_cwd ? { start_cwd } : {}),
+            ...(start_cwd !== undefined ? { start_cwd } : {}),
           };
           if (written === null) delete seat.waiting;
           else if (written) seat.waiting = written;
