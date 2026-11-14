@@ -570,12 +570,11 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       io.stdout(`dry-run: would ${done} ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n${entityOutcome.text}`);
     } else {
       io.stdout(`${done} ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n`);
-      // What the change means for the entity's teams: `{root}` in their files reads the new folder,
-      // and the records an approval signed hold the folder they read then.
+      // What the change means for the entity's teams: `{root}` in their files reads the new folder.
       if (key === ROOT_KEY) {
         io.stderr(folder === null
           ? `team config: a team of entity "${entityName}" that writes {root} is now refused until a root is set again\n`
-          : `team config: teams of entity "${entityName}" read {root} as ${folder.path}; a team approved with another root needs \`team approve\` again\n`);
+          : `team config: teams of entity "${entityName}" read {root} as ${folder.path}\n`);
       }
       if (!entityOutcome.kept) io.stderr(`team config: the entities file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
     }

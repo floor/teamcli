@@ -84,8 +84,8 @@ would start with the word is quoted, and the result must read back as the same t
 those paths changed, or nothing is offered. Every changed line is printed, before and after, by
 the dry run and by the write alike; the write is never silent. Anyone may run the dry run; the
 write is the owner's, from a terminal outside herdr, as every edit of the team's record. A seat
-whose launch line changed has its agent record's launch line updated with it, and a team approved
-before the rewrite may need `team approve` again. `--root` takes no other import option.
+whose launch line changed has its agent record's launch line updated with it. `--root` takes no
+other import option.
 
 | Outcome | Exit |
 | --- | --- |

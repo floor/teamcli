@@ -90,8 +90,7 @@ relative path, the filesystem's root, or a path that writes `{root}` itself is r
 is written. `unset` removes it, after which a team of the entity that writes `{root}` is refused
 until one is set again. `get --json` adds the folder it reads as (`resolved`). A path whose first
 segment is a section of the team's own record (`seats.root` is a seat named `root`) stays the
-team's. Teams approved before the root was set or moved need `team approve` again, which the set
-says on stderr.
+team's. A set says on stderr the folder the entity's teams now read `{root}` as.
 
 `<entity>.names.unique` says how far apart seat nicknames stay — `entity` (the default, across
 every team of the entity), `project` (within one project), `team` (within one team) or `off`.

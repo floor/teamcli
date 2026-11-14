@@ -6,7 +6,7 @@
 // back as the same team with only those paths changed. Writing is the owner's, from a terminal
 // outside herdr, as every other edit of the team's record is.
 import { join } from 'node:path';
-import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { syncAgentLaunches } from '../config/edit.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
 import { planRootRewrite, ROOT_WORD } from '../file/root-word.ts';
@@ -98,10 +98,7 @@ export function runRootMigrate(args: RootMigrateArgs, io: Io, home: string): num
   const checked = readTeamConfig(root, { home });
   const synced = checked.ok ? syncAgentLaunches(home, teamIdOf(root), text, checked.team.seats, root) : [];
   say(true);
-  if (!json) {
-    for (const name of synced) io.stdout(`agent record of ${name}: launch line updated to match\n`);
-    io.stderr(`team migrate: written by ${callerLabel(caller)}; a team approved before the rewrite may need \`team approve\` again\n`);
-  }
+  if (!json) for (const name of synced) io.stdout(`agent record of ${name}: launch line updated to match\n`);
   // exit: migrate.root-written
   return 0;
 }

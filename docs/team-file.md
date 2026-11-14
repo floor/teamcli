@@ -422,8 +422,8 @@ team config unset acme.root
 - The entity's and the home project's rules (`<entity>.rules`, `project.<id>.rules`) read the word
   the same way. They are not a team file, so where no root is named they keep the word as written,
   and `team doctor` says so.
-- The resolved paths are part of the record an approval signs: setting the root of an entity, or
-  moving it, changes what its `{root}` teams read, and those teams need `team approve` again.
+- Setting the root of an entity, or moving it, changes what its `{root}` teams read at their next
+  read: a running seat keeps the line it was launched with until it is launched again.
 - [`team doctor`](commands/doctor.md) warns about every value that writes a full path inside the
   entity's root on this machine, and [`team migrate --root`](commands/migrate.md) rewrites those
   paths as `{root}/…`: `--dry-run` first lists each line it would change.
