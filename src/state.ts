@@ -35,6 +35,9 @@ export function mintSeatId(): string {
 export type RetainedSeat = {
   id: string;
   last_active?: string;
+  /** The folder the seat ran in when its record was dropped for a relaunch: a line that runs
+   *  again in the same pane runs there, and the new record keeps it (`keptStartFolder`). */
+  start_cwd?: string;
   /** The conversation the seat ran when `team down` stopped it: the state's half of the resume
    *  binding (`recordedSeatSession`), so the next `up` resumes the registry's recorded session
    *  rather than minting a fresh one. */
@@ -1420,7 +1423,28 @@ export function reclaimLockDir(dir: string, options: { youngMs?: number } = {}):
  * placement check above all — reads a real folder and never a path relative to its own working
  * folder. Undefined stays undefined: a record with no folder keeps none.
  */
-export function startFolderOf(root: string, cwd: string | undefined): string | undefined {
-  if (cwd === undefined || cwd === '') return undefined;
+export function startFolderOf(root: string, cwd: unknown): string | undefined {
+  if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) return undefined;
   return isAbsolute(cwd) ? cwd : resolve(root, cwd);
+}
+
+/**
+ * The start folder a record write keeps. `fresh` is the folder of a workspace this write created
+ * (or one the patch itself names): it always wins, so a replacement workspace never keeps an
+ * older folder, and it repairs a malformed one. Without fresh evidence the prior folder stands,
+ * made absolute; a prior value that is no path at all is kept as it was, never dropped, so the
+ * placement check keeps refusing it (with its repair) rather than fall back to the declaration.
+ */
+export function keptStartFolder(root: string, fresh: unknown, prior: unknown): string | undefined {
+  const now = startFolderOf(root, fresh);
+  if (now !== undefined) return now;
+  if (prior === undefined) return undefined;
+  return startFolderOf(root, prior) ?? (prior as string);
+}
+
+/** A seat record's start folder when it is a path: a value an older or hand-edited record holds
+ *  that is no string is no folder to read, and a reader that would use it as one reads none. */
+export function recordedStartFolder(seat: { start_cwd?: unknown } | undefined): string | undefined {
+  const cwd = seat?.start_cwd;
+  return typeof cwd === 'string' && cwd !== '' ? cwd : undefined;
 }

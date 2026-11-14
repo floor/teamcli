@@ -96,7 +96,7 @@ import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
-import { emptySession, mintSeatId, readState, startFolderOf, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, keptStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { findAgent as findRegisteredAgent, recordProvenAgentAddress, updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
@@ -1402,6 +1402,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           (current.retained_seats ??= {})[name] = {
             id: prior.id,
             ...(prior.last_active ? { last_active: prior.last_active } : {}),
+            ...(prior.start_cwd !== undefined ? { start_cwd: prior.start_cwd } : {}),
           };
         }
         delete current.seats[name];
@@ -2201,8 +2202,14 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        // Kept absolute, against the team root, whatever the plan or an older record held.
-        const start_cwd = startFolderOf(input.root, patch.start_cwd ?? prior.start_cwd ?? (patch.createdWorkspace ? input.startCwd : undefined));
+        // A workspace this write made records its own folder; otherwise the folder the seat already
+        // ran in stands — the record's, or the one kept beside its id when the close dropped the
+        // record and the line runs again in the same pane — never today's declaration.
+        const start_cwd = keptStartFolder(
+          input.root,
+          patch.createdWorkspace ? (patch.start_cwd ?? input.startCwd) : patch.start_cwd,
+          prior.start_cwd ?? retained?.start_cwd,
+        );
         const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
@@ -2309,6 +2316,7 @@ function hostOf(input: {
           (current.retained_seats ??= {})[name] = {
             id: prior.id,
             ...(prior.last_active ? { last_active: prior.last_active } : {}),
+            ...(prior.start_cwd !== undefined ? { start_cwd: prior.start_cwd } : {}),
           };
         }
         delete current.seats[name];

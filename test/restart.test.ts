@@ -2870,6 +2870,28 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(isAbsolute(recorded!)).toBe(true);
   });
 
+  for (const prior of [{ label: 'an older absolute folder', value: '/elsewhere/old-seat-folder' }, { label: 'a malformed value', value: 42 }]) {
+    test(`a replacement workspace records its own folder over ${prior.label}`, async () => {
+      // The prior record named another folder (or no path at all); the restart makes a new
+      // workspace, and that workspace's folder is the one recorded, without a crash.
+      const yaml = CURSOR_TEAM_YAML
+        .replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web')
+        .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+      const { fixture, run } = seeded({
+        registry: 'ses_keep', state: 'ses_keep', cli: 'cursor', model: 'Grok', version: '4.7', yaml,
+        launch: 'cursor-agent --model cursor-model', foregroundArgv0: 'cursor-agent', newPaneScreen: CURSOR_IDLE, launched: true,
+      });
+      updateState(fixture.dir, (state) => {
+        (state.sessions.acme!.seats.worker as { start_cwd?: unknown }).start_cwd = prior.value;
+      });
+      run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+      mkdirSync(join(fixture.root, 'web'), { recursive: true });
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+      expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
+    });
+  }
+
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {
     const launch = 'zsh /home/owner/as-floor.sh grok --model grok-4.7';
     const { fixture, run } = seeded({

@@ -130,7 +130,7 @@ import { declaredInboundOf, inboundStaleReason } from '../send/inbound.ts';
 import { defaultSocketsDirs, liveSocketOf } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, startFolderOf, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
+import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, keptStartFolder, recordedStartFolder, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -3062,7 +3062,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // (`start_cwd`); without it the line is not checked at all — the file's folder is not
     // where that pane is, so refusing or passing on it would be a guess.
     const doctor = sources.doctor;
-    const resumeCwd = recorded?.seats[seat.name]?.start_cwd;
+    const resumeCwd = recordedStartFolder(recorded?.seats[seat.name]);
     const line = doctor
       ? placed
         ? launchLineFinding(team, seat, root, { onPath: (binary) => doctor.onPath(binary), home: doctor.home, state: recorded })
@@ -4213,17 +4213,14 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
             : (prior.last_active ?? retained?.last_active);
-          let start_cwd = patch.start_cwd ?? prior.start_cwd;
-          if (!start_cwd && patch.createdWorkspace) {
-            const planned = seats.find((item) => item.name === name);
-            if (planned?.lobby) {
-              if (verifiedLobby) start_cwd = verifiedLobby;
-            } else if (planned?.cwd) {
-              start_cwd = planned.cwd;
-            }
-          }
-          // Kept absolute, against the team root, whatever the plan or an older record held.
-          start_cwd = startFolderOf(root, start_cwd);
+          // A replacement workspace records the folder it was made in, never the prior record's
+          // (the verified lobby for a lobby seat); otherwise the folder the seat already ran in
+          // stands. Kept absolute, against the team root.
+          const planned = seats.find((item) => item.name === name);
+          const fresh = patch.createdWorkspace
+            ? (planned?.lobby ? (verifiedLobby ?? patch.start_cwd) : (patch.start_cwd ?? planned?.cwd))
+            : patch.start_cwd;
+          const start_cwd = keptStartFolder(root, fresh, prior.start_cwd);
           // `waiting: null` removes the field alone; anything else written replaces it.
           // `effort: null` is a launch that set no word: the stored word goes with it.
           const { waiting: written, effort: patchedEffort, ...rest } = patch;

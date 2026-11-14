@@ -72,7 +72,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { emptySession, mintSeatId, readState, startFolderOf, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, keptStartFolder, recordedStartFolder, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -1014,7 +1014,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     repair || (held?.launched !== undefined && verdict !== 'same')
       ? undefined
       : unnamedIn(built.name, recorded.seats, agents);
-  const resumeCwd = recorded.seats[built.name]?.start_cwd;
+  const resumeCwd = recordedStartFolder(recorded.seats[built.name]);
   const line = !stray
     ? launchLineFinding(prepared.team, built.seat, root, {
         onPath: (binary) => sources.doctor.onPath(binary),
@@ -1955,16 +1955,12 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        let start_cwd = patch.start_cwd ?? prior.start_cwd;
-        if (!start_cwd && patch.createdWorkspace) {
-          if (input.inLobby) {
-            if (input.verifiedLobby) start_cwd = input.verifiedLobby;
-          } else {
-            start_cwd = input.startCwd;
-          }
-        }
-        // Kept absolute, against the team root, whatever the plan or an older record held.
-        start_cwd = startFolderOf(input.root, start_cwd);
+        // A workspace this write made records its own folder (the verified lobby for a lobby seat);
+        // otherwise the folder the seat already ran in stands. Kept absolute, against the team root.
+        const fresh = patch.createdWorkspace
+          ? (input.inLobby ? (input.verifiedLobby ?? patch.start_cwd) : (patch.start_cwd ?? input.startCwd))
+          : patch.start_cwd;
+        const start_cwd = keptStartFolder(input.root, fresh, prior.start_cwd);
         // `waiting: null` removes the field alone; anything else written replaces it.
         // `effort: null` is a launch that set no word: the stored word goes with it.
         const { waiting: written, effort: patchedEffort, ...rest } = patch;

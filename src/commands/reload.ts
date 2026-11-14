@@ -68,7 +68,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { parseVersion, profileFor, versionVerdict } from '../profiles/profile.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
-import { emptySession, readState, updateState, worktreeOf, type SeatState } from '../state.ts';
+import { emptySession, readState, recordedStartFolder, updateState, worktreeOf, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
@@ -488,10 +488,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const refreshStartProblem = (): string | null => {
     const cli = recorded.cli ?? seat.cli;
     if (cli !== 'grok' && cli !== 'cursor') return null;
-    if (recorded.start_cwd === undefined) {
+    const startFolder = recordedStartFolder(recorded);
+    if (startFolder === undefined) {
       return `${seat.name}: its pane has no recorded start folder; set the seat cwd to its own worktree or clone and restart it in a new workspace`;
     }
-    return ownStartFolderProblem({ cli, seat: seat.name, cwd: recorded.start_cwd, root,
+    return ownStartFolderProblem({ cli, seat: seat.name, cwd: startFolder, root,
       home: home ?? homedir(), lobby: lobbyOf(home ?? homedir(), root, { ...team, session }),
       peers: placedStartFolders(team.seats, readState(dir).sessions[session]) });
   };
@@ -505,8 +506,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     if (refuseRefreshStart()) return false;
     const inboxCli = recorded.cli ?? seat.cli;
     const register = sources.launch.registerInbox;
-    if (recorded.start_cwd !== undefined && register !== undefined) {
-      const inbox = register(inboxCli, seat.name, recorded.start_cwd, session, launchTeamFile(loaded));
+    const startFolder = recordedStartFolder(recorded);
+    if (startFolder !== undefined && register !== undefined) {
+      const inbox = register(inboxCli, seat.name, startFolder, session, launchTeamFile(loaded));
       if (inbox && !inbox.ok) {
         const said = `${seat.name}: its team inbox was not registered: ${inbox.reason}; team restart ${seat.name} retries it`;
         if (json) jsonNotes.push(said);

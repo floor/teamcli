@@ -7,7 +7,7 @@ import { isLeadSeat } from '../file/sections/lead.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { channelStart, claudeChannelSeat } from '../mcp/launch-config.ts';
-import { worktreeOf, type SessionState } from '../state.ts';
+import { recordedStartFolder, worktreeOf, type SessionState } from '../state.ts';
 
 // A task name is one path segment. It is also the last segment of the folder and part of the branch.
 const TASK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -82,7 +82,7 @@ export function placedStartFolders(
   seats: readonly StartFolder[], state?: Pick<SessionState, 'seats' | 'worktrees'>,
 ): StartFolder[] {
   return seats.map(seat => ({ ...seat,
-    cwd: state?.seats[seat.name]?.start_cwd ||
+    cwd: recordedStartFolder(state?.seats[seat.name]) ||
       (seat.cwd === '.' || seat.cwdDefaulted === true ? worktreeOf(state, seat.name)?.path : undefined) || seat.cwd,
   }));
 }

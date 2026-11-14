@@ -229,7 +229,7 @@ export function grokCommandDenyNotes(
       if (missing.length) out.push(`${prefix}: its recorded launch lacks --deny ${missing.join(', ')}`);
       continue;
     }
-    if (recorded?.start_cwd === undefined || !isAbsolute(recorded.start_cwd)) {
+    if (typeof recorded?.start_cwd !== 'string' || !isAbsolute(recorded.start_cwd)) {
       out.push(`${prefix}: no recorded launch folder with an absolute path to check .cursor/cli.json`);
       continue;
     }

@@ -1479,7 +1479,8 @@ export async function executePlan(
             pane: made.pane,
             workspace: made.workspace,
             createdWorkspace: true,
-            ...(op.channel === undefined ? {} : { start_cwd: op.cwd }),
+            // The folder this workspace was made in, for every seat: the record of where it runs.
+            start_cwd: op.cwd,
             waiting: null,
             ...(shell !== null ? { pane_shell: shell } : {}),
             ...(shellStart !== null ? { pane_shell_start: shellStart } : {}),
