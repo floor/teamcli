@@ -819,10 +819,18 @@ function seatWorkPlans(
     if (record.served || record.inDrops !== false) continue;
     olderStore.set(record.to, (olderStore.get(record.to) ?? 0) + 1);
   }
+  // Said once per seat and count, held in the watch's own memory: the pass's once-marks are
+  // already settled when this runs, so they cannot hold it.
+  const toldOlder = (memory.slots['older-store'] ??= {}) as Record<string, number>;
+  for (const seat of Object.keys(toldOlder)) if (!olderStore.has(seat)) delete toldOlder[seat];
   for (const [seat, count] of olderStore) {
-    const told = once(`older-store:${seat}`, `${seat}: ${String(count)} message(s) wait in the older mailbox store; \`team messages\` serves them, a wake does not`, 'orchestrator');
-    if (told) reports.push(told);
-    else keep(`older-store:${seat}`);
+    if (toldOlder[seat] === count) continue;
+    toldOlder[seat] = count;
+    reports.push({
+      key: `older-store:${seat}`,
+      text: `${seat}: ${String(count)} message(s) wait in the older mailbox store; \`team messages\` serves them, a wake does not`,
+      to: 'orchestrator',
+    });
   }
   const plans: SeatCantWork[] = [];
   for (const obs of observations) {

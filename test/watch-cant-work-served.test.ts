@@ -84,3 +84,16 @@ test('a record its drop receipt already settled raises nothing', () => {
   expect((result.cantWork ?? []).find((plan) => plan.seat === SEAT)).toBeUndefined();
   expect(result.reports.some((report) => report.text.includes('older mailbox store'))).toBe(false);
 });
+
+test('the older-store report is said once while the count stands, and again when it changes', () => {
+  const file = team();
+  const memory = newMemory();
+  const run = (records: MailboxWaiting[], now: number) => pass({
+    team: file, watch: file.watch, state: emptySession(), live: live(), machine: fine, now, memory,
+    mailbox: records, processes: { [PANE]: { shell: 100, foreground: [101] } },
+  }).reports.filter((report) => report.text.includes('older mailbox store'));
+  const one = waiting(false, false);
+  expect(run([one], 60_000)).toHaveLength(1);
+  expect(run([one], 120_000)).toHaveLength(0);
+  expect(run([one, { ...one, id: 'aaaaaaaa-0000-4000-8000-000000000002' }], 180_000)).toHaveLength(1);
+});
