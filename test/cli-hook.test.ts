@@ -611,7 +611,7 @@ seats:
     expect(landing(run(command))).toBe(`${MARK}second\n\n${MARK}first`);
   }, 30_000);
 
-  test('one turn reads ten messages at most, and the rest wait for the next', () => {
+  test('one turn reads five messages at most, counts the rest, and they wait for the next', () => {
     const dir = dropsAt();
     const ids = Array.from({ length: 12 }, (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`);
     for (const [index, id] of ids.entries()) {
@@ -621,10 +621,13 @@ seats:
     }
     const command = dropCommand(install());
     const first = landing(run(command));
-    expect(first.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(10);
-    expect(readdirSync(dir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
+    expect(first.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(5);
+    expect(first).toContain('7 older unread message(s) wait in this inbox');
+    expect(readdirSync(dir).filter((name) => name.endsWith('.read.json'))).toHaveLength(5);
     const second = landing(run(command));
-    expect(second.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(2);
+    expect(second.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(5);
+    const third = landing(run(command));
+    expect(third.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(2);
     expect(readdirSync(dir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
   }, 60_000);
 

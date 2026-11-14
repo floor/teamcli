@@ -136,7 +136,8 @@ test('a live listener and an unread drop are shown beside the class', () => {
     v: 1, seat: SEAT, session: SESSION, root, cli: 'codex', pid: process.pid, ts: NOW.toISOString(),
   })).toBe(true);
   // An unsigned drop is dated by the send's own marker: five minutes before the reading.
-  writeFileSync(join(dropDir(), DROP), 'hello\n');
+  // An unverified record, not a plain-text drop an earlier build wrote: that is not mail at all.
+  writeFileSync(join(dropDir(), DROP), `${JSON.stringify({ body: 'hello' })}\n`);
   writeFileSync(
     join(dropDir(), `${DROP}.pending`),
     `${JSON.stringify({ id: DROP, from: 'lead', ts: new Date(NOW.getTime() - 5 * 60_000).toISOString() })}\n`,
