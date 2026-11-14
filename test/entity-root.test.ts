@@ -88,7 +88,7 @@ describe('the projects root an entity names on this machine', () => {
       const checked = checkedRootPath(value, '/home/owner');
       expect(checked.ok, JSON.stringify(value)).toBe(false);
     }
-    expect(checkedRootPath('/srv/$(id)', '/home/owner')).toEqual({ ok: false, why: 'a folder of the entity holds only letters, digits and / . _ - ~ @ + (no space, quote, $, backtick, backslash or other shell character)' });
+    expect(checkedRootPath('/srv/$(id)', '/home/owner')).toEqual({ ok: false, why: 'a folder of the entity holds only letters, digits and / . _ - @ +, after a leading ~/ (no space, quote, $, backtick, backslash, other ~ or other shell character)' });
     expect(checkedRootPath('/srv/team@v1.2+x_y-z', '/home/owner')).toEqual({ ok: true, root: '/srv/team@v1.2+x_y-z' });
   });
 
@@ -656,7 +656,8 @@ describe('round 2 of the review', () => {
     symlinkSync(join(home, 'nowhere'), join(home, 'repos', 'dangling'));
     expect(resolvedTarget(join(home, 'repos', 'link', 'not-yet'))).toBe(join(home, 'outside', 'not-yet'));
     expect(resolvedTarget(join(home, 'repos', 'dangling', 'x'))).toBeNull();
-    expect(resolvedTarget(join(home, 'repos', 'web', '..', '..', 'outside'))).toBeNull();
+    // Written by hand: `join` would fold the `..` away before the check sees it.
+    expect(resolvedTarget(`${home}/repos/web/../../outside`)).toBeNull();
     expect(charterRootsGate(home, join(home, 'repos', 'web', 'not-yet'), store).kind).toBe('admit');
     expect(charterRootsGate(home, join(home, 'repos', 'link', 'not-yet'), store).kind).toBe('block');
     expect(charterRootsGate(home, join(home, 'repos', 'dangling', 'x'), store).kind).toBe('block');
