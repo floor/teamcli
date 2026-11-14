@@ -22,7 +22,6 @@
 // Running it again is safe; only the rule's account list changes, to the accounts named this time.
 
 import { mkdtempSync, rmSync, writeFileSync, lstatSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACCOUNT_NAME_PATTERN, OWNER_HELPER_FORMAT, SHARED_OWNER_LEDGER, SYSTEM_OWNER_FOLDER } from './owner-pin-path.ts';
@@ -33,6 +32,10 @@ export const OWNER_HELPER_SUDOERS = '/etc/sudoers.d/teamcli-owner';
 export const OWNER_INSTALL_RECORD = `${SYSTEM_OWNER_FOLDER}/owner-install.json`;
 export const OWNER_INSTALL_FORMAT = 'team-owner-install-v1';
 const OWNER_HELPER_RECORD = `${SYSTEM_OWNER_FOLDER}/owner-helper.json`;
+/** Where the install stages the files it puts in place: a folder of the administrator's alone,
+ *  below folders only the administrator can change — never the process's temporary folder, which
+ *  its environment names. */
+export const OWNER_INSTALL_STAGING = '/var/lib/teamcli-owner-install';
 const NOLOGIN = '/usr/sbin/nologin';
 
 /** One path as read without following links. */
@@ -52,8 +55,9 @@ export type InstallSystem = {
   bun: string;
   /** The helper's program, bundled into one file; returns its text. */
   bundle: () => Promise<string>;
-  /** A private folder for the files the install puts in place; removed after. */
-  staging: () => string;
+  /** Makes a fresh private folder under `root` (the install's own staging folder) for the files
+   *  the install puts in place, and returns its path; it is removed after. */
+  staging: (root: string) => string;
   write: (path: string, text: string) => void;
   remove: (path: string) => void;
 };
@@ -209,6 +213,7 @@ export async function installOwnerState(system: InstallSystem, accounts: readonl
     [SHARED_OWNER_LEDGER, 'dir', helperOrRoot],
     [OWNER_HELPER_TMP, 'dir', helperOrRoot],
     [OWNER_HELPER_SUDOERS, 'file', rootOnly],
+    [OWNER_INSTALL_STAGING, 'dir', rootOnly],
   ];
   for (const [path, type, owners] of checks) {
     const problem = pathProblem(system, path, type, owners);
@@ -216,34 +221,61 @@ export async function installOwnerState(system: InstallSystem, accounts: readonl
   }
   if (system.lstat(dirname(OWNER_HELPER_SUDOERS)).kind === 'absent') return refuse(`${dirname(OWNER_HELPER_SUDOERS)} does not exist; the privilege rule cannot be put in place`);
 
-  const staging = dryRun ? '<staging>' : system.staging();
-  const bundled = join(staging, 'owner-spend.js');
-  const launcher = join(staging, 'owner-spend.sh');
-  const installRecord = join(staging, 'owner-install.json');
-  const helperRecord = join(staging, 'owner-helper.json');
-  const rule = join(staging, 'teamcli-owner.sudoers');
   const install = (mode: string, owner: string, from: string, to: string): string[] => ['/usr/bin/install', '-m', mode, '-o', owner, '-g', owner, from, to];
   const folders = (mode: string, owner: string, ...paths: string[]): string[] => ['/usr/bin/install', '-d', '-m', mode, '-o', owner, '-g', owner, ...paths];
-  steps.push({ what: "the system owner folder, the administrator's, read by every account", argv: folders('0755', 'root', SYSTEM_OWNER_FOLDER) });
-  if (helper === null) {
-    steps.push(
-      { what: `make the owner helper's user ${OWNER_HELPER_USER} (a system user, no login, no home made)`, argv: ['/usr/sbin/useradd', '--system', '--user-group', '--home-dir', OWNER_HELPER_HOME, '--no-create-home', '--shell', NOLOGIN, OWNER_HELPER_USER] },
-      { what: 'record that this install made that user (its uid and gid), at once', argv: install('0644', 'root', installRecord, OWNER_INSTALL_RECORD) },
+  const stagingStep: InstallStep = { what: "the install's own staging folder, the administrator's alone", argv: folders('0700', 'root', OWNER_INSTALL_STAGING) };
+  const plan = (staging: string) => {
+    const planned: InstallStep[] = [];
+    const bundled = join(staging, 'owner-spend.js');
+    const launcher = join(staging, 'owner-spend.sh');
+    const installRecord = join(staging, 'owner-install.json');
+    const helperRecord = join(staging, 'owner-helper.json');
+    const rule = join(staging, 'teamcli-owner.sudoers');
+    planned.push({ what: "the system owner folder, the administrator's, read by every account", argv: folders('0755', 'root', SYSTEM_OWNER_FOLDER) });
+    if (helper === null) {
+      planned.push(
+        { what: `make the owner helper's user ${OWNER_HELPER_USER} (a system user, no login, no home made)`, argv: ['/usr/sbin/useradd', '--system', '--user-group', '--home-dir', OWNER_HELPER_HOME, '--no-create-home', '--shell', NOLOGIN, OWNER_HELPER_USER] },
+        { what: 'record that this install made that user (its uid and gid), at once', argv: install('0644', 'root', installRecord, OWNER_INSTALL_RECORD) },
+      );
+    }
+    planned.push(
+      { what: "the helper's code folders, the administrator's", argv: folders('0755', 'root', OWNER_HELPER_ROOT, `${OWNER_HELPER_ROOT}/bin`, `${OWNER_HELPER_ROOT}/app`) },
+      { what: 'the Bun the helper runs under, copied so no account can replace it', argv: install('0755', 'root', system.bun, OWNER_HELPER_BUN) },
+      { what: "the helper's launcher, which starts Bun with an environment of its own", argv: install('0755', 'root', launcher, OWNER_HELPER_LAUNCHER) },
+      { what: "the helper's program, bundled into one file", argv: install('0644', 'root', bundled, OWNER_HELPER_APP) },
+      { what: "the helper's folder and the ledger, written by the helper alone and read by every account", argv: folders('0755', OWNER_HELPER_USER, OWNER_HELPER_HOME, SHARED_OWNER_LEDGER) },
+      { what: "the helper's own temporary folder", argv: folders('0700', OWNER_HELPER_USER, OWNER_HELPER_TMP) },
+      { what: "the helper's record in the system owner folder (its user and uid)", argv: install('0644', 'root', helperRecord, OWNER_HELPER_RECORD) },
+      { what: "check the privilege rule with the system's own checker", argv: ['/usr/sbin/visudo', '-cf', rule] },
+      { what: `the privilege rule: ${named.join(', ')} may start the helper as ${OWNER_HELPER_USER}`, argv: install('0440', 'root', rule, OWNER_HELPER_SUDOERS) },
     );
+    return { planned, bundled, launcher, installRecord, helperRecord, rule };
+  };
+  if (dryRun) {
+    steps.push(stagingStep, ...plan(`${OWNER_INSTALL_STAGING}/<run>`).planned);
+    return { ok: true, steps, ran: false };
   }
-  steps.push(
-    { what: "the helper's code folders, the administrator's", argv: folders('0755', 'root', OWNER_HELPER_ROOT, `${OWNER_HELPER_ROOT}/bin`, `${OWNER_HELPER_ROOT}/app`) },
-    { what: 'the Bun the helper runs under, copied so no account can replace it', argv: install('0755', 'root', system.bun, OWNER_HELPER_BUN) },
-    { what: "the helper's launcher, which starts Bun with an environment of its own", argv: install('0755', 'root', launcher, OWNER_HELPER_LAUNCHER) },
-    { what: "the helper's program, bundled into one file", argv: install('0644', 'root', bundled, OWNER_HELPER_APP) },
-    { what: "the helper's folder and the ledger, written by the helper alone and read by every account", argv: folders('0755', OWNER_HELPER_USER, OWNER_HELPER_HOME, SHARED_OWNER_LEDGER) },
-    { what: "the helper's own temporary folder", argv: folders('0700', OWNER_HELPER_USER, OWNER_HELPER_TMP) },
-    { what: "the helper's record in the system owner folder (its user and uid)", argv: install('0644', 'root', helperRecord, OWNER_HELPER_RECORD) },
-    { what: "check the privilege rule with the system's own checker", argv: ['/usr/sbin/visudo', '-cf', rule] },
-    { what: `the privilege rule: ${named.join(', ')} may start the helper as ${OWNER_HELPER_USER}`, argv: install('0440', 'root', rule, OWNER_HELPER_SUDOERS) },
-  );
-  if (dryRun) return { ok: true, steps, ran: false };
+  // The staging folder first, checked once made: the administrator's, a folder, and closed to
+  // everyone else, below folders only the administrator can change (checked above). Then a fresh
+  // folder in it for this run, checked the same way. Nothing is staged anywhere else.
+  steps.push(stagingStep);
+  const madeStaging = system.run(stagingStep.argv);
+  if (madeStaging.status !== 0) return { ok: false, why: `${stagingStep.what}: ${stagingStep.argv.join(' ')} failed (${(madeStaging.stderr || madeStaging.stdout).trim().split('\n')[0] ?? `status ${madeStaging.status}`}); nothing else was changed`, steps };
+  const closed = (path: string): boolean => {
+    const stat = system.lstat(path);
+    return stat.kind === 'present' && stat.type === 'dir' && stat.uid === 0 && (stat.mode & 0o077) === 0;
+  };
+  if (!closed(OWNER_INSTALL_STAGING)) return refuse(`${OWNER_INSTALL_STAGING} is not a folder of the administrator's alone`);
+  let staging: string;
   try {
+    staging = system.staging(OWNER_INSTALL_STAGING);
+  } catch {
+    return refuse(`no folder for this run can be made in ${OWNER_INSTALL_STAGING}`);
+  }
+  const { planned, bundled, launcher, installRecord, helperRecord, rule } = plan(staging);
+  steps.push(...planned);
+  try {
+    if (!closed(staging)) return refuse(`${staging} is not a folder of the administrator's alone`);
     let program: string;
     try {
       program = await system.bundle();
@@ -254,7 +286,7 @@ export async function installOwnerState(system: InstallSystem, accounts: readonl
     system.write(launcher, launcherText());
     system.write(rule, sudoersText(named));
     let made: InstallRecord | null = record === 'absent' ? null : record;
-    for (const step of steps) {
+    for (const step of planned) {
       // The records are written once the user exists, from the user database.
       if (step.argv.includes(installRecord)) {
         const entry = passwdEntry(system, OWNER_HELPER_USER);
@@ -310,7 +342,7 @@ export function realInstallSystem(): InstallSystem {
       if (!built.success || built.outputs.length !== 1) throw new Error("the owner helper's program could not be bundled");
       return await built.outputs[0]!.text();
     },
-    staging: () => mkdtempSync(join(tmpdir(), 'teamcli-owner-install-')),
+    staging: (root) => mkdtempSync(join(root, 'run-')),
     write: (path, text) => writeFileSync(path, text, { mode: 0o600, flag: 'wx' }),
     remove: (path) => rmSync(path, { recursive: true, force: true }),
   };

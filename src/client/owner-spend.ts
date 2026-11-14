@@ -55,6 +55,8 @@ export const OWNER_HELPER_SUDO = '/usr/bin/sudo';
 export const OWNER_SPEND_MAX_BYTES = 2 * CARRIED_FILE_MAX_BYTES;
 /** How long the helper waits for its whole input before it refuses. */
 export const OWNER_SPEND_INPUT_MS = 5_000;
+/** How long the helper tries to hand its verdict over before it exits. */
+export const OWNER_SPEND_OUTPUT_MS = 2_000;
 
 /** What the account is about to run, as the request's own fields name it. */
 export type SpendAsk = { action: OwnerAction; root: string; team: string; head: string | null; args_sha256: string };
@@ -141,16 +143,18 @@ function syncFolder(path: string): boolean {
 
 /**
  * Spends `<id>.<action>` once in one account's ledger folder: created once, never replaced, and
- * on disk — the entry, the folder that holds it, and a folder made for it in the ledger — before
- * it answers that it was spent.
+ * on disk — the ledger that holds the account's folder (made now or before), that folder, and the
+ * entry — before it answers that it was spent.
  */
 export function spendInLedgerFolder(folder: string, id: string, action: OwnerAction, entry: Record<string, unknown>): { ok: true } | { ok: false; why: string } {
   try {
     mkdirSync(folder, { mode: 0o755 });
-    if (!syncFolder(join(folder, '..'))) return { ok: false, why: 'the approval ledger cannot be made durable; nothing was spent' };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return { ok: false, why: 'the approval ledger cannot be made; nothing was spent' };
   }
+  // The account's folder is on disk in the ledger whoever made it: an earlier call may have made
+  // it and stopped before it synced the ledger.
+  if (!syncFolder(join(folder, '..'))) return { ok: false, why: 'the approval ledger cannot be made durable; nothing was spent' };
   let fd: number;
   try {
     fd = openSync(join(folder, `${id}.${action}`), 'wx', 0o644);
@@ -178,13 +182,14 @@ export type HelperContext = {
   stdin: string;
   env: Readonly<Record<string, string | undefined>>;
   uid: number;
-  now: Date;
+  /** The clock, read once the spend lock is held: every time the judgment and the ledger use. */
+  clock: () => Date;
   /** The account name of a uid, from the user database (null when it has none). */
   nameOf: (uid: number) => string | null;
   /** The owner state for one account (the system folder, in real use). */
   stateFor?: (account: string) => OwnerStateRead;
-  /** Takes the one-spend-at-a-time lock, held until the helper exits (src/client/owner-spend-lock.ts). */
-  lock?: () => { ok: true } | { ok: false; why: string };
+  /** Takes the one-spend-at-a-time lock (src/client/owner-spend-lock.ts); `release` gives it up. */
+  lock?: () => { ok: true; release: () => void } | { ok: false; why: string };
 };
 
 /**
@@ -208,11 +213,24 @@ export function runOwnerSpend(ctx: HelperContext): SpendVerdict {
   if (helper === undefined) return { ok: false, why: state.kind === 'refused' ? `${state.why}; nothing was spent` : "this machine's owner state is not shared by its accounts; nothing was spent" };
   if (ctx.uid !== helper.uid) return { ok: false, why: `the owner helper runs as ${helper.user}, started through the system's privilege rule; nothing was spent` };
   if (callerUid === helper.uid) return { ok: false, why: 'the owner helper spends for an account, not for itself; nothing was spent' };
-  // One spend at a time, from the pin's read to the ledger's write.
+  // One spend at a time, from the pin's read to the ledger's write, and no longer: the lock is
+  // given up before the verdict is written, so a caller that never reads its output holds no one
+  // else up.
+  let release = (): void => {};
   if (ctx.lock !== undefined) {
     const locked = ctx.lock();
     if (!locked.ok) return locked;
+    release = locked.release;
   }
+  try {
+    // The clock is read with the lock held: a request that expired while this call waited is not spent.
+    return judgeAndSpend(ctx, state, account, ctx.clock());
+  } finally {
+    release();
+  }
+}
+
+function judgeAndSpend(ctx: HelperContext, state: OwnerStateRead, account: string, now: Date): SpendVerdict {
   const pin = readOwnerPinIn(state);
   if (pin.kind !== 'pinned') return { ok: false, why: pin.kind === 'refused' ? `${pin.why}; nothing was spent` : 'no owner seat is pinned on this machine; nothing was spent' };
   let raw: unknown;
@@ -221,12 +239,12 @@ export function runOwnerSpend(ctx: HelperContext): SpendVerdict {
   } catch {
     return { ok: false, why: 'the spend is not whole JSON' };
   }
-  const judged = judgeSpend(raw, pin, account, ctx.now);
+  const judged = judgeSpend(raw, pin, account, now);
   if (!judged.ok) return judged;
   const { record, ask } = judged.input;
   if (state.kind !== 'present' || state.place.shared === undefined) return { ok: false, why: "this account's approval ledger cannot be read; nothing was spent" };
   const spent = spendInLedgerFolder(state.place.ledger, record.request_id, ask.action, {
-    request_id: record.request_id, action: ask.action, params_sha256: record.params_sha256, account, signer: judged.signer, at: ctx.now.toISOString(),
+    request_id: record.request_id, action: ask.action, params_sha256: record.params_sha256, account, signer: judged.signer, at: now.toISOString(),
   });
   if (!spent.ok) return spent;
   return { ok: true, request_id: record.request_id, action: ask.action, params_sha256: record.params_sha256, account, signer: judged.signer };

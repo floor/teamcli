@@ -22,8 +22,8 @@ function systemFlock(): Flock {
   return flock;
 }
 
-/** Takes the spend lock at `path`, trying until `waitMs` has passed. The lock is held until the
- *  process exits (or `release` is called). */
+/** Takes the spend lock at `path`, trying until `waitMs` has passed. The lock is held until
+ *  `release` is called (or, failing that, until the process exits). */
 export function holdSpendLock(path: string, waitMs: number): { ok: true; release: () => void } | { ok: false; why: string } {
   let fd: number;
   try {
@@ -35,7 +35,10 @@ export function holdSpendLock(path: string, waitMs: number): { ok: true; release
   try {
     const lock = systemFlock();
     while (true) {
-      if (lock(fd, LOCK_EX | LOCK_NB) === 0) return { ok: true, release: () => closeSync(fd) };
+      if (lock(fd, LOCK_EX | LOCK_NB) === 0) {
+        let held = true;
+        return { ok: true, release: () => { if (held) { held = false; closeSync(fd); } } };
+      }
       if (Date.now() >= until) break;
       Bun.sleepSync(25);
     }

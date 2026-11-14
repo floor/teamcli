@@ -5,7 +5,10 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { installOwnerState, launcherText, OWNER_INSTALL_RECORD, sudoersText, type InstallSystem, type PathStat } from '../src/client/owner-state-install.ts';
+import { installOwnerState, launcherText, OWNER_INSTALL_RECORD, OWNER_INSTALL_STAGING, sudoersText, type InstallSystem, type PathStat } from '../src/client/owner-state-install.ts';
+import { readFileSync } from 'node:fs';
+
+const RUN = `${OWNER_INSTALL_STAGING}/run-1`;
 import { runOwnerSeat } from '../src/commands/owner-seat.ts';
 import { testIo } from './helpers.ts';
 
@@ -15,7 +18,7 @@ const HELPER_LINE = 'teamcli-owner:x:998:998::/var/lib/teamcli-owner:/usr/sbin/n
 const RECORD = `${JSON.stringify({ format: 'team-owner-install-v1', user: 'teamcli-owner', uid: 998, gid: 998, made_by: 'team owner-seat install' })}\n`;
 const rootDir = (mode = 0o755): PathStat => ({ kind: 'present', type: 'dir', uid: 0, mode });
 
-function fakeSystem(options: { uid?: number; platform?: NodeJS.Platform; users?: Record<string, string>; fail?: string; paths?: Record<string, PathStat>; files?: Record<string, string> } = {}): Fake {
+function fakeSystem(options: { uid?: number; platform?: NodeJS.Platform; users?: Record<string, string>; fail?: string; paths?: Record<string, PathStat>; files?: Record<string, string>; stagingMode?: number } = {}): Fake {
   const users: Record<string, string> = { floor: 'floor:x:1001:1001::/home/floor:/bin/bash', studio: 'studio:x:1002:1002::/home/studio:/bin/bash', root: 'root:x:0:0:root:/root:/bin/bash', ...options.users };
   const groups: Record<string, string> = users['teamcli-owner'] === undefined ? {} : { 'teamcli-owner': 'teamcli-owner:x:998:' };
   const paths = new Map<string, PathStat>(Object.entries({ '/': rootDir(), '/etc': rootDir(), '/etc/sudoers.d': rootDir(0o750), '/usr': rootDir(), '/usr/local': rootDir(), '/var': rootDir(), '/var/lib': rootDir(), ...options.paths }));
@@ -42,13 +45,18 @@ function fakeSystem(options: { uid?: number; platform?: NodeJS.Platform; users?:
         groups['teamcli-owner'] = 'teamcli-owner:x:998:';
       }
       if (options.fail !== undefined && argv.includes(options.fail)) return { status: 1, stdout: '', stderr: 'no space left' };
+      // The staging folder, as `install -d` leaves it.
+      if (argv[0] === '/usr/bin/install' && argv.at(-1) === OWNER_INSTALL_STAGING) paths.set(OWNER_INSTALL_STAGING, { kind: 'present', type: 'dir', uid: 0, mode: options.stagingMode ?? 0o700 });
       return { status: 0, stdout: '', stderr: '' };
     },
     lstat: (path) => paths.get(path) ?? { kind: 'absent' },
     read: (path) => files.get(path) ?? null,
     bun: '/opt/bun/bin/bun',
     bundle: async () => '// bundled helper\n',
-    staging: () => '/staging',
+    staging: (root) => {
+      paths.set(`${root}/run-1`, { kind: 'present', type: 'dir', uid: 0, mode: 0o700 });
+      return `${root}/run-1`;
+    },
     write: (path, text) => { written.set(path, text); },
     remove: (path) => { removed.push(path); },
   };
@@ -81,13 +89,14 @@ describe('team owner-seat install', () => {
     expect(commands(fake)).toEqual([]);
     expect(fake.written.size).toBe(0);
     const argv = outcome.steps.map((step) => step.argv.join(' '));
-    expect(argv[0]).toBe('/usr/bin/install -d -m 0755 -o root -g root /etc/teamcli');
-    expect(argv[1]).toBe('/usr/sbin/useradd --system --user-group --home-dir /var/lib/teamcli-owner --no-create-home --shell /usr/sbin/nologin teamcli-owner');
-    expect(argv[2]).toBe(`/usr/bin/install -m 0644 -o root -g root <staging>/owner-install.json ${OWNER_INSTALL_RECORD}`);
+    expect(argv[0]).toBe(`/usr/bin/install -d -m 0700 -o root -g root ${OWNER_INSTALL_STAGING}`);
+    expect(argv[1]).toBe('/usr/bin/install -d -m 0755 -o root -g root /etc/teamcli');
+    expect(argv[2]).toBe('/usr/sbin/useradd --system --user-group --home-dir /var/lib/teamcli-owner --no-create-home --shell /usr/sbin/nologin teamcli-owner');
+    expect(argv[3]).toBe(`/usr/bin/install -m 0644 -o root -g root ${OWNER_INSTALL_STAGING}/<run>/owner-install.json ${OWNER_INSTALL_RECORD}`);
     expect(argv).toContain('/usr/bin/install -d -m 0755 -o teamcli-owner -g teamcli-owner /var/lib/teamcli-owner /var/lib/teamcli-owner/ledger');
-    expect(argv).toContain('/usr/bin/install -m 0755 -o root -g root <staging>/owner-spend.sh /usr/local/teamcli-owner/bin/owner-spend');
-    expect(argv.at(-2)).toBe('/usr/sbin/visudo -cf <staging>/teamcli-owner.sudoers');
-    expect(argv.at(-1)).toBe('/usr/bin/install -m 0440 -o root -g root <staging>/teamcli-owner.sudoers /etc/sudoers.d/teamcli-owner');
+    expect(argv).toContain(`/usr/bin/install -m 0755 -o root -g root ${OWNER_INSTALL_STAGING}/<run>/owner-spend.sh /usr/local/teamcli-owner/bin/owner-spend`);
+    expect(argv.at(-2)).toBe(`/usr/sbin/visudo -cf ${OWNER_INSTALL_STAGING}/<run>/teamcli-owner.sudoers`);
+    expect(argv.at(-1)).toBe(`/usr/bin/install -m 0440 -o root -g root ${OWNER_INSTALL_STAGING}/<run>/teamcli-owner.sudoers /etc/sudoers.d/teamcli-owner`);
     expect(argv.every((line) => !/\bchmod\b|\bchown\b/.test(line))).toBe(true);
   });
 
@@ -96,15 +105,16 @@ describe('team owner-seat install', () => {
     const outcome = await installOwnerState(fake, ['studio', 'floor'], false);
     expect(outcome.ok, why(outcome)).toBe(true);
     const run = commands(fake).map((argv) => argv.join(' '));
-    expect(run[1]).toStartWith('/usr/sbin/useradd');
-    expect(run[2]).toEndWith(OWNER_INSTALL_RECORD);
+    expect(run[0]).toBe(`/usr/bin/install -d -m 0700 -o root -g root ${OWNER_INSTALL_STAGING}`);
+    expect(run[2]).toStartWith('/usr/sbin/useradd');
+    expect(run[3]).toEndWith(OWNER_INSTALL_RECORD);
     expect(run.findIndex((line) => line.startsWith('/usr/sbin/visudo'))).toBe(run.length - 2);
-    expect(JSON.parse(fake.written.get('/staging/owner-install.json')!)).toEqual({ format: 'team-owner-install-v1', user: 'teamcli-owner', uid: 998, gid: 998, made_by: 'team owner-seat install' });
-    expect(JSON.parse(fake.written.get('/staging/owner-helper.json')!)).toEqual({ format: 'team-owner-helper-v1', user: 'teamcli-owner', uid: 998 });
-    expect(fake.written.get('/staging/owner-spend.js')).toBe('// bundled helper\n');
-    expect(fake.written.get('/staging/owner-spend.sh')).toBe(launcherText());
-    expect(fake.written.get('/staging/teamcli-owner.sudoers')).toBe(sudoersText(['floor', 'studio']));
-    expect(fake.removed).toEqual(['/staging']);
+    expect(JSON.parse(fake.written.get(`${RUN}/owner-install.json`)!)).toEqual({ format: 'team-owner-install-v1', user: 'teamcli-owner', uid: 998, gid: 998, made_by: 'team owner-seat install' });
+    expect(JSON.parse(fake.written.get(`${RUN}/owner-helper.json`)!)).toEqual({ format: 'team-owner-helper-v1', user: 'teamcli-owner', uid: 998 });
+    expect(fake.written.get(`${RUN}/owner-spend.js`)).toBe('// bundled helper\n');
+    expect(fake.written.get(`${RUN}/owner-spend.sh`)).toBe(launcherText());
+    expect(fake.written.get(`${RUN}/teamcli-owner.sudoers`)).toBe(sudoersText(['floor', 'studio']));
+    expect(fake.removed).toEqual([RUN]);
   });
 
   test('the rule names the launcher alone with no arguments, and the launcher writes the whole environment', () => {
@@ -182,6 +192,30 @@ describe('team owner-seat install', () => {
     }
   });
 
+  test("files are staged only in the install's own folder, the administrator's alone, never the temporary folder", async () => {
+    // A staging folder that is a link, or one an account owns, refuses before anything changes.
+    for (const stat of [{ kind: 'present', type: 'link', uid: 1001, mode: 0o777 }, { kind: 'present', type: 'dir', uid: 1001, mode: 0o700 }] as PathStat[]) {
+      const fake = fakeSystem({ paths: { [OWNER_INSTALL_STAGING]: stat } });
+      expect(why(await installOwnerState(fake, ['floor'], false))).toContain(OWNER_INSTALL_STAGING);
+      expect(commands(fake)).toEqual([]);
+      expect(fake.written.size).toBe(0);
+    }
+    // Made, but left open to others (an odd file-creation mask, say): refused before anything is staged.
+    const open = fakeSystem({ stagingMode: 0o755 });
+    expect(why(await installOwnerState(open, ['floor'], false))).toContain("not a folder of the administrator's alone");
+    expect(commands(open).map((argv) => argv.at(-1))).toEqual([OWNER_INSTALL_STAGING]);
+    expect(open.written.size).toBe(0);
+    // A folder above it that an account owns.
+    const above = fakeSystem({ paths: { '/var/lib': { kind: 'present', type: 'dir', uid: 1001, mode: 0o755 } } });
+    expect(why(await installOwnerState(above, ['floor'], false))).toContain('/var/lib is not a folder only the administrator can change');
+    // Every staged file is in this run's folder.
+    const fake = fakeSystem();
+    expect((await installOwnerState(fake, ['floor'], false)).ok).toBe(true);
+    expect([...fake.written.keys()].every((path) => path.startsWith(`${RUN}/`))).toBe(true);
+    const source = readFileSync(join(import.meta.dir, '..', 'src', 'client', 'owner-state-install.ts'), 'utf8');
+    expect(source).not.toContain('tmpdir');
+  });
+
   test('refusals: off Linux, without the administrator, an unknown or privileged account, a failing step', async () => {
     expect(why(await installOwnerState(fakeSystem({ platform: 'darwin' }), ['floor'], false))).toContain('Linux');
     expect(why(await installOwnerState(fakeSystem({ uid: 1000 }), ['floor'], false))).toContain('sudo');
@@ -193,7 +227,7 @@ describe('team owner-seat install', () => {
     const failed = await installOwnerState(failing, ['floor'], false);
     expect(why(failed)).toContain('no space left');
     expect(commands(failing).some((argv) => argv[0] === '/usr/sbin/visudo')).toBe(false);
-    expect(failing.removed).toEqual(['/staging']);
+    expect(failing.removed).toEqual([RUN]);
   });
 
   test('the command prints the plan; --dry-run changes nothing; --account and --dry-run belong to install', async () => {

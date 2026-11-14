@@ -187,7 +187,8 @@ and the fingerprint it replaced), `machine.json` (this machine's id and name) an
 (one entry per approval spent). On a shared Linux server: `/etc/teamcli/owner-seat-pin.json`,
 `/etc/teamcli/machine.json`, `/etc/teamcli/owner-helper.json` (the helper's user and uid) and
 `/etc/teamcli/owner-install.json` (the install's record of the user it made), read by every account; the ledger `/var/lib/teamcli-owner/ledger/<account>/`, written by the helper
-alone; the helper's code under `/usr/local/teamcli-owner/`; and its rule,
+alone; the helper's code under `/usr/local/teamcli-owner/`; the install's own staging folder,
+`/var/lib/teamcli-owner-install/` (the administrator's alone, emptied after each run); and its rule,
 `/etc/sudoers.d/teamcli-owner`. The export, the pin and the re-pin are logged in
 `security-profile.log`.
 

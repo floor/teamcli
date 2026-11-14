@@ -15,7 +15,7 @@ import { acceptCarriedAnswer, OWNER_ANSWER_FILE_FORMAT, ownerRequestFile, signCa
 import { ownerMachinePinned, ownerSetupNoteOnThisAccount, ownerStateOf, productionOwnerStateRoots, type OwnerStateRoots } from '../src/client/owner-pin-path.ts';
 import { setOwnerStateRootsForTests } from './helpers/owner-state-roots.ts';
 import { claimInLedger, exportOwnerSeat, ledgerSpent, localOwnerSeatFingerprint, pinOwnerSeat, readOwnerPin, type SignedOwnerSeatExport } from '../src/client/owner-pin.ts';
-import { judgeSpend, OWNER_SPEND_FORMAT, readCappedInput, runOwnerSpend, verdictLine } from '../src/client/owner-spend.ts';
+import { judgeSpend, OWNER_SPEND_FORMAT, readCappedInput, runOwnerSpend, spendInLedgerFolder, verdictLine } from '../src/client/owner-spend.ts';
 import { holdSpendLock } from '../src/client/owner-spend-lock.ts';
 import { setOwnerHelperForTests } from './helpers/owner-helper-exec.ts';
 
@@ -110,7 +110,7 @@ function helperRunner(account: () => string, at: () => Date, sent: string[] = []
       stdin,
       env: { SUDO_UID: String(ACCOUNT_UIDS[name]), SUDO_USER: name },
       uid: UID,
-      now: at(),
+      clock: at,
       nameOf: (uid) => Object.keys(ACCOUNT_UIDS).find((key) => ACCOUNT_UIDS[key] === uid) ?? null,
     });
     return { status: verdict.ok ? 0 : 1, stdout: verdictLine(verdict) };
@@ -407,7 +407,7 @@ describe('an approval is spent once, by the helper, for the account that asked',
     const record = readOwnerActionRecord(r.home, r.id) as OwnerActionRecord;
     const stdin = JSON.stringify({ format: OWNER_SPEND_FORMAT, record, answer: r.answerFile.answer, ask: { action: 'team-import', root: record.params.root, team: 'acme', head: null, args_sha256: actionArgsHash('team-import', []) } });
     const nameOf = (uid: number) => Object.keys(ACCOUNT_UIDS).find((key) => ACCOUNT_UIDS[key] === uid) ?? null;
-    const base = { stdin, uid: UID, now: LATER(60_000), nameOf };
+    const base = { stdin, uid: UID, clock: () => LATER(60_000), nameOf };
     const why = (value: ReturnType<typeof runOwnerSpend>) => (value.ok ? 'spent' : value.why);
     // Run directly by the account: its uid is not the helper's.
     expect(why(runOwnerSpend({ ...base, uid: ACCOUNT_UIDS.floor!, env: { SUDO_UID: '5001', SUDO_USER: 'floor' } }))).toContain('runs as teamcli-owner');
@@ -417,9 +417,72 @@ describe('an approval is spent once, by the helper, for the account that asked',
     expect(why(runOwnerSpend({ ...base, env: { SUDO_UID: String(UID), SUDO_USER: 'teamcli-owner' }, nameOf: () => 'teamcli-owner' }))).toContain('not for itself');
     expect(why(runOwnerSpend({ ...base, env: { SUDO_UID: '5001', SUDO_USER: 'floor' }, lock: () => ({ ok: false, why: 'another spend is running' }) }))).toContain('another spend is running');
     expect(existsSync(join(m.ledger, 'floor'))).toBe(false);
-    let locked = 0;
-    expect(why(runOwnerSpend({ ...base, env: { SUDO_UID: '5001', SUDO_USER: 'floor' }, lock: () => { locked += 1; return { ok: true }; } }))).toBe('spent');
-    expect(locked).toBe(1);
+    // The lock is taken once, the clock is read only once it is held, and the lock is given up
+    // before the verdict is returned (and so before it is written).
+    const order: string[] = [];
+    const spent = runOwnerSpend({
+      ...base,
+      env: { SUDO_UID: '5001', SUDO_USER: 'floor' },
+      lock: () => { order.push('lock'); return { ok: true, release: () => order.push('release') }; },
+      clock: () => { order.push('clock'); return LATER(60_000); },
+    });
+    expect(why(spent)).toBe('spent');
+    expect(order).toEqual(['lock', 'clock', 'release']);
+    const entry = JSON.parse(readFileSync(join(m.ledger, 'floor', `${r.id}.team-import`), 'utf8')) as { at: string };
+    expect(entry.at).toBe(LATER(60_000).toISOString());
+    // A refusal gives the lock up too.
+    order.length = 0;
+    runOwnerSpend({ ...base, env: { SUDO_UID: '5001', SUDO_USER: 'floor' }, lock: () => { order.push('lock'); return { ok: true, release: () => order.push('release') }; } });
+    expect(order).toEqual(['lock', 'release']);
+  });
+
+  test('a request that expires while its call waits for the lock is not spent', () => {
+    const mac = signerMachine();
+    const m = sharedMachine();
+    pinShared(m, mac.exported);
+    const r = answeredRequest(m, mac, 'floor');
+    const record = readOwnerActionRecord(r.home, r.id) as OwnerActionRecord;
+    const stdin = JSON.stringify({ format: OWNER_SPEND_FORMAT, record, answer: r.answerFile.answer, ask: { action: 'team-import', root: record.params.root, team: 'acme', head: null, args_sha256: actionArgsHash('team-import', []) } });
+    // The call arrives a second before expiry; it gets the lock five seconds later.
+    let held = false;
+    const verdict = runOwnerSpend({
+      stdin, uid: UID, env: { SUDO_UID: '5001', SUDO_USER: 'floor' }, nameOf: () => 'floor',
+      lock: () => { held = true; return { ok: true, release: () => { held = false; } }; },
+      clock: () => (held ? LATER(15 * 60_000 + 4_000) : LATER(15 * 60_000 - 1_000)),
+    });
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.why).toContain('expired');
+    expect(existsSync(join(m.ledger, 'floor'))).toBe(false);
+  });
+
+  test("a caller that never reads its verdict holds no one up: the real lock is free once the spend is judged", () => {
+    const mac = signerMachine();
+    const m = sharedMachine();
+    pinShared(m, mac.exported);
+    const r = answeredRequest(m, mac, 'floor');
+    const record = readOwnerActionRecord(r.home, r.id) as OwnerActionRecord;
+    const stdin = JSON.stringify({ format: OWNER_SPEND_FORMAT, record, answer: r.answerFile.answer, ask: { action: 'team-import', root: record.params.root, team: 'acme', head: null, args_sha256: actionArgsHash('team-import', []) } });
+    const path = join(temp('blocked'), 'spend.lock');
+    // The first call is judged and spent, and its verdict is not yet written anywhere: its
+    // writer is stuck. A second call takes the lock at once.
+    const first = runOwnerSpend({ stdin, uid: UID, env: { SUDO_UID: '5001', SUDO_USER: 'floor' }, nameOf: () => 'floor', clock: () => LATER(60_000), lock: () => holdSpendLock(path, 1_000) });
+    expect(first.ok).toBe(true);
+    const started = Date.now();
+    const second = holdSpendLock(path, 0);
+    expect(second.ok).toBe(true);
+    expect(Date.now() - started).toBeLessThan(100);
+    if (second.ok) second.release();
+  });
+
+  test('the ledger is synced even when the account folder was made by an earlier call', () => {
+    const folder = join(temp('ledger-sync'), 'ledger', 'floor');
+    mkdirSync(folder, { recursive: true });
+    // The folder exists already (an earlier call made it and stopped): the spend still succeeds
+    // only once the ledger, the folder and the entry are on disk.
+    expect(spendInLedgerFolder(folder, 'oa_0123456789abcdef01234567', 'team-import', { at: 'x' })).toEqual({ ok: true });
+    // A ledger that is not there spends nothing.
+    const orphan = join(temp('ledger-gone'), 'gone', 'floor');
+    expect(spendInLedgerFolder(orphan, 'oa_0123456789abcdef01234567', 'team-import', { at: 'x' }).ok).toBe(false);
   });
 
   test("the account runs only on a verdict naming exactly the record it sent", () => {
