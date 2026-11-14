@@ -21,6 +21,7 @@ import {
   clientGrantsFolder,
   clientKeyDir,
   clientKeyPlacementProblem,
+  staleRegistryRoots,
   startFolderProblems,
   clientRevocations,
   newClientKeyPair,
@@ -85,7 +86,9 @@ function fixture(label: string): Fixture {
   const home = join(base, 'home');
   const teamRoot = join(base, 'floor');
   const lobby = join(base, 'lobby');
-  for (const dir of [home, teamRoot, lobby]) mkdirSync(dir, { recursive: true });
+  // Both registered teams' folders exist: a registry entry whose root is gone refuses every
+  // client key's placement (the stale-root scene below).
+  for (const dir of [home, teamRoot, lobby, join(base, 'teamcli')]) mkdirSync(dir, { recursive: true });
   const ownerKey = keyOf(home);
   const agent = registerAgent(home, {
     name: 'orchestrator',
@@ -331,6 +334,19 @@ describe('client grant and key records', () => {
       state.sessions.floor = session;
     });
     expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
+  });
+
+  test('a registry entry whose root is gone refuses, naming the entry and its repair; the doctor names it first', () => {
+    const f = fixture('stale-root');
+    rmSync(join(f.base, 'teamcli'), { recursive: true, force: true });
+    const said = clientKeyPlacementProblem(f.home, f.keyDir);
+    expect(said).toContain(`the team registry records team "teamcli" (${OTHER_TEAM_ID}) at ${join(f.base, 'teamcli')}, which does not resolve`);
+    expect(said).toContain(`\`team forget ${OTHER_TEAM_ID}\``);
+    expect(staleRegistryRoots(f.home)).toHaveLength(1);
+    expect(staleRegistryRoots(f.home)[0]).toContain('every client send on this machine is refused');
+    // Restored, nothing is said.
+    mkdirSync(join(f.base, 'teamcli'));
+    expect(staleRegistryRoots(f.home)).toEqual([]);
   });
 
   test('a registry root that is not absolute refuses', () => {

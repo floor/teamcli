@@ -130,7 +130,7 @@ import { declaredInboundOf, inboundStaleReason } from '../send/inbound.ts';
 import { defaultSocketsDirs, liveSocketOf } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, keptStartFolder, recordedStartFolder, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
+import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -4220,7 +4220,9 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
           const fresh = patch.createdWorkspace
             ? (patch.start_cwd ?? (planned?.lobby ? (verifiedLobby ?? undefined) : planned?.cwd))
             : patch.start_cwd;
-          const start_cwd = keptStartFolder(root, fresh, prior.start_cwd);
+          const start_cwd = keptStartFolder(root, fresh, prior.start_cwd !== undefined ? prior.start_cwd : current.retained_start_cwd?.[name]);
+          // The record holds its folder again: a folder a relaunch carried for it is retired here.
+          if (start_cwd !== undefined) retireCarriedStartFolder(current, name);
           // `waiting: null` removes the field alone; anything else written replaces it.
           // `effort: null` is a launch that set no word: the stored word goes with it.
           const { waiting: written, effort: patchedEffort, ...rest } = patch;

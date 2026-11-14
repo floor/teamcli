@@ -15,7 +15,7 @@ import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
 import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
 import { shownTeamFile } from '../check/team.ts';
 import { generalGrantChainNotes, widenedGrantNotes } from '../client/general-grant.ts';
-import { startFolderProblems } from '../client/records.ts';
+import { staleRegistryRoots, startFolderProblems } from '../client/records.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
 import { isParseError } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -1121,6 +1121,8 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
         ...rootWordFindings(loaded.text, team, root, sources.home),
         // A seat record whose start folder is no path stops every client send on the machine.
         ...startFolderProblems(root).map((text): Finding => ({ level: 'warn', text: plainLine(text) })),
+        // A registry entry whose root is gone stops every client send on the machine too.
+        ...staleRegistryRoots(sources.home).map((text): Finding => ({ level: 'warn', text: plainLine(text) })),
         // Each verified general grant's chain, one note, in neither count, blocking nothing.
         ...generalGrantChainNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),
         // A wildcard general grant signed before the release that first shipped an op reaches that

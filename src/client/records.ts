@@ -498,6 +498,38 @@ export function startFolderProblems(root: string): string[] {
   return out;
 }
 
+/** The refusal for a registry entry whose root does not resolve, with its repair. */
+function staleRootRefusal(teamId: string, project: string, root: string): string {
+  return `the team registry records team "${project}" (${teamId}) at ${root}, which does not resolve: where its seats run cannot be checked, so client key placement cannot be checked; restore the folder, or remove the stale entry with \`team forget ${teamId}\``;
+}
+
+/**
+ * Every registry entry on this machine whose root does not resolve (or is not absolute): each one
+ * makes every client key's placement check refuse, so `team doctor` names it, with its repair,
+ * before a client send does. A registry that cannot be read is named once.
+ */
+export function staleRegistryRoots(home: string): string[] {
+  let teams: ReturnType<typeof readTeams>;
+  try {
+    teams = readTeams(home);
+  } catch {
+    return ['the team registry cannot be read: every client send on this machine is refused until it reads'];
+  }
+  const out: string[] = [];
+  for (const [teamId, team] of Object.entries(teams)) {
+    if (typeof team.root !== 'string' || !isAbsolute(team.root)) {
+      out.push(`the team registry records a root for team "${team.project}" (${teamId}) that is not an absolute path: every client send on this machine is refused; \`team forget ${teamId}\` removes the entry`);
+      continue;
+    }
+    try {
+      realpathSync(team.root);
+    } catch {
+      out.push(`${staleRootRefusal(teamId, team.project, team.root)}; until then every client send on this machine is refused`);
+    }
+  }
+  return out;
+}
+
 export function clientKeyPlacementProblem(home: string, dir: string): string | null {
   if (!isAbsolute(dir)) return `the key directory "${dir}" is not absolute`;
   if (hasDotTraversal(dir)) return `the key directory "${dir}" walks through "." or ".."; name the real path`;
@@ -516,23 +548,24 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
   } catch {
     return 'the team registry cannot be read: client key placement cannot be checked';
   }
-  for (const team of Object.values(teams)) {
+  for (const [teamId, team] of Object.entries(teams)) {
     // A registry root that is not absolute names no folder of its own: it would be read against
     // the caller's working folder. Refused, as an unreadable registry is.
     if (typeof team.root !== 'string' || !isAbsolute(team.root)) {
       return `the team registry records a root for team "${team.project}" that is not an absolute path: client key placement cannot be checked`;
     }
-    const root = canonical(team.root);
-    // The root a legacy relative record is read against: the team root as it is on disk, never
-    // its registry spelling, which a link could carry elsewhere. A root that does not resolve
-    // cannot read such a record, and the check refuses when it must (`againstRoot`).
-    let realRoot: string | null;
+    // The team root as it is on disk, read once: every folder this decision derives from it — the
+    // root itself, a recorded relative folder, a declared one — is read from this one path, never
+    // from the registry spelling, which a link could carry elsewhere. A root that does not
+    // resolve is a stale registry entry, and where its seats run cannot be told: refused.
+    let realRoot: string;
     try {
       realRoot = realpathSync(team.root);
     } catch {
-      realRoot = null;
+      return staleRootRefusal(teamId, team.project, team.root);
     }
-    const againstRoot = (relativePath: string): string | null => (realRoot === null ? null : resolve(realRoot, relativePath));
+    const root = realRoot;
+    const againstRoot = (relativePath: string): string => resolve(realRoot, relativePath);
     // One recorded start folder, the record's or the one a relaunch carries: no path is no
     // evidence (refused, with its repair); a relative one is read against the real root.
     const startFolderRefusal = (seatName: string, sessionName: string, cwd: unknown): string | null => {
@@ -540,9 +573,6 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
         return `the recorded start folder of seat "${seatName}" of team "${team.project}" (session "${sessionName}", ${join(team.root, '.agents', 'team.state.json')}) is not a path: client key placement cannot be checked; \`team restart ${seatName}\` records it again`;
       }
       const startFolder = isAbsolute(cwd) ? cwd : againstRoot(cwd);
-      if (startFolder === null) {
-        return `the recorded start folder of seat "${seatName}" of team "${team.project}" is relative, and the team root ${team.root} does not resolve to read it against: client key placement cannot be checked`;
-      }
       if (overlaps(canonical(startFolder), target)) {
         return `the key directory "${dir}" is inside the folder seat "${seatName}" ran in; a client key sits outside every seat folder`;
       }
@@ -630,7 +660,7 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
               return `${absent} and the team file of "${team.project}" declares no seat by that name: client key placement cannot be checked`;
             }
             // Resolved against the team root as it is on disk, as a recorded relative folder is.
-            const launch = declaredLaunchFolder(file.team, declaration, realRoot ?? team.root, home, recordedLobby, team.project, sessionName);
+            const launch = declaredLaunchFolder(file.team, declaration, realRoot, home, recordedLobby, team.project, sessionName);
             if (!launch.ok) {
               return `${absent} and its declaration's launch folder cannot be resolved (${launch.why}): client key placement cannot be checked`;
             }
@@ -677,9 +707,6 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
         // key directory. An absolute path is used as it is; both go through the same symlink-
         // aware canonical form, which stays lexical for a path that no longer exists.
         const worktreePath = isAbsolute(recordedPath) ? recordedPath : againstRoot(recordedPath);
-        if (worktreePath === null) {
-          return `the recorded path of worktree "${branch}" of team "${team.project}" is relative, and the team root ${team.root} does not resolve to read it against: client key placement cannot be checked`;
-        }
         if (overlaps(canonical(worktreePath), target)) {
           return `the key directory "${dir}" is inside the recorded worktree "${branch}"; a client key sits outside every worktree`;
         }
@@ -696,10 +723,8 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
       return `the team file of "${team.project}" does not validate: client key placement cannot be checked`;
     }
     if (file.kind === 'read') {
-      // Read against the team root as it is on disk. A root that does not resolve holds nothing
-      // that exists, so no folder below it can hold the key that is being read: its spelling is
-      // the only one left, and it cannot widen what the check lets through.
-      const base = realRoot ?? resolve(team.root);
+      // Read against the team root as it is on disk, the one path this decision took.
+      const base = realRoot;
       for (const seat of file.team.seats) {
         // Every folder the seat may start in: its declared cwd, and for a lobby seat each lobby
         // it can be given — the recorded lobbies, the declared one, the derived default — so

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import type { Caller, CallerSources } from '../src/caller.ts';
 import { standingOf } from '../src/caller.ts';
 import { runTeamCheck } from '../src/check/team.ts';
@@ -696,6 +696,30 @@ describe('team restart <seat>', () => {
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(0);
     expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(folder);
+  });
+
+  test('a legacy relative folder on record is read against the team root before it is compared', async () => {
+    // The record holds the lobby folder relative to the team root, as an older version wrote it.
+    // The runner's own working folder is not the root, so read against it the folder would differ.
+    const fixture = makeFixture();
+    const folder = join(fixture.home, '.config', 'team', 'lobby', 'worker');
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab', start_cwd: relative(realpathSync(fixture.root), folder) };
+    });
+    const { sources, did } = makeHarness(fixture);
+    let exited = false;
+    const typeText = sources.launch!.typeText;
+    sources.launch!.typeText = (session, pane, text) => { if (text === '/exit') exited = true; return typeText(session, pane, text); };
+    sources.upLaunch.processInfo = () => (exited && did.runs.length === 0 ? { shell: 300, foreground: [300] } : { shell: 300, foreground: [exited ? 302 : 301] });
+    sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(process.cwd()).not.toBe(realpathSync(fixture.root));
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
     expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(folder);
   });
 

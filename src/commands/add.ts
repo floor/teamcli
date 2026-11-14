@@ -72,7 +72,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { emptySession, mintSeatId, readState, keptStartFolder, recordedStartFolder, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -1961,7 +1961,9 @@ function hostOf(input: {
         const fresh = patch.createdWorkspace
           ? (patch.start_cwd ?? (input.inLobby ? (input.verifiedLobby ?? undefined) : input.startCwd))
           : patch.start_cwd;
-        const start_cwd = keptStartFolder(input.root, fresh, prior.start_cwd);
+        const start_cwd = keptStartFolder(input.root, fresh, prior.start_cwd !== undefined ? prior.start_cwd : current.retained_start_cwd?.[name]);
+        // The record holds its folder again: a folder a relaunch carried for it is retired here.
+        if (start_cwd !== undefined) retireCarriedStartFolder(current, name);
         // `waiting: null` removes the field alone; anything else written replaces it.
         // `effort: null` is a launch that set no word: the stored word goes with it.
         const { waiting: written, effort: patchedEffort, ...rest } = patch;

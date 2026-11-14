@@ -1,7 +1,7 @@
 import { evictHerdrAgentList, evictHerdrPaneProcessInfo } from '../herdr.ts';
 import { chmodSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
@@ -96,7 +96,7 @@ import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
-import { emptySession, mintSeatId, readState, keptStartFolder, recordedStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { findAgent as findRegisteredAgent, recordProvenAgentAddress, updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
@@ -1389,7 +1389,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // record names that same folder. A pane recorded elsewhere, or with no folder (or one that
       // is no path) on record, is closed and the seat starts in a fresh workspace, so the folder
       // its record keeps is always the one its process runs in.
-      const plannedFolder = sameFolderOnDisk(recordedStartFolder(freshRecorded), resolve(root, planSeat.cwd));
+      const plannedFolder = sameFolderOnDisk(root, recordedStartFolder(freshRecorded), planSeat.cwd);
       if (keptPane !== undefined && atShell && plannedFolder) {
         planSeat.repair = { pane: keptPane.pane, workspace: keptPane.workspace, launched: { shell: keptShell!.shell, cli: [] }, cli: next.cli, reuse: true };
       } else if (keptPane !== undefined && !sources.upLaunch.closeWorkspace(session, keptPane.workspace)) {
@@ -2219,10 +2219,7 @@ function hostOf(input: {
           prior.start_cwd !== undefined ? prior.start_cwd : carried,
         );
         // The seat's record holds its folder again from here on.
-        if (current.retained_start_cwd !== undefined) {
-          delete current.retained_start_cwd[name];
-          if (Object.keys(current.retained_start_cwd).length === 0) delete current.retained_start_cwd;
-        }
+        if (start_cwd !== undefined) retireCarriedStartFolder(current, name);
         const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
@@ -2763,12 +2760,16 @@ function readyExit(
   return 0;
 }
 
-/** Whether a recorded folder is the planned one on disk (links followed): a folder missing on
- *  either side, or no recorded folder at all, is not the same folder. */
-function sameFolderOnDisk(recorded: string | undefined, planned: string): boolean {
+/** Whether a recorded folder is the planned one on disk (links followed). Both are read against
+ *  the team root as it is on disk — a legacy relative record too, never against the caller's
+ *  working folder — and a folder missing on either side, a root that does not resolve, or no
+ *  recorded folder at all, is not the same folder. */
+function sameFolderOnDisk(root: string, recorded: string | undefined, planned: string): boolean {
   if (recorded === undefined) return false;
   try {
-    return realpathSync(recorded) === realpathSync(planned);
+    const realRoot = realpathSync(root);
+    const against = (path: string): string => (isAbsolute(path) ? path : resolve(realRoot, path));
+    return realpathSync(against(recorded)) === realpathSync(against(planned));
   } catch {
     return false;
   }

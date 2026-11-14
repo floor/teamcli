@@ -1447,6 +1447,17 @@ export function keptStartFolder(root: string, fresh: unknown, prior: unknown): s
   return startFolderOf(root, prior) ?? (prior as string);
 }
 
+/**
+ * Takes the folder a relaunch carried for `name` (`retained_start_cwd`), when the record being
+ * written holds placement of its own again: the fresh workspace's folder, or a prior one. Removes
+ * the session map once it is empty. The record write calls it in the same state update.
+ */
+export function retireCarriedStartFolder(session: SessionState, name: string): void {
+  if (session.retained_start_cwd === undefined) return;
+  delete session.retained_start_cwd[name];
+  if (Object.keys(session.retained_start_cwd).length === 0) delete session.retained_start_cwd;
+}
+
 /** A seat record's start folder when it is a path: a value an older or hand-edited record holds
  *  that is no string is no folder to read, and a reader that would use it as one reads none. */
 export function recordedStartFolder(seat: { start_cwd?: unknown } | undefined): string | undefined {
