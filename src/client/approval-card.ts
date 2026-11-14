@@ -63,8 +63,10 @@ export function cardLines(card: ApprovalCard): string[] {
 /** The card as one line, for a prompt that shows one (the signing reason). A card that carries
  *  its exact change carries it whole when it fits the prompt, and its short form otherwise. */
 export function cardPrompt(card: ApprovalCard): string {
-  const base = cardLines(card).join(' — ');
-  if (card.change === undefined) return base;
+  if (card.change === undefined) return cardLines(card).join(' — ');
+  // A card with an exact change gives the prompt's room to the change: the title and the scope
+  // name what and where, and the question (who asked, and why) stays on the screen's whole card.
+  const base = [card.title, ...(card.scope === undefined ? [] : [card.scope])].join(' — ');
   const whole = `${base} — ${card.change}`;
   if (whole.length <= PROMPT_MAX) return whole;
   return `${base} — ${card.changeShort ?? card.change}`;
@@ -115,11 +117,11 @@ export function ownerActionChange(action: string, words: readonly string[] | und
     const key = keyOfPath(path ?? '');
     const where = file === undefined ? 'the entities file' : quoted(file);
     if (verb === 'unset' || value === undefined) {
-      return { change: `${verb} ${quoted(path ?? '')} in ${where}`, changeShort: `${verb} ${key} (the file is shown in full before this prompt)` };
+      return { change: `${verb} ${quoted(path ?? '')} in ${where}`, changeShort: `${verb} ${key}, the file shown in full on screen` };
     }
     return {
       change: `${verb} ${quoted(path ?? '')} to ${quoted(value)} in ${where}`,
-      changeShort: `${verb} ${key} to a value of ${value.length} characters, digest ${shortDigest(JSON.stringify({ path, value, file: file ?? null }))} (shown in full before this prompt)`,
+      changeShort: `${verb} ${key} to a value of ${value.length} characters, digest ${shortDigest(JSON.stringify({ path, value, file: file ?? null }))}, shown in full on screen`,
     };
   }
   if (action === 'team-daemon') {
@@ -131,7 +133,7 @@ export function ownerActionChange(action: string, words: readonly string[] | und
     const with_ = flags.length > 0 ? `, with ${flags.join(' and ')}` : '';
     const change = `${verb} for home ${home === undefined ? 'this home' : quoted(home)}${hosting}${with_}`;
     const digest = shortDigest(JSON.stringify({ verb, home: home ?? null, roots, flags }));
-    const changeShort = `${verb} for ${roots.length} checkout${roots.length === 1 ? '' : 's'}${with_}, digest ${digest} (shown in full before this prompt)`;
+    const changeShort = `${verb} for ${roots.length} checkout${roots.length === 1 ? '' : 's'}${with_}, digest ${digest}, shown in full on screen`;
     return { change, changeShort };
   }
   return null;

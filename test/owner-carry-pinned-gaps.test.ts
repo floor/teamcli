@@ -137,6 +137,7 @@ project: ${name}
 entity: acme
 session: ${name}
 coordinator: lead
+operator: ops
 trust:
   - ${lobby}
   - ${root}
@@ -145,6 +146,13 @@ workspace:
 seats:
   - role: coordinator
     name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: ops
     cli: claude-code
     vendor: anthropic
     model: Claude Opus
@@ -253,12 +261,14 @@ describe("an entity's record on a machine whose owner seat is pinned", () => {
     // The owner's card names the change in full: the operation, the key, the exact value and the file.
     expect(s.mac.store.prompts[0]).toContain("change where an entity's projects sit");
     expect(s.mac.store.prompts[0]).toContain('Entity acme on server');
-    // The whole change does not fit the prompt: it carries the value's length and digest, and the
-    // terminal shows the change whole before the prompt.
+    // The prompt carries the change whole when it fits, else its length and digest; the terminal
+    // shows it whole before the prompt either way.
+    const whole = `set "acme.root" to "~/Code/acme" in "${entitiesPath(s.server.home)}"`;
     const digest = shortDigest(JSON.stringify({ path: 'acme.root', value: '~/Code/acme', file: entitiesPath(s.server.home) }));
-    expect(s.mac.store.prompts[0]).toContain(`set root to a value of 11 characters, digest ${digest} (shown in full before this prompt)`);
-    expect(s.mac.store.prompts[0]!.length).toBeLessThanOrEqual(PROMPT_MAX);
-    expect(carried.signIo.err).toContain(`set "acme.root" to "~/Code/acme" in "${entitiesPath(s.server.home)}"`);
+    const prompt = s.mac.store.prompts[0]!;
+    expect(prompt.includes(whole) || prompt.includes(`set root to a value of 11 characters, digest ${digest}, shown in full on screen`), prompt).toBe(true);
+    expect(prompt.length).toBeLessThanOrEqual(PROMPT_MAX);
+    expect(carried.signIo.err).toContain(whole);
     expect((await answerOn(s, carried.answer)).code).toBe(0);
 
     // An answer for other words admits nothing, and spends nothing.
@@ -420,7 +430,8 @@ describe('an exact change is never bundled, and is shown whole before it is sign
 
   test('a change the prompt cannot carry is not signed where it cannot be shown whole', async () => {
     const s = scene();
-    const asked = await configOn(s, ['set', 'acme.root', '~/Code/acme', '--request'], SEAT);
+    const rule = 'every seat keeps its own worktree and never pushes to the main branch without the lead reading the change first';
+    const asked = await configOn(s, ['set', 'acme.rules', `[ "${rule}" ]`, '--request'], SEAT);
     const id = idOf(asked.io.out);
     const request = join(s.files, 'request.json');
     expect(await runApprovals(['export', id, '--out', request], testIo(s.server.root, TERMINAL), { home: s.server.home, now: () => NOW })).toBe(0);
@@ -431,7 +442,10 @@ describe('an exact change is never bundled, and is shown whole before it is sign
     // At a terminal the change is printed whole, then signed.
     const carried = await carry(s, [id]);
     expect(carried.signIo.err).toContain('the confirmation that follows answers request');
+    expect(carried.signIo.err).toContain(rule);
     expect(s.mac.store.prompts).toHaveLength(1);
+    expect(s.mac.store.prompts[0]).toContain('shown in full on screen');
+    expect(s.mac.store.prompts[0]!.length).toBeLessThanOrEqual(PROMPT_MAX);
   });
 
   test('every untrusted field is quoted, control characters are escaped, and the prompt stays in budget', () => {
