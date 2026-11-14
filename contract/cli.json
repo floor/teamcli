@@ -600,14 +600,14 @@
           "name": "export",
           "positionals": [
             {
-              "name": "id...",
+              "name": "id",
               "optional": false,
               "repeatable": false
             }
           ],
           "subcommands": [],
           "usage": [
-            "team approvals export <id...> --out <file> [--json]"
+            "team approvals export <id> --out <file> [--json]"
           ],
           "who": {
             "gate": "any-caller",
@@ -816,7 +816,7 @@
         "team approvals revoke <id...> [--json]",
         "team approvals revoke <id...> --request [--reason <text>] [--json]",
         "team approvals revoke <id...> --approval <request-id> [--json]",
-        "team approvals export <id...> --out <file> [--json]",
+        "team approvals export <id> --out <file> [--json]",
         "team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]",
         "team approvals answer --from <file> [--json]"
       ],
@@ -2200,12 +2200,6 @@
           "flags": [
             {
               "hidden": false,
-              "name": "--approval",
-              "repeatable": false,
-              "takesValue": true
-            },
-            {
-              "hidden": false,
               "name": "--dry-run",
               "repeatable": false,
               "takesValue": false
@@ -2236,18 +2230,6 @@
             },
             {
               "hidden": false,
-              "name": "--reason",
-              "repeatable": false,
-              "takesValue": true
-            },
-            {
-              "hidden": false,
-              "name": "--request",
-              "repeatable": false,
-              "takesValue": false
-            },
-            {
-              "hidden": false,
               "name": "--root",
               "repeatable": false,
               "takesValue": true
@@ -2270,7 +2252,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]"
+            "team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -2374,12 +2356,6 @@
           "flags": [
             {
               "hidden": false,
-              "name": "--approval",
-              "repeatable": false,
-              "takesValue": true
-            },
-            {
-              "hidden": false,
               "name": "--dry-run",
               "repeatable": false,
               "takesValue": false
@@ -2409,18 +2385,6 @@
               "takesValue": true
             },
             {
-              "hidden": false,
-              "name": "--reason",
-              "repeatable": false,
-              "takesValue": true
-            },
-            {
-              "hidden": false,
-              "name": "--request",
-              "repeatable": false,
-              "takesValue": false
-            },
-            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -2432,7 +2396,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon restart [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]"
+            "team daemon restart [--dry-run] [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -2621,9 +2585,9 @@
         "team daemon status [--json]",
         "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]",
         "team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]",
-        "team daemon restart [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]",
+        "team daemon restart [--dry-run] [--json]",
         "team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]",
-        "team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]"
+        "team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]"
       ],
       "who": {
         "gate": "owner-only",

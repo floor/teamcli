@@ -78,7 +78,22 @@ export function shortDigest(text: string): string {
 /** Display text with no control character: a value is shown as a JSON string, so nothing in it
  *  can start a line of its own or hide a character. */
 function quoted(value: string): string {
-  return JSON.stringify(value);
+  return JSON.stringify(value).replace(/[\u007f-\u009f\u2028\u2029]/g, (one) => `\\u${one.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/** One line as a terminal shows it: every control character written as an escape. */
+export function displayLine(line: string): string {
+  return line.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, (one) => `\\u${one.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/** The card with its exact change, whole, as the owner reads it before a prompt. */
+export function cardWhole(card: ApprovalCard): string {
+  return displayLine([...cardLines(card), ...(card.change === undefined ? [] : [card.change])].join(' — '));
+}
+
+/** Whether the signing prompt itself carries the card's exact change whole. */
+export function promptCarriesChange(card: ApprovalCard): boolean {
+  return card.change === undefined || cardPrompt(card).includes(card.change);
 }
 
 /** A bound word `key=value`, read back. */
@@ -95,32 +110,38 @@ export function ownerActionChange(action: string, words: readonly string[] | und
   if (words === undefined || words.length === 0) return null;
   if (action === 'team-entity-config') {
     const [verb, path] = words;
-    const file = boundValue(words, 'file') ?? 'the entities file';
+    const file = boundValue(words, 'file');
     const value = words.length >= 4 ? words[2]! : undefined;
-    if (verb === 'unset' || value === undefined) return { change: `${verb} ${path} in ${file}`, changeShort: `${verb} ${path} in ${file}` };
+    const key = keyOfPath(path ?? '');
+    const where = file === undefined ? 'the entities file' : quoted(file);
+    if (verb === 'unset' || value === undefined) {
+      return { change: `${verb} ${quoted(path ?? '')} in ${where}`, changeShort: `${verb} ${key} (the file is shown in full before this prompt)` };
+    }
     return {
-      change: `${verb} ${path} to ${quoted(value)} in ${file}`,
-      changeShort: `${verb} ${path} to a value of ${value.length} characters (digest ${shortDigest(value)}) in ${file}`,
+      change: `${verb} ${quoted(path ?? '')} to ${quoted(value)} in ${where}`,
+      changeShort: `${verb} ${key} to a value of ${value.length} characters, digest ${shortDigest(JSON.stringify({ path, value, file: file ?? null }))} (shown in full before this prompt)`,
     };
   }
   if (action === 'team-daemon') {
-    const verb = words[0];
-    const home = boundValue(words, 'home') ?? 'this home';
+    const verb = words[0] ?? '';
+    const home = boundValue(words, 'home');
     const roots = words.filter((word) => word.startsWith('root=')).map((word) => word.slice(5));
     const flags = ['presence', 'watch'].filter((flag) => words.includes(flag));
-    const route = boundValue(words, 'route');
-    const hosting = roots.length > 0 ? `, hosting ${roots.join(', ')}` : '';
+    const hosting = roots.length > 0 ? `, hosting ${roots.map(quoted).join(', ')}` : '';
     const with_ = flags.length > 0 ? `, with ${flags.join(' and ')}` : '';
-    const change = verb === 'fault-watch'
-      ? `fault-watch route ${route ?? '?'} of ${roots[0] ?? '?'} for home ${home}`
-      : `${verb} for home ${home}${hosting}${with_}`;
-    const listed = roots.join('\n');
-    const changeShort = verb === 'fault-watch' || roots.length === 0
-      ? change
-      : `${verb} for home ${home}, ${roots.length} checkout${roots.length === 1 ? '' : 's'} (digest ${shortDigest(listed)})${with_}`;
+    const change = `${verb} for home ${home === undefined ? 'this home' : quoted(home)}${hosting}${with_}`;
+    const digest = shortDigest(JSON.stringify({ verb, home: home ?? null, roots, flags }));
+    const changeShort = `${verb} for ${roots.length} checkout${roots.length === 1 ? '' : 's'}${with_}, digest ${digest} (shown in full before this prompt)`;
     return { change, changeShort };
   }
   return null;
+}
+
+/** The last key of an entity path, as a short form names it: `root`, `names.unique`, `rules`. */
+function keyOfPath(path: string): string {
+  if (path.endsWith('.names.unique')) return 'names.unique';
+  const last = path.split('.').pop() ?? '';
+  return /^[a-z][a-z.]{0,31}$/.test(last) ? last : 'the key';
 }
 
 /** The three answers, as the signing prompt names the one being signed. */

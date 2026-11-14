@@ -22,7 +22,7 @@ requests travel as files until machines are linked: `export`, `sign` and `answer
     team approvals revoke <id...> [--json]
     team approvals revoke <id...> --request [--reason <text>] [--json]
     team approvals revoke <id...> --approval <request-id> [--json]
-    team approvals export <id...> --out <file> [--json]
+    team approvals export <id> --out <file> [--json]
     team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
     team approvals answer --from <file> [--json]
 
@@ -60,41 +60,12 @@ Its owner-only actions run on the owner's signed answer, carried as files by an 
 The files carry the request record and the signed answer unchanged; neither file grants anything
 on its own, and neither is ever written over an existing file.
 
-### Several requests in one file
-
-`team approvals export <id> <id> … --out <file>` writes up to sixteen waiting requests of this
-machine into one file. They must all name this machine and the same account, and each must pass
-every check a single export makes; a request named twice is refused.
-
-`team approvals sign --from <file> --out <file> --answer <oui|always|non>` on the machine that
-holds the signers records every request in the file as its own card, then shows one prompt that
-answers them all with that word and one confirmation on the owner's device. The prompt lists
-each request's card and its exact change — `3 requests from machine <name>: 1) … | 2) … | 3) …`
-— when that fits the prompt. When it does not, `sign` first prints every request's card and
-change in full on the terminal, with a digest of that list, and the prompt names the count and
-the same digest. The signer is settled before anything is signed, and every request must still
-be unanswered and must not have been asked for by that signer; one that fails refuses the file,
-with no prompt. Each answer is still its own signature over its own request: it is verified,
-recorded, and spent once exactly as if it had been signed alone, and each request keeps its own
-fifteen-minute window. The same confirmation signs the file's manifest: the machine, the
-account and every request in order, with its parameter hash and the digest of the exact answer
-signed for it. Without `--answer`, `sign` waits until the owner has answered every request on
-the owner page, then asks one confirmation that lists the set and signs its manifest. A passkey
-signer answers one request per ceremony, so it cannot sign a batch. A credential helper built
-before this release asks once per request, plus once for the manifest, and `sign` says so.
-
-`team approvals answer --from <file>` on the pinned machine checks the manifest against the
-pinned owner seat and records every answer in the file only when the manifest names exactly
-those answers, in that order, for this machine and account; each command then runs with its own
-`--approval <id>`, in any order, each once. The answers are recorded together: if one cannot be
-written, those written before it are taken back.
-
-A member that fails any check refuses the whole file, at every step: an altered request, a
-request for another machine or another account, an expired one, an answer that does not verify,
-an answer moved, dropped, added or replaced by one from another confirmation.
-Nothing in the file is signed, and no answer from it is recorded. The owner's one prompt listed
-the whole set; a file that no longer holds what that prompt listed is no longer what the owner
-answered, so no part of it is taken.
+Before `sign --answer` signs, it prints the request's card and its exact change, whole, from the
+one record it then signs (a request that changed since is refused). When the confirmation prompt
+cannot carry an exact change itself (an entity's record or a daemon plan too long for it, which
+the prompt then names by length and digest), `sign` signs only at a terminal; elsewhere the owner
+answers on the owner page, which shows the change whole. Each carried request is signed on its
+own; signing several with one confirmation is planned.
 
 ## Who may run it
 
@@ -122,9 +93,6 @@ owner's own device when `sign` asks for it, and checked where the request runs.
 | the rules are revoked | `team approvals: revoked <id...>` | 0 |
 | a request is recorded | the owner-seat request line | 0 |
 | a request is exported | `team approvals: request <id> of machine <name> written to <file>` and its expiry | 0 |
-| several requests are exported | `team approvals: <n> requests of machine <name> written to <file>` and the first expiry | 0 |
-| a batch is signed | `team approvals: <n> requests for machine <name> answered (<id> <choice>, …); answers written to <file>` | 0 |
-| a batch's answers are recorded | `team approvals: <n> answers verified against the pinned owner seat <fingerprint> and recorded`, then one line per request | 0 |
 | a carried request is signed | `team approvals: request <id> for machine <name> answered <choice> by <signer>; answer written to <file>` | 0 |
 | a carried request waits on the owner page | `team approvals: request <id> from machine <name> is on the owner page; …` | 0 |
 | a carried answer is recorded | `team approvals: request <id> answered <choice> by <signer>, verified against the pinned owner seat <fingerprint>`, then `run the command again with --approval <id>`; a denial says `nothing runs` | 0 |
@@ -143,7 +111,7 @@ Usage: team approvals list [--json]
        team approvals revoke <id...> [--json]
        team approvals revoke <id...> --request [--reason <text>] [--json]
        team approvals revoke <id...> --approval <request-id> [--json]
-       team approvals export <id...> --out <file> [--json]
+       team approvals export <id> --out <file> [--json]
        team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
        team approvals answer --from <file> [--json]
 
@@ -162,11 +130,6 @@ Export writes one waiting request of this machine to a file. Sign, on the machin
 the owner's signers, records that request, shows its card (signed at once with --answer, or on
 the owner page) and writes the signed answer to a file. Answer, back on the pinned machine, checks that
 answer against the pinned owner seat and records it; the command then runs with --approval <id>.
-Export with several ids (at most 16, all waiting, all this machine's and this account's) writes
-them to one file. Sign then shows one card listing them all and signs them with one word and
-one Touch ID; each request keeps its own answer, window and single use. Answer records every
-answer in the file, and each command runs with its own --approval <id>. A member that fails any
-check refuses the whole file, at every step: nothing in it is signed or recorded.
 
 Exits 0 when the rules are listed, the details are printed, the rules are revoked, a request
 is recorded, a file is written or an answer is recorded, 1 when the details, the revoke or a

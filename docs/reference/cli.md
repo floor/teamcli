@@ -232,7 +232,7 @@ Usage:
     team approvals revoke <id...> [--json]
     team approvals revoke <id...> --request [--reason <text>] [--json]
     team approvals revoke <id...> --approval <request-id> [--json]
-    team approvals export <id...> --out <file> [--json]
+    team approvals export <id> --out <file> [--json]
     team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
     team approvals answer --from <file> [--json]
 
@@ -314,7 +314,7 @@ Hidden: no
 
 Usage:
 
-    team approvals export <id...> --out <file> [--json]
+    team approvals export <id> --out <file> [--json]
 
 #### Who may run it
 
@@ -335,7 +335,7 @@ Usage:
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `id...` | no | no |
+| `id` | no | no |
 
 ### `list`
 
@@ -1090,9 +1090,9 @@ Usage:
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
     team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
-    team daemon restart [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon restart [--dry-run] [--json]
     team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
-    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -1141,7 +1141,7 @@ Hidden: no
 
 Usage:
 
-    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 #### Who may run it
 
@@ -1151,14 +1151,11 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
-| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
-| `--reason` | yes | no | no |
-| `--request` | no | no | no |
 | `--root` | yes | no | no |
 | `--route` | yes | no | no |
 | `-h` | no | no | yes |
@@ -1207,7 +1204,7 @@ Hidden: no
 
 Usage:
 
-    team daemon restart [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon restart [--dry-run] [--json]
 
 #### Who may run it
 
@@ -1217,14 +1214,11 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
-| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
-| `--reason` | yes | no | no |
-| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals

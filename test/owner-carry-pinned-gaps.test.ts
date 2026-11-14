@@ -1,28 +1,29 @@
 // The owner-only commands that had no owner-seat door on a machine whose owner seat is pinned from
 // another machine — an entity's own record (`team config set <entity>.root` and the other entity
 // keys) and the machine daemon (`team daemon install|restart|uninstall|fault-watch`) — now take
-// `--request` and `--approval <id>`, carried as files like any other request. And several requests
-// travel in one file, signed with one card and one user-presence prompt, each keeping its own
-// answer, window and single use. Every scene is synthetic: fake credential stores, temporary
+// `--request` and `--approval <id>`, carried as files like any other request, each signed on its
+// own over a card that shows its exact change. Every scene is synthetic: fake credential stores, temporary
 // homes and repositories, a fake service manager; no terminal host is started.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { generateKeyPairSync, sign as cryptoSign, verify as cryptoVerify, createPublicKey, type KeyObject } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PINNED_TERMINAL_REASON, type Caller } from '../src/caller.ts';
 import { ownerActionHash, readOwnerActionRecord, type OwnerActionRecord } from '../src/client/owner-action.ts';
-import { shortDigest } from '../src/client/approval-card.ts';
-import { OWNER_ANSWER_BATCH_FORMAT, OWNER_REQUEST_BATCH_FORMAT, type OwnerAnswerBatchFile, type OwnerRequestBatchFile, type OwnerRequestFile } from '../src/client/owner-carry.ts';
+import { cardPrompt, cardWhole, ownerActionCard, PROMPT_MAX, shortDigest } from '../src/client/approval-card.ts';
+import type { OwnerRequestFile } from '../src/client/owner-carry.ts';
+import { resolveLobby } from '../src/lobby/gate.ts';
 import { exportOwnerSeat, pinOwnerSeat, type SignedOwnerSeatExport } from '../src/client/owner-pin.ts';
-import { registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
+import { registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { runApprovals } from '../src/commands/approvals.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { runDaemon } from '../src/commands/daemon.ts';
 import { runSetup } from '../src/commands/setup.ts';
-import type { ServiceManager } from '../src/daemon/service.ts';
+import type { ServiceManager, ServiceProgram } from '../src/daemon/service.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import { entitiesPath } from '../src/entities.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { keyOf } from '../src/store/keys.ts';
@@ -39,12 +40,10 @@ const raw = (key: KeyObject) => {
   return `04${Buffer.from(jwk.x, 'base64url').toString('hex')}${Buffer.from(jwk.y, 'base64url').toString('hex')}`;
 };
 
-/** A credential store whose every user-presence prompt is counted. With `many`, it signs several
- *  messages under one prompt, as the helper's `sign-many` does. */
-function fakeStore(many: boolean): OwnerSeatKeyStore & { prompts: string[] } {
+/** A credential store whose every user-presence prompt is counted. */
+function fakeStore(): OwnerSeatKeyStore & { prompts: string[] } {
   const keys = new Map<string, ReturnType<typeof generateKeyPairSync>>();
   const prompts: string[] = [];
-  const signWith = (label: string, message: Buffer) => cryptoSign('sha256', message, { key: keys.get(label)!.privateKey, dsaEncoding: 'der' }).toString('hex');
   return {
     name: 'fake-credential-store',
     prompts,
@@ -57,14 +56,8 @@ function fakeStore(many: boolean): OwnerSeatKeyStore & { prompts: string[] } {
     publicKey: (label) => (keys.has(label) ? { ok: true, publicKey: raw(keys.get(label)!.publicKey) } : { ok: false, why: 'no key' }),
     sign: (label, message, reason) => {
       prompts.push(reason);
-      return keys.has(label) ? { ok: true, signature: signWith(label, message) } : { ok: false, why: 'no key' };
+      return keys.has(label) ? { ok: true, signature: cryptoSign('sha256', message, { key: keys.get(label)!.privateKey, dsaEncoding: 'der' }).toString('hex') } : { ok: false, why: 'no key' };
     },
-    ...(many ? {
-      signMany: (label: string, messages: readonly Buffer[], reason: string) => {
-        prompts.push(reason);
-        return keys.has(label) ? { ok: true as const, signatures: messages.map((message) => signWith(label, message)) } : { ok: false as const, why: 'no key' };
-      },
-    } : {}),
     pinSet: () => ({ ok: true }),
     pinGet: () => ({ ok: false, why: 'no pin' }),
   };
@@ -84,11 +77,11 @@ function git(cwd: string, ...args: string[]): void {
 }
 
 /** The machine that holds the owner's signers: one owner seat, one signer `mac`, accepted by policy. */
-function signerMachine(many = true) {
+function signerMachine() {
   const home = join(tempBase('mac'), 'home');
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
   keyOf(home);
-  const store = fakeStore(many);
+  const store = fakeStore();
   const seat = registerOwnerSeat(home, { team: 'floor', signer: 'mac' }, store, NOW);
   if (!seat.ok) throw new Error(seat.why);
   const wrote = writePolicySet(home, { level: 'entity', target: 'floor', name: 'owner-signers', value: ['mac'] }, { now: NOW });
@@ -116,8 +109,8 @@ const SEAT: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: '
 
 type Scene = { mac: ReturnType<typeof signerMachine>; server: ReturnType<typeof pinnedMachine>; files: string };
 
-function scene(many = true, name = 'server'): Scene {
-  const mac = signerMachine(many);
+function scene(name = 'server'): Scene {
+  const mac = signerMachine();
   const exported = exportOwnerSeat(mac.home, mac.store, NOW);
   if (!exported.ok) throw new Error(exported.why);
   const server = pinnedMachine(exported.signed, name);
@@ -132,20 +125,72 @@ function idOf(out: string): string {
   return id;
 }
 
+/** A checkout holding team `acme`, its lead placed, as an install hosts one. */
+function teamCheckout(home: string, name: string): string {
+  const root = join(home, name);
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  const lobby = resolveLobby(home, { entity: 'acme' });
+  mkdirSync(lobby, { recursive: true, mode: 0o700 });
+  chmodSync(lobby, 0o700);
+  writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1
+project: ${name}
+entity: acme
+session: ${name}
+coordinator: lead
+trust:
+  - ${lobby}
+  - ${root}
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`);
+  return root;
+}
+
+/** The health reading an install confirms: the daemon it started answers its probe. */
+const ANSWERING: DaemonHealth = {
+  daemon: 'teamcli',
+  socket: '/synthetic/daemon.sock',
+  state: 'running',
+  running: true,
+  pid: 42,
+  uid: 501,
+  since: '2026-11-01T00:00:00.000Z',
+  startedBy: 'system-service-manager',
+  version: 'test',
+  gitHead: null,
+  heartbeatAt: null,
+  heartbeatSeconds: null,
+  features: null,
+  stuck: [],
+  roots: [],
+  probe: { state: 'answered', at: '2026-11-01T00:00:01.000Z' },
+  why: null,
+};
+
 /** The fake service manager a daemon scene changes: it records each call and touches nothing. */
-function fakeService(): ServiceManager & { calls: string[] } {
+function fakeService(): ServiceManager & { calls: string[]; programs: ServiceProgram[] } {
   const calls: string[] = [];
+  const programs: ServiceProgram[] = [];
   return {
     kind: 'system-service-manager',
     calls,
+    programs,
     unitPath: (home) => join(home, 'unit'),
     plan: (home, program) => ({ unitPath: join(home, 'unit'), program: [program.execPath, program.entry, 'daemon', 'run'] }),
     job: () => null,
     unit: () => null,
-    install: (home) => { calls.push('install'); return { ok: true, unitPath: join(home, 'unit') }; },
+    install: (home, program) => { calls.push('install'); programs.push(program); return { ok: true, unitPath: join(home, 'unit') }; },
     uninstall: (home) => { calls.push('uninstall'); return { ok: true, unitPath: join(home, 'unit'), removed: true }; },
     restart: () => { calls.push('restart'); return { ok: false, reason: 'refused', why: 'not in this scene', detail: null }; },
-  } as ServiceManager & { calls: string[] };
+  } as ServiceManager & { calls: string[]; programs: ServiceProgram[] };
 }
 
 const configOn = (s: Scene, argv: string[], caller: Caller = TERMINAL) => {
@@ -158,12 +203,14 @@ const daemonOn = (s: Scene, argv: string[], service: ServiceManager, caller: Cal
   return runDaemon(argv, io, { home: s.server.home, accountHome: s.server.home, service, now: () => NOW }).then((code) => ({ code, io }));
 };
 
-async function carry(s: Scene, ids: string[], word: string | null = 'oui'): Promise<{ request: string; answer: string; signIo: ReturnType<typeof testIo> }> {
+async function carry(s: Scene, ids: string[], word: string | null = 'oui', terminal = true): Promise<{ request: string; answer: string; signIo: ReturnType<typeof testIo> }> {
   const request = join(s.files, `request-${Math.random().toString(16).slice(2)}.json`);
   const exported = testIo(s.server.root, TERMINAL);
   expect(await runApprovals(['export', ...ids, '--out', request], exported, { home: s.server.home, now: () => NOW }), exported.err).toBe(0);
   const answer = join(s.files, `answer-${Math.random().toString(16).slice(2)}.json`);
   const signIo = testIo(s.mac.home);
+  // The owner signs at a terminal, where the change is shown whole before the prompt.
+  if (terminal) signIo.stderrIsTTY = true;
   expect(await runApprovals(['sign', '--from', request, '--out', answer, ...(word === null ? [] : ['--answer', word])], signIo, { home: s.mac.home, now: () => NOW, ownerSeatStore: s.mac.store }), signIo.err).toBe(0);
   return { request, answer, signIo };
 }
@@ -208,8 +255,10 @@ describe("an entity's record on a machine whose owner seat is pinned", () => {
     expect(s.mac.store.prompts[0]).toContain('Entity acme on server');
     // The whole change does not fit the prompt: it carries the value's length and digest, and the
     // terminal shows the change whole before the prompt.
-    expect(s.mac.store.prompts[0]).toContain(`set acme.root to a value of 11 characters (digest ${shortDigest('~/Code/acme')}) in ${entitiesPath(s.server.home)}`);
-    expect(carried.signIo.err).toContain(`set acme.root to "~/Code/acme" in ${entitiesPath(s.server.home)}`);
+    const digest = shortDigest(JSON.stringify({ path: 'acme.root', value: '~/Code/acme', file: entitiesPath(s.server.home) }));
+    expect(s.mac.store.prompts[0]).toContain(`set root to a value of 11 characters, digest ${digest} (shown in full before this prompt)`);
+    expect(s.mac.store.prompts[0]!.length).toBeLessThanOrEqual(PROMPT_MAX);
+    expect(carried.signIo.err).toContain(`set "acme.root" to "~/Code/acme" in "${entitiesPath(s.server.home)}"`);
     expect((await answerOn(s, carried.answer)).code).toBe(0);
 
     // An answer for other words admits nothing, and spends nothing.
@@ -270,7 +319,7 @@ describe('the machine daemon on a machine whose owner seat is pinned', () => {
     const carried = await carry(s, [id]);
     expect(s.mac.store.prompts[0]).toContain('remove the machine daemon');
     expect(s.mac.store.prompts[0]).toContain('Machine server');
-    expect(s.mac.store.prompts[0]).toContain(`uninstall for home ${realpathSync(s.server.home)}`);
+    expect(s.mac.store.prompts[0]).toContain(`uninstall for home "${realpathSync(s.server.home)}"`);
     expect((await answerOn(s, carried.answer)).code).toBe(0);
 
     // The answer names uninstall: an install with it is refused.
@@ -288,220 +337,134 @@ describe('the machine daemon on a machine whose owner seat is pinned', () => {
     expect(service.calls).toEqual(['uninstall']);
   });
 
-  test('a dry run checks the answer and spends nothing', async () => {
+  test('an install binds one plan of real paths, runs exactly it, and a dry run spends nothing', async () => {
     const s = scene();
     const service = fakeService();
-    const asked = await daemonOn(s, ['restart', '--dry-run', '--request'], service, SEAT);
+    const repo = teamCheckout(s.server.home, 'checkout');
+    const link = join(s.server.home, 'alias');
+    const { symlinkSync } = await import('node:fs');
+    symlinkSync(repo, link);
+    const sources = { home: s.server.home, accountHome: s.server.home, service, now: () => NOW, program: { execPath: process.execPath, entry: join(s.server.home, 'cli.js') }, health: async () => ANSWERING };
+    const run = async (argv: string[]) => { const io = testIo(s.server.home, SEAT); const code = await runDaemon(argv, io, sources); return { code, io }; };
+    const asked = await run(['install', '--root', 'alias', '--presence', '--request']);
     expect(asked.code, asked.io.err).toBe(0);
     const id = idOf(asked.io.out);
+    const record = readOwnerActionRecord(s.server.home, id) as OwnerActionRecord;
+    expect(record.params.words?.['team-daemon']).toEqual(['install', `home=${realpathSync(s.server.home)}`, `root=${realpathSync(repo)}`, 'presence']);
     const carried = await carry(s, [id]);
     expect((await answerOn(s, carried.answer)).code).toBe(0);
-    // --dry-run is not part of what the answer binds, and twice spends nothing.
-    await daemonOn(s, ['restart', '--dry-run', '--approval', id], service, SEAT);
-    await daemonOn(s, ['restart', '--dry-run', '--approval', id], service, SEAT);
-    expect(service.calls).toEqual([]);
+    // A dry run checks the answer and spends nothing.
+    expect((await run(['install', '--root', 'alias', '--presence', '--dry-run', '--approval', id])).code).toBe(0);
     expect(existsSync(join(actionRequestsFolder(s.server.home), `${id}.used-team-daemon`))).toBe(false);
+    // The alias now names another checkout: the plan differs, and the answer admits nothing.
+    const other = teamCheckout(s.server.home, 'other');
+    const { unlinkSync } = await import('node:fs');
+    unlinkSync(link);
+    symlinkSync(other, link);
+    expect((await run(['install', '--root', 'alias', '--presence', '--approval', id])).code).toBe(1);
+    expect(service.calls).toEqual([]);
+    unlinkSync(link);
+    symlinkSync(repo, link);
+    const installed = await run(['install', '--root', 'alias', '--presence', '--approval', id]);
+    expect(installed.code, installed.io.err).toBe(0);
+    expect(service.calls).toEqual(['install']);
+    // The unit hosts the plan's real path, not the alias.
+    expect(service.programs.at(-1)?.roots).toEqual([realpathSync(repo)]);
+    expect((await run(['install', '--root', 'alias', '--presence', '--approval', id])).code).toBe(1);
   });
 
-  test('the request options belong to the owner-gated verbs only', async () => {
+  test('a checkout that does not resolve refuses the request', async () => {
+    const s = scene();
+    const asked = await daemonOn(s, ['install', '--root', join(s.server.home, 'missing'), '--request'], fakeService(), SEAT);
+    expect(asked.code).toBe(1);
+    expect(asked.io.err).toContain('nothing was recorded or run');
+  });
+
+  test('the request options belong to install and uninstall only', async () => {
     const s = scene();
     const service = fakeService();
     expect((await daemonOn(s, ['status', '--request'], service, SEAT)).code).toBe(2);
+    expect((await daemonOn(s, ['restart', '--request'], service, SEAT)).code).toBe(2);
+    expect((await daemonOn(s, ['restart', '--approval', 'oa_000000000000000000000000'], service, SEAT)).code).toBe(2);
+    expect((await daemonOn(s, ['fault-watch', '--root', '.', '--route', 'r', '--request'], service, SEAT)).code).toBe(2);
     expect((await daemonOn(s, ['uninstall', '--request', '--approval', 'oa_000000000000000000000000'], service, SEAT)).code).toBe(2);
     expect((await daemonOn(s, ['uninstall', '--reason', 'why'], service, SEAT)).code).toBe(2);
   });
 });
 
-describe('several requests carried in one file', () => {
-  async function three(s: Scene): Promise<string[]> {
-    const service = fakeService();
-    const ids: string[] = [];
-    for (const argv of [['set', 'acme.root', '~/Code/acme', '--request'], ['set', 'acme.worktrees', '~/Code/acme-trees', '--request']]) {
-      const asked = await configOn(s, argv, SEAT);
-      expect(asked.code, asked.io.err).toBe(0);
-      ids.push(idOf(asked.io.out));
-    }
-    const daemon = await daemonOn(s, ['uninstall', '--request'], service, SEAT);
-    expect(daemon.code, daemon.io.err).toBe(0);
-    ids.push(idOf(daemon.io.out));
-    return ids;
-  }
-
-  test('three requests are signed under one prompt and run one by one, each once', async () => {
-    const s = scene(true);
-    const ids = await three(s);
-    const carried = await carry(s, ids);
-    const batch = JSON.parse(readFileSync(carried.request, 'utf8')) as OwnerRequestBatchFile;
-    expect(batch.format).toBe(OWNER_REQUEST_BATCH_FORMAT);
-    expect(batch.requests.map((one) => one.request_id)).toEqual(ids);
-    // One prompt. The full list does not fit it, so the terminal lists every change first and the
-    // prompt names the count and the list's digest.
-    expect(s.mac.store.prompts).toHaveLength(1);
-    expect(s.mac.store.prompts[0]).toContain('3 requests from machine server');
-    const digest = /list digest ([0-9a-f]{12})/.exec(s.mac.store.prompts[0]!)?.[1];
-    expect(digest).toBeDefined();
-    expect(carried.signIo.err).toContain(`answers these 3 requests (list digest ${digest})`);
-    expect(carried.signIo.err).toContain(`set acme.root to "~/Code/acme"`);
-    expect(carried.signIo.err).toContain(`set acme.worktrees to "~/Code/acme-trees"`);
-    expect(carried.signIo.err).toContain(`uninstall for home ${realpathSync(s.server.home)}`);
-    const answers = JSON.parse(readFileSync(carried.answer, 'utf8')) as OwnerAnswerBatchFile;
-    expect(answers.format).toBe(OWNER_ANSWER_BATCH_FORMAT);
-    // Each answer is its own signature over its own request.
-    expect(new Set(answers.answers.map((one) => one.answer.signature)).size).toBe(3);
-    expect(answers.answers.map((one) => one.answer.owner_seat_answer.request_id)).toEqual(ids);
-
-    const answered = await answerOn(s, carried.answer);
-    expect(answered.code, answered.io.err).toBe(0);
-    for (const id of ids) expect(answered.io.out).toContain(`run its command again with --approval ${id}`);
-
-    const service = fakeService();
-    expect((await configOn(s, ['set', 'acme.root', '~/Code/acme', '--approval', ids[0]!], SEAT)).code).toBe(0);
-    expect((await configOn(s, ['set', 'acme.worktrees', '~/Code/acme-trees', '--approval', ids[1]!], SEAT)).code).toBe(0);
-    expect((await daemonOn(s, ['uninstall', '--approval', ids[2]!], service, SEAT)).code).toBe(0);
-    expect(entitiesText(s.server.home)).toContain('root: ~/Code/acme');
-    expect(entitiesText(s.server.home)).toContain('worktrees: ~/Code/acme-trees');
-    expect(service.calls).toEqual(['uninstall']);
-    // Every member is spent once: each replay is refused on its own.
-    expect((await configOn(s, ['set', 'acme.root', '~/Code/acme', '--approval', ids[0]!], SEAT)).code).toBe(1);
-    expect((await daemonOn(s, ['uninstall', '--approval', ids[2]!], service, SEAT)).code).toBe(1);
-    // The answer file cannot be recorded twice.
-    expect((await answerOn(s, carried.answer)).code).toBe(1);
-  });
-
-  test('a store that signs one message at a time prompts once per request and says so', async () => {
-    const s = scene(false);
-    const ids = await three(s);
-    const carried = await carry(s, ids);
-    // Three answers and the manifest of the set: four prompts.
-    expect(s.mac.store.prompts).toHaveLength(4);
-    expect(carried.signIo.out).toContain('each answer and the set were signed with a Touch ID of their own (4 in all)');
-    expect((await answerOn(s, carried.answer)).code).toBe(0);
-  });
-
-  test('a tampered request refuses the whole batch before any prompt, and nothing is recorded', async () => {
+describe('an exact change is never bundled, and is shown whole before it is signed', () => {
+  test('a request that bundles an entity or daemon action is refused when it is made and when it is signed', async () => {
     const s = scene();
-    const ids = await three(s);
-    const request = join(s.files, 'request.json');
-    const exported = testIo(s.server.root, TERMINAL);
-    expect(await runApprovals(['export', ...ids, '--out', request], exported, { home: s.server.home, now: () => NOW })).toBe(0);
-    const batch = JSON.parse(readFileSync(request, 'utf8')) as OwnerRequestBatchFile;
-    batch.requests[1]!.params.words!['team-entity-config'] = ['set', 'acme.worktrees', '/'];
-    const tampered = join(s.files, 'tampered.json');
-    writeFileSync(tampered, JSON.stringify(batch));
-    const signIo = testIo(s.mac.home);
-    expect(await runApprovals(['sign', '--from', tampered, '--out', join(s.files, 'a.json'), '--answer', 'oui'], signIo, { home: s.mac.home, now: () => NOW, ownerSeatStore: s.mac.store })).toBe(1);
-    expect(signIo.err).toContain('nothing in the batch is signed');
-    expect(s.mac.store.prompts).toHaveLength(0);
-    for (const id of ids) expect(typeof readOwnerActionRecord(s.mac.home, id)).toBe('string');
-  });
-
-  test('a tampered answer refuses the whole batch, and no member can run', async () => {
-    const s = scene();
-    const ids = await three(s);
-    const carried = await carry(s, ids);
-    const answers = JSON.parse(readFileSync(carried.answer, 'utf8')) as OwnerAnswerBatchFile;
-    const sig = answers.answers[2]!.answer.signature;
-    answers.answers[2]!.answer.signature = `${sig.slice(0, -2)}${sig.endsWith('00') ? '01' : '00'}`;
-    const tampered = join(s.files, 'tampered-answer.json');
-    writeFileSync(tampered, JSON.stringify(answers));
-    const refused = await answerOn(s, tampered);
-    expect(refused.code).toBe(1);
-    expect(refused.io.err).toContain('no answer in the batch was recorded');
-    for (const id of ids) expect(existsSync(join(actionRequestsFolder(s.server.home), `${id}.seat-answer.json`))).toBe(false);
-    const run = await configOn(s, ['set', 'acme.root', '~/Code/acme', '--approval', ids[0]!], SEAT);
-    expect(run.code).toBe(1);
-    expect(run.io.err).toContain('has no owner-seat answer yet');
-    // The untouched file still records them all.
-    expect((await answerOn(s, carried.answer)).code).toBe(0);
-  });
-
-  test('a reordered, shortened or replaced set is refused by its signed manifest, and nothing is recorded', async () => {
-    const s = scene();
-    const ids = await three(s);
-    const carried = await carry(s, ids);
-    const original = JSON.parse(readFileSync(carried.answer, 'utf8')) as OwnerAnswerBatchFile;
-    const tries: OwnerAnswerBatchFile[] = [
-      { ...original, answers: [original.answers[1]!, original.answers[0]!, original.answers[2]!] },
-      { ...original, answers: original.answers.slice(0, 2) },
-      { ...original, manifest: { ...original.manifest, manifest: { ...original.manifest.manifest, members: [...original.manifest.manifest.members].reverse() } } },
-      { ...original, manifest: undefined as unknown as OwnerAnswerBatchFile['manifest'] },
-    ];
-    for (const [index, file] of tries.entries()) {
-      const path = join(s.files, `altered-${index}.json`);
-      writeFileSync(path, JSON.stringify(file));
-      const refused = await answerOn(s, path);
-      expect(refused.code, `try ${index}`).toBe(1);
-      expect(refused.io.err).toContain('no answer');
-    }
-    for (const id of ids) expect(existsSync(join(actionRequestsFolder(s.server.home), `${id}.seat-answer.json`))).toBe(false);
-
-    // A member replaced by a valid answer from another ceremony: the manifest names another answer.
-    const fourth = await configOn(s, ['set', 'acme.names.unique', 'team', '--request'], SEAT);
-    const fourthId = idOf(fourth.io.out);
-    const alone = await carry(s, [fourthId]);
-    const single = JSON.parse(readFileSync(alone.answer, 'utf8')) as { answer: OwnerAnswerBatchFile['answers'][number]['answer'] };
-    const replaced = join(s.files, 'replaced.json');
-    writeFileSync(replaced, JSON.stringify({ ...original, answers: [original.answers[0]!, original.answers[1]!, { request_id: fourthId, answer: single.answer }] }));
-    expect((await answerOn(s, replaced)).code).toBe(1);
-    expect(existsSync(join(actionRequestsFolder(s.server.home), `${fourthId}.seat-answer.json`))).toBe(false);
-    // The untouched file still records the three.
-    expect((await answerOn(s, carried.answer)).code).toBe(0);
-  });
-
-  test('a member the only signer asked for refuses the batch before any prompt, and no answer is left', async () => {
-    const s = scene();
-    const ids = await three(s);
-    // A request whose asker carries the signer's own name.
     const { createOwnerActionRequest } = await import('../src/client/owner-action.ts');
-    const made = createOwnerActionRequest(s.server.home, { actions: ['team-entity-config'], root: join(s.server.home, '.config', 'team'), team: 'acme', head: null, args: { 'team-entity-config': ['set', 'acme.root', '~/x', `file=${entitiesPath(s.server.home)}`] }, requestedBy: 'mac' }, NOW);
-    if (!made.ok) throw new Error(made.why);
-    const request = join(s.files, 'self.json');
-    expect(await runApprovals(['export', ids[0]!, made.record.request_id, '--out', request], testIo(s.server.root, TERMINAL), { home: s.server.home, now: () => NOW })).toBe(0);
+    const words = ['set', 'acme.root', '~/x', `file=${entitiesPath(s.server.home)}`];
+    const made = createOwnerActionRequest(s.server.home, { actions: ['team-entity-config', 'team-up'], root: s.server.root, team: 'acme', head: null, args: { 'team-entity-config': words, 'team-up': [] }, requestedBy: 'lead' }, NOW);
+    expect(made).toMatchObject({ ok: false });
+    expect((made as { why: string }).why).toContain('asked for on its own');
+    // A carried file whose record bundles one, with every hash whole, is refused before its card.
+    const asked = await configOn(s, ['set', 'acme.root', '~/Code/acme', '--request'], SEAT);
+    const id = idOf(asked.io.out);
+    const request = join(s.files, 'one.json');
+    expect(await runApprovals(['export', id, '--out', request], testIo(s.server.root, TERMINAL), { home: s.server.home, now: () => NOW })).toBe(0);
+    const file = JSON.parse(readFileSync(request, 'utf8')) as OwnerRequestFile;
+    const { actionArgsHash } = await import('../src/client/owner-action.ts');
+    const params = { ...file.request.params, actions: [...file.request.params.actions, 'team-up' as const], args: { ...file.request.params.args, 'team-up': actionArgsHash('team-up', []) }, words: { ...file.request.params.words, 'team-up': [] } };
+    const bundled = { ...file, request: { ...file.request, params, params_sha256: ownerActionHash(params) } };
+    const path = join(s.files, 'bundled.json');
+    writeFileSync(path, JSON.stringify(bundled));
     const io = testIo(s.mac.home);
-    expect(await runApprovals(['sign', '--from', request, '--out', join(s.files, 'self-answer.json'), '--answer', 'oui'], io, { home: s.mac.home, now: () => NOW, ownerSeatStore: s.mac.store })).toBe(1);
-    expect(io.err).toContain('no principal approves its own request');
+    io.stderrIsTTY = true;
+    expect(await runApprovals(['sign', '--from', path, '--out', join(s.files, 'bundled-answer.json'), '--answer', 'oui'], io, { home: s.mac.home, now: () => NOW, ownerSeatStore: s.mac.store })).toBe(1);
+    expect(io.err).toContain('asked for on its own');
     expect(s.mac.store.prompts).toHaveLength(0);
-    expect(existsSync(join(actionRequestsFolder(s.mac.home), `${ids[0]}.seat-answer.json`))).toBe(false);
   });
 
-  test('a batch mixing machines or accounts is refused', async () => {
+  test('a change the prompt cannot carry is not signed where it cannot be shown whole', async () => {
     const s = scene();
-    const ids = await three(s);
-    const exported = exportOwnerSeat(s.mac.home, s.mac.store, NOW);
-    if (!exported.ok) throw new Error(exported.why);
-    const other = pinnedMachine(exported.signed, 'second');
-    s.mac.store.prompts.length = 0;
-    const asked = testIo(other.root, SEAT);
-    expect(await runConfig(['set', 'acme.root', '~/Code/acme', '--request'], asked, { home: other.home, now: () => NOW })).toBe(0);
-    const otherId = idOf(asked.out);
-
+    const asked = await configOn(s, ['set', 'acme.root', '~/Code/acme', '--request'], SEAT);
+    const id = idOf(asked.io.out);
     const request = join(s.files, 'request.json');
-    expect(await runApprovals(['export', ...ids, '--out', request], testIo(s.server.root, TERMINAL), { home: s.server.home, now: () => NOW })).toBe(0);
-    const batch = JSON.parse(readFileSync(request, 'utf8')) as OwnerRequestBatchFile;
-    const single = join(s.files, 'other.json');
-    expect(await runApprovals(['export', otherId, '--out', single], testIo(other.root, TERMINAL), { home: other.home, now: () => NOW })).toBe(0);
-    const foreign = (JSON.parse(readFileSync(single, 'utf8')) as OwnerRequestFile).request;
-
-    const sign = async (file: OwnerRequestBatchFile): Promise<ReturnType<typeof testIo>> => {
-      const path = join(s.files, `mixed-${Math.random().toString(16).slice(2)}.json`);
-      writeFileSync(path, JSON.stringify(file));
-      const io = testIo(s.mac.home);
-      expect(await runApprovals(['sign', '--from', path, '--out', `${path}.answer`, '--answer', 'oui'], io, { home: s.mac.home, now: () => NOW, ownerSeatStore: s.mac.store })).toBe(1);
-      return io;
-    };
-    const machines = await sign({ ...batch, requests: [batch.requests[0]!, foreign] });
-    expect(machines.err).toMatch(/does not name the machine its file names|names another machine/);
-
-    // A member whose own hash is whole but which names another account.
-    const params = { ...batch.requests[1]!.params, account: 'other' };
-    const accounted: OwnerActionRecord = { ...batch.requests[1]!, params, params_sha256: ownerActionHash(params) };
-    const accounts = await sign({ ...batch, requests: [batch.requests[0]!, accounted] });
-    expect(accounts.err).toContain('names another account');
+    expect(await runApprovals(['export', id, '--out', request], testIo(s.server.root, TERMINAL), { home: s.server.home, now: () => NOW })).toBe(0);
+    const io = testIo(s.mac.home);
+    expect(await runApprovals(['sign', '--from', request, '--out', join(s.files, 'answer.json'), '--answer', 'oui'], io, { home: s.mac.home, now: () => NOW, ownerSeatStore: s.mac.store })).toBe(1);
+    expect(io.err).toContain('has no terminal to show it whole');
     expect(s.mac.store.prompts).toHaveLength(0);
+    // At a terminal the change is printed whole, then signed.
+    const carried = await carry(s, [id]);
+    expect(carried.signIo.err).toContain('the confirmation that follows answers request');
+    expect(s.mac.store.prompts).toHaveLength(1);
+  });
 
-    // A request named twice is refused at export.
-    const twice = testIo(s.server.root, TERMINAL);
-    expect(await runApprovals(['export', ids[0]!, ids[0]!, '--out', join(s.files, 'twice.json')], twice, { home: s.server.home, now: () => NOW })).toBe(1);
+  test('every untrusted field is quoted, control characters are escaped, and the prompt stays in budget', () => {
+    const words = ['set', 'acme.rules', '["one\u001b[31m", "two\nthree"]', 'file=/x/\u0007entities.yaml'];
+    const card = ownerActionCard({ actions: ['team-entity-config'], team: 'acme', requested_by: 'lead', words: { 'team-entity-config': words } });
+    const whole = cardWhole(card);
+    expect(whole).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(whole).toContain('"acme.rules"');
+    expect(cardPrompt(card)).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(cardPrompt(card).length).toBeLessThanOrEqual(PROMPT_MAX);
+    const daemon = ownerActionCard({ actions: ['team-daemon'], team: 'daemon', requested_by: 'lead', words: { 'team-daemon': ['install', 'home=/h', ...Array.from({ length: 12 }, (_, i) => `root=/very/long/checkout/path/number/${i}`), 'presence'] } });
+    expect(cardPrompt(daemon).length).toBeLessThanOrEqual(PROMPT_MAX);
+    expect(cardPrompt(daemon)).toContain('12 checkouts');
+    expect(cardWhole(daemon)).toContain('"/very/long/checkout/path/number/11"');
+  });
+});
+
+describe('an entity unset that finds nothing still spends its answer', () => {
+  test('a missing file reads as done, spends the answer once, and the replay is refused', async () => {
+    const s = scene();
+    const asked = await configOn(s, ['unset', 'acme.root', '--request'], SEAT);
+    expect(asked.code, asked.io.err).toBe(0);
+    const id = idOf(asked.io.out);
+    const carried = await carry(s, [id]);
+    expect((await answerOn(s, carried.answer)).code).toBe(0);
+    const run = await configOn(s, ['unset', 'acme.root', '--approval', id], SEAT);
+    expect(run.code, run.io.err).toBe(0);
+    expect(run.io.out).toContain('nothing changed');
+    // A value set later is not removed under the same answer.
+    writeFileSync(entitiesPath(s.server.home), 'acme:\n  root: ~/Code/acme\n');
+    const replay = await configOn(s, ['unset', 'acme.root', '--approval', id], SEAT);
+    expect(replay.code).toBe(1);
+    expect(entitiesText(s.server.home)).toContain('root: ~/Code/acme');
   });
 });
 
@@ -589,35 +552,3 @@ describe('a machine with a local owner keeps its behaviour', () => {
     expect(io.err).toContain('team approvals export');
   });
 });
-
-describe("the credential helper's one-prompt signing", () => {
-  test('sign-many returns one signature per message under one prompt; an older helper is said to be older', () => {
-    const dir = tempBase('helper');
-    // The fake runs under this test's own runtime, whatever is on the PATH.
-    const helper = join(dir, 'owner-seat-keystore');
-    copyFileSync(join(import.meta.dir, 'fixtures', 'owner-seat', 'fake-keystore.mjs'), join(dir, 'fake-keystore.mjs'));
-    writeFileSync(helper, `#!/bin/sh\nexec '${process.execPath}' '${join(dir, 'fake-keystore.mjs')}' "$@"\n`);
-    chmodSync(helper, 0o700);
-    const store = systemOwnerSeatKeyStore(helper);
-    const created = store.create('mac');
-    if (!created.ok) throw new Error(created.why);
-    const messages = [Buffer.from('one'), Buffer.from('two'), Buffer.from('three')];
-    const signed = store.signMany!('mac', messages, 'three answers');
-    if (!signed.ok) throw new Error(signed.why);
-    expect(signed.signatures).toHaveLength(3);
-    const point = Buffer.from(created.publicKey, 'hex');
-    const key = createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: point.subarray(1, 33).toString('base64url'), y: point.subarray(33).toString('base64url') }, format: 'jwk' });
-    for (const [index, message] of messages.entries()) {
-      expect(cryptoVerify('sha256', message, { key, dsaEncoding: 'der' }, Buffer.from(signed.signatures[index]!, 'hex'))).toBe(true);
-    }
-    expect(readFileSync(join(dir, 'prompts.log'), 'utf8').trim().split('\n')).toEqual(['Touch ID: three answers']);
-    process.env.FAKE_KEYSTORE_OLD = '1';
-    try {
-      const old = store.signMany!('mac', messages, 'three answers');
-      expect(old).toMatchObject({ ok: false, unsupported: true });
-    } finally {
-      delete process.env.FAKE_KEYSTORE_OLD;
-    }
-  });
-});
-

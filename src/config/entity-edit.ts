@@ -492,7 +492,10 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     // set makes the file and the entry when they are missing, and an unset of a root that is not
     // there changes nothing. Every other key keeps to an entry the file already declares.
     const makesEntry = isFolderKey(key) && verb === 'set';
-    if (isFolderKey(key) && verb === 'unset' && !existsSync(entitiesFile)) return { kind: 'unchanged' };
+    // Every outcome that stands as done spends an answer the run carries, a value already absent
+    // included, so a replay of the same answer is refused as any replay is.
+    const done = (): { kind: 'unchanged' } | { kind: 'claim-refused' } => (claim !== undefined && !claim() ? { kind: 'claim-refused' } : { kind: 'unchanged' });
+    if (isFolderKey(key) && verb === 'unset' && !existsSync(entitiesFile)) return done();
     if (!existsSync(entitiesFile) && !makesEntry) {
       return {
         kind: 'path',
@@ -527,7 +530,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     const wrapped = hasEntitiesWrapper(record);
     const entryLookup = wrapped ? ['entities', targetName] : [targetName];
     const entry = getAt(record, entryLookup);
-    if (!entry.found && isFolderKey(key) && verb === 'unset') return { kind: 'unchanged' };
+    if (!entry.found && isFolderKey(key) && verb === 'unset') return done();
     if (!entry.found && !makesEntry) {
       return {
         kind: 'path',
@@ -555,10 +558,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
         why: `entity "${targetName}" ${key as string}: ${changed.why}; nothing was written`,
       };
     }
-    if (!changed.changed) {
-      if (claim !== undefined && !claim()) return { kind: 'claim-refused' };
-      return { kind: 'unchanged' };
-    }
+    if (!changed.changed) return done();
     const edited = editedRecordText(text, recordPath, value, changed.root);
     // A reminder list is held to the daemon's own parser on the text that would be written. A
     // problem on this entity refuses the write with the parser's reason, whatever the file carried

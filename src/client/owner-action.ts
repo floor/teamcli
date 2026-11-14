@@ -25,10 +25,9 @@ import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, r
 import { dirname, join } from 'node:path';
 import { charterLifetime } from '../charter/check.ts';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
-import { answerCard, cardLines, cardPrompt, ownerActionCard, PROMPT_MAX, shortDigest, type ApprovalCard } from './approval-card.ts';
-import { answerDigest, batchManifestBytes, type BatchManifest, type SignedBatchManifest } from './owner-batch-manifest.ts';
+import { answerCard, cardPrompt, ownerActionCard, PROMPT_MAX, type ApprovalCard } from './approval-card.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
-import { answerDeadline, deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, resolvedOwnerSigner, signOwnerAnswer, signOwnerAnswers, verifyOwnerAnswer, type AnswerWindow, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
+import { answerDeadline, deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type AnswerWindow, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { accountBindingOf, claimInLedger, ledgerSpent, machineBindingOf, readOwnerPin, requestMachineProblem, verifyPinnedOwnerAnswer } from './owner-pin.ts';
 import { ownerSpendShared, spendThroughHelper } from './owner-spend-client.ts';
 import { ownerMachinePinned } from './owner-pin-path.ts';
@@ -46,7 +45,6 @@ import {
   type OwnerAction,
   type OwnerActionParams,
   type OwnerActionRecord,
-  type MachineBinding,
 } from './owner-request-record.ts';
 
 export { actionArgsHash, carriedAnswerTimeProblem, carriedBindingProblem, carriedRequestTimeProblem, OWNER_ACTION_ID_PATTERN, OWNER_ACTION_TTL_MS, OWNER_ACTIONS, ownerActionHash, ownerActionRecordOf };
@@ -62,6 +60,13 @@ export const EXACT_ANSWER_ACTIONS: ReadonlySet<OwnerAction> = new Set<OwnerActio
 
 function exactOnly(actions: readonly OwnerAction[]): boolean {
   return actions.some((action) => EXACT_ANSWER_ACTIONS.has(action));
+}
+
+/** Why a request is refused for bundling an exact-answer action with another, or null. Such an
+ *  action's card shows its one exact change, and a bundle's card cannot: it is never bundled. */
+export function exactBundleProblem(actions: readonly OwnerAction[], id?: string): string | null {
+  if (actions.length > 1 && exactOnly(actions)) return `${id === undefined ? 'the request' : `request ${id}`} bundles ${actions.filter((action) => EXACT_ANSWER_ACTIONS.has(action)).join(', ')} with other actions; an entity's record or the machine daemon is asked for on its own`;
+  return null;
 }
 
 /** The words of a command that an approval binds: everything but how it is asked and shown. */
@@ -212,6 +217,8 @@ function requestExpiry(home: string, now: Date): string | null {
 }
 
 function sameAsk(a: OwnerActionRequestInput, b: OwnerActionRequestInput): boolean {
+  // A request for an exact-answer action is never folded into another card, nor another into it.
+  if (exactOnly(a.actions) || exactOnly(b.actions)) return false;
   return canonicalRoot(a.root) === canonicalRoot(b.root) && a.team === b.team && a.head === b.head;
 }
 
@@ -365,6 +372,8 @@ export function createOwnerActionRequest(
 ): { ok: true; record: OwnerActionRecord; inbox: string | null; text: string; page: 'live' | 'closed' } | { ok: false; why: string } {
   const actions = [...new Set(input.actions)];
   if (actions.length === 0 || actions.some((action) => !(OWNER_ACTIONS as readonly string[]).includes(action))) return { ok: false, why: `an owner-seat request names one or more of ${OWNER_ACTIONS.join(', ')}` };
+  const bundled = exactBundleProblem(actions);
+  if (bundled !== null) return { ok: false, why: bundled };
   const mine: OwnerActionRequestInput = { ...input, actions };
   const waiterId = randomBytes(8).toString('hex');
   mkdirSync(ownerActionWaitersFolder(home), { recursive: true, mode: 0o700 });
@@ -494,6 +503,8 @@ export function prepareOwnerActionAnswer(home: string, id: string, word: string,
   // there): a request without either is not signed. An answer given before stays verifiable.
   if (record.params.window === undefined) return { ok: false, why: windowlessRefusal(id) };
   if (record.params.words === undefined) return { ok: false, why: `request ${id} carries no argument words, so its card cannot show what it admits and it is not signed; record it again with --request` };
+  const bundled = exactBundleProblem(record.params.actions, id);
+  if (bundled !== null) return { ok: false, why: `${bundled}; nothing was signed` };
   // Before any card is shown or signed: a request for another machine carries all it must, and
   // says it was made no later than now by this machine's clock.
   const binding = ownerActionBindingProblem(home, record);
@@ -558,145 +569,14 @@ export function approveOwnerAction(
 ): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
   const ready = prepareOwnerActionAnswer(home, id, word, store, now, via);
   if (!ready.ok) return ready;
+  // A card that carries an exact change is signed only under a prompt inside the budget: its
+  // change, or the short form shown in full before it. Nothing is cut to fit.
+  if (via.assertion === undefined && ready.prepared.card.change !== undefined && cardPrompt(ready.prepared.card).length > PROMPT_MAX) {
+    return { ok: false, why: `request ${id} does not fit the confirmation prompt; answer it on the owner page; nothing was signed` };
+  }
   const signed = signOwnerAnswer(home, ready.prepared.answer, via.signer, store, cardPrompt(ready.prepared.card), via.assertion);
   if (!signed.ok) return signed;
   return recordOwnerActionAnswer(home, ready.prepared, signed.signed, store, now);
-}
-
-/** How one batch is shown to the owner before the prompt, when its list does not fit the prompt. */
-export type BatchShow = (lines: readonly string[], digest: string) => void;
-
-/**
- * The prompt that answers several requests, and the full list behind it. The prompt lists every
- * member's card with its exact change when that fits; otherwise it names the count and the
- * digest of the full list, which `show` puts in front of the owner before the prompt. Null when
- * the list does not fit and nothing can show it.
- */
-export function batchPrompt(cards: readonly ApprovalCard[], title: string, show?: BatchShow): string | null {
-  const lines = cards.map((card, index) => `${index + 1}) ${[...cardLines(card), ...(card.change === undefined ? [] : [card.change])].join(' — ')}`);
-  const faithful = `${title}: ${lines.join(' | ')}`;
-  if (faithful.length <= PROMPT_MAX) return faithful;
-  if (show === undefined) return null;
-  const digest = shortDigest(lines.join('\n'));
-  show(lines, digest);
-  return `${title}, each listed in full on the screen before this prompt (list digest ${digest})`;
-}
-
-function manifestOf(signer: string, machine: MachineBinding, account: string | null, records: readonly OwnerActionRecord[], answers: readonly OwnerSeatAnswer[], now: Date): BatchManifest {
-  return {
-    kind: 'owner-batch',
-    machine: { id: machine.id, name: machine.name },
-    account,
-    signer,
-    at: now.toISOString(),
-    members: records.map((record, index) => ({ request_id: record.request_id, params_sha256: record.params_sha256, answer_sha256: answerDigest(answers[index]!) })),
-  };
-}
-
-/**
- * The owner seat answers several carried requests with one word and one user-presence prompt.
- * The signer is resolved first, and every request is prepared exactly as `approveOwnerAction`
- * prepares one against that signer (it did not ask for any of them), with no answer held for any:
- * a single refusal signs none. The prompt is one card that lists them all (`batchPrompt`), and
- * the same prompt signs the ordered manifest of the set. Each answer is its own signature over its
- * own request. The answers are recorded together: if one cannot be written, those written before
- * it are taken back, and none is left to run.
- */
-export function approveOwnerActions(
-  home: string,
-  ids: readonly string[],
-  word: string,
-  store: OwnerSeatKeyStore,
-  now: Date,
-  via: { signer?: string; title: string; show?: BatchShow; machine: MachineBinding; account: string | null },
-): { ok: true; answered: { id: string; choice: 'once' | 'always' | 'deny' }[]; answers: SignedOwnerAnswer[]; manifest: SignedBatchManifest; prompts: number } | { ok: false; why: string } {
-  if (ids.length === 0) return { ok: false, why: 'no request to answer' };
-  if (new Set(ids).size !== ids.length) return { ok: false, why: 'a request is named twice; nothing was signed' };
-  const signer = resolvedOwnerSigner(home, via.signer);
-  if (!signer.ok) return signer;
-  const prepared: PreparedOwnerAnswer[] = [];
-  for (const id of ids) {
-    const ready = prepareOwnerActionAnswer(home, id, word, store, now, { signer: signer.name });
-    if (!ready.ok) return { ok: false, why: `${ready.why}; nothing was signed` };
-    if (ready.prepared.record.params.machine === undefined) return { ok: false, why: `request ${id} is this machine's own; a batch answers requests carried from another machine; nothing was signed` };
-    if (heldAnswer(home, answerPath(home, id), ready.prepared.record, store, now)) return { ok: false, why: `request ${id} was already answered; nothing was signed` };
-    prepared.push(ready.prepared);
-  }
-  const prompt = batchPrompt(prepared.map((one) => one.card), via.title, via.show);
-  if (prompt === null) return { ok: false, why: 'the requests do not fit one prompt and nothing can list them first; nothing was signed' };
-  const records = prepared.map((one) => one.record);
-  const answers = prepared.map((one) => one.answer);
-  const manifest = manifestOf(signer.name, via.machine, via.account, records, answers, now);
-  const signed = signOwnerAnswers(home, answers, signer.name, store, prompt, [batchManifestBytes(manifest)]);
-  if (!signed.ok) return signed;
-  const written = writeAnswersTogether(home, records, signed.signed, store, now);
-  if (!written.ok) return written;
-  return {
-    ok: true,
-    answered: prepared.map((one) => ({ id: one.record.request_id, choice: one.choice })),
-    answers: signed.signed,
-    manifest: { manifest, signature: signed.extraSignatures[0]! },
-    prompts: signed.prompts,
-  };
-}
-
-/**
- * The manifest for a batch whose every member the owner already answered (on the owner page):
- * one prompt that lists the set and its answers signs the ordered manifest, and nothing else.
- */
-export function signBatchManifest(
-  home: string,
-  records: readonly OwnerActionRecord[],
-  answers: readonly SignedOwnerAnswer[],
-  store: OwnerSeatKeyStore,
-  now: Date,
-  via: { signer?: string; title: string; show?: BatchShow; machine: MachineBinding; account: string | null },
-): { ok: true; manifest: SignedBatchManifest; prompts: number } | { ok: false; why: string } {
-  const signer = resolvedOwnerSigner(home, via.signer);
-  if (!signer.ok) return signer;
-  const cards = records.map((record, index) => answerCard(ownerActionCard(record.params), answers[index]!.owner_seat_answer.choice));
-  const prompt = batchPrompt(cards, `${via.title}, answered on the owner page: sign them as one set`, via.show);
-  if (prompt === null) return { ok: false, why: 'the requests do not fit one prompt and nothing can list them first; nothing was signed' };
-  const manifest = manifestOf(signer.name, via.machine, via.account, records, answers.map((one) => one.owner_seat_answer), now);
-  const signed = signOwnerAnswers(home, [], signer.name, store, prompt, [batchManifestBytes(manifest)]);
-  if (!signed.ok) return signed;
-  return { ok: true, manifest: { manifest, signature: signed.extraSignatures[0]! }, prompts: signed.prompts };
-}
-
-function answerPath(home: string, id: string): string {
-  return join(actionRequestsFolder(home), `${id}.seat-answer.json`);
-}
-
-/**
- * Writes several answers as one: each is checked to be writable first (no answer that verifies is
- * held for it, and its signer did not ask for it), then each is written; a write that fails takes
- * back every answer written before it. No standing rule is kept for any.
- */
-export function writeAnswersTogether(home: string, records: readonly OwnerActionRecord[], signed: readonly SignedOwnerAnswer[], store: OwnerSeatKeyStore, now: Date): { ok: true } | { ok: false; why: string } {
-  for (const [index, record] of records.entries()) {
-    const one = signed[index]!;
-    if (askedBy(record.params).includes(one.signer)) return { ok: false, why: `signer "${one.signer}" asked for request ${record.request_id}; no principal approves its own request; no answer was recorded` };
-    if (heldAnswer(home, answerPath(home, record.request_id), record, store, now)) return { ok: false, why: `request ${record.request_id} was already answered; no answer was recorded` };
-  }
-  const done: string[] = [];
-  const undo = (why: string): { ok: false; why: string } => {
-    for (const path of done) {
-      try { unlinkSync(path); } catch { /* already gone */ }
-    }
-    return { ok: false, why: `${why}; no answer was recorded` };
-  };
-  for (const [index, record] of records.entries()) {
-    const path = answerPath(home, record.request_id);
-    const text = `${JSON.stringify(signed[index], null, 2)}\n`;
-    const written = writeExclusive(path, text);
-    if (written === 'failed') return undo(`the answer to ${record.request_id} could not be written`);
-    if (written === 'exists') {
-      if (heldAnswer(home, path, record, store, now)) return undo(`request ${record.request_id} was already answered`);
-      if (!replaceFile(path, text)) return undo(`the answer to ${record.request_id} could not be written`);
-    }
-    done.push(path);
-  }
-  return { ok: true };
 }
 
 function heldAnswer(home: string, path: string, record: OwnerActionRecord, store: OwnerSeatKeyStore, now: Date): boolean {
@@ -732,6 +612,8 @@ export function heldOwnerActionAnswer(home: string, record: OwnerActionRecord, s
  */
 export function recordForeignOwnerAction(home: string, record: OwnerActionRecord, now: Date = new Date()): { ok: true; fresh: boolean; text: string } | { ok: false; why: string } {
   if (record.params.machine === undefined) return { ok: false, why: `request ${record.request_id} names no machine; only a request carried from another machine is recorded here` };
+  const bundled = exactBundleProblem(record.params.actions, record.request_id);
+  if (bundled !== null) return { ok: false, why: bundled };
   mkdirSync(actionRequestsFolder(home), { recursive: true, mode: 0o700 });
   const path = join(actionRequestsFolder(home), `${record.request_id}.json`);
   const text = `Request ${record.request_id} from machine ${record.params.machine.name}${record.params.account !== undefined ? ` (account ${record.params.account})` : ''}: ${ownerActionSummary(record.params)} Authorized? oui, always, or non.`;
@@ -866,6 +748,8 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
     if (dated !== null) return { ok: false, why: dated };
   }
   if (!p.actions.includes(ask.action)) return { ok: false, why: `request ${id} does not approve ${ask.action} (it names ${p.actions.join(', ')})` };
+  const bundled = exactBundleProblem(p.actions, id);
+  if (bundled !== null) return { ok: false, why: bundled };
   if (p.root !== canonicalRoot(ask.root)) return { ok: false, why: `request ${id} is for ${p.root}, not this repository` };
   if (p.team !== ask.team) return { ok: false, why: `request ${id} is for team "${p.team}", not "${ask.team}"` };
   if (p.head !== null && p.head !== ask.head) return { ok: false, why: `request ${id} was approved at HEAD ${p.head.slice(0, 12)}; HEAD is now ${ask.head?.slice(0, 12) ?? 'unknown'}` };

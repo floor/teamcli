@@ -15,11 +15,12 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { canonicalScope } from '../client/emission.ts';
-import { cardLines, ownerActionCard, ownerActionDetails, teamCreateDetails } from '../client/approval-card.ts';
+import { answerCard, cardWhole, ownerActionCard, ownerActionDetails, promptCarriesChange, teamCreateDetails } from '../client/approval-card.ts';
+import { answerChoiceOf } from '../client/emission.ts';
 import type { OwnerActionRecord } from '../client/owner-request-record.ts';
 import { approveOwnerAction, listOwnerActionRules, OWNER_ACTION_ID_PATTERN, readOwnerActionRecord, revokeOwnerActionRule } from '../client/owner-action.ts';
 import { ownerAdmitsRecord, ownerSeatStep } from '../client/owner-action-step.ts';
-import { acceptCarriedAnswer, acceptCarriedAnswerBatch, OWNER_ANSWER_BATCH_FORMAT, OWNER_REQUEST_BATCH_FORMAT, ownerRequestBatchFile, ownerRequestFile, readCarriedFile, readOwnerRequestBatchFile, readOwnerRequestFile, signCarriedBatch, signCarriedRequest, writeCarriedFile } from '../client/owner-carry.ts';
+import { acceptCarriedAnswer, ownerRequestFile, readCarriedFile, readOwnerRequestFile, signCarriedRequest, writeCarriedFile } from '../client/owner-carry.ts';
 import { fingerprintText, localOwnerSeatFingerprint } from '../client/owner-pin.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, listTeamCreateRules, readTeamCreateRecord, revokeTeamCreateRule, TEAM_CREATE_ID_PATTERN } from '../client/team-create.ts';
@@ -32,7 +33,7 @@ export const USAGE = `Usage: team approvals list [--json]
        team approvals revoke <id...> [--json]
        team approvals revoke <id...> --request [--reason <text>] [--json]
        team approvals revoke <id...> --approval <request-id> [--json]
-       team approvals export <id...> --out <file> [--json]
+       team approvals export <id> --out <file> [--json]
        team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
        team approvals answer --from <file> [--json]
 
@@ -51,11 +52,6 @@ Export writes one waiting request of this machine to a file. Sign, on the machin
 the owner's signers, records that request, shows its card (signed at once with --answer, or on
 the owner page) and writes the signed answer to a file. Answer, back on the pinned machine, checks that
 answer against the pinned owner seat and records it; the command then runs with --approval <id>.
-Export with several ids (at most 16, all waiting, all this machine's and this account's) writes
-them to one file. Sign then shows one card listing them all and signs them with one word and
-one Touch ID; each request keeps its own answer, window and single use. Answer records every
-answer in the file, and each command runs with its own --approval <id>. A member that fails any
-check refuses the whole file, at every step: nothing in it is signed or recorded.
 
 Exits 0 when the rules are listed, the details are printed, the rules are revoked, a request
 is recorded, a file is written or an answer is recorded, 1 when the details, the revoke or a
@@ -75,7 +71,7 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
   const verbs = verb === 'list' || verb === 'revoke' || verb === 'details' || carried;
   const misplaced = verbs ? misplacedOption(verb, args) : undefined;
   if (args.error || !verbs || misplaced !== undefined || (verb === 'list' && args.rest.length !== 1) || (verb === 'details' && args.rest.length !== 2) || (verb === 'revoke' && args.rest.length < 2)
-    || (verb === 'export' && args.rest.length < 2) || ((verb === 'sign' || verb === 'answer') && args.rest.length !== 1)) {
+    || (verb === 'export' && args.rest.length !== 2) || ((verb === 'sign' || verb === 'answer') && args.rest.length !== 1)) {
     const why = args.error ?? misplaced ?? (verb === undefined ? 'a verb is required: list, details, revoke, export, sign or answer'
       : verb === 'revoke' || verb === 'export' ? (args.rest.length < 2 ? 'an id is required' : `unexpected "${args.rest[args.rest.length - 1]}"`)
         : verb === 'details' && args.rest.length < 2 ? 'an id is required' : `unexpected "${args.rest[args.rest.length - 1]}"`);
@@ -86,9 +82,7 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
   const home = sources.home ?? homedir();
   const now = sources.now?.() ?? new Date();
   const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
-  if (verb === 'export') return args.rest.length === 2
-    ? exportRequest(io, json, home, now, store, args.rest[1]!, args.values.out!)
-    : exportBatch(io, json, home, now, store, args.rest.slice(1), args.values.out!);
+  if (verb === 'export') return exportRequest(io, json, home, now, store, args.rest[1]!, args.values.out!);
   if (verb === 'sign') return signRequest(io, json, home, now, store, args.values);
   if (verb === 'answer') return answerRequest(io, json, home, now, store, args.values.from!);
   if (verb === 'details') {
@@ -234,39 +228,24 @@ function exportRequest(io: Io, json: boolean, home: string, now: Date, store: Ow
   return 0;
 }
 
-/** On a machine whose owner seat is pinned: several waiting requests of this machine, written to one file. */
-function exportBatch(io: Io, json: boolean, home: string, now: Date, store: OwnerSeatKeyStore, ids: string[], out: string): number {
-  const made = ownerRequestBatchFile(home, ids, store, now);
-  if (!made.ok) return refused(io, json, made.why);
-  const written = writeCarriedFile(io.cwd, out, made.file);
-  if (!written.ok) return refused(io, json, written.why);
-  const fingerprint = fingerprintText(made.file.owner_seat);
-  const expiries = made.file.requests.map((record) => record.expires_at).filter((at): at is string => at !== null).sort();
-  const first = expiries[0] ?? null;
-  if (json) io.stdout(`${JSON.stringify({ format: 1, status: 'exported', request_ids: ids, file: written.path, machine: made.file.machine, owner_seat: fingerprint, expires_at: made.file.requests.map((record) => ({ request_id: record.request_id, expires_at: record.expires_at })) })}\n`);
-  else io.stdout(`team approvals: ${ids.length} requests of machine ${made.file.machine.name} written to ${written.path}\nthe first expires ${first ?? 'never'}; on the machine that holds the owner's signers run: team approvals sign --from <file> --out <answer file>\n`);
-  // exit: approvals.exported
-  return 0;
-}
-
 /** On the machine that holds the owner's signers: record a carried request, sign it, write the answer file. */
 function signRequest(io: Io, json: boolean, home: string, now: Date, store: OwnerSeatKeyStore, values: Record<string, string>): number {
   const read = readCarriedFile(io.cwd, values.from!);
   if (!read.ok) return refused(io, json, read.why);
-  if (isFormat(read.value, OWNER_REQUEST_BATCH_FORMAT)) return signBatch(io, json, home, now, store, values, read.value);
   const file = readOwnerRequestFile(read.value);
   if (!file.ok) return refused(io, json, file.why);
   const assertion = assertionOf(values.assertion, io.cwd);
   if (assertion === 'unreadable') return refused(io, json, `${values.assertion} is not a passkey assertion (authenticator_data, client_data_json, signature)`);
   const word = values.answer;
   const answer = word === undefined ? null : (record: OwnerActionRecord) => {
-    // The card in full, its exact change included, before the confirmation: the prompt may carry
-    // the change's short form only.
-    const card = ownerActionCard(record.params);
-    io.stderr(`team approvals: the confirmation that follows answers request ${record.request_id}: ${[...cardLines(card), ...(card.change === undefined ? [] : [card.change])].join(' — ')}\n`);
+    // One snapshot: the card is drawn from this record, shown whole, and the answer is signed only
+    // over the record with this same parameter hash, so a request replaced in between is refused.
+    const shown = showWhole(io, record, word);
+    if (!shown.ok) return shown;
     const answered = approveOwnerAction(home, record.request_id, word, store, now, {
       ...(values.signer !== undefined ? { signer: values.signer } : {}),
       ...(assertion !== undefined ? { assertion } : {}),
+      expect: record.params_sha256,
     });
     return answered.ok ? { ok: true as const } : answered;
   };
@@ -291,58 +270,26 @@ function signRequest(io: Io, json: boolean, home: string, now: Date, store: Owne
   return 0;
 }
 
-function isFormat(value: unknown, format: string): boolean {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) && (value as { format?: unknown }).format === format;
-}
-
-/** A batch of carried requests: one card listing them all, one word, one Touch ID. */
-function signBatch(io: Io, json: boolean, home: string, now: Date, store: OwnerSeatKeyStore, values: Record<string, string>, raw: unknown): number {
-  if (values.assertion !== undefined) return refused(io, json, 'a passkey assertion signs one request; a batch is signed with --answer on the device that holds the signer, or answered on the owner page');
-  const read = readOwnerRequestBatchFile(raw);
-  if (!read.ok) return refused(io, json, read.why);
-  // A list that does not fit the signing prompt is shown here first, whole, with the digest the
-  // prompt then names: the owner reads every change before the one confirmation.
-  const show = (lines: readonly string[], digest: string): void => {
-    io.stderr(`team approvals: the confirmation that follows answers these ${lines.length} requests (list digest ${digest}):\n${lines.map((line) => `  ${line}\n`).join('')}`);
-  };
-  const signed = signCarriedBatch(home, read.members, store, now, values.answer ?? null, values.signer, localOwnerSeatFingerprint(home, now), show);
-  if (!signed.ok) return refused(io, json, signed.why);
-  const machine = read.batch.machine;
-  const ids = read.batch.requests.map((record) => record.request_id);
-  const stale = signed.stalePin
-    ? `note: machine ${machine.name} pinned another owner seat (${fingerprintText(read.batch.owner_seat)}); if the answers are refused there, pin a fresh export on it (team owner-seat export, then team owner-seat pin)\n`
-    : '';
-  if (signed.kind === 'waiting') {
-    if (json) io.stdout(`${JSON.stringify({ format: 1, status: 'waiting', request_ids: ids, waiting: signed.waiting, machine, stale_pin: signed.stalePin })}\n`);
-    else io.stdout(`team approvals: ${signed.waiting.length} of ${ids.length} requests from machine ${machine.name} wait on the owner page (${signed.waiting.join(', ')}); run this again once the owner has answered them, or pass --answer <oui|always|non> to sign them all now with one Touch ID\n${stale}`);
-    // exit: approvals.sign-waiting
-    return 0;
+/**
+ * Before a carried request is signed here: the card and its exact change, whole, on the terminal.
+ * When the signing prompt cannot carry the change itself (it carries its short form), the change
+ * must be shown where the owner reads it: a sign whose terminal is not a terminal is refused, and
+ * the owner answers on the owner page instead.
+ */
+function showWhole(io: Io, record: OwnerActionRecord, word: string): { ok: true } | { ok: false; why: string } {
+  const choice = answerChoiceOf(word);
+  const card = choice === null ? ownerActionCard(record.params) : answerCard(ownerActionCard(record.params), choice);
+  if (!promptCarriesChange(card) && io.stderrIsTTY !== true) {
+    return { ok: false, why: `request ${record.request_id} changes more than the confirmation prompt can show, and this run has no terminal to show it whole: run team approvals sign at a terminal, or answer it on the owner page; nothing was signed` };
   }
-  const written = writeCarriedFile(io.cwd, values.out!, signed.file);
-  if (!written.ok) return refused(io, json, written.why);
-  const prompts = signed.prompts > 1 ? `note: the credential helper predates signing several answers at once, so each answer and the set were signed with a Touch ID of their own (${signed.prompts} in all); rebuild the helper to sign a batch with one\n` : '';
-  if (json) io.stdout(`${JSON.stringify({ format: 1, status: 'answered', request_ids: ids, machine, answers: signed.answered.map((one) => ({ request_id: one.id, choice: one.choice, signer: one.signer })), prompts: signed.prompts, file: written.path, stale_pin: signed.stalePin })}\n`);
-  const choices = signed.answered.map((one) => `${one.id} ${one.choice}`).join(', ');
-  if (!json) io.stdout(`team approvals: ${ids.length} requests for machine ${machine.name} answered (${choices}); answers written to ${written.path}\non machine ${machine.name} run: team approvals answer --from <file>\n${prompts}${stale}`);
-  // exit: approvals.signed
-  return 0;
+  io.stderr(`team approvals: the confirmation that follows answers request ${record.request_id}: ${cardWhole(card)}\n`);
+  return { ok: true };
 }
 
 /** Back on the machine whose owner seat is pinned: record a carried answer for one of its requests. */
 function answerRequest(io: Io, json: boolean, home: string, now: Date, store: OwnerSeatKeyStore, from: string): number {
   const read = readCarriedFile(io.cwd, from);
   if (!read.ok) return refused(io, json, read.why);
-  if (isFormat(read.value, OWNER_ANSWER_BATCH_FORMAT)) {
-    const batch = acceptCarriedAnswerBatch(home, read.value, store, now);
-    if (!batch.ok) return refused(io, json, batch.why);
-    if (json) io.stdout(`${JSON.stringify({ format: 1, status: 'answered', answers: batch.answered.map((one) => ({ request_id: one.id, choice: one.choice, signer: one.signer })), owner_seat: fingerprintText(batch.fingerprint) })}\n`);
-    else {
-      io.stdout(`team approvals: ${batch.answered.length} answers verified against the pinned owner seat ${fingerprintText(batch.fingerprint)} and recorded\n`);
-      for (const one of batch.answered) io.stdout(one.choice === 'deny' ? `  ${one.id}: denied by ${one.signer}; nothing runs\n` : `  ${one.id}: ${one.choice} by ${one.signer}; run its command again with --approval ${one.id}\n`);
-    }
-    // exit: approvals.answered
-    return 0;
-  }
   const accepted = acceptCarriedAnswer(home, read.value, store, now);
   if (!accepted.ok) return refused(io, json, accepted.why);
   const once = accepted.choice === 'always' ? ' (on this machine it admits this request once; no standing rule is kept here)' : '';

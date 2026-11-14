@@ -48,10 +48,6 @@ export type OwnerSeatKeyStore = {
   publicKey: (label: string) => { ok: true; publicKey: string } | { ok: false; why: string };
   /** Signs `message` (ECDSA P-256 SHA-256, DER, hex), prompting for user presence with `reason`. */
   sign: (label: string, message: Buffer, reason: string) => { ok: true; signature: string } | { ok: false; why: string };
-  /** Signs every message under one user-presence prompt with `reason`, one signature per message
-   *  in order. Absent, or `unsupported` (a helper older than this build), each message is signed
-   *  with `sign` and its own prompt. */
-  signMany?: (label: string, messages: readonly Buffer[], reason: string) => { ok: true; signatures: string[] } | { ok: false; why: string; unsupported?: true };
   /** Stores a pin (a public key held elsewhere) under `label`; never overwrites one. */
   pinSet: (label: string, value: string) => { ok: true } | { ok: false; why: string };
   /** Reads a pin back. */
@@ -91,18 +87,6 @@ export function systemOwnerSeatKeyStore(helper: string = ownerSeatHelperPath()):
         const out = run(['sign', label, reason], message.toString('hex'));
         return /^[0-9a-f]+$/.test(out) ? { ok: true, signature: out } : { ok: false, why: 'the helper returned no signature' };
       } catch {
-        return { ok: false, why: 'the signature was refused or the user-presence prompt was cancelled' };
-      }
-    },
-    signMany: (label, messages, reason) => {
-      try {
-        const out = run(['sign-many', label, reason], messages.map((message) => message.toString('hex')).join('\n'));
-        const signatures = out.split('\n').map((line) => line.trim());
-        if (signatures.length !== messages.length || !signatures.every((one) => /^[0-9a-f]+$/.test(one))) return { ok: false, why: 'the helper did not return one signature per answer' };
-        return { ok: true, signatures };
-      } catch (error) {
-        const said = String((error as { stderr?: string }).stderr ?? '');
-        if (said.includes('unknown command sign-many')) return { ok: false, why: 'the credential helper predates signing several answers at once', unsupported: true };
         return { ok: false, why: 'the signature was refused or the user-presence prompt was cancelled' };
       }
     },
@@ -403,63 +387,6 @@ export function signOwnerAnswer(home: string, answer: OwnerSeatAnswer, signerNam
   const signed = store.sign(signer.label, ownerSeatAnswerBytes(answer), reason);
   if (!signed.ok) return signed;
   return { ok: true, signed: { owner_seat_answer: answer, signer: signer.name, signature: signed.signature } };
-}
-
-/** Which signer an answer signed with `signerName` is signed by: the one named, or the only one. */
-export function resolvedOwnerSigner(home: string, signerName: string | undefined): { ok: true; name: string } | { ok: false; why: string } {
-  const record = readOwnerSeat(home);
-  if (record === null) return { ok: false, why: 'no owner seat is registered: the owner runs team grant --add-owner-seat --team <team> --signer <name>' };
-  const signer = signerName === undefined
-    ? (record.signers.length === 1 ? record.signers[0] : undefined)
-    : record.signers.find((s) => s.name === signerName);
-  if (signer === undefined) return { ok: false, why: signerName === undefined ? `name the signer with --signer (${record.signers.map((s) => s.name).join(', ')})` : `"${signerName}" is not a registered owner signer` };
-  return { ok: true, name: signer.name };
-}
-
-/**
- * Several answers, and any further messages (a batch manifest), signed by one signer under one
- * user-presence prompt (`signMany`), each its own signature over its own bytes, so each answer
- * verifies exactly as an answer signed alone. The same checks as `signOwnerAnswer` come first,
- * before any prompt. A passkey signs one challenge per ceremony, so it is refused here; a store
- * with no `signMany`, or a helper older than this build, signs each message with its own prompt,
- * and `prompts` says how many there were.
- */
-export function signOwnerAnswers(home: string, answers: readonly OwnerSeatAnswer[], signerName: string | undefined, store: OwnerSeatKeyStore, reason: string, extra: readonly Buffer[] = []): { ok: true; signed: SignedOwnerAnswer[]; extraSignatures: string[]; signer: string; prompts: number } | { ok: false; why: string } {
-  const record = readOwnerSeat(home);
-  if (record === null) return { ok: false, why: 'no owner seat is registered: the owner runs team grant --add-owner-seat --team <team> --signer <name>' };
-  const named = resolvedOwnerSigner(home, signerName);
-  if (!named.ok) return named;
-  const signer = record.signers.find((s) => s.name === named.name)!;
-  const accepted = acceptedSigners(home, record);
-  if ('why' in accepted) return { ok: false, why: accepted.why };
-  if (!accepted.names.includes(signer.name)) return { ok: false, why: `signer "${signer.name}" is not accepted by the owner-signers policy (${accepted.names.join(', ') || 'none'})` };
-  if (signer.type === 'webauthn') return { ok: false, why: `signer "${signer.name}" is a passkey, which signs one request per ceremony: answer each request on the owner page, or sign them one by one with --assertion` };
-  if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available` };
-  const messages = [...answers.map((answer) => ownerSeatAnswerBytes(answer)), ...extra];
-  let signatures: string[];
-  let prompts: number;
-  const together = store.signMany?.(signer.label, messages, reason);
-  if (together !== undefined && together.ok) {
-    signatures = together.signatures;
-    prompts = 1;
-  } else if (together !== undefined && !together.unsupported) {
-    return together;
-  } else {
-    signatures = [];
-    for (const message of messages) {
-      const one = store.sign(signer.label, message, reason);
-      if (!one.ok) return signatures.length === 0 ? one : { ok: false, why: `${one.why}; nothing was recorded` };
-      signatures.push(one.signature);
-    }
-    prompts = messages.length;
-  }
-  return {
-    ok: true,
-    signed: answers.map((answer, index) => ({ owner_seat_answer: answer, signer: signer.name, signature: signatures[index]! })),
-    extraSignatures: signatures.slice(answers.length),
-    signer: signer.name,
-    prompts,
-  };
 }
 
 // The later answer: a signed deferral is not an approval. It hides one request until a return

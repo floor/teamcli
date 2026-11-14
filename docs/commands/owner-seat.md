@@ -80,12 +80,13 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
 - **Which commands take the answer.** `team import`, `migrate`, `up` (and `init` bundled with
   it), `add`, `send`, `down`, `bus`, `forget`, `approvals revoke`, `batch`, `team config` (a
   team's record, and an entity's own record: `<entity>.root`, `.worktrees`, `.names.unique`,
-  `.reminders`, `.rules`, and a project's rules), `team daemon install|restart|uninstall|fault-watch`,
+  `.reminders`, `.rules`, and a project's rules), `team daemon install|uninstall`,
   `team development-mode` and `team client general-grant` read `--request` and
-  `--approval <id>`. Several requests can travel in one file and be signed with one card and
-  one confirmation (`team approvals export <id> <id> …`).
+  `--approval <id>`. Each request travels and is signed on its own; signing several carried
+  requests with one confirmation is planned.
 - **Which commands do not yet.** These stay the owner's at a terminal, so on this machine they
-  are refused until they take an answer: `team grant` (outside its `--client` form), `revoke`,
+  are refused until they take an answer: `team daemon restart` and `fault-watch`, `team grant`
+  (outside its `--client` form), `revoke`,
   `delegate`, `policy set|unset`, `settings set|unset`, `tempo`, `broker`, `start`,
   `swap --now`, `mcp setup`, `approve`, `remove --abandon`, `rename` (a team, `--rekey`),
   `migrate --root`, and `init --approval-mode` and `--revoke-approval` (no `always` rule is kept
