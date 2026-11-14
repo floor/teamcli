@@ -490,6 +490,52 @@ describe('an exact change is never bundled, and is shown whole before it is sign
     expect((byPasskey as { why: string }).why).toContain('sign challenge');
   });
 
+  test('a device key signs only inside the budget, assertion or not, and takes no assertion', async () => {
+    const mac = signerMachine();
+    const root = join(mac.home, 'repo');
+    mkdirSync(root, { recursive: true });
+    const entity = `e${'x'.repeat(127)}`;
+    const asked = testIo(root, SEAT);
+    expect(await runConfig(['set', `${entity}.rules`, '[ "one" ]', '--request'], asked, { home: mac.home, now: () => NOW })).toBe(0);
+    const long = idOf(asked.out);
+    const { approveOwnerAction } = await import('../src/client/owner-action.ts');
+    const empty = { authenticator_data: '', client_data_json: '', signature: '' };
+    // An assertion beside a device-key signer does not lift the budget.
+    const over = approveOwnerAction(mac.home, long, 'oui', mac.store, NOW, { signer: 'mac', assertion: empty });
+    expect((over as { why: string }).why).toContain('does not fit the confirmation prompt');
+    // Inside the budget, an assertion beside a device key is refused, never ignored.
+    const short = testIo(root, SEAT);
+    expect(await runConfig(['set', 'acme.root', '~/Code/acme', '--request'], short, { home: mac.home, now: () => NOW })).toBe(0);
+    const withAssertion = approveOwnerAction(mac.home, idOf(short.out), 'oui', mac.store, NOW, { signer: 'mac', assertion: empty });
+    expect((withAssertion as { why: string }).why).toContain('takes no passkey assertion');
+    expect(mac.store.prompts).toHaveLength(0);
+  });
+
+  test('sign refuses --assertion for a device-key signer as a usage error', async () => {
+    const s = scene();
+    const asked = await daemonOn(s, ['uninstall', '--request'], fakeService(), SEAT);
+    const id = idOf(asked.io.out);
+    const request = join(s.files, 'request.json');
+    expect(await runApprovals(['export', id, '--out', request], testIo(s.server.root, TERMINAL), { home: s.server.home, now: () => NOW })).toBe(0);
+    const assertion = join(s.files, 'assertion.json');
+    writeFileSync(assertion, JSON.stringify({ authenticator_data: '', client_data_json: '', signature: '' }));
+    const io = testIo(s.mac.home);
+    io.stderrIsTTY = true;
+    expect(await runApprovals(['sign', '--from', request, '--out', join(s.files, 'a.json'), '--answer', 'oui', '--signer', 'mac', '--assertion', assertion], io, { home: s.mac.home, now: () => NOW, ownerSeatStore: s.mac.store })).toBe(2);
+    expect(io.err).toContain('--assertion belongs to a passkey signer');
+    expect(s.mac.store.prompts).toHaveLength(0);
+  });
+
+  test("an uninstall's short form is bounded and carries a digest, so a long home is signed only at a terminal", async () => {
+    const home = `/${'deep/'.repeat(40)}home`;
+    const card = ownerActionCard({ actions: ['team-daemon'], team: 'daemon', requested_by: 'lead', words: { 'team-daemon': ['uninstall', `home=${home}`] } });
+    expect(card.change).toBe(`uninstall for home "${home}"`);
+    expect(cardPrompt(card).length).toBeLessThanOrEqual(PROMPT_MAX);
+    expect(cardPrompt(card)).toContain(`digest ${shortDigest(JSON.stringify({ verb: 'uninstall', home }))}, shown in full on screen`);
+    const { promptCarriesChange } = await import('../src/client/approval-card.ts');
+    expect(promptCarriesChange(card)).toBe(false);
+  });
+
   test('every untrusted field is quoted, control characters are escaped, and the prompt stays in budget', () => {
     const words = ['set', 'acme.rules', '["one\u001b[31m", "two\nthree"]', 'file=/x/\u0007entities.yaml'];
     const card = ownerActionCard({ actions: ['team-entity-config'], team: 'acme', requested_by: 'lead', words: { 'team-entity-config': words } });

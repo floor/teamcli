@@ -578,11 +578,12 @@ export function approveOwnerAction(
 ): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
   const ready = prepareOwnerActionAnswer(home, id, word, store, now, via);
   if (!ready.ok) return ready;
-  // A card that carries an exact change is signed by the credential store only under a prompt
-  // inside the budget: its change, or the short form shown in full before it. Nothing is cut to
-  // fit. A passkey signer shows no such prompt: its challenge is prepared and answered on the owner
-  // page, which shows the whole card, and is bound to the same record by `expect`.
-  if (via.assertion === undefined && deviceKeySigner(home, via.signer) && ready.prepared.card.change !== undefined && cardPrompt(ready.prepared.card).length > PROMPT_MAX) {
+  // A card that carries an exact change is signed by a device key only under a prompt inside the
+  // budget: its change, or the short form shown in full before it. Nothing is cut to fit. Whether
+  // an assertion was passed does not matter: a device key signs with its own prompt, and takes no
+  // assertion (`signOwnerAnswer`). A passkey signer shows no such prompt: its challenge is prepared
+  // and answered on the owner page, which shows the whole card, and is bound by `expect`.
+  if (deviceKeySigner(home, via.signer) && ready.prepared.card.change !== undefined && cardPrompt(ready.prepared.card).length > PROMPT_MAX) {
     return { ok: false, why: `request ${id} does not fit the confirmation prompt; answer it on the owner page; nothing was signed` };
   }
   const signed = signOwnerAnswer(home, ready.prepared.answer, via.signer, store, cardPrompt(ready.prepared.card), via.assertion);

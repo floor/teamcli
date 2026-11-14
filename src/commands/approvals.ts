@@ -22,7 +22,7 @@ import { approveOwnerAction, listOwnerActionRules, OWNER_ACTION_ID_PATTERN, read
 import { ownerAdmitsRecord, ownerSeatStep } from '../client/owner-action-step.ts';
 import { acceptCarriedAnswer, ownerRequestFile, readCarriedFile, readOwnerRequestFile, signCarriedRequest, writeCarriedFile } from '../client/owner-carry.ts';
 import { fingerprintText, localOwnerSeatFingerprint } from '../client/owner-pin.ts';
-import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, listTeamCreateRules, readTeamCreateRecord, revokeTeamCreateRule, TEAM_CREATE_ID_PATTERN } from '../client/team-create.ts';
 import { describeCaller, detachedRefusal } from '../caller.ts';
 import { hasJsonFlag } from '../output/index.ts';
@@ -234,6 +234,16 @@ function signRequest(io: Io, json: boolean, home: string, now: Date, store: Owne
   if (!read.ok) return refused(io, json, read.why);
   const file = readOwnerRequestFile(read.value);
   if (!file.ok) return refused(io, json, file.why);
+  // A passkey assertion belongs to a passkey signer: a device key signs with its own prompt.
+  if (values.assertion !== undefined) {
+    const seat = readOwnerSeat(home);
+    const named = seat === null ? undefined : values.signer === undefined ? (seat.signers.length === 1 ? seat.signers[0] : undefined) : seat.signers.find((one) => one.name === values.signer);
+    if (named !== undefined && named.type !== 'webauthn') {
+      io.stderr(`team approvals: --assertion belongs to a passkey signer; signer "${named.name}" holds a device key and signs with its own prompt\n${USAGE}`);
+      // exit: approvals.invocation
+      return 2;
+    }
+  }
   const assertion = assertionOf(values.assertion, io.cwd);
   if (assertion === 'unreadable') return refused(io, json, `${values.assertion} is not a passkey assertion (authenticator_data, client_data_json, signature)`);
   const word = values.answer;
