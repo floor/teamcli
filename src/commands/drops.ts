@@ -213,10 +213,10 @@ export const realSources: DropsSources = { home: homedir() };
 
 /** How many bodies one `--read` hands over. The newest are read first: a bounded batch keeps a
  *  turn from carrying an unbounded folder, and the newest mail is the mail the turn is for.
- *  Whatever is left waits for the next turn. A plain-text drop an earlier build wrote, a record
- *  that is otherwise malformed, or an earlier delivery of the general seat brief is not a body
- *  and does not use one of the ten. */
-export const DROP_READ_BATCH = 10;
+ *  Whatever is left waits for the next turn, and the read says how many. A plain-text drop an
+ *  earlier build wrote, a record that is otherwise malformed, or an earlier delivery of the
+ *  general seat brief is not a body and does not use one of the five. */
+export const DROP_READ_BATCH = 5;
 
 /** Whether every step down to the seat's drop folder is a real folder of this user's. A step
  *  that is missing is no fault — no send has written yet, and the read is empty; anything else
@@ -732,7 +732,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const settled = settledFacts(dropDir, context, sources.home);
     // Only a name the inbox lists is served. A file whose name is not a message id stays on the
     // folder listing and is not handed over here.
-    const waiting = listUnread(dropDir, context, sources.home);
+    const waiting = listUnread(dropDir, context, sources.home, undefined, undefined, { legacy: 'include' });
     const bodies: string[] = [];
     const seals: Array<() => boolean> = [];
     // The ids a peek showed: a peek writes no receipt, so the log line below is its only trace.
@@ -748,7 +748,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     // its content, whether or not another body was served.
     const receiptRefusals: string[] = [];
     // Newest first: the turn reads what has just landed, and the tail of a backlog waits for the
-    // next turn. A file that is not a signed record never uses one of the ten: a plain-text drop
+    // next turn. A file that is not a signed record never uses one of the five: a plain-text drop
     // an earlier build wrote is counted and skipped, and the signed records around it are read.
     for (const message of [...waiting].reverse()) {
       if (bodies.length >= DROP_READ_BATCH) break;
@@ -792,7 +792,16 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         }
       }
     }
-    if (bodies.length > 0) io.stdout(`${bodies.join('\n\n')}\n`);
+    // The rest of a backlog is a count, never more bodies: the turn hears how many older messages
+    // still wait and where they are listed, and reads them when it chooses.
+    const handled = bodies.length + superseded + receiptRefusals.length + (refusal === null ? 0 : 1);
+    const older = Math.max(0, waiting.filter((one) => one.legacy !== true).length - handled);
+    if (bodies.length > 0) {
+      const tail = older > 0
+        ? `\n\n${String(older)} older unread message(s) wait in this inbox; inbox_check or team drops --read lists them`
+        : '';
+      io.stdout(`${bodies.join('\n\n')}${tail}\n`);
+    }
     // The receipt follows the hand-over. A stdout that throws never reaches here, so the message
     // stays unread. A seal that loses the name, or cannot be flushed, is said with the other
     // receipt refusals; the body was already handed over.

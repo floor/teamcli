@@ -804,7 +804,10 @@ function seatWorkPlans(
 ): SeatCantWork[] {
   const episodes = (memory.slots['seat-cant-work'] ??= {}) as Record<string, { since: number; told: boolean; restarted: boolean; open: boolean }>;
   for (const episode of Object.values(episodes)) episode.open = false;
-  const waiting = new Set(mailbox.map((record) => record.to));
+  // A seat waits on a wake only for mail its own drop read would serve: a record in the older
+  // mailbox store, or one a drop receipt already settled, waits on nothing this seat's wake could
+  // take, and counting it flagged seats with an empty inbox as unable to work.
+  const waiting = new Set(mailbox.filter((record) => record.served).map((record) => record.to));
   const plans: SeatCantWork[] = [];
   for (const obs of observations) {
     if (!obs.agent || obs.lead) continue;

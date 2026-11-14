@@ -143,6 +143,8 @@ export type InboxMessage = {
   ts: string;
   bytes: number;
   sender_attribution: SenderAttribution;
+  /** A plain-text drop an earlier build wrote: listed only when the caller asks for them. */
+  legacy?: true;
 };
 
 export function listenerPath(dropDir: string): string {
@@ -480,6 +482,10 @@ export function listUnread(
   home: string,
   records?: RecordReader,
   listed?: (names: readonly string[]) => void,
+  /** `include` lists plain-text drops an earlier build wrote, marked `legacy`. By default they
+   *  are left out: no reader can serve one, so they are not mail waiting, and a counter that
+   *  rang for them rang forever. */
+  options: { legacy?: 'include' } = {},
 ): InboxMessage[] {
   let names: string[];
   try {
@@ -525,6 +531,8 @@ export function listUnread(
     // dates only a record the key cannot vouch for. The sender follows the same rule: the
     // record's own signed claim when it verifies, the marker's word only when it does not — and
     // only the record's claim can be attributed to anything.
+    const legacy = payload === null && legacyDropAt(at);
+    if (legacy && options.legacy !== 'include') continue;
     const signedAt = signedTimeOfPayload(payload);
     const sender = payload !== null ? payload.from : marker.from;
     const senderAttribution = payload === null
@@ -536,6 +544,7 @@ export function listUnread(
       ts: signedAt ?? marker.ts ?? new Date(mtime).toISOString(),
       bytes: size,
       sender_attribution: senderAttribution,
+      ...(legacy ? { legacy: true as const } : {}),
     });
   }
   return messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));

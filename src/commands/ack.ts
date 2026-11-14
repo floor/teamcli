@@ -299,7 +299,12 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     try {
       settled = withClientGrantLock(host.home, (): { ok: true; outcome: ReturnType<typeof publishRecordRead> } | { ok: false; why: string } => {
         const active = activeClientUpGrant(host.home, bundleOrigin, host.now());
-        if (!active.ok) return { ok: false, why: `the originating grant ${bundleOrigin.grant.grantId} is not active: ${active.why}; nothing was written` };
+        // A revoked or expired grant ends what the client may do, not the seat's own reading of a
+        // record the grant once admitted: the recipient was proven against the stored grant above,
+        // and a read receipt grants nothing. Without it the record stayed unread for good, and
+        // every reader that replays unread mail replayed it forever. A reply stays gated on an
+        // active grant.
+        if (!active.ok) return { ok: true, outcome: publish() };
         const fresh = resolveBundleSendTarget(host.home, active.grant, acknowledged.to);
         if (!fresh.ok) return { ok: false, why: `the bundle grant's recipient can no longer be resolved: ${fresh.why}; nothing was written` };
         if (

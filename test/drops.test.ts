@@ -610,7 +610,7 @@ describe('team drops --read', () => {
     expect(seat).toEqual({ code: 1, out: '', err: 'team drops: the team file declares no seat "helper"\n' });
   });
 
-  test('a turn reads the ten newest records first, and leaves the rest waiting', async () => {
+  test('a turn reads the five newest records first, counts the rest, and leaves them waiting', async () => {
     const ids = Array.from(
       { length: 12 },
       (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`,
@@ -622,13 +622,20 @@ describe('team drops --read', () => {
     }
     const first = await run(['--read', '--seat', 'lead']);
     expect(first.code).toBe(0);
-    // Newest first: the ten newest are handed over, and the two that wait are the oldest.
+    // Newest first: the five newest are handed over, and the rest is a count, not more bodies.
     expect(first.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(
-      Array.from({ length: 10 }, (_, index) => `message ${String(11 - index)}`),
+      Array.from({ length: 5 }, (_, index) => `message ${String(11 - index)}`),
     );
-    expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
+    expect(first.out).toContain('7 older unread message(s) wait in this inbox');
+    expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(5);
     const second = await run(['--read', '--seat', 'lead']);
-    expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
+    expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(
+      Array.from({ length: 5 }, (_, index) => `message ${String(6 - index)}`),
+    );
+    expect(second.out).toContain('2 older unread message(s) wait in this inbox');
+    const last = await run(['--read', '--seat', 'lead']);
+    expect(last.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
+    expect(last.out).not.toContain('older unread');
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
     // The receipts are what leave nothing behind: a third read names the newest and serves no body.
     const third = await run(['--read', '--seat', 'lead']);
@@ -669,7 +676,7 @@ describe('team drops --read', () => {
     expect(events.events.filter((event) => event.payload.kind === 'record.invalid')).toEqual([]);
   });
 
-  test('a legacy drop in the newest slot uses no batch slot: the ten newest signed records are read', async () => {
+  test('a legacy drop in the newest slot uses no batch slot and is not counted as waiting mail', async () => {
     const ids = Array.from(
       { length: 12 },
       (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`,
@@ -685,15 +692,12 @@ describe('team drops --read', () => {
     const first = await run(['--read', '--seat', 'lead']);
     expect(first.code).toBe(0);
     expect(first.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(
-      Array.from({ length: 10 }, (_, index) => `message ${String(11 - index)}`),
+      Array.from({ length: 5 }, (_, index) => `message ${String(11 - index)}`),
     );
+    // The old file is never counted as waiting mail: the count is of signed records alone.
+    expect(first.out).toContain('7 older unread message(s) wait in this inbox');
     expect(first.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
-    expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
-    // The two oldest signed records are what waited, not the old file: it is skipped every turn.
-    const second = await run(['--read', '--seat', 'lead']);
-    expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
-    expect(second.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
-    expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
+    expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(5);
   });
 
   test('a signed runtime report an earlier build named `unread-<uuid>` is served and receipted like any record', async () => {
