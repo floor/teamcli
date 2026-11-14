@@ -140,6 +140,9 @@ export type SignalWatch = {
 /** The spawn and exit `restartSelf` uses. The launch passes none; a scene supplies them so it can
  *  drive the child's events without spawning a process or ending the suite. */
 export type RestartHooks = {
+  /** The launch epoch this process is bound to. The replacement is started bound to exactly it,
+   *  and marked as a replacement, so it never adopts a later launch's claim. */
+  epoch?: string;
   spawnChild?: typeof spawn;
   exit?: (code: number) => void;
   say?: (line: string) => void;
@@ -165,6 +168,24 @@ export type RestartHooks = {
  *  failure cannot be caught around the call: this process leaves only after the child's `error`
  *  (exit 1) or its `exit` (its own code). A quiet exit 0 would end the client's session as if
  *  the fresh server had taken over. */
+/** Set on a server started by `restartSelf`: it serves only the launch its parent was bound to. */
+export const SERVE_REPLACEMENT_ENV = 'TEAMCLI_SERVE_REPLACEMENT';
+
+/** The arguments without any `--epoch <value>` or `--epoch=<value>`. */
+function withoutEpoch(args: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const word = args[index]!;
+    if (word === '--epoch') {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith('--epoch=')) continue;
+    kept.push(word);
+  }
+  return kept;
+}
+
 export function restartSelf(hooks: RestartHooks = {}): void {
   const start = hooks.spawnChild ?? spawn;
   const say = hooks.say ?? ((line: string) => process.stderr.write(line));
@@ -191,7 +212,11 @@ export function restartSelf(hooks: RestartHooks = {}): void {
   const { command, entry } = selfRunner();
   let child: ChildProcess;
   try {
-    child = start(command, [entry, ...process.argv.slice(2)], { stdio: 'inherit' });
+    const args = withoutEpoch(process.argv.slice(2));
+    child = start(command, [entry, ...args, ...(hooks.epoch === undefined ? [] : ['--epoch', hooks.epoch])], {
+      stdio: 'inherit',
+      env: { ...process.env, [SERVE_REPLACEMENT_ENV]: '1' },
+    });
   } catch {
     failed();
     return;
@@ -1062,8 +1087,8 @@ export function placementOf(io: Io, stateDir: string, session: string, name: str
 export const SERVE_PLACEMENT_WAIT_MS = 5000;
 const SERVE_PLACEMENT_POLL_MS = 250;
 /** How many times the start reads a team file it could not read before it answers the handshake
- *  (8 x 250 ms = 2 s, well inside a client's 30 s handshake). */
-const TEAM_READ_RETRIES = 8;
+ *  (2 x 250 ms: a file caught mid-write, not a wait the handshake can feel). */
+const TEAM_READ_RETRIES = 2;
 /** Past the start bound, while the seat's own recorded pane still has no herdr name and the
  *  client is still connected, the placement is read again at this slower pace. */
 export const SERVE_PLACEMENT_SLOW_POLL_MS = 2000;
@@ -1208,7 +1233,8 @@ export async function proveWhileServing<T = true>(input: {
   deps?: PlacementClock;
 }): Promise<ServingProof<T>> {
   const deps = input.deps ?? {};
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  // The poll timer holds nothing open: a process whose client has gone ends without waiting it out.
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms).unref?.(); }));
   const now = deps.now ?? Date.now;
   // No line is asked for until the first refusal is one this wait may serve through: a refused
   // start leaves the input exactly as it found it. One read is outstanding at a time, and it is
@@ -1391,6 +1417,7 @@ export async function runMcpServe(
     return refuse(`--epoch ${JSON.stringify(options.epoch)} is not a runtime epoch`);
   }
   const seatName = options.seat;
+  const replacement = io.env[SERVE_REPLACEMENT_ENV] === '1';
   // A named file is the launch's own team file, read as given. Without one the team is the
   // registry's record for this seat: the folder the server starts in is a lobby for most seats,
   // and reading a team file from it would be reading the checkout's folder, not the seat's team.
@@ -1456,7 +1483,10 @@ export async function runMcpServe(
     // An epoch from an earlier launch, or none, binds the current claim only when that launch is
     // proven to be this server's own. A state that records no launched CLI proves nothing: a
     // server with no epoch keeps the binding it always had, and a stale epoch waits.
-    const owns = ownsCurrentLaunch(io, stateDir, team.session, seat.name);
+    // A replacement this server's own install restart started serves only the launch its parent
+    // was bound to: its ancestry still holds the earlier launch's CLI, which proves nothing about
+    // a later claim.
+    const owns = replacement ? false : ownsCurrentLaunch(io, stateDir, team.session, seat.name);
     if (owns === true || (owns === null && options.epoch === undefined)) {
       return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: generation.epoch } };
     }
@@ -1526,7 +1556,8 @@ export async function runMcpServe(
   // The channel is the seat's own launch word: a line with the development-channels flag naming
   // this server. Nothing on the command line turns it on separately, and a marker without it is
   // an ordinary inbox the send walks past.
-  const channel = channelLaunchEnabled(seat.launch);
+  // A channel the handshake did not declare is never started: the client was told of none.
+  const channel = pendingChannel && channelLaunchEnabled(seat.launch);
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
   if (dropDir === null) {
     return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');
@@ -1552,7 +1583,7 @@ export async function runMcpServe(
   // the installed entry. A pinned build with no installed source is its own install, so a scene
   // that states a build never reloads unless it says how.
   const installedNow = host.installed ?? (host.build === undefined ? installIdentity : () => installIdentityOf(host.build as BuildIdentity));
-  const restart = host.restart ?? (() => restartSelf());
+  const restart = host.restart ?? (() => restartSelf(boundEpoch === undefined ? {} : { epoch: boundEpoch }));
   let installed: InstallIdentity | null = null;
   const notice = (): boolean => {
     if (installed !== null) return true;
@@ -1609,7 +1640,7 @@ export async function runMcpServe(
       // A server that bound no claim (it started before its launch wrote one) takes its own
       // launch's first claim, once that launch is proven to be its own; any other claim stays a
       // refusal, and a binding once taken is kept for the life of the process.
-      if (boundEpoch === undefined && generationNow.kind === 'claim'
+      if (boundEpoch === undefined && generationNow.kind === 'claim' && !replacement
         && ownsCurrentLaunch(io, stateDir, team.session, seat.name) === true) {
         boundEpoch = generationNow.epoch;
         brief.epoch = generationNow.epoch;

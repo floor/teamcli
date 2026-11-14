@@ -5,7 +5,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listenerPath } from '../src/mcp/inbox.ts';
-import { runMcpServe } from '../src/mcp/serve.ts';
+import { restartSelf, runMcpServe, SERVE_REPLACEMENT_ENV } from '../src/mcp/serve.ts';
+import { EventEmitter } from 'node:events';
+import type { ChildProcess } from 'node:child_process';
 import { signRecord } from '../src/send/record.ts';
 import { testIo } from './helpers.ts';
 
@@ -393,4 +395,46 @@ test('a foreign seat is refused at once, and the refusal closes the input so the
   } finally {
     at.cleanup();
   }
+});
+
+test('a replacement an install restart started serves only its parent\'s launch, even with that launch\'s CLI among its ancestors', async () => {
+  const at = place();
+  try {
+    claim(at.root, claimAt(OTHER, BASE));
+    launchedBy(at.root, [OWN_CLI]);
+    const io = ownIo(at.root);
+    io.env = { [SERVE_REPLACEMENT_ENV]: '1' };
+    const code = await runMcpServe({ seat: 'lead', session: SESSION, file: at.file, epoch: EPOCH }, io,
+      { lines: (async function* () { /* the client has gone */ })(), write: () => {} }, { home: at.home });
+    expect(code).toBe(2);
+    expect(io.err).toContain('not the seat\'s current launch epoch');
+    expect(existsSync(markerOf(at.root))).toBe(false);
+  } finally {
+    at.cleanup();
+  }
+});
+
+test('an install restart starts its replacement bound to this process\'s epoch and marked as a replacement', () => {
+  const calls: { args: readonly string[]; env: Record<string, string | undefined> }[] = [];
+  const child = new EventEmitter() as ChildProcess;
+  child.unref = () => child;
+  const argv = process.argv;
+  process.argv = [argv[0]!, argv[1]!, 'mcp', 'serve', '--seat', 'lead', '--epoch', OTHER];
+  try {
+    restartSelf({
+      epoch: EPOCH,
+      spawnChild: ((_command: string, args: readonly string[], options: { env: Record<string, string | undefined> }) => {
+        calls.push({ args, env: options.env });
+        return child;
+      }) as never,
+      exit: () => {},
+      say: () => {},
+      signals: { on: () => {}, off: () => {} } as never,
+    });
+  } finally {
+    process.argv = argv;
+  }
+  expect(calls).toHaveLength(1);
+  expect(calls[0]!.args.slice(1)).toEqual(['mcp', 'serve', '--seat', 'lead', '--epoch', EPOCH]);
+  expect(calls[0]!.env[SERVE_REPLACEMENT_ENV]).toBe('1');
 });
