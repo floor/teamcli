@@ -672,9 +672,13 @@ describe('team restart <seat>', () => {
     // closed its workspace and opened a new one. A clean exit now leaves the pane at its shell and
     // the launch runs there: nothing is closed and no workspace is created.
     const fixture = makeFixture();
+    // The pane is reused only where its record names the folder today's launch plans: the
+    // worker's own folder in the lobby.
+    const folder = join(fixture.home, '.config', 'team', 'lobby', 'worker');
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
-      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab', start_cwd: folder };
     });
     const { sources, did } = makeHarness(fixture);
     let exited = false;
@@ -692,6 +696,26 @@ describe('team restart <seat>', () => {
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(0);
     expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(folder);
+  });
+
+  test('a pane with no folder on record is not reused: where it runs is unknown, so the seat starts fresh', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    let exited = false;
+    const typeText = sources.launch!.typeText;
+    sources.launch!.typeText = (session, pane, text) => { if (text === '/exit') exited = true; return typeText(session, pane, text); };
+    sources.upLaunch.processInfo = () => (exited && did.runs.length === 0 ? { shell: 300, foreground: [300] } : { shell: 300, foreground: [exited ? 302 : 301] });
+    sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd?.startsWith('/')).toBe(true);
   });
 
   test('owner restarts a free running seat, prints pre-close facts, updates state, and does not edit team.yaml', async () => {
