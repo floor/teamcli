@@ -30,7 +30,7 @@ import { approvalStanding } from '../store/store.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { getAgent } from '../registry/agents.ts';
 import { readStoredTeamConfig, teamConfigRecordPath, TeamConfigStoreError } from '../registry/team-config-store.ts';
-import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { isTeamId, readTeams, teamIdOf, teamIdOfRealPath, type TeamRecord } from '../registry/teams.ts';
 import { STATE_FILE } from '../state.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -606,7 +606,8 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
     const declaredTeam = (): DeclaredTeam => {
       // Through the root's real path and the registry's own id and session for it, never the
       // registry spelling resolved again.
-      declarations ??= readDeclarations(realRoot, home, { id: teamId, session: team.session ?? null });
+      // The registry's key when it is a team ID; else the ID of the real path, hashed as taken.
+      declarations ??= readDeclarations(realRoot, home, { id: isTeamId(teamId) ? teamId : teamIdOfRealPath(realRoot), session: team.session ?? null });
       return declarations;
     };
     if (overlaps(root, target)) return `the key directory "${dir}" is inside the team root "${team.root}"; a client key sits outside every checkout`;
