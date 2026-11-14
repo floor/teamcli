@@ -262,7 +262,8 @@ describe('the run flag reaches the real host, and only when asked', () => {
     expect(plainState.kind).toBe('ok');
     if (plainState.kind === 'ok') {
       expect(plainState.state.roots[0]?.watch).toBeUndefined();
-      expect(plainState.state.features).toEqual({ broker: 'absent' });
+      // The run records that it hosts no watch, so a reader can name --watch as the repair.
+      expect(plainState.state.features).toEqual({ broker: 'absent', watch: 'off' });
     }
     expect(await plain.finish()).toBe(0);
 
@@ -291,7 +292,7 @@ describe('the run flag reaches the real host, and only when asked', () => {
     expect(state.kind).toBe('ok');
     if (state.kind === 'ok') {
       expect(state.state.roots[0]?.watch?.cycles).toBeGreaterThanOrEqual(2);
-      expect(state.state.features).toEqual({ broker: 'absent' });
+      expect(state.state.features).toEqual({ broker: 'absent', watch: 'on' });
     }
     expect(await watched.finish()).toBe(0);
     // The closing beat stopped the watch with the daemon's own reason before ownership moved.

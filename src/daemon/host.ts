@@ -556,7 +556,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const home = input.home ?? homedir();
   const now = input.now ?? (() => new Date());
   const startedBy = input.startedBy ?? 'manual';
-  const features: DaemonFeatures = input.features ?? { broker: 'absent' };
+  // The watch word is this run's own: whether it was started to host a watch per route.
+  const features: DaemonFeatures = { ...(input.features ?? { broker: 'absent' }), watch: input.watchHosting === true ? 'on' : 'off' };
   const stuckMs = input.stuckMs ?? STUCK_MS;
   const refreshCloseBoundMs = input.refreshCloseBoundMs ?? REFRESH_CLOSE_BOUND_MS;
   const pid = process.pid;

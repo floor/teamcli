@@ -738,10 +738,14 @@ describe('team status', () => {
     updateState(join(dir, '.agents'), (state) => {
       delete state.sessions['acme-web']?.watch;
     });
-    // The daemon serves this root, and no root carries a hosted watch record: it was started
-    // without --watch, so a plain reinstall would not bring a watch back.
+    // The daemon records it was started without --watch, so a plain reinstall would not bring a
+    // watch back.
     const health = watchHealth('acme-web', 'running');
-    const watchless: DaemonHealth = { ...health, roots: health.roots.map(({ watch: _watch, ...entry }) => entry) };
+    const watchless: DaemonHealth = {
+      ...health,
+      features: { broker: 'absent', watch: 'off' },
+      roots: health.roots.map(({ watch: _watch, ...entry }) => entry),
+    };
     const reading = await statusHealth(watchless);
     expect(reading.out).toContain(`difference: no watch has run for this session\n  repair: ${WATCH_HOSTING_REPAIR}\n`);
     expect(reading.out).toContain('team daemon install --watch');

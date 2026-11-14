@@ -10,8 +10,10 @@ import { reaperRecordOf, type ReaperRecord } from '../orphan-reaper.ts';
 import { daemonStatePath, machineConfigDir } from './paths.ts';
 
 /** Which features the running build actually carries. `absent` means the handler is not built;
- *  it is not the policy value `off`. */
-export type DaemonFeatures = { broker: 'on' | 'off' | 'absent' };
+ *  it is not the policy value `off`. `watch` says whether this daemon was started to host a
+ *  watch per route (`--watch`); older records carry no field, and a reader takes that as
+ *  not known. */
+export type DaemonFeatures = { broker: 'on' | 'off' | 'absent'; watch?: 'on' | 'off' };
 
 /** A request the daemon has been working on longer than its stuck threshold. */
 export type DaemonStuckRequest = { id: string; op: string; since: string; ageMs: number };
@@ -305,7 +307,12 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
         ? record.heartbeatSeconds
         : null,
     socket: record.socket as string,
-    features: { broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'] },
+    features: {
+      broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'],
+      ...((features as Record<string, unknown>).watch === 'on' || (features as Record<string, unknown>).watch === 'off'
+        ? { watch: (features as Record<string, unknown>).watch as 'on' | 'off' }
+        : {}),
+    },
     stuck: requests,
     roots,
     ...(mailbox === undefined ? {} : { mailbox }),

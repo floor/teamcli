@@ -1052,8 +1052,9 @@ export function placementOf(io: Io, stateDir: string, session: string, name: str
 
 /** How long `mcp serve` re-proves its caller's placement at start, and the pause between reads.
  *  A seat's CLI starts its MCP servers during boot, before herdr has detected an agent in the
- *  pane and before the launch's own naming step reaches it. The wait is bounded and happens
- *  once, at start; `alive()` re-proves with a single reading on every use and never waits. */
+ *  pane and before the launch's own naming step reaches it. The start reads again on this pace
+ *  for this long, and past it only while the client stays connected (`proveWhileServing`);
+ *  `alive()` re-proves with a single reading on every use and never waits. */
 export const SERVE_PLACEMENT_WAIT_MS = 5000;
 const SERVE_PLACEMENT_POLL_MS = 250;
 /** Past the start bound, while the seat's own recorded pane still has no herdr name and the
@@ -1146,30 +1147,80 @@ export async function proveWhileServing(input: {
   const deps = input.deps ?? {};
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = deps.now ?? Date.now;
-  let next = input.lines.next();
+  // No line is asked for until the first refusal is one this wait may serve through: a refused
+  // start leaves the input exactly as it found it. One read is outstanding at a time, and it is
+  // observed by exactly one handler, which wakes the current wait: a quiet client and a long wait
+  // attach nothing more per reading.
+  let next: Promise<IteratorResult<string>> | null = null;
+  let arrived: { result: IteratorResult<string> } | { error: unknown } | null = null;
+  let wake: (() => void) | null = null;
+  const ask = (): void => {
+    const read = input.lines.next();
+    next = read;
+    read.then(
+      (result) => {
+        arrived = { result };
+        wake?.();
+      },
+      (error: unknown) => {
+        arrived = { error };
+        wake?.();
+      },
+    );
+  };
   let ended = false;
   /** Answers the lines that arrive until `tick` settles; past the input's end, waits it out. */
   const serveUntil = async (tick: Promise<void>): Promise<void> => {
+    let ticked = false;
+    let active = true;
+    // A tick from a wait that has already returned wakes nothing.
+    void tick.then(() => {
+      ticked = true;
+      if (active) wake?.();
+    });
+    if (next === null) ask();
+    try {
+      await answerUntilTick(() => ticked);
+    } finally {
+      active = false;
+    }
+    if (ended) await tick;
+  };
+  /** The loop of one wait: answer each line that arrives, until the tick or the input's end. */
+  const answerUntilTick = async (tickedNow: () => boolean): Promise<void> => {
     for (;;) {
-      if (ended) {
-        await tick;
-        return;
+      if (ended) return;
+      if (arrived === null && !tickedNow()) {
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        wake = null;
       }
-      const got = await Promise.race([next.then((result) => ({ result })), tick.then(() => null)]);
-      if (got === null) return;
+      const got = arrived as { result: IteratorResult<string> } | { error: unknown } | null;
+      if (got === null) {
+        if (tickedNow()) return;
+        continue;
+      }
+      arrived = null;
+      if ('error' in got) throw got.error;
       if (got.result.done === true) {
         ended = true;
         continue;
       }
       const reply = input.pending(got.result.value);
       if (reply !== null) input.write(reply);
-      next = input.lines.next();
+      ask();
     }
   };
   const start = now();
   for (;;) {
     const verdict = placementOf(input.io, input.stateDir, input.session, input.name);
-    if (verdict.ok) return { ok: true, next };
+    if (verdict.ok) {
+      // A line that already arrived is handed on as it came; otherwise the outstanding read.
+      const held = arrived as { result: IteratorResult<string> } | { error: unknown } | null;
+      if (held !== null) return { ok: true, next: 'error' in held ? Promise.reject(held.error) : Promise.resolve(held.result) };
+      return { ok: true, next: next ?? input.lines.next() };
+    }
     input.onRefusal?.(verdict.why);
     const recorded = recordedPaneOf(input.stateDir, input.session, input.name);
     if (recorded === undefined || input.io.env.HERDR_PANE_ID !== recorded) return { ok: false, why: verdict.why };
@@ -1322,6 +1373,10 @@ export async function runMcpServe(
     channel,
     alive: () => `this server has not proven its caller yet, so it serves no inbox: ${unplacedWhy}`,
   };
+  // The launch this server belongs to is bound before any wait: a claim a relaunch writes while
+  // this process waits for its pane's name is another launch's, never one this server adopts.
+  const startGeneration = generationOf(stateDir, team.session, seat.name);
+  const boundEpoch = boundEpochOf(startGeneration, options.epoch);
   const lines = streams.lines[Symbol.asyncIterator]();
   const placed = await proveWhileServing({
     io,
@@ -1341,7 +1396,6 @@ export async function runMcpServe(
     return refuse(placed.why);
   }
   const generation = generationOf(stateDir, team.session, seat.name);
-  const boundEpoch = boundEpochOf(generation, options.epoch);
   const stale = staleLaunch(generation, boundEpoch, seat.name);
   if (stale !== null) return refuse(stale);
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
@@ -1458,7 +1512,9 @@ export async function runMcpServe(
   } finally {
     stopChannel?.();
     try {
-      void lines.return?.();
+      lines.return?.()?.catch(() => {
+        // The input is closed below either way.
+      });
     } catch {
       // The input is closed below either way.
     }

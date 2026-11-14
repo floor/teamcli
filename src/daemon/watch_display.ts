@@ -30,14 +30,11 @@ export const WATCH_MISSING_REPAIR = 'team daemon status, or the lead runs team d
  *  watch, and a plain `team daemon install` writes a unit without it again. */
 export const WATCH_HOSTING_REPAIR = 'the machine daemon runs without --watch, so no watch runs for any team: the owner runs team daemon install --watch, naming again every opt-in the unit runs with (such as --presence)';
 
-/** Whether a running daemon's reading proves it hosts no watch: it serves roots and not one of
- *  them carries a hosted watch record. A daemon started with `--watch` records one for every root
- *  it loaded, in whatever phase. A reading with no root, or of a daemon that is not running,
- *  proves nothing. */
+/** Whether a running daemon's reading proves it hosts no watch: the run records that it was
+ *  started without `--watch`. A daemon that is not running, an older build that records no watch
+ *  word, or a reading that cannot tell proves nothing, and the generic repair stands. */
 export function daemonHostsNoWatch(health: DaemonHealth): boolean {
-  return health.state === 'running'
-    && health.roots.length > 0
-    && health.roots.every((entry) => entry.watch === undefined || entry.watch === null);
+  return health.state === 'running' && health.features?.watch === 'off';
 }
 
 /** The repair for a missing or stale watch, from the daemon reading the caller already holds. */
