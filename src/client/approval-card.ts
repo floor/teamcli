@@ -9,9 +9,14 @@
 // folder, and the details functions below render them for `team approvals details` and the owner
 // page's folded details. Nothing here decides what is signed or what is admitted.
 
+import { createHash } from 'node:crypto';
 import { msg, type MessageId } from './grant-messages.ts';
 import type { OwnerActionParams } from './owner-action.ts';
 import type { TeamCreateParams } from './team-create.ts';
+
+/** The longest signing prompt: the grant prompt's budget (`GRANT_PROMPT_MAX` in
+ *  src/client/grant-prompt.ts), kept here so this module reads no grant code. */
+export const PROMPT_MAX = 210;
 
 /** A card never carries more than this many lines. */
 export const CARD_MAX_LINES = 3;
@@ -38,6 +43,16 @@ export type ApprovalCard = {
   title: string;
   question: string;
   scope?: string;
+  /**
+   * The exact change, for a request whose words are the change itself (an entity's record, the
+   * machine daemon): the operation, the key or verb, the value in full and the file or folders it
+   * acts on. The owner signs what this line says, so it is never cut: the owner page and the
+   * terminal show it whole, and a signing prompt it does not fit carries `changeShort` instead.
+   */
+  change?: string;
+  /** The change as the signing prompt carries it when `change` does not fit: the operation, the
+   *  target, the value's length and a digest of the exact value the owner was shown in full. */
+  changeShort?: string;
 };
 
 /** The card's lines, top to bottom: at most CARD_MAX_LINES. */
@@ -45,9 +60,67 @@ export function cardLines(card: ApprovalCard): string[] {
   return [card.title, card.question, ...(card.scope === undefined ? [] : [card.scope])];
 }
 
-/** The card as one line, for a prompt that shows one (the signing reason). */
+/** The card as one line, for a prompt that shows one (the signing reason). A card that carries
+ *  its exact change carries it whole when it fits the prompt, and its short form otherwise. */
 export function cardPrompt(card: ApprovalCard): string {
-  return cardLines(card).join(' — ');
+  const base = cardLines(card).join(' — ');
+  if (card.change === undefined) return base;
+  const whole = `${base} — ${card.change}`;
+  if (whole.length <= PROMPT_MAX) return whole;
+  return `${base} — ${card.changeShort ?? card.change}`;
+}
+
+/** The first twelve hex digits of the SHA-256 of `text`: the digest a short form names. */
+export function shortDigest(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12);
+}
+
+/** Display text with no control character: a value is shown as a JSON string, so nothing in it
+ *  can start a line of its own or hide a character. */
+function quoted(value: string): string {
+  return JSON.stringify(value);
+}
+
+/** A bound word `key=value`, read back. */
+function boundValue(words: readonly string[], key: string): string | undefined {
+  const word = words.find((one) => one.startsWith(`${key}=`));
+  return word === undefined ? undefined : word.slice(key.length + 1);
+}
+
+/**
+ * The exact change an entity-record or daemon request makes, read from its bound words, in full
+ * and short. Null for every other kind, whose card stays three plain lines.
+ */
+export function ownerActionChange(action: string, words: readonly string[] | undefined): { change: string; changeShort: string } | null {
+  if (words === undefined || words.length === 0) return null;
+  if (action === 'team-entity-config') {
+    const [verb, path] = words;
+    const file = boundValue(words, 'file') ?? 'the entities file';
+    const value = words.length >= 4 ? words[2]! : undefined;
+    if (verb === 'unset' || value === undefined) return { change: `${verb} ${path} in ${file}`, changeShort: `${verb} ${path} in ${file}` };
+    return {
+      change: `${verb} ${path} to ${quoted(value)} in ${file}`,
+      changeShort: `${verb} ${path} to a value of ${value.length} characters (digest ${shortDigest(value)}) in ${file}`,
+    };
+  }
+  if (action === 'team-daemon') {
+    const verb = words[0];
+    const home = boundValue(words, 'home') ?? 'this home';
+    const roots = words.filter((word) => word.startsWith('root=')).map((word) => word.slice(5));
+    const flags = ['presence', 'watch'].filter((flag) => words.includes(flag));
+    const route = boundValue(words, 'route');
+    const hosting = roots.length > 0 ? `, hosting ${roots.join(', ')}` : '';
+    const with_ = flags.length > 0 ? `, with ${flags.join(' and ')}` : '';
+    const change = verb === 'fault-watch'
+      ? `fault-watch route ${route ?? '?'} of ${roots[0] ?? '?'} for home ${home}`
+      : `${verb} for home ${home}${hosting}${with_}`;
+    const listed = roots.join('\n');
+    const changeShort = verb === 'fault-watch' || roots.length === 0
+      ? change
+      : `${verb} for home ${home}, ${roots.length} checkout${roots.length === 1 ? '' : 's'} (digest ${shortDigest(listed)})${with_}`;
+    return { change, changeShort };
+  }
+  return null;
 }
 
 /** The three answers, as the signing prompt names the one being signed. */
@@ -241,10 +314,12 @@ export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'tea
   const machine = machineOf(params);
   if (params.actions.length === 1) {
     const action = params.actions[0]!;
+    const change = ownerActionChange(action, params.words?.[action]);
     return {
       title: titleOf(action, what[0]!, params.words?.[action]),
       question: questionOf(action, who, what[0]!, params.reason, params.words?.[action]),
       scope: scopeOf(params.actions, params.team, machine),
+      ...(change === null ? {} : change),
     };
   }
   return {

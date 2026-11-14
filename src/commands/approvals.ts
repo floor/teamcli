@@ -15,7 +15,8 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { canonicalScope } from '../client/emission.ts';
-import { ownerActionDetails, teamCreateDetails } from '../client/approval-card.ts';
+import { cardLines, ownerActionCard, ownerActionDetails, teamCreateDetails } from '../client/approval-card.ts';
+import type { OwnerActionRecord } from '../client/owner-request-record.ts';
 import { approveOwnerAction, listOwnerActionRules, OWNER_ACTION_ID_PATTERN, readOwnerActionRecord, revokeOwnerActionRule } from '../client/owner-action.ts';
 import { ownerAdmitsRecord, ownerSeatStep } from '../client/owner-action-step.ts';
 import { acceptCarriedAnswer, acceptCarriedAnswerBatch, OWNER_ANSWER_BATCH_FORMAT, OWNER_REQUEST_BATCH_FORMAT, ownerRequestBatchFile, ownerRequestFile, readCarriedFile, readOwnerRequestBatchFile, readOwnerRequestFile, signCarriedBatch, signCarriedRequest, writeCarriedFile } from '../client/owner-carry.ts';
@@ -258,7 +259,11 @@ function signRequest(io: Io, json: boolean, home: string, now: Date, store: Owne
   const assertion = assertionOf(values.assertion, io.cwd);
   if (assertion === 'unreadable') return refused(io, json, `${values.assertion} is not a passkey assertion (authenticator_data, client_data_json, signature)`);
   const word = values.answer;
-  const answer = word === undefined ? null : (record: { request_id: string }) => {
+  const answer = word === undefined ? null : (record: OwnerActionRecord) => {
+    // The card in full, its exact change included, before the confirmation: the prompt may carry
+    // the change's short form only.
+    const card = ownerActionCard(record.params);
+    io.stderr(`team approvals: the confirmation that follows answers request ${record.request_id}: ${[...cardLines(card), ...(card.change === undefined ? [] : [card.change])].join(' — ')}\n`);
     const answered = approveOwnerAction(home, record.request_id, word, store, now, {
       ...(values.signer !== undefined ? { signer: values.signer } : {}),
       ...(assertion !== undefined ? { assertion } : {}),
@@ -295,7 +300,12 @@ function signBatch(io: Io, json: boolean, home: string, now: Date, store: OwnerS
   if (values.assertion !== undefined) return refused(io, json, 'a passkey assertion signs one request; a batch is signed with --answer on the device that holds the signer, or answered on the owner page');
   const read = readOwnerRequestBatchFile(raw);
   if (!read.ok) return refused(io, json, read.why);
-  const signed = signCarriedBatch(home, read.members, store, now, values.answer ?? null, values.signer, localOwnerSeatFingerprint(home, now));
+  // A list that does not fit the signing prompt is shown here first, whole, with the digest the
+  // prompt then names: the owner reads every change before the one confirmation.
+  const show = (lines: readonly string[], digest: string): void => {
+    io.stderr(`team approvals: the confirmation that follows answers these ${lines.length} requests (list digest ${digest}):\n${lines.map((line) => `  ${line}\n`).join('')}`);
+  };
+  const signed = signCarriedBatch(home, read.members, store, now, values.answer ?? null, values.signer, localOwnerSeatFingerprint(home, now), show);
   if (!signed.ok) return refused(io, json, signed.why);
   const machine = read.batch.machine;
   const ids = read.batch.requests.map((record) => record.request_id);
@@ -310,7 +320,7 @@ function signBatch(io: Io, json: boolean, home: string, now: Date, store: OwnerS
   }
   const written = writeCarriedFile(io.cwd, values.out!, signed.file);
   if (!written.ok) return refused(io, json, written.why);
-  const prompts = signed.prompts > 1 ? `note: the credential helper predates signing several answers at once, so each was signed with its own Touch ID; rebuild it to sign a batch with one\n` : '';
+  const prompts = signed.prompts > 1 ? `note: the credential helper predates signing several answers at once, so each answer and the set were signed with a Touch ID of their own (${signed.prompts} in all); rebuild the helper to sign a batch with one\n` : '';
   if (json) io.stdout(`${JSON.stringify({ format: 1, status: 'answered', request_ids: ids, machine, answers: signed.answered.map((one) => ({ request_id: one.id, choice: one.choice, signer: one.signer })), prompts: signed.prompts, file: written.path, stale_pin: signed.stalePin })}\n`);
   const choices = signed.answered.map((one) => `${one.id} ${one.choice}`).join(', ');
   if (!json) io.stdout(`team approvals: ${ids.length} requests for machine ${machine.name} answered (${choices}); answers written to ${written.path}\non machine ${machine.name} run: team approvals answer --from <file>\n${prompts}${stale}`);

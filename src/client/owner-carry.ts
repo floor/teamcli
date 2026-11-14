@@ -31,6 +31,9 @@ import {
   carriedRequestTimeProblem,
   approveOwnerActions,
   carriedOwnerAnswerCheck,
+  signBatchManifest,
+  writeAnswersTogether,
+  type BatchShow,
   recordCarriedOwnerAnswer,
   recordForeignOwnerAction,
   OWNER_ACTION_ID_PATTERN,
@@ -45,6 +48,7 @@ import {
   type MachineBinding,
 } from './owner-pin.ts';
 import { ownerMachinePinned } from './owner-pin-path.ts';
+import { answerDigest, verifyPinnedBatchManifest, type SignedBatchManifest } from './owner-batch-manifest.ts';
 import { readOwnerSeat, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 
 export const OWNER_REQUEST_FILE_FORMAT = 'team-owner-request-file-v1';
@@ -280,6 +284,8 @@ export type OwnerAnswerBatchFile = {
   format: typeof OWNER_ANSWER_BATCH_FORMAT;
   machine: MachineBinding;
   answers: { request_id: string; answer: SignedOwnerAnswer }[];
+  /** The ordered set, signed by the same signer under the same prompt. */
+  manifest: SignedBatchManifest;
 };
 
 function batchSizeProblem(count: number): string | null {
@@ -356,10 +362,11 @@ export type BatchSignOutcome =
 
 /**
  * On the machine that holds the owner's signers: records every request of a batch (each one as
- * `signCarriedRequest` records one), then, with `word`, signs the ones not answered yet under one
- * prompt that lists them all. Every member is checked before any is recorded or signed; one that
- * fails refuses the batch. With no word, the batch is answered once every member holds an answer
- * the owner gave on the owner page, and waits otherwise.
+ * `signCarriedRequest` records one). With `word`, every member must still be unanswered, and all
+ * of them are signed under one prompt that lists them, together with the ordered manifest of the
+ * set (`approveOwnerActions`). With no word, the batch waits until the owner has answered every
+ * member on the owner page; then one prompt that lists the set signs its manifest. Every member is
+ * checked before any is recorded or signed; one that fails refuses the batch.
  */
 export function signCarriedBatch(
   home: string,
@@ -369,12 +376,14 @@ export function signCarriedBatch(
   word: string | null,
   signer: string | undefined,
   fingerprint: string | null,
+  show?: BatchShow,
 ): BatchSignOutcome {
   for (const member of members) {
     const problem = carriedRequestProblem(home, member, store, now);
     if (problem !== null) return { ok: false, why: `${problem}; nothing in the batch is signed` };
   }
   const machine = members[0]!.machine;
+  const account = members[0]!.request.params.account ?? null;
   const stalePin = fingerprint !== null && fingerprint !== members[0]!.owner_seat;
   for (const member of members) {
     const recorded = recordForeignOwnerAction(home, member.request, now);
@@ -386,32 +395,40 @@ export function signCarriedBatch(
     if (typeof record === 'string') return { ok: false, why: record };
     records.push(record);
   }
-  const unanswered = records.filter((record) => heldOwnerActionAnswer(home, record, store, now) === null);
-  let prompts = 0;
-  if (unanswered.length > 0) {
-    if (word === null) return { ok: true, kind: 'waiting', waiting: unanswered.map((record) => record.request_id), stalePin };
-    const title = `${unanswered.length} requests from machine ${machine.name}`;
-    const signed = approveOwnerActions(home, unanswered.map((record) => record.request_id), word, store, now, { ...(signer === undefined ? {} : { signer }), title });
+  const held = records.map((record) => heldOwnerActionAnswer(home, record, store, now));
+  const title = `${records.length} requests from machine ${machine.name}`;
+  const finish = (answers: readonly SignedOwnerAnswer[], manifest: SignedBatchManifest, prompts: number): BatchSignOutcome => {
+    const answered: { id: string; choice: OwnerSeatAnswer['choice']; signer: string }[] = [];
+    for (const [index, record] of records.entries()) {
+      const bound = boundOwnerActionAnswer(home, answers[index]!, record, store, now);
+      if (!bound.ok) return bound;
+      answered.push({ id: record.request_id, choice: bound.answer.choice, signer: bound.signer });
+    }
+    const file: OwnerAnswerBatchFile = { format: OWNER_ANSWER_BATCH_FORMAT, machine, answers: records.map((record, index) => ({ request_id: record.request_id, answer: answers[index]! })), manifest };
+    return { ok: true, kind: 'answered', file, answered, prompts, stalePin };
+  };
+  if (word !== null) {
+    const answeredAlready = records.find((_, index) => held[index] !== null);
+    if (answeredAlready !== undefined) return { ok: false, why: `request ${answeredAlready.request_id} is answered already, and a batch is signed whole: sign it without --answer once every request is answered on the owner page; nothing in the batch is signed` };
+    const signed = approveOwnerActions(home, records.map((record) => record.request_id), word, store, now, { ...(signer === undefined ? {} : { signer }), title, ...(show === undefined ? {} : { show }), machine, account });
     if (!signed.ok) return signed;
-    prompts = signed.prompts;
+    return finish(signed.answers, signed.manifest, signed.prompts);
   }
-  const answers: OwnerAnswerBatchFile['answers'] = [];
-  const answered: { id: string; choice: OwnerSeatAnswer['choice']; signer: string }[] = [];
-  for (const record of records) {
-    const held = heldOwnerActionAnswer(home, record, store, now);
-    if (held === null) return { ok: false, why: `the answer to ${record.request_id} was signed but does not verify here` };
-    const bound = boundOwnerActionAnswer(home, held, record, store, now);
-    if (!bound.ok) return bound;
-    answers.push({ request_id: record.request_id, answer: held });
-    answered.push({ id: record.request_id, choice: bound.answer.choice, signer: bound.signer });
-  }
-  return { ok: true, kind: 'answered', file: { format: OWNER_ANSWER_BATCH_FORMAT, machine, answers }, answered, prompts, stalePin };
+  const waiting = records.filter((_, index) => held[index] === null).map((record) => record.request_id);
+  if (waiting.length > 0) return { ok: true, kind: 'waiting', waiting, stalePin };
+  const answers = held as SignedOwnerAnswer[];
+  const manifest = signBatchManifest(home, records, answers, store, now, { ...(signer === undefined ? {} : { signer }), title, ...(show === undefined ? {} : { show }), machine, account });
+  if (!manifest.ok) return manifest;
+  return finish(answers, manifest.manifest, manifest.prompts);
 }
 
 /**
- * Back on the machine whose owner seat is pinned: records every answer of a batch. Each answer is
- * checked exactly as `acceptCarriedAnswer` checks one, all of them before any is recorded; one that
- * fails refuses the batch and records none. Each request then runs with its own `--approval <id>`.
+ * Back on the machine whose owner seat is pinned: records every answer of a batch. The batch's
+ * manifest must verify against the pinned owner seat and name exactly the answers the file
+ * carries, in order, for this machine and account; each answer is then checked exactly as
+ * `acceptCarriedAnswer` checks one, all of them before any is recorded; one that fails refuses
+ * the batch and records none, and a write that fails takes back those written before it. Each
+ * request then runs with its own `--approval <id>`.
  */
 export function acceptCarriedAnswerBatch(home: string, raw: unknown, store: OwnerSeatKeyStore, now: Date = new Date()): { ok: true; answered: { id: string; choice: OwnerSeatAnswer['choice']; signer: string }[]; fingerprint: string } | { ok: false; why: string } {
   if (!plainObject(raw) || raw.format !== OWNER_ANSWER_BATCH_FORMAT) return { ok: false, why: `the file is not a ${OWNER_ANSWER_BATCH_FORMAT} record` };
@@ -419,11 +436,24 @@ export function acceptCarriedAnswerBatch(home: string, raw: unknown, store: Owne
   if (!Array.isArray(raw.answers)) return { ok: false, why: 'the batch answer file carries no answers' };
   const size = batchSizeProblem(raw.answers.length);
   if (size !== null) return { ok: false, why: size };
+  const pin = readOwnerPin(home);
+  if (pin.kind === 'none') return { ok: false, why: "this machine's owner seat is not pinned from another machine; an answer is given here, not carried" };
+  if (pin.kind === 'refused') return { ok: false, why: pin.why };
+  const verified = verifyPinnedBatchManifest(pin, raw.manifest);
+  if (!verified.ok) return { ok: false, why: `${verified.why}; no answer in the batch was recorded` };
+  const manifest = verified.manifest;
+  if (manifest.machine.id !== raw.machine.id || manifest.machine.name !== raw.machine.name) return { ok: false, why: 'the batch manifest names another machine than its file; no answer in the batch was recorded' };
+  if (manifest.members.length !== raw.answers.length) return { ok: false, why: `the batch manifest names ${manifest.members.length} requests and the file carries ${raw.answers.length}; no answer in the batch was recorded` };
   const checked: CheckedAnswer[] = [];
-  for (const entry of raw.answers as unknown[]) {
+  for (const [index, entry] of (raw.answers as unknown[]).entries()) {
     if (!plainObject(entry)) return { ok: false, why: 'the batch answer file carries an entry that is not an answer; no answer was recorded' };
     const one = checkCarriedAnswer(home, { format: OWNER_ANSWER_FILE_FORMAT, machine: raw.machine, request_id: entry.request_id, answer: entry.answer }, store, now);
     if (!one.ok) return { ok: false, why: `${one.why}; no answer in the batch was recorded` };
+    const member = manifest.members[index]!;
+    const exact = member.request_id === one.id
+      && member.params_sha256 === one.record.params_sha256
+      && member.answer_sha256 === answerDigest(one.signed.owner_seat_answer);
+    if (!exact) return { ok: false, why: `answer ${index + 1} of the batch is not the one its signed manifest names in that place; no answer in the batch was recorded` };
     checked.push(one);
   }
   const ids = checked.map((one) => one.id);
@@ -431,11 +461,8 @@ export function acceptCarriedAnswerBatch(home: string, raw: unknown, store: Owne
   if (repeated !== undefined) return { ok: false, why: `request ${repeated} is in the batch twice; no answer in the batch was recorded` };
   const mixed = sameMachineAndAccount(checked.map((one) => one.record), raw.machine);
   if (mixed !== null) return { ok: false, why: `${mixed}; no answer in the batch was recorded` };
-  const answered: { id: string; choice: OwnerSeatAnswer['choice']; signer: string }[] = [];
-  for (const one of checked) {
-    const recorded = recordCarriedOwnerAnswer(home, one.record, one.signed, store, now);
-    if (!recorded.ok) return { ok: false, why: answered.length === 0 ? `${recorded.why}; no answer in the batch was recorded` : `${recorded.why}; ${answered.map((done) => done.id).join(', ')} recorded before it` };
-    answered.push({ id: one.id, choice: recorded.answer.choice, signer: recorded.signer });
-  }
-  return { ok: true, answered, fingerprint: checked[0]!.fingerprint };
+  if ((checked[0]!.record.params.account ?? null) !== manifest.account) return { ok: false, why: 'the batch manifest names another account than its requests; no answer in the batch was recorded' };
+  const written = writeAnswersTogether(home, checked.map((one) => one.record), checked.map((one) => one.signed), store, now);
+  if (!written.ok) return written;
+  return { ok: true, answered: checked.map((one) => ({ id: one.id, choice: one.choice, signer: one.signer })), fingerprint: checked[0]!.fingerprint };
 }

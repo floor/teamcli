@@ -68,20 +68,30 @@ every check a single export makes; a request named twice is refused.
 
 `team approvals sign --from <file> --out <file> --answer <oui|always|non>` on the machine that
 holds the signers records every request in the file as its own card, then shows one prompt that
-lists them all — `3 requests from machine <name>: 1) … | 2) … | 3) …`, each item the card the
-request would show alone — and signs every one with that word and one confirmation on the
-owner's device. Each answer is still its own signature over its own request: it is verified,
+answers them all with that word and one confirmation on the owner's device. The prompt lists
+each request's card and its exact change — `3 requests from machine <name>: 1) … | 2) … | 3) …`
+— when that fits the prompt. When it does not, `sign` first prints every request's card and
+change in full on the terminal, with a digest of that list, and the prompt names the count and
+the same digest. The signer is settled before anything is signed, and every request must still
+be unanswered and must not have been asked for by that signer; one that fails refuses the file,
+with no prompt. Each answer is still its own signature over its own request: it is verified,
 recorded, and spent once exactly as if it had been signed alone, and each request keeps its own
-fifteen-minute window. Without `--answer`, the file is answered once the owner has answered
-every request on the owner page. A passkey signer answers one request per ceremony, so a batch
-is answered on the owner page or request by request. A credential helper built before this
-release asks once per request, and `sign` says so.
+fifteen-minute window. The same confirmation signs the file's manifest: the machine, the
+account and every request in order, with its parameter hash and the digest of the exact answer
+signed for it. Without `--answer`, `sign` waits until the owner has answered every request on
+the owner page, then asks one confirmation that lists the set and signs its manifest. A passkey
+signer answers one request per ceremony, so it cannot sign a batch. A credential helper built
+before this release asks once per request, plus once for the manifest, and `sign` says so.
 
-`team approvals answer --from <file>` on the pinned machine records every answer in the file,
-and each command then runs with its own `--approval <id>`, in any order, each once.
+`team approvals answer --from <file>` on the pinned machine checks the manifest against the
+pinned owner seat and records every answer in the file only when the manifest names exactly
+those answers, in that order, for this machine and account; each command then runs with its own
+`--approval <id>`, in any order, each once. The answers are recorded together: if one cannot be
+written, those written before it are taken back.
 
 A member that fails any check refuses the whole file, at every step: an altered request, a
-request for another machine or another account, an expired one, an answer that does not verify.
+request for another machine or another account, an expired one, an answer that does not verify,
+an answer moved, dropped, added or replaced by one from another confirmation.
 Nothing in the file is signed, and no answer from it is recorded. The owner's one prompt listed
 the whole set; a file that no longer holds what that prompt listed is no longer what the owner
 answered, so no part of it is taken.

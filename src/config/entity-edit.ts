@@ -396,7 +396,9 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     { request: args.flags.has('request'), approval: args.values.approval, dry, json, ...(args.values.reason === undefined ? {} : { reason: args.values.reason }) },
     io,
     { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) },
-    { root: dirname(file), team: targetName, head: null },
+    // Bound as the parser read the line — the verb, the path and the value — and the file it
+    // writes, so the card can show the exact change and the run writes nothing else.
+    { root: dirname(file), team: targetName, head: null, words: [...args.rest, `file=${file}`] },
   );
   let spendAnswer = false;
   if (asked) {
@@ -433,21 +435,19 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     }
   }
 
-  // An answer is spent only by a write that would go through: the same write is tried first with
-  // nothing written, and a refusal there keeps the answer for a corrected run.
+  // An answer is spent only by a write that goes through, inside the file's lock: the write is
+  // planned under the lock, a plan that is refused keeps the answer for a corrected run, and the
+  // answer is claimed just before the planned text is written (or, for a value already in place,
+  // before the unchanged plan returns).
   const spend = (): boolean => door(false).kind === 'admitted';
 
   if (isProjectRules) {
     let outcome: ReturnType<typeof setProjectRules>;
     try {
-      if (spendAnswer) {
-        setProjectRules(home, targetName, list as string[], { dryRun: true, allowDisplayName: true });
-        // exit: config.entity.approval-refused
-        if (!spend()) return 1;
-      }
       outcome = setProjectRules(home, targetName, list as string[], {
         dryRun,
         allowDisplayName: true,
+        ...(spendAnswer ? { claim: spend } : {}),
       });
     } catch (error) {
       const msg = error instanceof ProjectsError || error instanceof Error ? error.message : String(error);
@@ -456,6 +456,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       }
       return unreadable(io, json, msg);
     }
+    // exit: config.entity.approval-refused
+    if (outcome.claimRefused === true) return 1;
     if (!outcome.changed) {
       if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: false, ...(dryRun ? { dry_run: true } : {}), source: 'project', comments_kept: true });
       else io.stdout(`nothing changed in ${file}\n`);
@@ -479,7 +481,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   }
 
   const entitiesFile = entitiesPath(home);
-  const runEntityWrite = (write: boolean = !dryRun):
+  const runEntityWrite = (write: boolean = !dryRun, claim?: () => boolean):
+    | { kind: 'claim-refused' }
     | { kind: 'path'; why: string }
     | { kind: 'unreadable'; why: string }
     | { kind: 'reminders-problem'; why: string }
@@ -553,6 +556,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       };
     }
     if (!changed.changed) {
+      if (claim !== undefined && !claim()) return { kind: 'claim-refused' };
       return { kind: 'unchanged' };
     }
     const edited = editedRecordText(text, recordPath, value, changed.root);
@@ -579,6 +583,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       );
       if (refused !== undefined) return { kind: 'reminders-problem', why: refused.why };
     }
+    if (claim !== undefined && !claim()) return { kind: 'claim-refused' };
     if (write) {
       writeOwnerFile(entitiesFile, edited.text);
     }
@@ -588,20 +593,18 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   let entityOutcome: ReturnType<typeof runEntityWrite>;
   try {
     if (spendAnswer) {
-      const tried = runEntityWrite(false);
-      // A write that is refused spends nothing, and its refusal is said below. One that changes
-      // nothing is the write the owner answered, already in place: it spends the answer as a
-      // write would, so a second run of the same answer is refused as any replay is.
-      if (tried.kind !== 'written' && tried.kind !== 'unchanged') entityOutcome = tried;
-      // exit: config.entity.approval-refused
-      else if (!spend()) return 1;
-      else entityOutcome = lockedEntities(home, () => runEntityWrite(true));
+      // Planned, claimed and written under the one lock. A plan that is refused spends nothing,
+      // and its refusal is said below; one that changes nothing is the write the owner answered,
+      // already in place, and spends the answer as a write would, so a replay is refused.
+      entityOutcome = lockedEntities(home, () => runEntityWrite(true, spend));
     } else {
       entityOutcome = dryRun ? runEntityWrite() : lockedEntities(home, () => runEntityWrite());
     }
   } catch (error) {
     return unreadable(io, json, error instanceof Error ? error.message : String(error));
   }
+  // exit: config.entity.approval-refused
+  if (entityOutcome.kind === 'claim-refused') return 1;
   if (entityOutcome.kind === 'path') return pathRefused(io, json, entityOutcome.why);
   if (entityOutcome.kind === 'unreadable') return unreadable(io, json, entityOutcome.why);
   if (entityOutcome.kind === 'reminders-problem') return remindersProblem(io, json, entityOutcome.why);

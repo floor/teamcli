@@ -178,7 +178,27 @@ export function ownerSeatStep(
 
 /** What a request outside a repository binds in place of the repository, team and HEAD: a folder
  *  the action writes in and a name the card shows. */
-export type OwnerRequestBinding = { root: string; team: string; head: string | null };
+export type OwnerRequestBinding = {
+  root: string;
+  team: string;
+  head: string | null;
+  /** The action's words as the command's own parser read them, every value resolved, in place of
+   *  the line's words. Absent: the line's words (`boundWords`). */
+  words?: readonly string[];
+};
+
+/** The line as the owner reruns it: every word but `--request`, `--reason <text>` and `--json`. */
+export function rerunWords(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const word = argv[i]!;
+    if (word === '--request' || word === '--json') continue;
+    if (word === '--reason') { i++; continue; }
+    if (word.startsWith('--reason=')) continue;
+    out.push(word);
+  }
+  return out;
+}
 
 /**
  * `--request` and `--approval <id>` alone: no charter, no default rule and no `always` rule is
@@ -207,7 +227,7 @@ export function ownerRequestDoor(
   if (ask.request && ask.approval !== undefined) return refused('--request asks the owner seat and --approval runs an answered request: pass one');
   if (binding === null) return refused('not inside a git repository');
   const { root, team, head } = binding;
-  const words = boundWords(argv);
+  const words = binding.words === undefined ? boundWords(argv) : [...binding.words];
   if (ask.request) {
     const made = createOwnerActionRequest(home, {
       actions: [action],
@@ -221,7 +241,8 @@ export function ownerRequestDoor(
     if (!made.ok) return refused(made.why);
     // `--request` files the card and stops. It does not present Touch ID and it does not run the
     // command in this process; `--approval` is the run, once the owner has answered.
-    const run = `team ${command} ${[...words, '--approval', made.record.request_id].join(' ')}`.replace(/\s+/g, ' ');
+    const shown = binding.words === undefined ? words : rerunWords(argv);
+    const run = `team ${command} ${[...shown, '--approval', made.record.request_id].join(' ')}`.replace(/\s+/g, ' ');
     const where = made.page === 'live' ? 'the owner page is already open and will show this card' : 'the owner answers it on the owner page';
     if (ask.json) io.stdout(`${JSON.stringify({ format: 1, status: 'requested', request_id: made.record.request_id, expires_at: made.record.expires_at, text: made.text, page: made.page, run })}\n`);
     else io.stdout(`team ${command}: owner-seat request ${made.record.request_id} recorded; ${where}\nthen run: ${run}\n`);

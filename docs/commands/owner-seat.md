@@ -91,9 +91,11 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   `migrate --root`, and `init --approval-mode` and `--revoke-approval` (no `always` rule is kept
   here, so there is none to change). `team owner-seat` (its pins are trust on first use or
   signed exports) and `team setup` (below) never take one.
-- **What an answer binds.** The request's action, its argument words, the folder it acts in
-  (the repository, the entities file's folder, or the home for the daemon), its team or
-  entity, HEAD in a repository, this machine and, on a shared server, the account. A file a
+- **What an answer binds.** The request's action, its argument words as the command read them
+  (for the daemon, the resolved home, checkouts, opt-ins and route; for an entity's record, the
+  operation, key, value and file), the folder it acts in, its team or entity, HEAD in a
+  repository, this machine and, on a shared server, the account. An entity's record and the
+  daemon are answered once or denied, never by a standing rule. A file a
   command names is bound by its path, not its contents (as under a general grant); inside a
   repository HEAD binds the repository's own files.
 - **No owner signer and no charter are made here.** `team owner-seat setup` and `team setup` are

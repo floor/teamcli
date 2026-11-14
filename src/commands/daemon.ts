@@ -188,6 +188,8 @@ type Parsed = {
   presence: boolean;
   watch: boolean;
   startedBy: string | undefined;
+  /** The first of `--home`, `--root`, `--route`, `--reason` given a value that starts with `-`. */
+  optionLike: string | null;
   /** `--request`: record the verb for the owner seat to answer. */
   request: boolean;
   /** `--approval <id>`: run the verb on the owner's signed answer to that request. */
@@ -240,6 +242,7 @@ function parse(argv: string[]): Parsed {
     presence: args.flags.has('presence'),
     watch: args.flags.has('watch'),
     startedBy: args.values['started-by'],
+    optionLike: optionLikeValue(argv),
     request: args.flags.has('request'),
     approval: args.values['approval'],
     reason: args.values['reason'],
@@ -247,6 +250,26 @@ function parse(argv: string[]): Parsed {
     inherited: args.values['inherited'],
     error: args.error ?? null,
   };
+}
+
+/**
+ * The first folder, route or reason option whose value starts with `-`. Such a value reads as an
+ * option to anyone reading the line, so it is refused before anything is bound or run: what the
+ * owner is asked to answer is never a line that reads two ways.
+ */
+function optionLikeValue(argv: readonly string[]): string | null {
+  for (let index = 0; index < argv.length; index++) {
+    const word = argv[index] as string;
+    for (const name of ['home', 'root', 'route', 'reason']) {
+      if (word === `--${name}`) {
+        const value = argv[index + 1];
+        if (value !== undefined && value.startsWith('-')) return name;
+      } else if (word.startsWith(`--${name}=`) && word.slice(name.length + 3).startsWith('-')) {
+        return name;
+      }
+    }
+  }
+  return null;
 }
 
 function verbProblem(parsed: Parsed): string | null {
@@ -274,6 +297,7 @@ function verbProblem(parsed: Parsed): string | null {
     return null;
   }
   if (parsed.inherited !== undefined) return '--inherited belongs to the daemon\'s own child';
+  if (parsed.optionLike !== null) return `--${parsed.optionLike} takes a value, not an option: a value that starts with "-" is refused`;
   const ownerGated = parsed.verb === 'install' || parsed.verb === 'restart' || parsed.verb === 'uninstall' || parsed.verb === 'fault-watch';
   if (!ownerGated && parsed.request) return '--request belongs to install, restart, uninstall or fault-watch';
   if (!ownerGated && parsed.approval !== undefined) return '--approval belongs to install, restart, uninstall or fault-watch';
@@ -415,6 +439,11 @@ function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSourc
     return ownerAllows(io, sources, parsed.json, parsed.verb) ? { kind: 'allowed', spend: () => true } : { kind: 'refused' };
   }
   const home = sources.home ?? homedir();
+  const bound = daemonBinding(io, parsed, home);
+  if ('why' in bound) {
+    refuse(io, parsed.json, 'daemon', { id: 'daemon.approval-refused', message: `${bound.why}; nothing was recorded or run`, repair: null });
+    return { kind: 'refused' };
+  }
   const door = (dry: boolean) => ownerRequestDoor(
     'daemon',
     'team-daemon',
@@ -422,12 +451,51 @@ function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSourc
     { request: parsed.request, approval: parsed.approval, dry, json: parsed.json, ...(parsed.reason === undefined ? {} : { reason: parsed.reason }) },
     io,
     { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) },
-    { root: home, team: 'daemon', head: null },
+    { root: bound.home, team: 'daemon', head: null, words: bound.words },
   );
   const step = door(true);
   if (step.kind === 'requested') return { kind: 'requested' };
   if (step.kind !== 'admitted') return { kind: 'refused' };
   return { kind: 'allowed', spend: () => parsed.dryRun || door(false).kind === 'admitted' };
+}
+
+/** A folder as it is on disk, every link resolved; the path itself when it cannot be resolved. */
+function onDisk(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * What an owner-seat answer to a daemon verb binds, as this run resolves it: the verb, the home
+ * the unit is for (the `--home` folder, or this home), every checkout the install hosts (named
+ * with `--root`, or the checkout this run stands in), the hosting opt-ins, and for fault-watch
+ * the checkout and the route. Each folder is absolute and as it is on disk, so a relative word
+ * or a different working folder never means another target under the same answer: the run
+ * resolves the same way, and an answer for other targets admits nothing. `--dry-run` is not
+ * bound: a dry run spends nothing.
+ */
+function daemonBinding(io: Io, parsed: Parsed, home: string): { home: string; words: string[] } | { why: string } {
+  let target = onDisk(home);
+  if (parsed.home !== undefined) {
+    const checked = homeTargetProblem(parsed.home, io.cwd);
+    if (!checked.ok) return { why: checked.why };
+    target = checked.realTarget;
+  }
+  const words: string[] = [parsed.verb ?? '', `home=${target}`];
+  if (parsed.verb === 'install') {
+    const named = rootsOf(parsed, io, parsed.home === undefined ? home : target, 'install');
+    if ('problem' in named) return { why: named.problem };
+    for (const root of named.roots) words.push(`root=${onDisk(root)}`);
+    if (parsed.presence) words.push('presence');
+    if (parsed.watch) words.push('watch');
+  }
+  if (parsed.verb === 'fault-watch') {
+    words.push(`root=${onDisk(resolve(io.cwd, parsed.roots[0] ?? ''))}`, `route=${parsed.route ?? ''}`);
+  }
+  return { home: target, words };
 }
 
 function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb: string | undefined): boolean {
@@ -630,6 +698,7 @@ async function faultWatch(
   io: Io,
   sources: DaemonCommandSources,
   home: string,
+  spend: () => boolean = () => true,
 ): Promise<number> {
   const routeArg = parsed.route as string;
   if (!/^[0-9a-f]{32}$/.test(routeArg)) {
@@ -737,6 +806,10 @@ async function faultWatch(
     requestedAt: now.toISOString(),
     nonce: randomUUID(),
   };
+  // An owner-seat answer is spent here, after every check and never by a dry run: the fault
+  // request is the change.
+  // exit: daemon.approval-refused
+  if (!spend()) return 1;
   const written = writeFaultRequest(home, request);
   if (!written.ok) {
     refuse(io, parsed.json, 'daemon', { id: 'daemon.fault-pending', message: written.why, repair: null });
@@ -1163,6 +1236,7 @@ async function restartInstalled(
   parsed: Parsed,
   home: string,
   sources: DaemonCommandSources,
+  spend: () => boolean = () => true,
 ): Promise<number> {
   if (parsed.dryRun) {
     if (parsed.json) {
@@ -1187,6 +1261,9 @@ async function restartInstalled(
   // old copy: the new code never reaches the daemon (seen 2026-11-12: a day of builds that a
   // restart never loaded). The restart then refreshes the copy as an install does, with the
   // installed unit's own opt-ins (`--presence`, `--watch`) and roots, and reports that it did.
+  // An owner-seat answer is spent here, after the dry run returned and before anything changes.
+  // exit: daemon.approval-refused
+  if (!spend()) return 1;
   const refreshed = refreshStaleCopy(manager, io, parsed, home, sources);
   if (refreshed === 'failed') {
     // exit: daemon.restart-refresh-failed
@@ -1572,9 +1649,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   const spent = (): boolean => gate.spend();
 
   if (parsed.verb === 'fault-watch') {
-    // exit: daemon.approval-refused
-    if (!spent()) return 1;
-    return await faultWatch(parsed, io, sources, home);
+    return await faultWatch(parsed, io, sources, home, spent);
   }
 
   const manager =
@@ -1592,9 +1667,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   if (parsed.verb === 'restart') {
-    // exit: daemon.approval-refused
-    if (!spent()) return 1;
-    return await restartInstalled(manager, io, parsed, home, sources);
+    return await restartInstalled(manager, io, parsed, home, sources, spent);
   }
 
   let targetHome = home;

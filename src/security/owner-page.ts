@@ -21,7 +21,7 @@ import { noteDeferral } from '../client/owner-later-notice.ts';
 import { addOwnerSigner, answerDeadline, deferralUntil, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, signOwnerLater, type AnswerWindow, type OwnerSeatKeyStore, type OwnerSeatLater } from '../client/owner-seat.ts';
 import { grantCard, ownerActionCard, ownerActionDetails, teamCreateCard, teamCreateDetails } from '../client/approval-card.ts';
 import { actionRequestsFolder, approveTeamCreate, readTeamCreateRecord, TEAM_CREATE_ID_PATTERN, TEAM_CREATE_TTL_MS, teamCreateSummary, type TeamCreateParams } from '../client/team-create.ts';
-import { approveOwnerAction, OWNER_ACTION_ID_PATTERN, OWNER_ACTION_TTL_MS, OWNER_ACTIONS, ownerActionSummary, readOwnerActionRecord, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
+import { approveOwnerAction, EXACT_ANSWER_ACTIONS, OWNER_ACTION_ID_PATTERN, OWNER_ACTION_TTL_MS, OWNER_ACTIONS, ownerActionSummary, readOwnerActionRecord, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
 import { answerChoiceOf, approveAsOwnerSeat, deferUntilOf, GRANT_REQUEST_ID_PATTERN, GRANT_REQUEST_TTL_MS, grantRequestsFolder, pendingGrantPrompt } from '../client/emission.ts';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { openRequestLink } from '../client/request-link.ts';
@@ -58,6 +58,9 @@ export type OwnerPageRequest = {
   description: string;
   /** The card's third line, when the kind has one: who asked and what the answer covers. */
   scope?: string;
+  /** The exact change, whole, for a request whose words are the change itself (an entity's
+   *  record, the machine daemon): the page shows it before any button. */
+  change?: string;
   /** Approve once and Deny only. Migrations, and grants a standing rule cannot cover. */
   onceOnly: boolean;
   /**
@@ -120,9 +123,11 @@ export function ownerPageRequest(message: { request_id: string; text?: string; k
     if (!isOwnerAction(summary)) return unknown(strippedPrompt(text));
     const params = summary;
     const card = ownerActionCard(params);
-    const onceOnly = params.actions.some((action) => MIGRATION_ACTIONS.has(action));
+    // A migration, an entity's record and the machine daemon are answered once or denied: no
+    // standing rule is offered for them.
+    const onceOnly = params.actions.some((action) => MIGRATION_ACTIONS.has(action) || EXACT_ANSWER_ACTIONS.has(action));
     const details = ownerActionDetails({ request_id: id, params, ...(hash === undefined ? {} : { params_sha256: hash }) });
-    return { id, text, title: card.title, description: card.question, ...(card.scope === undefined ? {} : { scope: card.scope }), onceOnly, details: details.join('\n') };
+    return { id, text, title: card.title, description: card.question, ...(card.scope === undefined ? {} : { scope: card.scope }), ...(card.change === undefined ? {} : { change: card.change }), onceOnly, details: details.join('\n') };
   }
   if (kind === 'team-create-confirmation' || isTeamCreate(summary)) {
     if (!isTeamCreate(summary)) return unknown(strippedPrompt(text));
@@ -574,7 +579,7 @@ let stamp = '';
 async function load() {
   if (busy) return;
   const next = await api('GET', '/api/state');
-  const mark = JSON.stringify([next.profile, next.proposal, (next.requests || []).map(r => r.id + '\\n' + (r.title || '') + '\\n' + r.onceOnly + '\\n' + (r.description || '') + '\\n' + (r.scope || '') + '\\n' + (r.details || '') + '\\n' + r.text + '\\n' + (r.shown || '')), next.seat]);
+  const mark = JSON.stringify([next.profile, next.proposal, (next.requests || []).map(r => r.id + '\\n' + (r.title || '') + '\\n' + r.onceOnly + '\\n' + (r.description || '') + '\\n' + (r.scope || '') + '\\n' + (r.change || '') + '\\n' + (r.details || '') + '\\n' + r.text + '\\n' + (r.shown || '')), next.seat]);
   S = next;
   if (mark === stamp) return;
   stamp = mark;
@@ -591,7 +596,7 @@ async function load() {
     if (!hasPasskey) break;
     // The card is at most three plain lines; the record is only in the fold. The request id is
     // in the fold too, never beside the title.
-    const scope = r.scope ? '<p class="hint">' + esc(r.scope) + '</p>' : '';
+    const scope = (r.change ? '<p><b>' + esc(r.change) + '</b></p>' : '') + (r.scope ? '<p class="hint">' + esc(r.scope) + '</p>' : '');
     if (r.id.startsWith('gr_')) {
       const always = r.onceOnly ? '' : '<button data-w="always">${msg('page.always_allow')}</button>';
       const details = '<details><summary>${msg('page.details')}</summary><p class="hint">' + esc(r.details || '') + '</p></details>';
@@ -648,7 +653,7 @@ async function answer(word) {
   const r = S.request;
   const always = r.onceOnly ? '' : '<button data-w="always">Always allow</button>';
   const d = document.getElementById('card'); d.className = 'card';
-  const scope = r.scope ? '<p class="hint">' + esc(r.scope) + '</p>' : '';
+  const scope = (r.change ? '<p><b>' + esc(r.change) + '</b></p>' : '') + (r.scope ? '<p class="hint">' + esc(r.scope) + '</p>' : '');
   d.innerHTML = '<b>' + esc(r.title) + '</b><p>' + esc(r.description) + '</p>' + scope + (r.details ? '<details><summary>Details</summary><p class="hint">' + esc(r.details) + '</p></details>' : '') + '<button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button><button data-w="later">Later</button><button data-w="tomorrow">Tomorrow</button><button data-w="monday">Monday</button>';
   d.querySelectorAll('button').forEach(b => b.onclick = () => answer(b.dataset.w).catch(e => log('Refused: ' + e.message)));
 })().catch(e => log(e.message));

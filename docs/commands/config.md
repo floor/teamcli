@@ -131,7 +131,11 @@ it. The owner's signed answer is the third way, for every entity key and for a p
 file's folder, the entity and every word of the change; it is checked first, the write is then
 tried with nothing written, and only a write that would go through (or that finds the value
 already in place) spends it, so a write refused for a missing entry keeps the answer for a
-corrected run. `--request` and `--approval` take no `get`, never go together, and never go
+corrected run. The write is planned, the answer spent and the planned text written under the
+file's one lock, so a file that changes in between cannot spend an answer for a write that is
+then refused. The owner's card names the exact change: set or unset, the key, the value in full
+and the file. An entity's record is answered once or denied: `always` is refused, and no
+standing rule ever admits one. `--request` and `--approval` take no `get`, never go together, and never go
 with `--general`. On a machine whose owner seat is pinned from another machine this is the only
 way, and the request is carried with `team approvals export`.
 

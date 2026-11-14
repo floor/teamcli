@@ -353,11 +353,18 @@ verifies them again, so a grant whose chain, key or ops no longer verify `daemon
 run and are never written into the unit.
 
 The owner's signed answer admits each of `install`, `restart`, `uninstall` and `fault-watch`,
-for any caller: `--request` records the verb and every option it names, bound to this home, and
-`--approval <request-id>` runs exactly that once the owner has answered. The answer is checked
-when the command starts, with nothing spent, and spent once just before the daemon is changed,
-so a run refused before that (no service manager, a root that cannot be read) keeps it; a dry run
-never spends it. A change the service manager refuses after that has spent the answer: a new
+for any caller: `--request` records the verb and what it resolves to — the home the unit is for
+(the `--home` folder, or this home), every checkout an install hosts (named with `--root`, or
+the checkout the command stands in), the hosting opt-ins, and for `fault-watch` the checkout and
+the route — every folder absolute and as it is on disk, and the owner's card shows all of it.
+`--approval <request-id>` runs the verb only when it resolves to exactly those targets again, so
+a relative folder or another working folder never means another target under the same answer.
+A value of `--home`, `--root`, `--route` or `--reason` that starts with `-` is refused. A daemon
+request is answered once or denied: `always` is refused, and no standing rule admits one. The answer is checked
+when the command starts, with nothing spent, and spent once just before the daemon is changed —
+after every check, for `fault-watch` just before its fault request is written — so a run refused
+before that (no service manager, a root that cannot be read, a route that is not hosted) keeps
+it; a dry run never spends it. A change the service manager refuses after that has spent the answer: a new
 answer is needed to retry. On a machine whose owner seat is pinned from another machine this is the only
 way, and the request is carried with `team approvals export`. A refused answer is
 `daemon.approval-refused`.
