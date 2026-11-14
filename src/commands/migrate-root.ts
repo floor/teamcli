@@ -54,9 +54,11 @@ export function runRootMigrate(args: RootMigrateArgs, io: Io, home: string): num
   const lines = plan.changes.map((change) => ({ line: change.line, before: change.before, after: change.after }));
   const say = (written: boolean) => {
     if (json) {
-      writeJson(io, 'team.migrate-root', { format: 1, dry_run: dryRun, written, entity: plan.entity, root: plan.root, worktrees: plan.worktrees, changes: lines });
+      writeJson(io, 'team.migrate-root', { format: 1, dry_run: dryRun, written, entity: plan.entity, root: plan.root, worktrees: plan.worktrees, changes: lines, kept: plan.kept });
       return;
     }
+    // A spelling a shell line does not expand where it stands is left, and said, every time.
+    for (const one of plan.kept) io.stdout(`left as written: line ${String(one.line)}: ${one.field} writes ${one.written}: ${one.why}\n`);
     const folders = [plan.root, plan.worktrees].filter((folder): folder is string => folder !== null);
     const unique = [...new Set(folders)].join(' and ');
     if (lines.length === 0) {

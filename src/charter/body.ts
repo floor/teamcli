@@ -5,10 +5,10 @@
 // `team setup --edit`. Nothing in this file signs or reads a key.
 
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, sep } from 'node:path';
-import { declaredProjectRoots } from '../entities.ts';
+import { join, normalize, sep } from 'node:path';
+import { canonicalFolder, declaredProjectRoots } from '../entities.ts';
 
 /** Routine operations the charter can admit. `grant` is included and still cannot carry the
  *  right to grant (`grant_right` is always false). */
@@ -73,13 +73,44 @@ export function defaultProjectRoots(home: string): DefaultRoots {
   if (declared.problems.length > 0) {
     return { ok: false, why: `${declared.problems.join('; ')}: set it again with \`team config set <entity>.root <folder>\`, or name the charter's roots with --roots <dirs>; nothing was written` };
   }
-  if (declared.roots.length > 0) return { ok: true, roots: declared.roots.map((one) => one.root) };
+  if (declared.roots.length > 0) return signedRoots(declared.roots.map((one) => one.root), home);
   const found = SUGGESTED_NAMES.map((name) => join(home, name)).filter((path) => existsSync(path));
   const hint = found.length > 0 ? ` (folders found under the home: ${found.join(', ')})` : '';
   return {
     ok: false,
     why: `no entity names a projects root on this machine: set one with \`team config set <entity>.root <folder>\`, or name the charter's roots with --roots <dirs>${hint}; nothing was written`,
   };
+}
+
+/**
+ * The roots a charter signs, as they are on disk: each one's real path (`canonicalFolder`), so a
+ * link cannot widen the signed scope later, and each held to a folder's limits — never the
+ * filesystem's root, the home or a folder above it, and never a folder that does not resolve. A
+ * root inside another signed root adds nothing and is left out. Refused whole when one does not
+ * pass: nothing is signed over a guess.
+ */
+export function signedRoots(roots: readonly string[], home: string): DefaultRoots {
+  const real: string[] = [];
+  for (const root of roots) {
+    const resolved = canonicalFolder(root, home);
+    if (!resolved.ok) return { ok: false, why: `${resolved.why}: a charter root must be a folder that exists, narrower than the home; nothing was written` };
+    if (!real.includes(resolved.path)) real.push(resolved.path);
+  }
+  return { ok: true, roots: real.filter((root) => !real.some((other) => other !== root && pathInsideRoot(other, root))) };
+}
+
+/**
+ * A signed root bound to what was signed: the root itself while it still resolves to itself, or
+ * null when it now resolves elsewhere (a link retargeted since the signature) or does not resolve
+ * at all. A root that is null covers nothing.
+ */
+export function boundRoot(root: string): string | null {
+  try {
+    const real = realpathSync(root);
+    return real === normalize(root).replace(/(.)\/+$/, '$1') ? real : null;
+  } catch {
+    return null;
+  }
 }
 
 const DEFAULT_LIFETIMES: CharterLifetimes = { request: null, rule: null, grant: null, unattended: null };

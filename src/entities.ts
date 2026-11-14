@@ -6,6 +6,7 @@
 import {
   closeSync,
   existsSync,
+  realpathSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -139,25 +140,69 @@ export const ENTITY_WORKTREES_KEY = 'worktrees';
  *  as an absolute path; null when the entry writes none; or why the word it writes does not read. */
 export type EntityRootRead = { ok: true; root: string | null } | { ok: false; why: string };
 
+/** The characters a folder of an entity may hold: letters, digits and `/ . _ - ~ @ +`. A folder is
+ *  pasted into launch lines, which a shell reads, so a space, a quote, `$`, a backtick, a
+ *  backslash or any of `;|&<>()*?[]{}` would change what the line runs: such a folder is refused,
+ *  never quoted on the way in. */
+const FOLDER_CHARACTERS = /^[A-Za-z0-9/._~@+-]+$/;
+
+/** Why `path` is too wide to be a folder of an entity: the filesystem's root, the home itself, or
+ *  a folder above the home. Null when it is narrower. */
+function tooWide(path: string, home: string): string | null {
+  const homeless = normalize(home).replace(/\/+$/, '') || '/';
+  if (path === '' || path === '/') return 'cannot be the filesystem root';
+  if (path === homeless) return 'cannot be the home itself: name the folder the repositories sit in';
+  if (homeless.startsWith(`${path}/`)) return 'cannot be a folder above the home';
+  return null;
+}
+
 /**
- * A projects root as the owner writes it, checked and made absolute: an absolute path, or `~` or
- * `~/…` under `home`. Trailing slashes are dropped, so `{root}/docs` never doubles one. A relative
- * path, the filesystem's own root, a path that names the root word itself, and a value with a
- * control character are refused: each would make `{root}` mean something the owner did not write.
+ * A folder of an entity (its projects root or its worktrees folder) as the owner writes it,
+ * checked and made absolute: an absolute path, or `~/…` under `home`. Trailing slashes are
+ * dropped, so `{root}/docs` never doubles one. Refused: a relative path, a `..` segment, the
+ * filesystem's root, the home itself or a folder above it, a path that names a word itself, and
+ * any character outside letters, digits and `/ . _ - ~ @ +`. The path is lexical: `canonicalFolder`
+ * resolves it where the folder must exist.
  */
 export function checkedRootPath(value: string, home: string): { ok: true; root: string } | { ok: false; why: string } {
   const written = value.trim();
-  if (written === '') return { ok: false, why: 'a projects root must name a folder' };
-  if (/[\u0000-\u001f\u007f]/.test(written)) return { ok: false, why: 'a projects root holds no control character' };
+  if (written === '') return { ok: false, why: 'a folder of the entity must name a folder' };
   if (/\{(root|worktrees)\}/.test(written)) return { ok: false, why: 'a folder of the entity cannot name {root} or {worktrees} itself' };
+  if (!FOLDER_CHARACTERS.test(written)) {
+    return { ok: false, why: 'a folder of the entity holds only letters, digits and / . _ - ~ @ + (no space, quote, $, backtick, backslash or other shell character)' };
+  }
+  if (written.split('/').includes('..')) return { ok: false, why: 'a folder of the entity names no ".." segment' };
   let path: string;
-  if (written === '~') path = home;
-  else if (written.startsWith('~/')) path = join(home, written.slice(2));
+  if (written.startsWith('~/')) path = join(home, written.slice(2));
+  else if (written === '~') path = home;
   else if (written.startsWith('/')) path = written;
   else return { ok: false, why: `"${written}" is not an absolute path: write /… or ~/…` };
   path = normalize(path).replace(/\/+$/, '');
-  if (path === '') return { ok: false, why: 'a projects root cannot be the filesystem root' };
+  const wide = tooWide(path, home);
+  if (wide !== null) return { ok: false, why: `a folder of the entity ${wide}` };
+  if (!FOLDER_CHARACTERS.test(path)) return { ok: false, why: `${path} holds a character a launch line cannot carry as it is` };
   return { ok: true, root: path };
+}
+
+/**
+ * A folder of an entity as it is on disk: its real path, every link resolved, held to the same
+ * limits as the folder written — so a link that points at `/`, the home or a folder above it is
+ * refused like the word would be. A folder that does not resolve is refused: what a signature or
+ * a containment check binds must be a folder that exists.
+ */
+export function canonicalFolder(path: string, home: string): { ok: true; path: string } | { ok: false; why: string; missing?: true } {
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    return { ok: false, why: `${path} does not resolve to a folder on this machine`, missing: true };
+  }
+  let realHome = home;
+  try { realHome = realpathSync(home); } catch { /* the lexical home is the bound */ }
+  const wide = tooWide(real, realHome) ?? tooWide(real, home);
+  if (wide !== null) return { ok: false, why: `${path} resolves to ${real}, which ${wide}` };
+  if (!FOLDER_CHARACTERS.test(real)) return { ok: false, why: `${path} resolves to ${real}, which holds a character a launch line cannot carry as it is` };
+  return { ok: true, path: real };
 }
 
 /**

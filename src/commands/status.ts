@@ -534,7 +534,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     return 1;
   }
 
-  const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
+  // A team whose `{root}` this machine can no longer fill is still shown: status reads, never launches.
+  const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner, undefined, 'keep');
   if (!owner) {
     const read = current.ok && (clientRead || mayReadTeam(current, io, sources));
     // A create-grant admits the seat whose own registry record it names to the read, for a team

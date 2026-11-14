@@ -33,7 +33,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, workSettingsFor, type RulesOrigin } from '../launch/rules.ts';
-import { hasRootWord, ROOT_WORD, rootPathUses, rootPathWarning, setRootCommand } from '../file/root-word.ts';
+import { foldersUnsigned, hasRootWord, ROOT_WORD, rootPathUses, rootPathWarning, setRootCommand } from '../file/root-word.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { cliWordList, versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
@@ -1010,6 +1010,10 @@ export function rootWordFindings(text: string, team: TeamFile, root: string, hom
     level: 'warn',
     text: plainLine(`the file, line ${use.line}: ${rootPathWarning(use)}`),
   }));
+  // With no charter the entities file's folders are filled as written: say they are unsigned.
+  if (team.entity !== null && hasRootWord(text) && foldersUnsigned(home)) {
+    findings.push({ level: 'warn', text: plainLine(`the file writes ${ROOT_WORD} or {worktrees}, and this machine has no owner charter: entity "${team.entity}"'s folders are filled from the entities file as written, bound to no signature; \`team setup\` signs one`) });
+  }
   const work = workSettingsFor(team, root, home);
   if (work?.vaultProblem !== undefined) findings.push({ level: 'warn', text: plainLine(`${work.vaultProblem}: seats get no vault rule`) });
   if (work !== null && team.entity !== null) {

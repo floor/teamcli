@@ -6,7 +6,7 @@
 import { realpathSync } from 'node:fs';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { logLine } from '../log.ts';
-import { pathInsideRoot, type CharterLifetimes, type CharterOp } from './body.ts';
+import { boundRoot, pathInsideRoot, type CharterLifetimes, type CharterOp } from './body.ts';
 import { readCharter } from './store.ts';
 
 export type CharterAsk = {
@@ -33,12 +33,19 @@ function located(path: string): string {
   }
 }
 
+/** Whether a signed root covers `path`: only while the root still resolves to what was signed
+ *  (`boundRoot`). A root a link has moved since, or one that is gone, covers nothing. */
+function covers(root: string, path: string): boolean {
+  const bound = boundRoot(root);
+  return bound !== null && pathInsideRoot(bound, path);
+}
+
 /** Whether `folder` sits under a verified charter root. No charter, or one that does not verify, is false. */
 export function charterCoversFolder(home: string, folder: string, store?: OwnerSeatKeyStore): boolean {
   const read = readCharter(home, store ?? systemOwnerSeatKeyStore());
   if (read.kind !== 'ok') return false;
   const at = located(folder);
-  return read.charter.body.roots.some((root) => pathInsideRoot(located(root), at));
+  return read.charter.body.roots.some((root) => covers(root, at));
 }
 
 /** One lifetime from a verified charter. Absent and invalid stay distinct so a caller can fail closed. */
@@ -83,7 +90,7 @@ export function charterGate(home: string, ask: CharterAsk, store?: OwnerSeatKeyS
     return { kind: 'block', message: `the owner charter does not allow vendor ${ask.vendor}; the owner widens it with ${EDIT}` };
   }
   const path = located(ask.path ?? ask.cwd);
-  const inside = body.roots.some((root) => pathInsideRoot(located(root), path));
+  const inside = body.roots.some((root) => covers(root, path));
   if (!inside) {
     return { kind: 'block', message: `this is outside the owner charter (${path} is not under a charter root); the owner widens it with ${EDIT}` };
   }
@@ -105,7 +112,7 @@ export function charterRootsGate(home: string, folder: string, store?: OwnerSeat
     return { kind: 'block', message: `the owner charter expired at ${body.expires_at}; the owner signs again with ${EDIT}` };
   }
   const path = located(folder);
-  const inside = body.roots.some((root) => pathInsideRoot(located(root), path));
+  const inside = body.roots.some((root) => covers(root, path));
   if (!inside) {
     return { kind: 'block', message: `this is outside the owner charter (${path} is not under a charter root); the owner widens it with ${EDIT}` };
   }
@@ -139,11 +146,10 @@ export function charterGrantBound(
   for (const capability of request.capabilities) {
     if (forbidden.includes(capability)) return `a grant cannot carry \`${capability}\``;
   }
-  const roots = body.roots.map((root) => located(root));
   const places = [...request.roots, ...(request.scope ?? [])];
   for (const place of places) {
     const at = located(place);
-    if (!roots.some((root) => pathInsideRoot(root, at))) {
+    if (!body.roots.some((root) => covers(root, at))) {
       return `the grant path ${at} is outside the owner charter; the owner widens it with ${EDIT}`;
     }
   }

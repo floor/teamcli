@@ -207,6 +207,9 @@ export type LoadTeamFileOptions = {
   session?: string;
   /** This read's source. Absent: the `team-config.source` resolution (registry by default). */
   source?: 'registry' | 'file';
+  /** `keep` reads `{root}` and `{worktrees}` it cannot fill as written, refusing nothing: the
+   *  reads of `team down` and `team status`, which stop and show a team, never launch one. */
+  unfilled?: 'strict' | 'keep';
   env?: Record<string, string | undefined>;
 };
 
@@ -387,7 +390,7 @@ export function loadTeamText(
   text: string,
   root: string,
   path: string,
-  options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string } = {},
+  options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string; unfilled?: 'strict' | 'keep' } = {},
   reread?: () => string,
 ): LoadResult {
   let result = validateWithWorkspaceMode(text, root, options);
@@ -554,13 +557,14 @@ export function placedProblems(
 // requirements to learn its entity and project, then validated for real in the resolved mode.
 // A file that writes its mode is validated once, as before; so is every file when the chain holds
 // no `workspace-mode` (the release default is `worktree`).
-export function validateWithWorkspaceMode(text: string, root: string, options: { home?: string; fs?: FsReader }): ReturnType<typeof validateTeamFile> {
+export function validateWithWorkspaceMode(text: string, root: string, options: { home?: string; fs?: FsReader; unfilled?: 'strict' | 'keep' }): ReturnType<typeof validateTeamFile> {
   // The default lead's chain is read from the same home the policy chain uses, so a team that
   // names no lead in its file resolves one the same way under either source.
   const leadHome = options.home ?? homedir();
-  const plain = () => validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root });
+  const unfilled = options.unfilled !== undefined ? { unfilled: options.unfilled } : {};
+  const plain = () => validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root, ...unfilled });
   if (fileDeclaresWorkspaceMode(text)) return plain();
-  const probe = validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root, workspaceMode: 'shared' });
+  const probe = validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root, workspaceMode: 'shared', ...unfilled });
   if (!probe.ok) return plain();
   let mode: 'worktree' | 'shared' = 'worktree';
   try {

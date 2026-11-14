@@ -25,6 +25,7 @@ import {
   defaultCharterBody,
   defaultProjectRoots,
   parseDuration,
+  signedRoots,
   type CharterBody,
   type CharterLifetimes,
 } from '../charter/body.ts';
@@ -95,10 +96,13 @@ async function setupOutcome(argv: string[], rawIo: Io, options: SetupOptions): P
   if (args.flags.has('edit') && existing.kind === 'invalid') return fail(`${existing.why}; nothing was written`);
   // The owner's own roots, then the roots the charter already signed, then the projects root each
   // entity names on this machine: a machine that names none is refused, never given a guess.
+  // Every root is signed as it is on disk (`signedRoots`): a link cannot widen the scope later.
   let roots: string[];
-  if (parsedRoots !== undefined) roots = parsedRoots;
-  else if (existing.kind === 'ok') roots = [...existing.charter.body.roots];
-  else {
+  if (parsedRoots !== undefined || existing.kind === 'ok') {
+    const named = signedRoots(parsedRoots ?? (existing.kind === 'ok' ? existing.charter.body.roots : []), home);
+    if (!named.ok) return fail(named.why);
+    roots = named.roots;
+  } else {
     const defaults = defaultProjectRoots(home);
     if (!defaults.ok) return fail(defaults.why);
     roots = defaults.roots;
