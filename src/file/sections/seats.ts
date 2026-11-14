@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { isAbsolute, posix } from 'node:path';
 import { CLIS } from '../../clis.ts';
 import type { CrossSessionInbound } from '../../launch/declaration.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
@@ -616,7 +616,7 @@ function readCwd(entry: YamlEntry | undefined, at: string, trust: string[], chec
   // An absolute folder `{root}` or `{worktrees}` was filled into is the file's word, not a path of
   // this machine's: it is taken when it lies inside the entity's folders (src/file/root-word.ts).
   if (check.insideWordFolder(entry.value, cwd)) {
-    const path = normalize(cwd);
+    const path = posix.normalize(cwd).replace(/(.)\/+$/, '$1');
     const inProject = root !== undefined && (path === root || path.startsWith(`${root}/`));
     return { cwd: path, outside: !inProject && !insideTrust(path, trust, root) };
   }

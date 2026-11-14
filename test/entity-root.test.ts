@@ -217,7 +217,8 @@ describe('the doctor names full paths inside the root', () => {
     expect(checked.ok).toBe(true);
     if (!checked.ok) return;
     const findings = rootWordFindings(text, checked.team, join(home, 'Code', 'acme', 'web'), home);
-    expect(findings.map((finding) => finding.level)).toEqual(['warn', 'warn']);
+    // The two paths, and the folders bound to no signature: this machine has no charter.
+    expect(findings.map((finding) => finding.level)).toEqual(['warn', 'warn', 'warn']);
     expect(findings[1]!.text).toContain('the file, line 20: seats.0.launch writes ~/Code/acme, the entity\'s projects root on this machine: write {root} in its place');
   });
 
