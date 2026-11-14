@@ -445,15 +445,20 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     | { kind: 'reminders-problem'; why: string }
     | { kind: 'unchanged' }
     | { kind: 'written'; text: string; kept: boolean } => {
-    if (!existsSync(entitiesFile)) {
+    // A projects root is the first word a fresh machine needs, before any other entry exists: a
+    // set makes the file and the entry when they are missing, and an unset of a root that is not
+    // there changes nothing. Every other key keeps to an entry the file already declares.
+    const makesEntry = key === ROOT_KEY && verb === 'set';
+    if (key === ROOT_KEY && verb === 'unset' && !existsSync(entitiesFile)) return { kind: 'unchanged' };
+    if (!existsSync(entitiesFile) && !makesEntry) {
       return {
         kind: 'path',
         why: `${entitiesFile} does not exist: no entry for entity "${targetName}"; nothing was written`,
       };
     }
-    let text: string;
+    let text = '';
     try {
-      text = readFileSync(entitiesFile, 'utf8');
+      if (existsSync(entitiesFile)) text = readFileSync(entitiesFile, 'utf8');
     } catch (error) {
       return {
         kind: 'unreadable',
@@ -462,7 +467,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     }
     let root: YamlNode;
     try {
-      root = parseYaml(text);
+      root = text.trim() === '' ? { kind: 'map', line: 1, entries: [] } : parseYaml(text);
     } catch (error) {
       return {
         kind: 'unreadable',
@@ -479,13 +484,14 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     const wrapped = hasEntitiesWrapper(record);
     const entryLookup = wrapped ? ['entities', targetName] : [targetName];
     const entry = getAt(record, entryLookup);
-    if (!entry.found) {
+    if (!entry.found && key === ROOT_KEY && verb === 'unset') return { kind: 'unchanged' };
+    if (!entry.found && !makesEntry) {
       return {
         kind: 'path',
         why: `${entitiesFile}: no entry for entity "${targetName}"; nothing was written`,
       };
     }
-    if (!isMap(entry.value)) {
+    if (entry.found && !isMap(entry.value)) {
       return {
         kind: 'path',
         why: `${entitiesFile}: entity "${targetName}" is not a map; nothing was written`,

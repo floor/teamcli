@@ -385,7 +385,9 @@ check, and this build acts on what [the commands](commands/README.md) read.
 
 Each entity has one projects root per machine: the folder its repositories sit directly under.
 On one machine that may be `~/Code/acme`; on a server where the entity has an account of its own,
-`/home/acme`. A team file names it with one word, `{root}`, in place of the full path, so the same
+`/home/acme/repos`. Each machine names it outright; it is never derived from the home. A
+repository's folder under the root need not carry its remote's name: `{root}/v4` is whatever folder
+is there. A team file names it with one word, `{root}`, in place of the full path, so the same
 file reads on every machine:
 
 ```yaml

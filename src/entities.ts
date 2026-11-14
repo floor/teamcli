@@ -178,6 +178,22 @@ export function entityProjectsRoot(home: string, entity: string | null): EntityR
 }
 
 /**
+ * Every projects root this machine names, one per entity that writes one, in the order the file
+ * lists the entities; and why each entity whose word does not read is left out. Nothing is
+ * derived: an entity that writes no `root:` names no folder, whatever sits under the home.
+ */
+export function declaredProjectRoots(home: string): { roots: Array<{ entity: string; root: string }>; problems: string[] } {
+  const roots: Array<{ entity: string; root: string }> = [];
+  const problems: string[] = [];
+  for (const entry of entityEntries(home)) {
+    const read = entityProjectsRoot(home, entry.key);
+    if (!read.ok) problems.push(read.why);
+    else if (read.root !== null && !roots.some((known) => known.root === read.root)) roots.push({ entity: entry.key, root: read.root });
+  }
+  return { roots, problems };
+}
+
+/**
  * Each entity's declared word on the liveness defaults, by entity name, read from its
  * `liveness:` map. An entry whose map does not read declares none: the settings reader takes no
  * partial word from a map it could not parse.

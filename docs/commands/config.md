@@ -85,7 +85,9 @@ start with `@`) and takes no `set` or `unset`, so an entity or project named `co
 `<entity>.root` is the folder the entity's repositories sit directly under on this machine — an
 absolute path, or `~` or `~/…` under the home — which a team file names as `{root}`
 ([the team file's reference](../team-file.md#the-entitys-projects-root-root)). It is the machine's
-own word: a set writes it as given (a trailing slash dropped) and says the folder it reads as; a
+own word, never derived from the home: a set writes it as given (a trailing slash dropped) and
+says the folder it reads as, and on a fresh machine it creates the entity's entry, and the entities
+file, which no other key of this form does; a
 relative path, the filesystem's root, or a path that writes `{root}` itself is refused and nothing
 is written. `unset` removes it, after which a team of the entity that writes `{root}` is refused
 until one is set again. `get --json` adds the folder it reads as (`resolved`). A path whose first

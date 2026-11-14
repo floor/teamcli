@@ -4,9 +4,12 @@
 // registry, entities file or store is read, and no launch runs.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { charterPath, defaultProjectRoots } from '../src/charter/body.ts';
+import { readCharter } from '../src/charter/store.ts';
 import { runConfig } from '../src/commands/config.ts';
+import { runSetup } from '../src/commands/setup.ts';
 import { rootWordFindings } from '../src/commands/doctor.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
 import { checkedRootPath, entitiesPath, entityProjectsRoot } from '../src/entities.ts';
@@ -20,6 +23,7 @@ import { readTeamText } from '../src/file/team-text.ts';
 import { parseYaml } from '../src/yaml.ts';
 import { intoRegistry } from './helpers/registry-team.ts';
 import { fixtureBase, gitEnv, testIo } from './helpers.ts';
+import { fakeOwnerStore } from './helpers/owner-seat.ts';
 
 const made: string[] = [];
 afterAll(() => {
@@ -119,9 +123,9 @@ describe('a team file that writes {root}', () => {
   test('the same text reads each machine\'s own folder', () => {
     const text = teamText();
     const mac = validateTeamFile(text, { home: homeWith('acme:\n  root: ~/Code/acme\n') });
-    const server = validateTeamFile(text, { home: homeWith('acme:\n  root: /home/acme\n') });
+    const server = validateTeamFile(text, { home: homeWith('acme:\n  root: /home/acme/repos\n') });
     expect(mac.ok && mac.team.seats[0]!.launch).toMatch(/^zsh \/.+\/home\/Code\/acme\/docs\/tools\/as-acme\.sh /);
-    expect(server.ok && server.team.seats[0]!.launch).toBe('zsh /home/acme/docs/tools/as-acme.sh codex -m gpt-6.1-sol');
+    expect(server.ok && server.team.seats[0]!.launch).toBe('zsh /home/acme/repos/docs/tools/as-acme.sh codex -m gpt-6.1-sol');
   });
 
   test('no root on this machine refuses the file, naming the line and the command that sets one', () => {
@@ -207,7 +211,7 @@ describe('the doctor names full paths inside the root', () => {
     expect(findings[1]!.text).toContain('the file, line 20: seats.0.launch writes ~/Code/acme, the entity\'s projects root on this machine: write {root} in its place');
   });
 
-  test('where the root is the home itself, a hidden folder of it is the machine\'s and is not named', () => {
+  test('where a root is the home itself, a hidden folder of it is the machine\'s and is not named', () => {
     const home = homeWith('acme:\n  root: "~"\n');
     const text = teamText({ launch: 'zsh ~/docs/tools/as-acme.sh codex', rules: ['"The lobby is ~/.config/team/lobbies/acme."'] });
     expect(rootPathUses(text, home).map((use) => [use.field, use.written])).toEqual([['seats.0.launch', '~']]);
@@ -343,5 +347,60 @@ describe('team config <entity>.root', () => {
     const seatPath = testIo(cwd, { kind: 'owner' });
     await runConfig(['get', 'seats.root'], seatPath, { home });
     expect(seatPath.err).not.toContain('projects root');
+  });
+});
+
+describe('the charter team setup signs by default', () => {
+  const NOW = new Date('2026-11-14T12:00:00.000Z');
+  const AGENT = { kind: 'unplaced' as const, reason: 'the agent that launched setup' };
+
+  test('a server account: the roots are each entity\'s own root under the home, never the home or a guessed folder', () => {
+    // The server shape: repositories sit under `repos`, worktrees beside it, nothing named Code.
+    const home = homeWith('floor:\n  root: ~/repos\n');
+    for (const folder of ['repos/vlist', 'repos/v4', 'worktrees']) mkdirSync(join(home, folder), { recursive: true });
+    expect(defaultProjectRoots(home)).toEqual({ ok: true, roots: [join(home, 'repos')] });
+  });
+
+  test('a machine with two entities signs both roots, in the file\'s order, once each', () => {
+    const home = homeWith('floor:\n  root: ~/Code/floor\nradiooooo:\n  root: ~/Code/radiooooo/\nother:\n  root: ~/Code/floor\n');
+    expect(defaultProjectRoots(home)).toEqual({ ok: true, roots: [join(home, 'Code', 'floor'), join(home, 'Code', 'radiooooo')] });
+  });
+
+  test('no entity names a root: refused, with the command that sets one; a folder found is only a suggestion', () => {
+    const bare = defaultProjectRoots(homeWith());
+    expect(bare).toEqual({
+      ok: false,
+      why: 'no entity names a projects root on this machine: set one with `team config set <entity>.root <folder>`, or name the charter\'s roots with --roots <dirs>; nothing was written',
+    });
+    const home = homeWith('floor:\n  roots: [/x]\n');
+    mkdirSync(join(home, 'repos'), { recursive: true });
+    const suggested = defaultProjectRoots(home);
+    expect(suggested.ok).toBe(false);
+    if (!suggested.ok) expect(suggested.why).toContain(`(folders found under the home: ${join(home, 'repos')})`);
+    const broken = defaultProjectRoots(homeWith('floor:\n  root: repos\n'));
+    expect(broken.ok).toBe(false);
+    if (!broken.ok) expect(broken.why).toContain('entity "floor" root:');
+  });
+
+  test('team setup with no root and no --roots signs nothing; with the root set it signs that root', async () => {
+    const home = homeWith();
+    mkdirSync(join(home, 'repos', 'vlist'), { recursive: true });
+    const store = fakeOwnerStore();
+    const refused = testIo(join(home, 'repos'), AGENT);
+    expect(await runSetup(['--signer', 'touch-id', '--team', 'floor'], refused, { home, store, now: () => NOW })).toBe(1);
+    expect(refused.err).toContain('no entity names a projects root on this machine');
+    expect(store.prompts).toEqual([]);
+    expect(existsSync(charterPath(home))).toBe(false);
+
+    // A fresh machine: the root set makes the entities file and the entry.
+    const set = testIo(home, { kind: 'owner' });
+    expect(await runConfig(['set', 'floor.root', '~/repos'], set, { home })).toBe(0);
+    expect(readFileSync(entitiesPath(home), 'utf8')).toContain('root: ~/repos');
+
+    const signed = testIo(join(home, 'repos'), AGENT);
+    expect(await runSetup(['--signer', 'touch-id', '--team', 'floor'], signed, { home, store, now: () => NOW })).toBe(0);
+    const read = readCharter(home, store);
+    expect(read.kind).toBe('ok');
+    if (read.kind === 'ok') expect(read.charter.body.roots).toEqual([join(home, 'repos')]);
   });
 });

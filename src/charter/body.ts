@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
+import { declaredProjectRoots } from '../entities.ts';
 
 /** Routine operations the charter can admit. `grant` is included and still cannot carry the
  *  right to grant (`grant_right` is always false). */
@@ -52,11 +53,33 @@ export function charterPath(home: string = homedir()): string {
   return join(home, '.config', 'team', 'charter.json');
 }
 
-/** Project directories under `home`. The ones that exist, or `~/Code` when none do. */
-export function defaultProjectRoots(home: string): string[] {
-  const names = ['Code', 'Projects', 'src', 'dev', 'Developer', 'repos', 'work', 'code'];
-  const found = names.map((name) => join(home, name)).filter((path) => existsSync(path));
-  return found.length > 0 ? found : [join(home, 'Code')];
+/** The charter's default roots, or why there are none to sign. */
+export type DefaultRoots = { ok: true; roots: string[] } | { ok: false; why: string };
+
+/** Folders under the home a projects root often is. Named to the owner as a suggestion only: a
+ *  folder that happens to exist is never signed as a root on its own. */
+const SUGGESTED_NAMES = ['Code', 'Projects', 'src', 'dev', 'Developer', 'repos', 'work', 'code'];
+
+/**
+ * The project roots `team setup` signs when the owner names none: the projects root each entity
+ * names on this machine (`<entity>.root` in the owner's entities file, src/entities.ts). No folder
+ * is guessed — a machine's layout is its own (one keeps an entity's repositories in `~/Code/<entity>`,
+ * a server account in `~/repos`, a folder name need not be the repository's) — so a machine whose entities name no root, or one whose root does not read, is
+ * refused with the command that sets one and the `--roots` that names them outright. Folders under
+ * the home that often hold projects are named in the refusal as suggestions, never signed.
+ */
+export function defaultProjectRoots(home: string): DefaultRoots {
+  const declared = declaredProjectRoots(home);
+  if (declared.problems.length > 0) {
+    return { ok: false, why: `${declared.problems.join('; ')}: set it again with \`team config set <entity>.root <folder>\`, or name the charter's roots with --roots <dirs>; nothing was written` };
+  }
+  if (declared.roots.length > 0) return { ok: true, roots: declared.roots.map((one) => one.root) };
+  const found = SUGGESTED_NAMES.map((name) => join(home, name)).filter((path) => existsSync(path));
+  const hint = found.length > 0 ? ` (folders found under the home: ${found.join(', ')})` : '';
+  return {
+    ok: false,
+    why: `no entity names a projects root on this machine: set one with \`team config set <entity>.root <folder>\`, or name the charter's roots with --roots <dirs>${hint}; nothing was written`,
+  };
 }
 
 const DEFAULT_LIFETIMES: CharterLifetimes = { request: null, rule: null, grant: null, unattended: null };
