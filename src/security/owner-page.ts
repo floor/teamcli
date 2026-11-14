@@ -206,9 +206,9 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     at: Date,
     via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; expect?: string },
   ) => {
-    // An owner action checks the hash it was shown inside its own answer; the others here.
+    // Each answer function reads its request once and holds the shown hash against that one read:
+    // the challenge and the signed answer are drawn from the record it checked, never a reread.
     if (OWNER_ACTION_ID_PATTERN.test(id)) return approveOwnerAction(home, id, word, store, at, via);
-    if (via.expect !== undefined && currentHash(id) !== via.expect) return { ok: false as const, why: msg('page.changed') };
     if (GRANT_REQUEST_ID_PATTERN.test(id)) return approveAsOwnerSeat(home, id, word, store, at, via);
     return approveTeamCreate(home, id, word, store, at, via);
   };

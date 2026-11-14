@@ -584,8 +584,11 @@ export function approveOwnerAction(
   const record = readOwnerActionRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
   if (via.expect !== undefined && record.params_sha256 !== via.expect) return { ok: false, why: `request ${id} changed since it was shown; nothing was signed` };
-  // Every fresh signature covers a signed window: a request from before the window is not signed.
+  // Every fresh signature covers a signed window and the full argument words, each action's hash
+  // matching the words its card shows (`readOwnerActionRecord` checked the match when words are
+  // there): a request without either is not signed. An answer given before stays verifiable.
   if (record.params.window === undefined) return { ok: false, why: windowlessRefusal(id) };
+  if (record.params.words === undefined) return { ok: false, why: `request ${id} carries no argument words, so its card cannot show what it admits and it is not signed; record it again with --request` };
   // Before any card is shown or signed: a request for another machine carries all it must.
   const binding = ownerActionBindingProblem(home, record);
   if (binding !== null) return { ok: false, why: binding };

@@ -8,9 +8,10 @@ import { createHash, generateKeyPairSync, sign as cryptoSign, type KeyObject } f
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { actionArgsHash, admitOwnerAction, createOwnerActionRequest, ownerActionHash, type OwnerActionRecord } from '../src/client/owner-action.ts';
-import { ownerSeatInbox, registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
-import { actionRequestsFolder } from '../src/client/team-create.ts';
+import { execFileSync } from 'node:child_process';
+import { actionArgsHash, admitOwnerAction, approveOwnerAction, createOwnerActionRequest, ownerActionHash, type OwnerActionRecord } from '../src/client/owner-action.ts';
+import { ownerSeatInbox, readOwnerSeat, registerOwnerSeat, signOwnerAnswer, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
+import { actionRequestsFolder, approveTeamCreate, createTeamCreateRequest } from '../src/client/team-create.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { OWNER_PAGE_HTML, REQUEST_PAGE_HTML, serveOwnerPage } from '../src/security/owner-page.ts';
 import { keyOf } from '../src/store/keys.ts';
@@ -168,6 +169,68 @@ describe('the card is the record, and the record signed is the card shown', () =
     const other = devModeRequest(s.home, s.base, ['set', 'local-fast']);
     writeFileSync(path, JSON.stringify({ ...other, request_id: off.request_id }));
     expect((await s.call('POST', '/api/team-create/challenge', { id: off.request_id, word: 'later', credentialId: s.p.credentialId, shown: card!.shown })).status).toBe(409);
+  });
+
+  test('a team-create request swapped after it was shown signs nothing: the answer is drawn from the one read it checks', async () => {
+    const s = await page();
+    const repo = (name: string): string => {
+      const root = join(s.base, 'code', name);
+      mkdirSync(root, { recursive: true });
+      execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+      return root;
+    };
+    const a = createTeamCreateRequest(s.home, repo('alpha'), null, new Date());
+    const b = createTeamCreateRequest(s.home, repo('beta'), null, new Date());
+    if (!a.ok || !b.ok) throw new Error('team requests');
+    const path = join(actionRequestsFolder(s.home), `${a.record.request_id}.json`);
+    const original = readFileSync(path, 'utf8');
+    // Repository B's request under A's id, after A's card was shown: a valid record, another hash.
+    writeFileSync(path, JSON.stringify({ ...b.record, request_id: a.record.request_id }));
+    const prompts = s.store.prompts.length;
+    for (const signer of ['mac', 'iphone']) {
+      const swapped = approveTeamCreate(s.home, a.record.request_id, 'oui', s.store, new Date(), { signer, expect: a.record.params_sha256 });
+      expect(swapped.ok, signer).toBe(false);
+      if (!swapped.ok) expect(swapped.why).toContain('changed since it was shown');
+    }
+    expect(s.store.prompts.length).toBe(prompts);
+    expect(existsSync(join(actionRequestsFolder(s.home), `${a.record.request_id}.seat-answer.json`))).toBe(false);
+    // The request as shown: one prompt, its card naming repository A's team.
+    writeFileSync(path, original);
+    expect(approveTeamCreate(s.home, a.record.request_id, 'oui', s.store, new Date(), { signer: 'mac', expect: a.record.params_sha256 })).toMatchObject({ ok: true, choice: 'once' });
+    expect(s.store.prompts.length).toBe(prompts + 1);
+    expect(s.store.prompts.at(-1)).toContain('alpha');
+  });
+
+  test('a request with its words removed (window kept, hash recomputed) is refused before any prompt, on every path', async () => {
+    const s = await page();
+    const record = devModeRequest(s.home, s.base, ['set', 'off']);
+    const stripped: OwnerActionRecord = JSON.parse(JSON.stringify(record));
+    delete stripped.params.words;
+    stripped.params_sha256 = ownerActionHash(stripped.params);
+    expect(stripped.params.window).toEqual({ created: record.created, expires_at: record.expires_at });
+    writeFileSync(join(actionRequestsFolder(s.home), `${record.request_id}.json`), JSON.stringify(stripped));
+    const prompts = s.store.prompts.length;
+    // The device key (team init --approve-as-owner-seat, team approvals sign): refused.
+    const touch = approveOwnerAction(s.home, record.request_id, 'oui', s.store, new Date(), { signer: 'mac' });
+    expect(touch.ok).toBe(false);
+    if (!touch.ok) expect(touch.why).toContain('carries no argument words');
+    // The page's passkey: the card reads, but no challenge is issued for it.
+    const [card] = await s.cards();
+    expect(card!.shown).toBe(stripped.params_sha256);
+    const ch = await s.call('POST', '/api/team-create/challenge', { id: record.request_id, word: 'oui', credentialId: s.p.credentialId, shown: card!.shown });
+    expect(ch.status).toBe(400);
+    expect(String(ch.body.error)).toContain('carries no argument words');
+    expect(ch.body.challenge).toBeUndefined();
+    expect(s.store.prompts.length).toBe(prompts);
+    expect(existsSync(join(actionRequestsFolder(s.home), `${record.request_id}.seat-answer.json`))).toBe(false);
+    // An answer that already exists for such a request still verifies when it runs.
+    const seat = readOwnerSeat(s.home)!;
+    const answer = { kind: 'owner-action' as const, request_id: record.request_id, params_sha256: stripped.params_sha256, choice: 'once' as const, team: seat.team, seat: 'owner' as const, at: new Date().toISOString() };
+    const signed = signOwnerAnswer(s.home, answer, 'mac', s.store, 'an answer given before');
+    if (!signed.ok) throw new Error(signed.why);
+    writeFileSync(join(actionRequestsFolder(s.home), `${record.request_id}.seat-answer.json`), JSON.stringify(signed.signed));
+    const ask = { action: 'development-mode' as const, root: join(s.base, 'repo'), team: 'floor', head: null, words: ['set', 'off'], claim: false };
+    expect(admitOwnerAction(s.home, record.request_id, ask, s.store, new Date())).toMatchObject({ ok: true, via: 'owner-seat' });
   });
 
   test('both page scripts send the card\'s hash with every answer they ask for', () => {

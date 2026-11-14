@@ -425,8 +425,11 @@ export function approveAsOwnerSeat(
   word: string,
   store: OwnerSeatKeyStore,
   now: Date = new Date(),
-  via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; at?: string } = {},
+  via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; at?: string; expect?: string } = {},
 ): { ok: true; choice: 'once' | 'always' | 'deny'; summary: string } | { ok: false; why: string } {
+  // The pending record is read once below: the prompt, the challenge and the signed answer are all
+  // drawn from that one read, and `expect` (the parameter hash the owner was shown) is held
+  // against it, so a request swapped between what was shown and what is signed signs nothing.
   if (!GRANT_REQUEST_ID_PATTERN.test(requestId)) return { ok: false, why: `"${requestId}" is not a grant request id` };
   const choice = answerChoiceOf(word);
   if (choice === null) return { ok: false, why: `"${word}" is not an answer: oui/approved/yes, always, or non/deny` };
@@ -436,6 +439,7 @@ export function approveAsOwnerSeat(
   if (key === null) return { ok: false, why: 'the owner signing key is absent or unreadable: the pending request cannot be read' };
   const record = readPending(home, requestId, key);
   if (typeof record === 'string') return { ok: false, why: record };
+  if (via.expect !== undefined && record.params_sha256 !== via.expect) return { ok: false, why: `request ${requestId} changed since it was shown; nothing was signed` };
   const deadline = answerDeadline(home, grantRequestsFolder(home), requestId, windowOf(record), store, now, GRANT_REQUEST_TTL_MS, record.params.entity);
   if (deadline <= now.getTime()) return { ok: false, why: `request ${requestId} expired at ${record.expires_at}` };
   if (choice === 'always' && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always; answer oui to approve it once' };

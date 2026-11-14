@@ -156,19 +156,23 @@ function replaceFile(path: string, text: string): boolean {
   }
 }
 
-/** The owner seat answers one team request; `always` signs the scope (the parent folder). */
+/** The owner seat answers one team request; `always` signs the scope (the parent folder).
+ *  The record is read once: the card, the challenge and the signed answer are all drawn from that
+ *  one read, and `expect` — the parameter hash the owner was shown — is held against it, so a
+ *  request swapped between what was shown and what is signed signs nothing. */
 export function approveTeamCreate(
   home: string,
   id: string,
   word: string,
   store: OwnerSeatKeyStore,
   now: Date = new Date(),
-  via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } } = {},
+  via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string }; expect?: string } = {},
 ): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
   const choice = answerChoiceOf(word);
   if (choice === null) return { ok: false, why: `"${word}" is not an answer: oui/approved/yes, always, or non/deny` };
   const record = readTeamCreateRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
+  if (via.expect !== undefined && record.params_sha256 !== via.expect) return { ok: false, why: `request ${id} changed since it was shown; nothing was signed` };
   const deadline = answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, TEAM_CREATE_TTL_MS);
   if (deadline <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   const seat = readOwnerSeat(home);
