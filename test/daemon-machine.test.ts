@@ -148,7 +148,7 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       const health = await daemonHealth(home);
       expect(health.state).toBe('running');
       expect(health.startedBy).toBe('service-manager');
-      expect(health.features).toEqual({ broker: 'absent' });
+      expect(health.features).toEqual({ broker: 'absent', watch: 'off' });
       expect(health.roots).toHaveLength(1);
       expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
       expect(health.roots[0]?.firstPass).toBeDefined();

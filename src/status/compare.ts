@@ -1,3 +1,4 @@
+import { WATCH_MISSING_REPAIR } from '../daemon/watch_display.ts';
 import { homedir } from 'node:os';
 import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -334,6 +335,9 @@ export function compare(
    *  status note `watch: running in the daemon` reports. A session with no pane-watch record is
    *  not missing a watch while that is true. */
   hostedWatchRunning = false,
+  /** The repair a missing or stale watch names, from the caller's daemon reading
+   *  (`watchRepairOf`); absent, the generic one. */
+  watchRepair: string = WATCH_MISSING_REPAIR,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -780,14 +784,14 @@ export function compare(
     if (!state.watch && !hostedWatchRunning) {
       differences.push({
         what: 'no watch has run for this session',
-        repair: 'team daemon status, or the lead runs team daemon install',
+        repair: watchRepair,
         who: "the team's lead",
       });
     } else if (state.watch && !(now.getTime() - beat <= 2 * watch.interval * 1000)) {
       const minutes = Number.isFinite(beat) ? Math.round((now.getTime() - beat) / 60_000) : null;
       differences.push({
         what: `the watch's last pass was ${minutes === null ? 'never recorded' : `${pluralCount(minutes, 'minute')} ago`}`,
-        repair: 'team daemon status, or the lead runs team daemon install',
+        repair: watchRepair,
         who: "the team's lead",
       });
     }

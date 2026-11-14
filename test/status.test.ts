@@ -83,6 +83,7 @@ const REFUSED_WHY = 'the record is signed, but its key is missing';
 
 /** The repair a missing or stale watch names. The daemon carries the watch; a pane `team watch` does not. */
 const WATCH_REPAIR = 'team daemon status, or the lead runs team daemon install';
+const WATCH_HOSTING_REPAIR = 'the machine daemon runs without --watch, so no watch runs for any team: the owner runs team daemon install --watch, naming again every opt-in the unit runs with (such as --presence)';
 
 let dir: string;
 let file: string;
@@ -731,6 +732,30 @@ describe('team status', () => {
     const other = await statusHealth(watchHealth('other', 'running'));
     expect(other.out).toContain(missing);
     expect(other.code).toBe(1);
+  });
+
+  test('a running daemon that hosts no watch names its --watch as the repair', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      delete state.sessions['acme-web']?.watch;
+    });
+    // The daemon records it was started without --watch, so a plain reinstall would not bring a
+    // watch back.
+    const health = watchHealth('acme-web', 'running');
+    const watchless: DaemonHealth = {
+      ...health,
+      features: { broker: 'absent', watch: 'off' },
+      roots: health.roots.map(({ watch: _watch, ...entry }) => entry),
+    };
+    const reading = await statusHealth(watchless);
+    expect(reading.out).toContain(`difference: no watch has run for this session\n  repair: ${WATCH_HOSTING_REPAIR}\n`);
+    expect(reading.out).toContain('team daemon install --watch');
+    expect(reading.code).toBe(1);
+    // A stale pane-watch record left by an earlier daemon names the same repair.
+    updateState(join(dir, '.agents'), (state) => {
+      (state.sessions['acme-web'] ?? emptySession()).watch = { pid: 1, heartbeat: '2026-10-03T14:00:00Z' };
+    });
+    const stale = await statusHealth(watchless);
+    expect(stale.out).toContain(`the watch's last pass was 10 minutes ago\n  repair: ${WATCH_HOSTING_REPAIR}`);
   });
 
   test('a broken file: status falls back to the last valid copy and says so first', async () => {

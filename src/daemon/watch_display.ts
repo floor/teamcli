@@ -21,6 +21,27 @@ function watched(health: DaemonHealth): Watched[] {
   );
 }
 
+/** The repair said when no watch carries a running session and the daemon's reading cannot say
+ *  why: read the daemon, or install it. */
+export const WATCH_MISSING_REPAIR = 'team daemon status, or the lead runs team daemon install';
+
+/** The repair said when the running daemon hosts no watch at all. `up` starts no pane watch for a
+ *  session the daemon carries, so a daemon started without `--watch` leaves every team with no
+ *  watch, and a plain `team daemon install` writes a unit without it again. */
+export const WATCH_HOSTING_REPAIR = 'the machine daemon runs without --watch, so no watch runs for any team: the owner runs team daemon install --watch, naming again every opt-in the unit runs with (such as --presence)';
+
+/** Whether a running daemon's reading proves it hosts no watch: the run records that it was
+ *  started without `--watch`. A daemon that is not running, an older build that records no watch
+ *  word, or a reading that cannot tell proves nothing, and the generic repair stands. */
+export function daemonHostsNoWatch(health: DaemonHealth): boolean {
+  return health.state === 'running' && health.features?.watch === 'off';
+}
+
+/** The repair for a missing or stale watch, from the daemon reading the caller already holds. */
+export function watchRepairOf(health: DaemonHealth | null | undefined): string {
+  return health !== null && health !== undefined && daemonHostsNoWatch(health) ? WATCH_HOSTING_REPAIR : WATCH_MISSING_REPAIR;
+}
+
 /** Whether this session's hosted watch is the one the status note calls running in the daemon.
  *  The root match is the same canonical checkout `watchSitting` uses, and the phase is the one
  *  `watch: running in the daemon` is printed for. A starting, standing-by, stopped or failed

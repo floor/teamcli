@@ -8,7 +8,7 @@ import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
 import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
 import { daemonStateAlive, readDaemonState } from '../daemon/state.ts';
 import { tempFolderRow, type DaemonTempDir, type TempFolderRow } from '../temp-folders.ts';
-import { hostedWatchRunning } from '../daemon/watch_display.ts';
+import { daemonHostsNoWatch, hostedWatchRunning } from '../daemon/watch_display.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
@@ -417,6 +417,14 @@ export function holdFindings(dir: string, sources: DoctorSources): Finding[] {
   return hold === null ? [] : [{ level: 'note', text: `${holdText(hold)} (\`team hold --release\` clears it)` }];
 }
 
+/** The repair a doctor line names for a missing or stale watch, in the doctor's own backquoted
+ *  words: the daemon's `--watch` when its reading proves it hosts none. */
+function doctorWatchRepair(health: DaemonHealth | null): string {
+  return health !== null && daemonHostsNoWatch(health)
+    ? 'the machine daemon runs without `--watch`, so no watch runs for any team: the owner runs `team daemon install --watch`, naming again every opt-in the unit runs with (such as `--presence`)'
+    : 'run `team daemon status`, or the lead runs `team daemon install`';
+}
+
 // `watch` is the watch values in force — the live file's under a verified standing — so a standing
 // move the verdict either way.
 function watchFindings(
@@ -436,13 +444,13 @@ function watchFindings(
   if (!recorded && health !== null && hostedWatchRunning(health, root, session)) {
     return [{ level: 'ok', text: 'the watch is running in the daemon' }];
   }
-  if (!recorded) return [{ level: 'miss', text: `no watch has run for session ${session}: run \`team daemon status\`, or the lead runs \`team daemon install\`` }];
+  if (!recorded) return [{ level: 'miss', text: `no watch has run for session ${session}: ${doctorWatchRepair(health)}` }];
   const age = (now.getTime() - Date.parse(recorded.heartbeat)) / 1000;
   if (!(age <= 2 * watch.interval)) {
     return [
       {
         level: 'miss',
-        text: `the watch's heartbeat is ${Math.round(age / 60)} min old (two intervals are ${(2 * watch.interval) / 60} min): run \`team daemon status\`, or the lead runs \`team daemon install\``,
+        text: `the watch's heartbeat is ${Math.round(age / 60)} min old (two intervals are ${(2 * watch.interval) / 60} min): ${doctorWatchRepair(health)}`,
       },
     ];
   }

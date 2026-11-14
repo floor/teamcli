@@ -1052,10 +1052,14 @@ export function placementOf(io: Io, stateDir: string, session: string, name: str
 
 /** How long `mcp serve` re-proves its caller's placement at start, and the pause between reads.
  *  A seat's CLI starts its MCP servers during boot, before herdr has detected an agent in the
- *  pane and before the launch's own naming step reaches it. The wait is bounded and happens
- *  once, at start; `alive()` re-proves with a single reading on every use and never waits. */
+ *  pane and before the launch's own naming step reaches it. The start reads again on this pace
+ *  for this long, and past it only while the client stays connected (`proveWhileServing`);
+ *  `alive()` re-proves with a single reading on every use and never waits. */
 export const SERVE_PLACEMENT_WAIT_MS = 5000;
 const SERVE_PLACEMENT_POLL_MS = 250;
+/** Past the start bound, while the seat's own recorded pane still has no herdr name and the
+ *  client is still connected, the placement is read again at this slower pace. */
+export const SERVE_PLACEMENT_SLOW_POLL_MS = 2000;
 
 /** The pane the state records for a seat, or undefined when the state cannot be read or records
  *  none; the start's wait is only for a pane this says the server runs in. */
@@ -1104,6 +1108,139 @@ export async function placementAtStart(
     if (last.ok) return last;
   }
   return last;
+}
+
+/** What `proveWhileServing` hands back: the placement proven, with the client's next line still
+ *  owed to the serving loop, or the refusal the start answers with. */
+type ServingProof =
+  | {
+    ok: true;
+    /** The first line the serving loop reads: one that already arrived, the read still
+     *  outstanding, or a new read. Nothing is asked of the input until it is called. */
+    first: () => Promise<IteratorResult<string>>;
+    /** How long the placement took to prove, from the first reading. */
+    waitedMs: number;
+  }
+  | { ok: false; why: string };
+
+/**
+ * The start placement, read while the client is served. A seat's CLI starts its MCP servers
+ * during boot, and after a machine restart herdr can restore the pane before it names the agent
+ * in it: the placement then cannot be proven for longer than the client waits for its handshake,
+ * and a server that refused there was never started again for the whole session.
+ *
+ * The first reading is taken before any line is served, and its refusal rules are
+ * `placementAtStart`'s: a refusal is answered at once, with nothing served, unless the
+ * environment names the pane the seat's record holds. In that one case the lines that arrive are
+ * answered by `pending` — a serving whose every tool call refuses with the reason, and which
+ * opens no inbox, writes no receipt and pushes nothing — while the placement is read again
+ * (every 250 ms for the first 5 s, then every 2 s) for as long as the client stays connected, so
+ * the inbox opens as soon as herdr names the pane. A wait whose record stops naming that pane
+ * ends at once, and a client that has gone keeps the old 5 s bound; the last refusal is returned.
+ */
+export async function proveWhileServing(input: {
+  io: Io;
+  stateDir: string;
+  session: string;
+  name: string;
+  lines: AsyncIterator<string>;
+  write: (line: string) => void;
+  /** Answers the lines that arrive before the placement is proven. */
+  pending: (line: string) => string | null;
+  /** Told the latest refusal, so the pending serving can say why it serves nothing yet. */
+  onRefusal?: (why: string) => void;
+  deps?: PlacementClock;
+}): Promise<ServingProof> {
+  const deps = input.deps ?? {};
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = deps.now ?? Date.now;
+  // No line is asked for until the first refusal is one this wait may serve through: a refused
+  // start leaves the input exactly as it found it. One read is outstanding at a time, and it is
+  // observed by exactly one handler, which wakes the current wait: a quiet client and a long wait
+  // attach nothing more per reading.
+  let next: Promise<IteratorResult<string>> | null = null;
+  let arrived: { result: IteratorResult<string> } | { error: unknown } | null = null;
+  let wake: (() => void) | null = null;
+  const ask = (): void => {
+    const read = input.lines.next();
+    next = read;
+    read.then(
+      (result) => {
+        arrived = { result };
+        wake?.();
+      },
+      (error: unknown) => {
+        arrived = { error };
+        wake?.();
+      },
+    );
+  };
+  let ended = false;
+  /** Answers the lines that arrive until `tick` settles; past the input's end, waits it out. */
+  const serveUntil = async (tick: Promise<void>): Promise<void> => {
+    let ticked = false;
+    let active = true;
+    // A tick from a wait that has already returned wakes nothing.
+    void tick.then(() => {
+      ticked = true;
+      if (active) wake?.();
+    });
+    if (next === null) ask();
+    try {
+      await answerUntilTick(() => ticked);
+    } finally {
+      active = false;
+    }
+    if (ended) await tick;
+  };
+  /** The loop of one wait: answer each line that arrives, until the tick or the input's end. */
+  const answerUntilTick = async (tickedNow: () => boolean): Promise<void> => {
+    for (;;) {
+      if (ended) return;
+      if (arrived === null && !tickedNow()) {
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        wake = null;
+      }
+      const got = arrived as { result: IteratorResult<string> } | { error: unknown } | null;
+      if (got === null) {
+        if (tickedNow()) return;
+        continue;
+      }
+      arrived = null;
+      if ('error' in got) throw got.error;
+      if (got.result.done === true) {
+        ended = true;
+        continue;
+      }
+      const reply = input.pending(got.result.value);
+      if (reply !== null) input.write(reply);
+      ask();
+    }
+  };
+  const start = now();
+  for (;;) {
+    const verdict = placementOf(input.io, input.stateDir, input.session, input.name);
+    if (verdict.ok) {
+      // A line that already arrived is handed on as it came; otherwise the outstanding read, which
+      // its one handler already observes; otherwise a read started only when the loop asks.
+      const held = arrived as { result: IteratorResult<string> } | { error: unknown } | null;
+      const outstanding = next as Promise<IteratorResult<string>> | null;
+      const first = held !== null
+        ? () => ('error' in held ? Promise.reject(held.error) : Promise.resolve(held.result))
+        : outstanding !== null
+          ? () => outstanding
+          : () => input.lines.next();
+      return { ok: true, first, waitedMs: now() - start };
+    }
+    input.onRefusal?.(verdict.why);
+    const recorded = recordedPaneOf(input.stateDir, input.session, input.name);
+    if (recorded === undefined || input.io.env.HERDR_PANE_ID !== recorded) return { ok: false, why: verdict.why };
+    const elapsed = now() - start;
+    if (ended && elapsed >= SERVE_PLACEMENT_WAIT_MS) return { ok: false, why: verdict.why };
+    await serveUntil(sleep(elapsed < SERVE_PLACEMENT_WAIT_MS ? SERVE_PLACEMENT_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS));
+  }
 }
 
 /** The launch the seat's state names now: the current brief claim's epoch, a claim that holds no
@@ -1230,10 +1367,54 @@ export async function runMcpServe(
   // seat on its recorded pane, and the epoch is the claim the state holds now. Both checks run
   // before the inbox folder or the listener is written, so a refused start leaves no trace.
   const stateDir = dirname(loaded.path);
-  const placed = await placementAtStart(io, stateDir, team.session, seat.name, deps);
-  if (!placed.ok) return refuse(placed.why);
+  // The channel is the seat's own launch word: a line with the development-channels flag naming
+  // this server. Nothing on the command line turns it on separately, and a marker without it is
+  // an ordinary inbox the send walks past.
+  const channel = channelLaunchEnabled(seat.launch);
+  // Before the caller is proven, the handshake and the tool list are answered and every tool
+  // call refuses with the reason: nothing reads the inbox, writes a receipt or pushes.
+  let unplacedWhy = 'the placement has not been read yet';
+  const pending: Serving = {
+    project: team.project,
+    seat: seat.name,
+    session: team.session,
+    root: loaded.root,
+    dropDir: join(loaded.root, '.agents', 'send-drops', team.session, seat.name),
+    home: host.home,
+    team,
+    loadTeam: () => null,
+    channel,
+    alive: () => `this server has not proven its caller yet, so it serves no inbox: ${unplacedWhy}`,
+  };
+  // The launch this server belongs to is bound before any wait: a claim a relaunch writes while
+  // this process waits for its pane's name is another launch's, never one this server adopts.
+  const startGeneration = generationOf(stateDir, team.session, seat.name);
+  let boundEpoch = boundEpochOf(startGeneration, options.epoch);
+  const lines = streams.lines[Symbol.asyncIterator]();
+  const placed = await proveWhileServing({
+    io,
+    stateDir,
+    session: team.session,
+    name: seat.name,
+    lines,
+    write: streams.write,
+    pending: (line) => handleLine(line, pending),
+    onRefusal: (why) => {
+      unplacedWhy = why;
+    },
+    deps,
+  });
+  if (!placed.ok) {
+    streams.close?.();
+    return refuse(placed.why);
+  }
   const generation = generationOf(stateDir, team.session, seat.name);
-  const boundEpoch = boundEpochOf(generation, options.epoch);
+  // A seat with no claim yet when its server started takes the first claim its own launch writes,
+  // as it always has, but only within the start bound: past it, a first claim may be a later
+  // launch's, and this process stays bound to none.
+  if (startGeneration.kind === 'none' && options.epoch === undefined && placed.waitedMs <= SERVE_PLACEMENT_WAIT_MS) {
+    boundEpoch = boundEpochOf(generation, options.epoch);
+  }
   const stale = staleLaunch(generation, boundEpoch, seat.name);
   if (stale !== null) return refuse(stale);
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
@@ -1241,10 +1422,6 @@ export async function runMcpServe(
     return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');
   }
   const build = host.build ?? buildIdentity();
-  // The channel is the seat's own launch word: a line with the development-channels flag naming
-  // this server. Nothing on the command line turns it on separately, and a marker without it is
-  // an ordinary inbox the send walks past.
-  const channel = channelLaunchEnabled(seat.launch);
   const listener: InboxListener = {
     v: 1,
     seat: seat.name,
@@ -1340,14 +1517,26 @@ export async function runMcpServe(
     return refuse('the inbox listener marker could not be written');
   }
   try {
-    for await (const line of streams.lines) {
-      const reply = handleLine(line, serving);
+    // The line the placement wait left owed is the first one served here.
+    let next = placed.first();
+    for (;;) {
+      const result = await next;
+      if (result.done === true) break;
+      const reply = handleLine(result.value, serving);
       if (reply !== null) streams.write(reply);
       // The call just answered ran this build's code; the next one runs the installed build's.
       if (notice()) break;
+      next = lines.next();
     }
   } finally {
     stopChannel?.();
+    try {
+      lines.return?.()?.catch(() => {
+        // The input is closed below either way.
+      });
+    } catch {
+      // The input is closed below either way.
+    }
     streams.close?.();
     removeListener(dropDir, process.pid);
   }
