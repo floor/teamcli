@@ -105,18 +105,31 @@ pinned owner seat counts for every entity account, and none of them can change i
   read for any of them.
 - **Nothing reads as unpinned.** A system folder that is missing, is writable by anyone but the
   administrator, lacks the helper's record or the ledger, or holds no pin yet, refuses every
-  answer, and a terminal of an entity account is never the owner there.
+  answer, and a terminal of an entity account is never the owner there. The refusal names the
+  install to run, with this machine's own paths in full.
 - **Each answer is for one account.** A request made by an entity account names that account
   beside the machine, inside the signed parameters, and the owner's card shows it
   (`server (account floor)`). An answer for one account is never accepted by another.
 - **An approval is spent by the owner helper alone.** When a command runs with `--approval <id>`,
   the account hands the request, the answer and what it is about to run to the owner helper. The
-  account can start the helper only through one rule the administrator installed, as the helper's
-  own user, and the system itself tells the helper which account called it; the caller cannot
-  choose. The helper checks everything again against the system pin, for that account — the
-  machine, the account, the signed window, the signer, the parameters and the arguments about to
-  run — and spends the approval once in that account's ledger. The command runs only on a verdict
-  that names exactly the request it sent.
+  account can start the helper only through one rule the administrator installed: one launcher,
+  with no arguments, as the helper's own user. The launcher starts the helper with an environment
+  it writes out in full, so nothing the caller sets reaches it, and the system itself tells the
+  helper which account called it; the caller cannot choose. The helper reads at most one small
+  input, for a few seconds. It checks everything again against the system pin, for that account
+  — the machine, the account, the signed window, the signer, the parameters and the arguments
+  about to run — and spends the approval once in that account's ledger, on disk before it
+  answers. The command runs only on a verdict that names exactly the request it sent.
+- **Every time is checked against the clock.** A request carried between machines that says it
+  was made later than now (beyond a two-minute allowance for clocks that differ) is never shown,
+  signed, recorded or run, so its fifteen-minute window cannot be stretched. An answer must say it
+  was given inside that window and not later than now.
+- **What this protects, and what it does not.** The helper keeps the pin, the machine record and
+  the ledger out of every entity account's reach, so an account cannot pin another owner, replay a
+  spent approval, or use an answer given for another account. It does not stop an account from
+  acting on its own files: an agent in an entity account can change that account's own TeamCLI,
+  or do by hand what an owner-only command would do there. The boundary between entities, and
+  between an entity and the machine, is the account itself.
 - **Set up once, as the administrator.** From the owner's own account:
 
   ```console
@@ -125,12 +138,15 @@ pinned owner seat counts for every entity account, and none of them can change i
   $ sudo team owner-seat pin --from owner-seat-export.json --name server
   ```
 
-  The install makes the helper's user (no login, no home of its own), the system folder, the
-  helper's code folder (the administrator's), the ledger (the helper's), the helper's record, and
-  the rule that lets the named accounts start the helper, checked before it is put in place. Each
-  folder and file is created with its owner and mode. It refuses a user of the helper's name it
-  did not make, and running it again is safe; to add an entity account, run it again naming every
-  account. The pin is then made by the administrator, with the same first-pin and re-pin rules as
+  The install makes the helper's user (no login, no home of its own) and records at once that it
+  made it, then the system folder, the helper's code folder and launcher (the administrator's),
+  the ledger (the helper's), the helper's record, and the rule that lets the named accounts start
+  the helper, checked before it is put in place. Each folder and file is created with its owner
+  and mode. Before it changes anything, it reads every path it writes and every folder above it:
+  a link, or anything someone other than the administrator owns or may write, refuses it. It never
+  adopts a user of the helper's name that its record does not name; an install stopped right
+  after making the user says so and names the repair. Running it again is safe; to add an entity
+  account, run it again naming every account. The pin is then made by the administrator, with the same first-pin and re-pin rules as
   anywhere else; no entity account can pin or re-pin. The administrator's search path is narrower
   than the account's own, so name `team` and Bun by their full paths when it does not find them.
   The helper runs the Bun and the TeamCLI build the install copied: after upgrading either, run
@@ -168,8 +184,8 @@ pinned machine, in the owner-state folder (`/etc/teamcli` when it is present and
 the account's own `~/.config/team`): `owner-seat-pin.json` (the pinned export, its fingerprint
 and the fingerprint it replaced), `machine.json` (this machine's id and name) and `owner-ledger/`
 (one entry per approval spent). On a shared Linux server: `/etc/teamcli/owner-seat-pin.json`,
-`/etc/teamcli/machine.json` and `/etc/teamcli/owner-helper.json` (the helper's user and uid), read
-by every account; the ledger `/var/lib/teamcli-owner/ledger/<account>/`, written by the helper
+`/etc/teamcli/machine.json`, `/etc/teamcli/owner-helper.json` (the helper's user and uid) and
+`/etc/teamcli/owner-install.json` (the install's record of the user it made), read by every account; the ledger `/var/lib/teamcli-owner/ledger/<account>/`, written by the helper
 alone; the helper's code under `/usr/local/teamcli-owner/`; and its rule,
 `/etc/sudoers.d/teamcli-owner`. The export, the pin and the re-pin are logged in
 `security-profile.log`.
