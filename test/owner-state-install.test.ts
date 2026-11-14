@@ -229,8 +229,10 @@ describe('team owner-seat install', () => {
       '// src/client/owner-pin-verify.ts',
       '// src/client/owner-request-record.ts',
       '// src/client/owner-signature.ts',
+      '// src/client/owner-spend-lock.ts',
       '// src/client/owner-spend-main.ts',
       '// src/client/owner-spend.ts',
+      '// src/client/owner-state-roots.ts',
     ]);
     const folder = realpathSync(mkdtempSync(join(tmpdir(), 'owner-helper-')));
     try {

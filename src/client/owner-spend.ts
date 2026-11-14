@@ -183,6 +183,8 @@ export type HelperContext = {
   nameOf: (uid: number) => string | null;
   /** The owner state for one account (the system folder, in real use). */
   stateFor?: (account: string) => OwnerStateRead;
+  /** Takes the one-spend-at-a-time lock, held until the helper exits (src/client/owner-spend-lock.ts). */
+  lock?: () => { ok: true } | { ok: false; why: string };
 };
 
 /**
@@ -206,6 +208,11 @@ export function runOwnerSpend(ctx: HelperContext): SpendVerdict {
   if (helper === undefined) return { ok: false, why: state.kind === 'refused' ? `${state.why}; nothing was spent` : "this machine's owner state is not shared by its accounts; nothing was spent" };
   if (ctx.uid !== helper.uid) return { ok: false, why: `the owner helper runs as ${helper.user}, started through the system's privilege rule; nothing was spent` };
   if (callerUid === helper.uid) return { ok: false, why: 'the owner helper spends for an account, not for itself; nothing was spent' };
+  // One spend at a time, from the pin's read to the ledger's write.
+  if (ctx.lock !== undefined) {
+    const locked = ctx.lock();
+    if (!locked.ok) return locked;
+  }
   const pin = readOwnerPinIn(state);
   if (pin.kind !== 'pinned') return { ok: false, why: pin.kind === 'refused' ? `${pin.why}; nothing was spent` : 'no owner seat is pinned on this machine; nothing was spent' };
   let raw: unknown;

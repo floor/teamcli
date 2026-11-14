@@ -116,7 +116,8 @@ pinned owner seat counts for every entity account, and none of them can change i
   with no arguments, as the helper's own user. The launcher starts the helper with an environment
   it writes out in full, so nothing the caller sets reaches it, and the system itself tells the
   helper which account called it; the caller cannot choose. The helper reads at most one small
-  input, for a few seconds. It checks everything again against the system pin, for that account
+  input, for a few seconds, and spends one approval at a time: a call that cannot start within
+  that time spends nothing. It checks everything again against the system pin, for that account
   — the machine, the account, the signed window, the signer, the parameters and the arguments
   about to run — and spends the approval once in that account's ledger, on disk before it
   answers. The command runs only on a verdict that names exactly the request it sent.
