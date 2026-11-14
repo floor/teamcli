@@ -152,6 +152,11 @@ Export writes one waiting request of this machine to a file. Sign, on the machin
 the owner's signers, records that request, shows its card (signed at once with --answer, or on
 the owner page) and writes the signed answer to a file. Answer, back on the pinned machine, checks that
 answer against the pinned owner seat and records it; the command then runs with --approval <id>.
+Export with several ids (at most 16, all waiting, all this machine's and this account's) writes
+them to one file. Sign then shows one card listing them all and signs them with one word and
+one Touch ID; each request keeps its own answer, window and single use. Answer records every
+answer in the file, and each command runs with its own --approval <id>. A member that fails any
+check refuses the whole file, at every step: nothing in it is signed or recorded.
 
 Exits 0 when the rules are listed, the details are printed, the rules are revoked, a request
 is recorded, a file is written or an answer is recorded, 1 when the details, the revoke or a
