@@ -32,7 +32,11 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   127.0.0.1, one token per run): add a passkey, sign the waiting profile, answer team requests.
   The page asks `/api/state` every two seconds, so a request recorded while it is open appears
   on that page. A command that records a request does not open a browser. Refused while no
-  owner seat is registered.
+  owner seat is registered. An owner-action or team-create card is drawn from the request record
+  itself, never from the inbox copy beside it; a record that cannot be read (its words not
+  hashing to its arguments, among others) is shown as such and cannot be answered. The page
+  sends the card's parameter hash back with every answer, and a request that no longer has it
+  is neither asked for a challenge nor signed.
 - `export`: on the machine that holds the signers, writes the seat's public signer records — each
   device key's public key, each passkey's public key, credential id and relying party — and the
   names the `owner-signers` policy accepts, to a new file. No private key is in it. One
