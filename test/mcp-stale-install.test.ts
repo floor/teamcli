@@ -21,7 +21,7 @@ import {
   writeListener,
   type InboxListener,
 } from '../src/mcp/inbox.ts';
-import { restartSelf, runMcpServe } from '../src/mcp/serve.ts';
+import { restartSelf, SERVE_REPLACEMENT_ENV, runMcpServe } from '../src/mcp/serve.ts';
 import { selfRunner } from '../src/mcp/register.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { BuildIdentity, InstallIdentity } from '../src/version.ts';
@@ -288,8 +288,8 @@ describe('the fresh server a reload starts', () => {
     });
     expect(spawns).toEqual([{
       command: process.execPath,
-      args: [runner.entry, ...process.argv.slice(2)],
-      options: { stdio: 'inherit' },
+      args: [runner.entry, ...process.argv.slice(2).filter((word, index, all) => word !== '--epoch' && all[index - 1] !== '--epoch')],
+      options: { stdio: 'inherit', env: { ...process.env, [SERVE_REPLACEMENT_ENV]: '1' } },
     }]);
     // The old process still serves until the child reports that it started.
     expect(exits).toEqual([]);

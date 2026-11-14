@@ -212,7 +212,7 @@ test('a caller placed on the first reading has every line served by the inbox, n
   if (placed.ok) expect((await placed.first()).value).toBe(INITIALIZE);
 });
 
-test('a client that has gone keeps the start bound, and the last refusal is returned', async () => {
+test('a client that has gone ends the wait at once, and the last refusal is returned', async () => {
   const made = scene({ [SEAT]: UNANCHORED });
   const peer = client();
   peer.push(INITIALIZE);
@@ -236,7 +236,8 @@ test('a client that has gone keeps the start bound, and the last refusal is retu
   });
   expect(placed.ok).toBe(false);
   expect(placed.ok ? '' : placed.why).toContain(UNNAMED);
-  expect(clock).toBe(SERVE_PLACEMENT_WAIT_MS);
+  // Past the input's end nothing more is waited for.
+  expect(clock).toBeLessThanOrEqual(500);
   expect(answered).toEqual([`pending:${INITIALIZE}`]);
 });
 

@@ -89,7 +89,8 @@ test('setup uses this runner, scopes the server and records the calling pane wit
   expect(entry.command).toBe(selfRunner().command);
   const epoch = currentBriefClaim(readState(join(w.root, '.agents')).sessions[SESSION]?.briefs?.alpha)?.epoch;
   expect(epoch).toBeString();
-  expect(entry.args).toEqual([selfRunner().entry, 'mcp', 'serve', '--seat', 'alpha', '--session', SESSION, '--epoch', epoch]);
+  // A checkout pair outlives its launch: it names no epoch, and the server binds the current claim.
+  expect(entry.args).toEqual([selfRunner().entry, 'mcp', 'serve', '--seat', 'alpha', '--session', SESSION]);
   expect(readState(join(w.root, '.agents')).sessions[SESSION]?.seats.alpha?.pane).toBe(PANE);
   expect(readFileSync(w.file, 'utf8')).toContain(FLAG);
   expect(JSON.parse(readFileSync(join(w.cwd, '.claude/settings.local.json'), 'utf8')).enabledMcpjsonServers).toEqual(['team-inbox']);
