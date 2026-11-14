@@ -12,6 +12,8 @@ import type { TeamFile } from '../src/file/types.ts';
 import { rulesOf, workLines } from '../src/launch/rules.ts';
 import { readPolicyChain, writePolicySet } from '../src/policy/sources.ts';
 import { memoryFolder, resolveWorkSettings } from '../src/policy/work-settings.ts';
+import { runConfig } from '../src/commands/config.ts';
+import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-22T21:00:00Z');
 const made: string[] = [];
@@ -158,15 +160,16 @@ describe('vault-root: memory in the docs vault', () => {
 });
 
 describe('vault-root under the entity\'s projects root', () => {
-  test('{root}/… is accepted, and reads this machine\'s root; with no root it names no vault and says why', () => {
+  test('{root}/… is accepted, and reads this machine\'s root; with no root it names no vault and says why', async () => {
     const w = world('workspace:\n  mode: shared\n');
     expect(set(w.home, 'entity', 'vault-root', '{rootx}/docs').ok).toBe(false);
     expect(set(w.home, 'entity', 'vault-root', '{root}/docs/').ok).toBe(true);
     const unset = resolveWorkSettings(chainOf(w), {}, { now: NOW, home: w.home });
     expect(unset.vaultRoot).toEqual({ value: null, from: 'entity' });
     expect(unset.vaultProblem).toBe('vault-root {root}/docs: entity "acme-corp" names no projects root on this machine: run `team config set acme-corp.root <folder>`');
-    mkdirSync(join(w.home, '.config', 'team'), { recursive: true });
-    writeFileSync(join(w.home, '.config', 'team', 'entities.yaml'), 'acme-corp:\n  root: /srv/acme/repos\n');
+    // The owner sets the root beside the entity's signed policies, through the one entity editor.
+    const io = testIo(w.root, { kind: 'owner' });
+    expect(await runConfig(['set', 'acme-corp.root', '/srv/acme/repos'], io, { home: w.home }), io.err).toBe(0);
     const s = resolveWorkSettings(chainOf(w), {}, { now: NOW, home: w.home });
     expect(s.vaultRoot).toEqual({ value: '/srv/acme/repos/docs', from: 'entity' });
     expect(s.vaultProblem).toBeUndefined();

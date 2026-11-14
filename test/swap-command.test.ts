@@ -764,7 +764,7 @@ describe('team swap now and --run', () => {
     expect(forced.code, `${forced.err}${forced.out}`).toBe(0);
     const yaml = readFileSync(path, 'utf8');
     const lead = yaml.slice(yaml.indexOf('name: lead'), yaml.indexOf('name: worker'));
-    expect(lead).toContain('launch: claude --model deepseek-flash --add-dir {root}/docs');
+    expect(lead).toContain('launch: "claude --model deepseek-flash --add-dir {root}/docs"');
     expect(yaml).not.toContain('/srv/lab/repos');
     expect(world.did.runs.join('\n')).toContain('--add-dir /srv/lab/repos/docs');
   });
