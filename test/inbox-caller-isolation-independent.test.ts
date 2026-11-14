@@ -49,10 +49,13 @@ afterAll(() => {
   if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
   discardFixtures([suiteHome]);
 });
-function epoch(value: string) {
+/** A claim; `at` defaults to one written before any server here starts. A relaunch's claim, written
+ *  after the server under test started, takes LATER. */
+const LATER = '2099-01-01T00:00:00Z';
+function epoch(value: string, at = '2026-11-02T09:00:00Z') {
   updateState(dir, state => {
     const s = state.sessions['session-b']!;
-    (s.briefs ??= {}).reader = { id: '36f8f09e-2eb5-4814-a905-e8a9dfc702e8', at: '2026-11-02T09:00:00Z',
+    (s.briefs ??= {}).reader = { id: '36f8f09e-2eb5-4814-a905-e8a9dfc702e8', at,
       incarnation: 'inc_111111111111', epoch: value, sha256: 'a'.repeat(64), stage: 'ready', attempt: 0 };
   });
 }
@@ -148,7 +151,7 @@ test('managed Codex app-server ancestry outside herdr still proves the seat', as
   expect(existsSync(join(drop, id + '.read.json'))).toBe(true);
 });
 test('correct placement with a stale epoch refuses before opening or writing', async () => {
-  message(); epoch(newEpoch); const before = snapshot(rootB);
+  message(); epoch(newEpoch, LATER); const before = snapshot(rootB);
   expect((await serve(ownOptions(), ioFor().io)).code).toBe(2); expect(snapshot(rootB)).toEqual(before);
 });
 test('a correctly placed server with no epoch binds to the current claim, and a later generation refuses', async () => {
@@ -158,7 +161,7 @@ test('a correctly placed server with no epoch binds to the current claim, and a 
   expect(bound.code, caller.error()).toBe(0);
   expect(JSON.stringify(bound.replies)).toContain('private synthetic body');
   expect(existsSync(join(drop, id + '.read.json'))).toBe(true);
-  epoch(newEpoch);
+  epoch(newEpoch, LATER);
   const before = snapshot(rootB);
   const later = ioFor();
   expect((await serve(ownOptions(), later.io)).code).toBe(2);

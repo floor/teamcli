@@ -1163,7 +1163,7 @@ type ServingProof<T = true> =
  * opens no inbox, writes no receipt and pushes nothing — while the placement is read again
  * (every 250 ms for the first 5 s, then every 2 s) for as long as the client stays connected, so
  * the inbox opens as soon as herdr names the pane. A wait whose record stops naming that pane
- * ends at once, and a client that has gone keeps the old 5 s bound; the last refusal is returned.
+ * ends at once, and so does one whose client has gone; the last refusal is returned.
  */
 export async function proveWhileServing<T = true>(input: {
   /** One reading of the start's admission: proven, worth waiting for, or refused. Absent: the
@@ -1267,8 +1267,9 @@ export async function proveWhileServing<T = true>(input: {
     }
     input.onRefusal?.(verdict.why);
     if (!verdict.wait) return { ok: false, why: verdict.why };
+    // A client that has gone is waited for by no one: the last refusal is returned at once.
+    if (ended) return { ok: false, why: verdict.why };
     const elapsed = now() - start;
-    if (ended && elapsed >= SERVE_PLACEMENT_WAIT_MS) return { ok: false, why: verdict.why };
     await serveUntil(sleep(elapsed < SERVE_PLACEMENT_WAIT_MS ? SERVE_PLACEMENT_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS));
   }
 }

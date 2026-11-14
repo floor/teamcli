@@ -58,12 +58,12 @@ ${['alpha', 'beta', 'plain'].map((name) => `  - name: ${name}
   upsertTeam(home, teamIdOf(root), { root, project: 'synthetic-project', session: SESSION, lobby,
     roster: ['alpha', 'beta', 'plain'].map((seat, i) => ({ agent: `agt_${String(i + 1).padStart(12, '0')}`, seat, role: 'worker' })) });
   const state = join(root, '.agents/team.state.json');
-  const claim = (epoch: string | null) => {
+  const claim = (epoch: string | null, at = '2026-01-01T00:00:00Z') => {
     writeFileSync(state, JSON.stringify({ format: 1, sessions: { [SESSION]: {
       seats: { alpha: { stage: 'launched', pane: 'pane-alpha' }, beta: { stage: 'launched', pane: 'pane-beta' } },
       worktrees: {}, briefs: epoch === null ? {} : Object.fromEntries(['alpha', 'beta'].map((seat) => [seat, {
         id: '01234567-0000-4000-8000-000000000001', incarnation: 'inc_0123456789ab', epoch,
-        at: '2026-01-01T00:00:00Z', sha256: 'a'.repeat(64), stage: 'ready',
+        at, sha256: 'a'.repeat(64), stage: 'ready',
       }])),
     } } }));
   };
@@ -326,13 +326,25 @@ describe('launch-scoped channel config', () => {
     const w = world();
     prepare(w).release();
     const oldEpoch = entry(w).args.at(-1) as string;
-    w.claim(NEXT);
+    // A relaunch's claim, written after this old server's process started: never adopted.
+    w.claim(NEXT, '2099-01-01T00:00:00Z');
     const io = testIo(join(w.lobby, 'alpha'), { kind: 'seat', name: 'alpha', pane: 'pane-alpha', session: SESSION });
     const code = await runMcpServe({ seat: 'alpha', session: SESSION, epoch: oldEpoch }, io,
       { lines: (async function* () {})(), write: () => {} }, { home: w.home });
     expect(code).toBe(2);
     expect(io.err).toContain('not the seat\'s current launch epoch');
     expect(existsSync(join(w.root, '.agents/send-drops', SESSION, 'alpha/listener.json'))).toBe(false);
+  });
+
+  test('a stale epoch in a registration serves the claim its launch wrote before the server started', async () => {
+    const w = world();
+    prepare(w).release();
+    const oldEpoch = entry(w).args.at(-1) as string;
+    w.claim(NEXT);
+    const io = testIo(join(w.lobby, 'alpha'), { kind: 'seat', name: 'alpha', pane: 'pane-alpha', session: SESSION });
+    const code = await runMcpServe({ seat: 'alpha', session: SESSION, epoch: oldEpoch }, io,
+      { lines: (async function* () {})(), write: () => {} }, { home: w.home });
+    expect(code, io.err).toBe(0);
   });
 });
 
