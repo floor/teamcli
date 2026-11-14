@@ -293,7 +293,8 @@ describe('owner page', () => {
       });
       expect(card.title).toBe(titles[action] ?? '');
       expect(card.description).not.toMatch(/oui|non|Always allow/);
-      expect(card.onceOnly).toBe(action === 'team-migrate');
+      // A migration, an entity's record and the machine daemon offer no standing rule.
+      expect(card.onceOnly).toBe(action === 'team-migrate' || action === 'team-entity-config' || action === 'team-daemon');
     }
     const migration = ownerPageRequest({
       request_id: `oa_${'cd'.repeat(12)}`,

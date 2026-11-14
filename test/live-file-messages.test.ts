@@ -88,7 +88,7 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^(?:approve|approvals|approve-as-owner-seat|revoke-approval)$/, why: 'a grant or init flag name: an owner answer or a standing rule, not an approval copy' },
   { literal: /^--approvals takes no other arguments$/, why: "the grant flag's invocation refusal" },
   { literal: /^init\.approval-refused$/, why: "init's owner-seat refusal id, a key in the JSON envelope" },
-  { literal: /^(?:(?:up|add|import|migrate)\.)?approval-(?:requested|refused)$/, why: "the owner-seat door's outcome and refusal ids (src/client/owner-action.ts): keys, not an approval copy" },
+  { literal: /^(?:(?:up|add|import|migrate|daemon)\.)?approval-(?:requested|refused)$/, why: "the owner-seat door's outcome and refusal ids (src/client/owner-action.ts): keys, not an approval copy" },
   { literal: /^owner-seat-approved$/, why: "up's log word for a run an owner-seat answer admitted" },
   { literal: /^Usage: team (?:up|down) .*--approval <request-id>/s, why: "up and down usage, naming the owner-seat door's --approval flag" },
   // `team approvals` lists and revokes owner-seat always rules. The word is the command's own,
