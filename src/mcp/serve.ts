@@ -1076,7 +1076,13 @@ function recordedPaneOf(stateDir: string, session: string, name: string): string
 export type PlacementClock = {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /** When this server's process started, in ms. Absent: the process's own start. */
+  startedAtMs?: number;
 };
+
+/** This process's start, read once: a claim written before it is the launch this process
+ *  belongs to, never a later one. */
+const PROCESS_STARTED_MS = Date.now() - Math.round(process.uptime() * 1000);
 
 /**
  * The start placement, with its one bounded wait: the first refusal is answered at once unless
@@ -1112,9 +1118,30 @@ export async function placementAtStart(
 
 /** What `proveWhileServing` hands back: the placement proven, with the client's next line still
  *  owed to the serving loop, or the refusal the start answers with. */
-type ServingProof =
+/** One reading of what the start may do: serve (with what it proved), wait and read again, or
+ *  refuse for good. */
+export type StartReading<T = true> = { ok: true; value: T } | { ok: false; wait: boolean; why: string };
+
+/**
+ * The placement alone, as a start reading. A caller that herdr has not named yet, in the pane the
+ * seat's record holds or while the state records no pane for the seat (a restart rewriting it),
+ * is worth waiting for. A caller outside herdr, or in a pane the record gives to another
+ * launch, is foreign and refused.
+ */
+export function placementReading(io: Io, stateDir: string, session: string, name: string): StartReading {
+  const verdict = placementOf(io, stateDir, session, name);
+  if (verdict.ok) return { ok: true, value: true };
+  const pane = io.env.HERDR_PANE_ID;
+  const recorded = recordedPaneOf(stateDir, session, name);
+  const wait = pane !== undefined && pane !== '' && (recorded === undefined || recorded === pane);
+  return { ok: false, wait, why: verdict.why };
+}
+
+type ServingProof<T = true> =
   | {
     ok: true;
+    /** What the admission proved. */
+    value: T;
     /** The first line the serving loop reads: one that already arrived, the read still
      *  outstanding, or a new read. Nothing is asked of the input until it is called. */
     first: () => Promise<IteratorResult<string>>;
@@ -1138,7 +1165,10 @@ type ServingProof =
  * the inbox opens as soon as herdr names the pane. A wait whose record stops naming that pane
  * ends at once, and a client that has gone keeps the old 5 s bound; the last refusal is returned.
  */
-export async function proveWhileServing(input: {
+export async function proveWhileServing<T = true>(input: {
+  /** One reading of the start's admission: proven, worth waiting for, or refused. Absent: the
+   *  placement of `name` alone, read from `io` and `stateDir`. */
+  check?: () => StartReading<T>;
   io: Io;
   stateDir: string;
   session: string;
@@ -1150,7 +1180,7 @@ export async function proveWhileServing(input: {
   /** Told the latest refusal, so the pending serving can say why it serves nothing yet. */
   onRefusal?: (why: string) => void;
   deps?: PlacementClock;
-}): Promise<ServingProof> {
+}): Promise<ServingProof<T>> {
   const deps = input.deps ?? {};
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = deps.now ?? Date.now;
@@ -1219,9 +1249,10 @@ export async function proveWhileServing(input: {
       ask();
     }
   };
+  const check = input.check ?? ((): StartReading<T> => placementReading(input.io, input.stateDir, input.session, input.name) as StartReading<T>);
   const start = now();
   for (;;) {
-    const verdict = placementOf(input.io, input.stateDir, input.session, input.name);
+    const verdict = check();
     if (verdict.ok) {
       // A line that already arrived is handed on as it came; otherwise the outstanding read, which
       // its one handler already observes; otherwise a read started only when the loop asks.
@@ -1232,11 +1263,10 @@ export async function proveWhileServing(input: {
         : outstanding !== null
           ? () => outstanding
           : () => input.lines.next();
-      return { ok: true, first, waitedMs: now() - start };
+      return { ok: true, first, waitedMs: now() - start, value: verdict.value };
     }
     input.onRefusal?.(verdict.why);
-    const recorded = recordedPaneOf(input.stateDir, input.session, input.name);
-    if (recorded === undefined || input.io.env.HERDR_PANE_ID !== recorded) return { ok: false, why: verdict.why };
+    if (!verdict.wait) return { ok: false, why: verdict.why };
     const elapsed = now() - start;
     if (ended && elapsed >= SERVE_PLACEMENT_WAIT_MS) return { ok: false, why: verdict.why };
     await serveUntil(sleep(elapsed < SERVE_PLACEMENT_WAIT_MS ? SERVE_PLACEMENT_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS));
@@ -1246,7 +1276,7 @@ export async function proveWhileServing(input: {
 /** The launch the seat's state names now: the current brief claim's epoch, a claim that holds no
  *  launch epoch, no claim, or a state this server cannot read. */
 type Generation =
-  | { kind: 'claim'; epoch: string }
+  | { kind: 'claim'; epoch: string; at: string }
   | { kind: 'unbound' }
   | { kind: 'none' }
   | { kind: 'unreadable'; message: string };
@@ -1255,7 +1285,7 @@ function generationOf(stateDir: string, session: string, name: string): Generati
   try {
     const raw = readState(stateDir).sessions[session]?.briefs?.[name];
     const claim = currentBriefClaim(raw);
-    if (claim !== null) return { kind: 'claim', epoch: claim.epoch };
+    if (claim !== null) return { kind: 'claim', epoch: claim.epoch, at: claim.at };
     // An older build, or a CLI change, can leave a claim with an id and a time and no launch
     // epoch. It is not a current claim, and it is not the absence of one.
     return raw === undefined ? { kind: 'none' } : { kind: 'unbound' };
@@ -1286,15 +1316,6 @@ function staleLaunch(generation: Generation, epoch: string | undefined, name: st
     : `--epoch ${JSON.stringify(epoch)} is not the seat's current launch epoch; start the server from the seat's launch line`;
 }
 
-/** The epoch this process is bound to for the rest of its life. A launch line that omitted
- *  `--epoch` while a current claim already exists takes that claim's epoch, so a restart whose
- *  line did not carry one still serves. A claim with no launch epoch binds nothing, and a
- *  leftover `--epoch` is not treated as the launch. */
-function boundEpochOf(generation: Generation, asked: string | undefined): string | undefined {
-  if (generation.kind === 'claim' && asked === undefined) return generation.epoch;
-  if (generation.kind === 'unbound') return undefined;
-  return asked;
-}
 
 /**
  * Why the team file no longer declares the seat this server serves, or null while it does. The
@@ -1333,6 +1354,9 @@ export async function runMcpServe(
 ): Promise<number> {
   const refuse = (message: string): number => {
     io.stderr(`team mcp serve: ${message}\n`);
+    // The input is closed with every refusal: a reader left open on stdin keeps the process
+    // alive, and the client then waits out its whole handshake timeout instead of seeing it end.
+    streams.close?.();
     // exit: mcp.serve-refused
     return 2;
   };
@@ -1340,62 +1364,115 @@ export async function runMcpServe(
   if (options.epoch !== undefined && !isBriefEpoch(options.epoch)) {
     return refuse(`--epoch ${JSON.stringify(options.epoch)} is not a runtime epoch`);
   }
+  const seatName = options.seat;
+  const startedAtMs = deps.startedAtMs ?? PROCESS_STARTED_MS;
   // A named file is the launch's own team file, read as given. Without one the team is the
   // registry's record for this seat: the folder the server starts in is a lobby for most seats,
   // and reading a team file from it would be reading the checkout's folder, not the seat's team.
-  const registered = options.file === undefined ? registeredRoot(host.home, options.seat, options.session) : null;
-  if (registered !== null && !registered.ok) return refuse(registered.message);
-  const readTeam = (): LoadResult => readTeamConfig(registered === null ? io.cwd : registered.root, {
+  let registeredAt: string | null = null;
+  const readTeam = (): LoadResult => readTeamConfig(registeredAt ?? io.cwd, {
     ...(options.file === undefined ? {} : { file: options.file }),
     home: host.home,
   });
-  const loaded = readTeam();
-  if (!loaded.ok) return refuse(loaded.errors[0]?.message ?? 'the team file could not be read');
-  const team = loaded.team;
-  const session = options.session ?? team.session;
-  if (session !== team.session) {
-    return refuse(`the team's session is ${JSON.stringify(team.session)}, not ${JSON.stringify(session)}`);
-  }
-  const seat = team.seats.find((one) => one.name === options.seat);
-  if (seat === undefined) return refuse(`the team file declares no seat ${JSON.stringify(options.seat)}`);
-  // A seat the file marks stopped is not one this server may serve, whatever its launch does:
-  // `team remove <seat> --keep` leaves the entry and its pane, and only the file's word says the
-  // seat is out of the team.
-  const stoppedNow = declarationRefusal(team, team.session, seat.name);
-  if (stoppedNow !== null) return refuse(stoppedNow);
-  // The server's own identity is the launch's, and the state has to prove it: the caller is this
-  // seat on its recorded pane, and the epoch is the claim the state holds now. Both checks run
-  // before the inbox folder or the listener is written, so a refused start leaves no trace.
-  const stateDir = dirname(loaded.path);
-  // The channel is the seat's own launch word: a line with the development-channels flag naming
-  // this server. Nothing on the command line turns it on separately, and a marker without it is
-  // an ordinary inbox the send walks past.
-  const channel = channelLaunchEnabled(seat.launch);
-  // Before the caller is proven, the handshake and the tool list are answered and every tool
-  // call refuses with the reason: nothing reads the inbox, writes a receipt or pushes.
-  let unplacedWhy = 'the placement has not been read yet';
-  const pending: Serving = {
-    project: team.project,
-    seat: seat.name,
-    session: team.session,
-    root: loaded.root,
-    dropDir: join(loaded.root, '.agents', 'send-drops', team.session, seat.name),
-    home: host.home,
-    team,
-    loadTeam: () => null,
-    channel,
-    alive: () => `this server has not proven its caller yet, so it serves no inbox: ${unplacedWhy}`,
+  type Admitted = {
+    loaded: Extract<LoadResult, { ok: true }>;
+    team: TeamFile;
+    seat: TeamFile['seats'][number];
+    stateDir: string;
+    boundEpoch: string | undefined;
   };
-  // The launch this server belongs to is bound before any wait: a claim a relaunch writes while
-  // this process waits for its pane's name is another launch's, never one this server adopts.
-  const startGeneration = generationOf(stateDir, team.session, seat.name);
-  let boundEpoch = boundEpochOf(startGeneration, options.epoch);
+  /**
+   * One reading of everything the start must prove, before the inbox is opened. Claude Code
+   * does not start a stdio server again once it has left or timed out, so only a refusal that
+   * no later reading can change ends the process: a seat this team does not declare, a session
+   * that is not the team's, a stopped declaration, or a caller another launch's pane or no
+   * herdr pane at all places. Everything else — an unreadable team file, registry or state, an
+   * unnamed pane, a claim not written yet, an `--epoch` the launch line carried from an earlier
+   * launch — is waited for while the client is answered.
+   *
+   * The launch this server serves is the seat's current claim when the launch line names it, or
+   * when that claim was written before this process started (or within the start bound after
+   * it): a process started after a claim is that launch's own, whatever epoch a registration
+   * file left behind. A claim written later than that is a later launch's, and is never adopted.
+   */
+  const admit = (): StartReading<Admitted> => {
+    if (options.file === undefined) {
+      const registered = registeredRoot(host.home, seatName, options.session);
+      if (!registered.ok) return { ok: false, wait: true, why: registered.message };
+      registeredAt = registered.root;
+    }
+    const loaded = readTeam();
+    if (!loaded.ok) return { ok: false, wait: true, why: loaded.errors[0]?.message ?? 'the team file could not be read' };
+    const team = loaded.team;
+    const session = options.session ?? team.session;
+    if (session !== team.session) {
+      return { ok: false, wait: false, why: `the team's session is ${JSON.stringify(team.session)}, not ${JSON.stringify(session)}` };
+    }
+    const seat = team.seats.find((one) => one.name === seatName);
+    if (seat === undefined) return { ok: false, wait: false, why: `the team file declares no seat ${JSON.stringify(seatName)}` };
+    // A seat the file marks stopped is not one this server may serve, whatever its launch does:
+    // `team remove <seat> --keep` leaves the entry and its pane, and only the file's word says the
+    // seat is out of the team.
+    const stoppedNow = declarationRefusal(team, team.session, seat.name);
+    if (stoppedNow !== null) return { ok: false, wait: false, why: stoppedNow };
+    const stateDir = dirname(loaded.path);
+    const placed = placementReading(io, stateDir, team.session, seat.name);
+    if (!placed.ok) return placed;
+    const generation = generationOf(stateDir, team.session, seat.name);
+    if (generation.kind === 'unreadable') {
+      return { ok: false, wait: true, why: `the team state cannot be read, so this server cannot prove the launch it belongs to: ${generation.message}` };
+    }
+    if (generation.kind === 'unbound') return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: undefined } };
+    if (generation.kind === 'none') {
+      if (options.epoch === undefined) return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: undefined } };
+      return { ok: false, wait: true, why: `--epoch ${JSON.stringify(options.epoch)} names a launch the seat's state does not hold yet` };
+    }
+    if (options.epoch === generation.epoch) return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: generation.epoch } };
+    const claimedAt = Date.parse(generation.at);
+    if (Number.isFinite(claimedAt) && claimedAt <= startedAtMs + SERVE_PLACEMENT_WAIT_MS) {
+      return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: generation.epoch } };
+    }
+    return {
+      ok: false,
+      wait: true,
+      why: options.epoch === undefined
+        ? `seat ${JSON.stringify(seat.name)} has a current brief claim written after this server started; it serves only the launch it started under`
+        : `--epoch ${JSON.stringify(options.epoch)} is not the seat's current launch epoch, and the current claim was written after this server started`,
+    };
+  };
+  // Before the start is proven, the handshake and the tool list are answered and every tool
+  // call refuses with the reason: nothing reads the inbox, writes a receipt or pushes. The
+  // channel capability is the declaration's word when the team file can be read at once.
+  const firstRead = ((): LoadResult => {
+    if (options.file === undefined) {
+      const registered = registeredRoot(host.home, seatName, options.session);
+      if (registered.ok) registeredAt = registered.root;
+    }
+    return readTeam();
+  })();
+  const declaredFirst = firstRead.ok ? firstRead.team.seats.find((one) => one.name === seatName) : undefined;
+  const pendingChannel = declaredFirst === undefined ? false : channelLaunchEnabled(declaredFirst.launch);
+  let unplacedWhy = 'the start has not been read yet';
+  const pendingTeam: TeamFile | null = firstRead.ok ? firstRead.team : null;
+  const pending: Serving = {
+    project: pendingTeam?.project ?? '',
+    seat: seatName,
+    session: pendingTeam?.session ?? options.session ?? '',
+    root: firstRead.ok ? firstRead.root : io.cwd,
+    dropDir: '',
+    home: host.home,
+    team: (pendingTeam ?? { seats: [] }) as TeamFile,
+    loadTeam: () => null,
+    channel: pendingChannel,
+    alive: () => `this server has not proven its seat and launch yet, so it serves no inbox: ${unplacedWhy}`,
+  };
   const lines = streams.lines[Symbol.asyncIterator]();
-  const placed = await proveWhileServing({
+  const placed = await proveWhileServing<Admitted>({
+    check: admit,
     io,
-    stateDir,
-    session: team.session,
-    name: seat.name,
+    stateDir: '',
+    session: '',
+    name: seatName,
     lines,
     write: streams.write,
     pending: (line) => handleLine(line, pending),
@@ -1404,19 +1481,12 @@ export async function runMcpServe(
     },
     deps,
   });
-  if (!placed.ok) {
-    streams.close?.();
-    return refuse(placed.why);
-  }
-  const generation = generationOf(stateDir, team.session, seat.name);
-  // A seat with no claim yet when its server started takes the first claim its own launch writes,
-  // as it always has, but only within the start bound: past it, a first claim may be a later
-  // launch's, and this process stays bound to none.
-  if (startGeneration.kind === 'none' && options.epoch === undefined && placed.waitedMs <= SERVE_PLACEMENT_WAIT_MS) {
-    boundEpoch = boundEpochOf(generation, options.epoch);
-  }
-  const stale = staleLaunch(generation, boundEpoch, seat.name);
-  if (stale !== null) return refuse(stale);
+  if (!placed.ok) return refuse(placed.why);
+  const { loaded, team, seat, stateDir, boundEpoch } = placed.value;
+  // The channel is the seat's own launch word: a line with the development-channels flag naming
+  // this server. Nothing on the command line turns it on separately, and a marker without it is
+  // an ordinary inbox the send walks past.
+  const channel = channelLaunchEnabled(seat.launch);
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
   if (dropDir === null) {
     return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');

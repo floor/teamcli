@@ -61,6 +61,17 @@ export function channelPairPresent(dir: string, seat: string): boolean {
   }
 }
 
+/** Whether the folder's team-inbox entry names an `--epoch`: a pair an earlier build wrote. */
+export function channelPairPinsEpoch(dir: string): boolean {
+  try {
+    const mcp = JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf8')) as { mcpServers?: Record<string, unknown> };
+    const args = (mcp.mcpServers?.[CHANNEL_SERVER] as { args?: unknown } | undefined)?.args;
+    return Array.isArray(args) && args.includes('--epoch');
+  } catch {
+    return false;
+  }
+}
+
 export type ChannelStart = { cwd: string; lobby: boolean };
 
 /**
@@ -217,8 +228,13 @@ export function planChannelPair(input: ChannelPairScope, privateFolder = true): 
     throw new ConfigRefusal('the channel server name is already owned by another configuration');
   }
   const runner = selfRunner();
+  // A pair in a checkout folder (a project root or a worktree) outlives the launch that wrote
+  // it, so it names no epoch: a pinned epoch there goes stale at the next relaunch and the
+  // server it names refuses. The server binds the seat's current claim at its own start, and a
+  // claim written after that start is never adopted. A lobby pair is written by each launch.
+  const epoch = privateFolder ? input.epoch : undefined;
   const entry = { command: runner.command,
-    args: [runner.entry, ...inboxServeArgs(input.seat, input.session, undefined, input.epoch)],
+    args: [runner.entry, ...inboxServeArgs(input.seat, input.session, undefined, epoch)],
     env: { [OWNER_ENV]: owner } };
   const approval = channelDocument(join(approvalDir, 'settings.local.json'));
   approveChannel(approval.value); // Validate rejection switches and both approval lists first.
@@ -315,7 +331,10 @@ export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string;
     if (!samePlace(at, start.cwd)) throw new ConfigRefusal('the channel must start in its own folder');
     if (!start.lobby && samePlace(at, resolve(loaded.root))) {
       if (!channelPairPresent(at, declared.name)) throw new ConfigRefusal('the project folder has no channel pair for this seat');
-      return { ok: true, lease: { check() {}, release() {} } };
+      // A pair an earlier build wrote pins the epoch of the launch it was written for. It is
+      // rewritten, owned entry only, to name none, so this and every later launch serves.
+      if (!channelPairPinsEpoch(at)) return { ok: true, lease: { check() {}, release() {} } };
+      return publishChannelPair(planChannelPair({ ...input, epoch }, false), () => {});
     }
     const gate = verifyLobby(home, { lobby, create: false });
     if (!gate.ok || !('path' in gate)) throw new ConfigRefusal('the registered channel lobby is unsafe or missing');

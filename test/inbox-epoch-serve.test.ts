@@ -185,108 +185,174 @@ test('the adopted server still reads one message', async () => {
   }
 });
 
-test('a server waiting for its pane to be named binds the launch it started under, and refuses a relaunch claimed while it waited', async () => {
+const BASE = Date.parse('2026-11-14T15:43:03.000Z');
+const SEAT = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION } as const;
+function claimAt(epoch: string, atMs: number, id = '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'): Record<string, unknown> {
+  return { id, at: new Date(atMs).toISOString(), incarnation: 'inc_0123456789ab', epoch, sha256: 'a'.repeat(64), stage: 'claimed' };
+}
+/** A client the scene drives: `push` a line, `end` closes the input. */
+function client(): { lines: AsyncIterable<string>; push(line: string): void; end(): void } {
+  const waiting: string[] = [];
+  let wake: (() => void) | null = null;
+  let ended = false;
+  const bump = (): void => { const resume = wake; wake = null; resume?.(); };
+  return {
+    lines: (async function* () {
+      for (;;) {
+        if (waiting.length > 0) { yield waiting.shift()!; continue; }
+        if (ended) return;
+        await new Promise<void>((resolve) => { wake = resolve; });
+      }
+    })(),
+    push: (line) => { waiting.push(line); bump(); },
+    end: () => { ended = true; bump(); },
+  };
+}
+const CHECK = (id: number): string => JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'inbox_check' } });
+async function until(ok: () => boolean): Promise<void> {
+  for (let wait = 0; wait < 600 && !ok(); wait++) await new Promise((resolve) => setTimeout(resolve, 5));
+}
+
+test('a registration that pins an earlier launch epoch still serves the claim written before this server started', async () => {
   const at = place();
   try {
-    const started = {
-      id: '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
-      at: '2026-11-06T16:10:00.000Z',
-      incarnation: 'inc_0123456789ab',
-      epoch: EPOCH,
-      sha256: 'a'.repeat(64),
-      stage: 'claimed',
-    };
-    claim(at.root, started);
-    // The seat's own recorded pane, not named yet: the server waits, serving no inbox.
+    // The 2026-11-14 case: the project file kept run_97d9..., the restart claimed run_df28...
+    claim(at.root, claimAt(EPOCH, BASE - 2_000));
+    const peer = client();
+    const io = testIo(at.root, SEAT);
+    const replies: string[] = [];
+    const running = runMcpServe({ seat: 'lead', session: SESSION, file: at.file, epoch: OTHER }, io,
+      { lines: peer.lines, write: (line) => replies.push(line) }, { home: at.home }, { startedAtMs: BASE });
+    const marker = listenerPath(join(at.root, '.agents', 'send-drops', SESSION, 'lead'));
+    await until(() => existsSync(marker));
+    expect(existsSync(marker), io.err).toBe(true);
+    expect((JSON.parse(readFileSync(marker, 'utf8')) as { epoch?: string }).epoch).toBe(EPOCH);
+    peer.push(CHECK(1));
+    await until(() => replies.length > 0);
+    expect((JSON.parse(replies[0]!) as { result?: { isError?: boolean } }).result?.isError).not.toBe(true);
+    peer.end();
+    expect(await running).toBe(0);
+  } finally {
+    at.cleanup();
+  }
+});
+
+test('a server started before its launch claim waits, refusing calls, and serves once the claim and its registration agree, without a restart', async () => {
+  const at = place();
+  try {
+    const peer = client();
+    const io = testIo(at.root, SEAT);
+    io.env = { HERDR_PANE_ID: 'pane-lead' };
+    const replies: string[] = [];
+    let polls = 0;
+    const running = runMcpServe({ seat: 'lead', session: SESSION, file: at.file, epoch: EPOCH }, io,
+      { lines: peer.lines, write: (line) => replies.push(line) }, { home: at.home }, {
+        startedAtMs: BASE,
+        now: () => polls * 250,
+        sleep: async () => {
+          polls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          // The launch writes its claim well after the server started: the epoch names it.
+          if (polls === 40) claim(at.root, claimAt(EPOCH, BASE + 60_000));
+        },
+      });
+    peer.push(CHECK(1));
+    await until(() => replies.length > 0);
+    const early = JSON.parse(replies[0]!) as { result?: { isError?: boolean; content?: { text: string }[] } };
+    expect(early.result?.isError).toBe(true);
+    expect(early.result?.content?.[0]?.text).toContain('does not hold yet');
+    const marker = listenerPath(join(at.root, '.agents', 'send-drops', SESSION, 'lead'));
+    await until(() => existsSync(marker));
+    expect(existsSync(marker), io.err).toBe(true);
+    peer.push(CHECK(2));
+    await until(() => replies.length > 1);
+    expect((JSON.parse(replies[1]!) as { result?: { isError?: boolean } }).result?.isError).not.toBe(true);
+    peer.end();
+    expect(await running).toBe(0);
+  } finally {
+    at.cleanup();
+  }
+});
+
+test('a state being rewritten at the start is waited for, not a reason to exit', async () => {
+  const at = place();
+  try {
+    const statePath = join(at.root, '.agents', 'team.state.json');
+    const good = readFileSync(statePath, 'utf8');
+    writeFileSync(statePath, '{"format": 1, "sessions": ');
+    const peer = client();
+    const io = testIo(at.root, SEAT);
+    io.env = { HERDR_PANE_ID: 'pane-lead' };
+    let polls = 0;
+    const running = runMcpServe({ seat: 'lead', session: SESSION, file: at.file }, io,
+      { lines: peer.lines, write: () => {} }, { home: at.home }, {
+        startedAtMs: BASE,
+        now: () => polls * 250,
+        sleep: async () => {
+          polls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          if (polls === 10) writeFileSync(statePath, good);
+        },
+      });
+    const marker = listenerPath(join(at.root, '.agents', 'send-drops', SESSION, 'lead'));
+    await until(() => existsSync(marker));
+    expect(existsSync(marker), io.err).toBe(true);
+    peer.end();
+    expect(await running).toBe(0);
+  } finally {
+    at.cleanup();
+  }
+});
+
+test('a claim written after this server started is a later launch: never adopted, and a gone client ends the wait', async () => {
+  const at = place();
+  try {
+    claim(at.root, claimAt(EPOCH, BASE - 2_000));
+    const peer = client();
+    // Unplaced in its own pane while the seat is relaunched under a newer claim.
     const io = testIo(at.root, { kind: 'unplaced', reason: 'it runs in pane pane-lead, whose agent has no herdr name' });
     io.env = { HERDR_PANE_ID: 'pane-lead' };
     const replies: string[] = [];
-    let wake: (() => void) | null = null;
-    const lines = (async function* () {
-      yield JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'inbox_check' } });
-      // The client stays connected and says nothing more.
-      await new Promise<void>((resolve) => { wake = resolve; });
-    })();
     let polls = 0;
-    const code = await runMcpServe({ seat: 'lead', session: SESSION, file: at.file }, io, {
-      lines,
-      write: (line) => replies.push(line),
-    }, { home: at.home }, {
-      now: () => polls * 250,
-      sleep: async () => {
-        polls += 1;
-        // While it waits, the seat is relaunched under another epoch and herdr names the pane.
-        if (polls === 30) {
-          claim(at.root, { ...started, id: '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4f', epoch: OTHER });
-          io.caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION };
-        }
-      },
-    });
-    (wake as (() => void) | null)?.();
-    expect(code).toBe(2);
-    expect(io.err).toContain('is not the seat\'s current launch epoch');
-    // The call that came while unproven was refused, and the inbox was never opened.
-    const reply = JSON.parse(replies[0] ?? '{}') as { result?: { isError?: boolean; content?: { text: string }[] } };
+    const running = runMcpServe({ seat: 'lead', session: SESSION, file: at.file }, io,
+      { lines: peer.lines, write: (line) => replies.push(line) }, { home: at.home }, {
+        startedAtMs: BASE,
+        now: () => polls * 250,
+        sleep: async () => {
+          polls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          if (polls === 30) {
+            claim(at.root, claimAt(OTHER, BASE + 7_500, '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4f'));
+            io.caller = SEAT;
+          }
+          if (polls === 60) peer.end();
+        },
+      });
+    peer.push(CHECK(1));
+    expect(await running).toBe(2);
+    expect(io.err).toContain('written after this server started');
+    const reply = JSON.parse(replies[0] ?? '{}') as { result?: { isError?: boolean } };
     expect(reply.result?.isError).toBe(true);
-    expect(reply.result?.content?.[0]?.text).toContain('has not proven its caller yet');
     expect(existsSync(listenerPath(join(at.root, '.agents', 'send-drops', SESSION, 'lead')))).toBe(false);
   } finally {
     at.cleanup();
   }
 });
 
-for (const [label, at, served] of [
-  ['within the start bound takes the first claim its launch writes', 4, true],
-  ['past the start bound stays bound to none and refuses a first claim', 30, false],
-] as const) {
-  test(`a server that started before any claim, waiting for its pane to be named, ${label}`, async () => {
-    const place0 = place();
-    try {
-      const io = testIo(place0.root, { kind: 'unplaced', reason: 'it runs in pane pane-lead, whose agent has no herdr name' });
-      io.env = { HERDR_PANE_ID: 'pane-lead' };
-      let wake: (() => void) | null = null;
-      let ended = false;
-      const lines = (async function* () {
-        while (!ended) await new Promise<void>((resolve) => { wake = resolve; });
-      })();
-      let polls = 0;
-      const running = runMcpServe({ seat: 'lead', session: SESSION, file: place0.file }, io, {
-        lines,
-        write: () => {},
-      }, { home: place0.home }, {
-        now: () => polls * 250,
-        sleep: async () => {
-          polls += 1;
-          if (polls === at) {
-            claim(place0.root, {
-              id: '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
-              at: '2026-11-06T16:10:00.000Z',
-              incarnation: 'inc_0123456789ab',
-              epoch: EPOCH,
-              sha256: 'a'.repeat(64),
-              stage: 'claimed',
-            });
-            io.caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION };
-          }
-        },
-      });
-      const marker = listenerPath(join(place0.root, '.agents', 'send-drops', SESSION, 'lead'));
-      if (served) {
-        for (let wait = 0; wait < 400 && !existsSync(marker); wait++) {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-        }
-        expect(existsSync(marker), io.err).toBe(true);
-        expect((JSON.parse(readFileSync(marker, 'utf8')) as { epoch?: string }).epoch).toBe(EPOCH);
-        ended = true;
-        (wake as (() => void) | null)?.();
-        expect(await running).toBe(0);
-      } else {
-        expect(await running).toBe(2);
-        expect(io.err).toContain('started without its epoch');
-        expect(existsSync(marker)).toBe(false);
-      }
-    } finally {
-      place0.cleanup();
-    }
-  });
-}
+test('a foreign seat is refused at once, and the refusal closes the input so the process ends', async () => {
+  const at = place();
+  try {
+    let closed = false;
+    const io = testIo(at.root, SEAT);
+    const code = await runMcpServe({ seat: 'nobody', session: SESSION, file: at.file }, io, {
+      lines: (async function* () { /* nothing */ })(),
+      write: () => {},
+      close: () => { closed = true; },
+    }, { home: at.home });
+    expect(code).toBe(2);
+    expect(io.err).toContain('declares no seat');
+    expect(closed).toBe(true);
+  } finally {
+    at.cleanup();
+  }
+});
