@@ -21,6 +21,7 @@
 // it is made), and the rule is checked by the system's own checker before it is put in place.
 // Running it again is safe; only the rule's account list changes, to the accounts named this time.
 
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, lstatSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -279,8 +280,8 @@ export async function installOwnerState(system: InstallSystem, accounts: readonl
     let program: string;
     try {
       program = await system.bundle();
-    } catch {
-      return refuse("the owner helper's program could not be bundled from this build");
+    } catch (error) {
+      return refuse(`the owner helper's program could not be bundled from this build (${error instanceof Error ? error.message : 'no reason given'})`);
     }
     system.write(bundled, program);
     system.write(launcher, launcherText());
@@ -315,8 +316,8 @@ export function realInstallSystem(): InstallSystem {
     platform: process.platform,
     uid: () => process.getuid?.() ?? -1,
     run: (argv) => {
-      const run = Bun.spawnSync([...argv], { stdout: 'pipe', stderr: 'pipe', env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C' } });
-      return { status: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() };
+      const run = spawnSync(argv[0]!, argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C' } });
+      return { status: run.status, stdout: run.stdout ?? '', stderr: run.stderr ?? (run.error?.message ?? '') };
     },
     lstat: (path) => {
       try {
@@ -338,8 +339,11 @@ export function realInstallSystem(): InstallSystem {
     bun: process.execPath,
     bundle: async () => {
       const entry = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './owner-spend-main.ts' : './owner-spend-main.js', import.meta.url));
-      const built = await Bun.build({ entrypoints: [entry], target: 'bun' });
-      if (!built.success || built.outputs.length !== 1) throw new Error("the owner helper's program could not be bundled");
+      // The helper runs under Bun, and only Bun bundles it: the install refuses under any other runtime.
+      const bun = (globalThis as { Bun?: { build?: (options: { entrypoints: string[]; target: 'bun' }) => Promise<{ success: boolean; outputs: Array<{ text(): Promise<string> }> }> } }).Bun;
+      if (bun?.build === undefined) throw new Error('the install runs under Bun, which bundles the helper; run it with bun');
+      const built = await bun.build({ entrypoints: [entry], target: 'bun' });
+      if (!built.success || built.outputs.length !== 1) throw new Error('the bundler gave no single program');
       return await built.outputs[0]!.text();
     },
     staging: (root) => mkdtempSync(join(root, 'run-')),

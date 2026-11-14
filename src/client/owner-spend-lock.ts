@@ -3,23 +3,38 @@
 // served one by one. A call that cannot take the lock within its deadline spends nothing. The lock
 // is the system's own file lock (released by the system when the helper exits, however it exits),
 // taken without waiting and tried again until the deadline. Bun has no call for it, so it is
-// called from the system library.
-import { dlopen, FFIType } from 'bun:ffi';
+// called from the system library through `bun:ffi`, required only when a lock is taken (the
+// helper runs under Bun), so the built CLI compiles without Bun's types.
 import { closeSync, openSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 const LOCK_EX = 2;
 const LOCK_NB = 4;
+const RETRY_MS = 25;
+
+/** The shape of `bun:ffi` this module uses. */
+interface BunFfi {
+  dlopen: (library: string, symbols: Record<string, { args: unknown[]; returns: unknown }>) => { symbols: { flock: (fd: number, operation: number) => number } };
+  FFIType: { i32: unknown };
+}
 
 type Flock = (fd: number, operation: number) => number;
 let flock: Flock | null = null;
 
 function systemFlock(): Flock {
   if (flock === null) {
+    const ffi = createRequire(import.meta.url)('bun:ffi') as BunFfi;
     const library = process.platform === 'linux' ? 'libc.so.6' : '/usr/lib/libSystem.B.dylib';
-    const opened = dlopen(library, { flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 } });
-    flock = (fd, operation) => opened.symbols.flock(fd, operation) as number;
+    const opened = ffi.dlopen(library, { flock: { args: [ffi.FFIType.i32, ffi.FFIType.i32], returns: ffi.FFIType.i32 } });
+    flock = (fd, operation) => opened.symbols.flock(fd, operation);
   }
   return flock;
+}
+
+/** Waits `ms` without spinning: a timed wait on a value nothing ever changes. */
+const pause = new Int32Array(new SharedArrayBuffer(4));
+function sleep(ms: number): void {
+  Atomics.wait(pause, 0, 0, ms);
 }
 
 /** Takes the spend lock at `path`, trying until `waitMs` has passed. The lock is held until
@@ -40,7 +55,7 @@ export function holdSpendLock(path: string, waitMs: number): { ok: true; release
         return { ok: true, release: () => { if (held) { held = false; closeSync(fd); } } };
       }
       if (Date.now() >= until) break;
-      Bun.sleepSync(25);
+      sleep(RETRY_MS);
     }
   } catch {
     closeSync(fd);
