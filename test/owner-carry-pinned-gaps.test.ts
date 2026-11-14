@@ -498,9 +498,9 @@ describe('an exact change is never bundled, and is shown whole before it is sign
     expect(whole).toContain('"acme.rules"');
     expect(cardPrompt(card)).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
     expect(cardPrompt(card).length).toBeLessThanOrEqual(PROMPT_MAX);
-    const daemon = ownerActionCard({ actions: ['team-daemon'], team: 'daemon', requested_by: 'lead', words: { 'team-daemon': ['install', 'home=/h', ...Array.from({ length: 12 }, (_, i) => `root=/very/long/checkout/path/number/${i}`), 'presence'] } });
+    const daemon = ownerActionCard({ actions: ['team-daemon'], team: 'daemon', requested_by: 'lead', words: { 'team-daemon': ['install', 'home=/h', ...Array.from({ length: 12 }, (_, i) => `registered=/very/long/checkout/path/number/${i}`), 'presence'] } });
     expect(cardPrompt(daemon).length).toBeLessThanOrEqual(PROMPT_MAX);
-    expect(cardPrompt(daemon)).toContain('12 checkouts');
+    expect(cardPrompt(daemon)).toContain('(12 now)');
     expect(cardWhole(daemon)).toContain('"/very/long/checkout/path/number/11"');
   });
 });
