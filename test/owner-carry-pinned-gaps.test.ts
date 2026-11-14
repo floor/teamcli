@@ -119,7 +119,10 @@ function scene(many = true, name = 'server'): Scene {
   const mac = signerMachine(many);
   const exported = exportOwnerSeat(mac.home, mac.store, NOW);
   if (!exported.ok) throw new Error(exported.why);
-  return { mac, server: pinnedMachine(exported.signed, name), files: tempBase('files') };
+  const server = pinnedMachine(exported.signed, name);
+  // The export's own prompt is the pin's, not an answer's: each scene counts answers from here.
+  mac.store.prompts.length = 0;
+  return { mac, server, files: tempBase('files') };
 }
 
 function idOf(out: string): string {
@@ -188,7 +191,7 @@ describe("an entity's record on a machine whose owner seat is pinned", () => {
     expect(entitiesText(s.server.home)).toBe('');
     const record = readOwnerActionRecord(s.server.home, id) as OwnerActionRecord;
     expect(record.params.actions).toEqual(['team-entity-config']);
-    expect(record.params.machine).toEqual(s.server.machine);
+    expect(record.params.machine).toEqual({ id: s.server.machine.id, name: 'server' });
     expect(record.params.team).toBe('acme');
 
     // Before an answer, --approval is refused and writes nothing.
@@ -407,6 +410,7 @@ describe('several requests carried in one file', () => {
     const exported = exportOwnerSeat(s.mac.home, s.mac.store, NOW);
     if (!exported.ok) throw new Error(exported.why);
     const other = pinnedMachine(exported.signed, 'second');
+    s.mac.store.prompts.length = 0;
     const asked = testIo(other.root, SEAT);
     expect(await runConfig(['set', 'acme.root', '~/Code/acme', '--request'], asked, { home: other.home, now: () => NOW })).toBe(0);
     const otherId = idOf(asked.out);

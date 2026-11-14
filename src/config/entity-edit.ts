@@ -433,7 +433,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     }
   }
 
-  // An answer is spent only by a write that goes through: the same write is tried first with
+  // An answer is spent only by a write that would go through: the same write is tried first with
   // nothing written, and a refusal there keeps the answer for a corrected run.
   const spend = (): boolean => door(false).kind === 'admitted';
 
@@ -589,8 +589,10 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   try {
     if (spendAnswer) {
       const tried = runEntityWrite(false);
-      // A write that changes nothing, or that is refused, spends nothing: its outcome is said below.
-      if (tried.kind !== 'written') entityOutcome = tried;
+      // A write that is refused spends nothing, and its refusal is said below. One that changes
+      // nothing is the write the owner answered, already in place: it spends the answer as a
+      // write would, so a second run of the same answer is refused as any replay is.
+      if (tried.kind !== 'written' && tried.kind !== 'unchanged') entityOutcome = tried;
       // exit: config.entity.approval-refused
       else if (!spend()) return 1;
       else entityOutcome = lockedEntities(home, () => runEntityWrite(true));
