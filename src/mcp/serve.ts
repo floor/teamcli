@@ -1056,6 +1056,12 @@ export function placementOf(io: Io, stateDir: string, session: string, name: str
  *  once, at start; `alive()` re-proves with a single reading on every use and never waits. */
 export const SERVE_PLACEMENT_WAIT_MS = 5000;
 const SERVE_PLACEMENT_POLL_MS = 250;
+/** Past the start bound, while the seat's own recorded pane still has no herdr name and the
+ *  client is still connected, the placement is read again at this slower pace. */
+export const SERVE_PLACEMENT_SLOW_POLL_MS = 2000;
+/** How long the start leaves the client's handshake to arrive before the first placement read,
+ *  which can block on a slow terminal host. */
+export const SERVE_HANDSHAKE_GRACE_MS = 100;
 
 /** The pane the state records for a seat, or undefined when the state cannot be read or records
  *  none; the start's wait is only for a pane this says the server runs in. */
@@ -1104,6 +1110,106 @@ export async function placementAtStart(
     if (last.ok) return last;
   }
   return last;
+}
+
+/** Stands for any line without an id: a notification, which is answered by nothing. */
+const NOTIFICATION = '\u0000notification';
+
+/** A line's JSON-RPC method, `NOTIFICATION` for a message without an id, or null when the line
+ *  is not a request at all (it is then served, and refused, like any other line). */
+function methodOf(line: string): string | null {
+  if (line.trim() === '') return NOTIFICATION;
+  try {
+    const message = JSON.parse(line) as unknown;
+    if (typeof message !== 'object' || message === null || Array.isArray(message)) return null;
+    const record = message as Record<string, unknown>;
+    if (!('id' in record)) return NOTIFICATION;
+    return typeof record.method === 'string' ? record.method : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What `proveWhileServing` hands back: the placement proven, with the client's next line still
+ *  owed to the serving loop, or the refusal the start answers with. */
+type ServingProof =
+  | { ok: true; next: Promise<IteratorResult<string>> }
+  | { ok: false; why: string };
+
+/**
+ * The start placement, read while the client's handshake is answered. A seat's CLI starts its
+ * MCP servers during boot, and after a machine restart herdr can restore the pane before it names
+ * the agent in it: the placement then cannot be proven for longer than the client waits for its
+ * handshake, and a server that refused there was never started again for the whole session. So
+ * the handshake is answered first, by `pending` — a serving whose every tool call refuses and
+ * which opens no inbox, writes no receipt and pushes nothing — and the placement is read after it.
+ *
+ * The refusal rules are `placementAtStart`'s: a first refusal is answered at once unless the
+ * environment names the pane the seat's record holds, and a wait whose record stops naming that
+ * pane ends at once. The difference is the bound: while the client is still connected, the seat's
+ * own recorded pane is read again (every 250 ms for the first 5 s, then every 2 s) until herdr
+ * names it, so the inbox opens as soon as the caller is proven. A client that has gone keeps the
+ * old 5 s bound and the last refusal is returned.
+ */
+export async function proveWhileServing(input: {
+  io: Io;
+  stateDir: string;
+  session: string;
+  name: string;
+  lines: AsyncIterator<string>;
+  write: (line: string) => void;
+  /** Answers the lines that arrive before the placement is proven. */
+  pending: (line: string) => string | null;
+  /** Told the latest refusal, so the pending serving can say why it serves nothing yet. */
+  onRefusal?: (why: string) => void;
+  deps?: PlacementClock;
+}): Promise<ServingProof> {
+  const deps = input.deps ?? {};
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = deps.now ?? Date.now;
+  let next = input.lines.next();
+  let ended = false;
+  /**
+   * Answers the lines that arrive until `tick` settles. In the handshake grace it stops early: at
+   * the input's end, once `initialize` is answered, or at the first line that is not part of the
+   * handshake — that line is held back, unanswered, for the reading that follows, so a caller
+   * proven on the first reading has its call served by the inbox, not refused by `pending`.
+   */
+  const serveUntil = async (tick: Promise<void>, grace: boolean): Promise<void> => {
+    for (;;) {
+      if (ended) {
+        if (!grace) await tick;
+        return;
+      }
+      const got = await Promise.race([next.then((result) => ({ result })), tick.then(() => null)]);
+      if (got === null) return;
+      if (got.result.done === true) {
+        ended = true;
+        continue;
+      }
+      const method = grace ? methodOf(got.result.value) : null;
+      if (grace && method !== 'initialize' && method !== 'ping' && method !== NOTIFICATION) {
+        next = Promise.resolve(got.result);
+        return;
+      }
+      const reply = input.pending(got.result.value);
+      if (reply !== null) input.write(reply);
+      next = input.lines.next();
+      if (grace && method === 'initialize') return;
+    }
+  };
+  await serveUntil(sleep(SERVE_HANDSHAKE_GRACE_MS), true);
+  const start = now();
+  for (;;) {
+    const verdict = placementOf(input.io, input.stateDir, input.session, input.name);
+    if (verdict.ok) return { ok: true, next };
+    input.onRefusal?.(verdict.why);
+    const recorded = recordedPaneOf(input.stateDir, input.session, input.name);
+    if (recorded === undefined || input.io.env.HERDR_PANE_ID !== recorded) return { ok: false, why: verdict.why };
+    const elapsed = now() - start;
+    if (ended && elapsed >= SERVE_PLACEMENT_WAIT_MS) return { ok: false, why: verdict.why };
+    await serveUntil(sleep(elapsed < SERVE_PLACEMENT_WAIT_MS ? SERVE_PLACEMENT_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS), false);
+  }
 }
 
 /** The launch the seat's state names now: the current brief claim's epoch, a claim that holds no
@@ -1230,8 +1336,43 @@ export async function runMcpServe(
   // seat on its recorded pane, and the epoch is the claim the state holds now. Both checks run
   // before the inbox folder or the listener is written, so a refused start leaves no trace.
   const stateDir = dirname(loaded.path);
-  const placed = await placementAtStart(io, stateDir, team.session, seat.name, deps);
-  if (!placed.ok) return refuse(placed.why);
+  // The channel is the seat's own launch word: a line with the development-channels flag naming
+  // this server. Nothing on the command line turns it on separately, and a marker without it is
+  // an ordinary inbox the send walks past.
+  const channel = channelLaunchEnabled(seat.launch);
+  // Before the caller is proven, the handshake and the tool list are answered and every tool
+  // call refuses with the reason: nothing reads the inbox, writes a receipt or pushes.
+  let unplacedWhy = 'the placement has not been read yet';
+  const pending: Serving = {
+    project: team.project,
+    seat: seat.name,
+    session: team.session,
+    root: loaded.root,
+    dropDir: join(loaded.root, '.agents', 'send-drops', team.session, seat.name),
+    home: host.home,
+    team,
+    loadTeam: () => null,
+    channel,
+    alive: () => `this server has not proven its caller yet, so it serves no inbox: ${unplacedWhy}`,
+  };
+  const lines = streams.lines[Symbol.asyncIterator]();
+  const placed = await proveWhileServing({
+    io,
+    stateDir,
+    session: team.session,
+    name: seat.name,
+    lines,
+    write: streams.write,
+    pending: (line) => handleLine(line, pending),
+    onRefusal: (why) => {
+      unplacedWhy = why;
+    },
+    deps,
+  });
+  if (!placed.ok) {
+    streams.close?.();
+    return refuse(placed.why);
+  }
   const generation = generationOf(stateDir, team.session, seat.name);
   const boundEpoch = boundEpochOf(generation, options.epoch);
   const stale = staleLaunch(generation, boundEpoch, seat.name);
@@ -1241,10 +1382,6 @@ export async function runMcpServe(
     return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');
   }
   const build = host.build ?? buildIdentity();
-  // The channel is the seat's own launch word: a line with the development-channels flag naming
-  // this server. Nothing on the command line turns it on separately, and a marker without it is
-  // an ordinary inbox the send walks past.
-  const channel = channelLaunchEnabled(seat.launch);
   const listener: InboxListener = {
     v: 1,
     seat: seat.name,
@@ -1340,14 +1477,24 @@ export async function runMcpServe(
     return refuse('the inbox listener marker could not be written');
   }
   try {
-    for await (const line of streams.lines) {
-      const reply = handleLine(line, serving);
+    // The line the placement wait left owed is the first one served here.
+    let next = placed.next;
+    for (;;) {
+      const result = await next;
+      if (result.done === true) break;
+      const reply = handleLine(result.value, serving);
       if (reply !== null) streams.write(reply);
       // The call just answered ran this build's code; the next one runs the installed build's.
       if (notice()) break;
+      next = lines.next();
     }
   } finally {
     stopChannel?.();
+    try {
+      void lines.return?.();
+    } catch {
+      // The input is closed below either way.
+    }
     streams.close?.();
     removeListener(dropDir, process.pid);
   }
