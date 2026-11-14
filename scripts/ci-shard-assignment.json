@@ -448,6 +448,7 @@
     "test/end.test.ts": 0,
     "test/endpoint-blocked-notice.test.ts": 0,
     "test/entity-create-grant.test.ts": 4,
+    "test/entity-root.test.ts": 4,
     "test/event-thresholds-coverage.test.ts": 0,
     "test/event-thresholds-policy.test.ts": 3,
     "test/examples.test.ts": 4,

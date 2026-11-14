@@ -173,6 +173,8 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/commands/lock.ts',
       'src/commands/mcp.ts',
       'src/commands/migrate.ts',
+      // `team migrate --root`: rewrites the team's record as its owner.
+      'src/commands/migrate-root.ts',
       'src/commands/owner-seat.ts',
       'src/commands/policy.ts',
       'src/commands/register.ts',

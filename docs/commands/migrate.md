@@ -7,6 +7,7 @@ Moves this team's definition from `.agents/team.yaml` into the registry, once, a
     team migrate [--keep-file] [--dry-run] [--json]
     team migrate [--keep-file] --request [--json]
     team migrate [--keep-file] --approval <request-id> [--json]
+    team migrate --root [--dry-run] [--json]
 
 ## Examples
 
@@ -63,9 +64,34 @@ beacon: the registry already holds this team; nothing to import
 - `--keep-file` — import and verify, and leave `.agents/team.yaml` where it is.
 - `--request` — record an owner-seat card for this exact record and stop. The card is titled **Migrate the team** and asks **<asker> wants to migrate the team. OK?**, adding the reason the request carried when it has one; the project, the seat count, the canonical-record hash and the request id are in its folded details, and `team approvals details <id>` prints them. It offers **Approve once** and **Deny** as decisions (the page's later words are on it too, but they decide nothing). A migration needs that one-time approval; the card does not offer **Always allow**.
 - `--approval <request-id>` — run the migrate the owner seat signed, once. A denial, an expiry, or a bad signature writes nothing. No signer approves a request they asked for.
+- `--root` — rewrite full paths inside the entity's projects root as `{root}` (above).
 - `--json` — one JSON document on stdout.
 
 Run by anyone but the owner at a terminal, `team migrate` records that card, waits for the signed answer, and continues. The owner at a terminal runs it with no extra flags.
+
+## Rewriting full paths as `{root}`
+
+`team migrate --root` rewrites, in this team's record, every value that writes a full path inside
+its entity's projects root on this machine — the absolute path, `~/…` or `$HOME/…` — as `{root}/…`
+([the team file's reference](../team-file.md#the-entitys-projects-root-root)), so the same record
+reads on every machine. Set the root first: `team config set <entity>.root <folder>`.
+
+    team migrate --root --dry-run    # each line it would change; writes nothing
+    team migrate --root              # the owner, from a terminal: writes those lines
+
+The rewrite is line by line: comments, keys and every other value stay byte for byte, a value that
+would start with the word is quoted, and the result must read back as the same team with only
+those paths changed, or nothing is offered. Every changed line is printed, before and after, by
+the dry run and by the write alike; the write is never silent. Anyone may run the dry run; the
+write is the owner's, from a terminal outside herdr, as every edit of the team's record. A seat
+whose launch line changed has its agent record's launch line updated with it, and a team approved
+before the rewrite may need `team approve` again. `--root` takes no other import option.
+
+| Outcome | Exit |
+| --- | --- |
+| the lines listed, written, or nothing to rewrite | 0 |
+| no root set, a rewrite that does not read back, a caller who is not the owner | 1 |
+| an invalid invocation, or a record that cannot be read | 2 |
 
 ## See also
 

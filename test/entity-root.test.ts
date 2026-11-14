@@ -16,8 +16,7 @@ import { fillSecretWords } from '../src/launch/secret-words.ts';
 import type { SecretStore } from '../src/secrets/store.ts';
 import { formatPlan, upPlan, type UpSeat } from '../src/launch/plan.ts';
 import { rulesOf } from '../src/launch/rules.ts';
-import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
-import { teamIdOf } from '../src/registry/teams.ts';
+import { readTeamText } from '../src/file/team-text.ts';
 import { parseYaml } from '../src/yaml.ts';
 import { intoRegistry } from './helpers/registry-team.ts';
 import { fixtureBase, gitEnv, testIo } from './helpers.ts';
@@ -267,7 +266,8 @@ describe('team migrate --root', () => {
       (at) => teamText({ launch: `zsh ${at}/Code/acme/docs/tools/as-acme.sh codex`, rules: ['Keep it short.'] }),
       'acme:\n  roots: [/x]\n',
     );
-    const record = (): string => readStoredTeamConfig(home, teamIdOf(root))!.text;
+    // The team's text where every command reads it: the suite's source, the registry in real use.
+    const record = (): string => readTeamText(join(root, '.agents', 'team.yaml'), { home });
     const stored = record();
 
     // No root yet: the dry run is refused, and says how to set one.

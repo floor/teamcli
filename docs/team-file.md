@@ -381,6 +381,53 @@ More fields exist — `tools`, `trust`, `machine`, `limits`, `watch`, `visibilit
 `releases` — and the comments `team init` writes name them; validation refuses what it cannot
 check, and this build acts on what [the commands](commands/README.md) read.
 
+## The entity's projects root: `{root}`
+
+Each entity has one projects root per machine: the folder its repositories sit directly under.
+On one machine that may be `~/Code/acme`; on a server where the entity has an account of its own,
+`/home/acme`. A team file names it with one word, `{root}`, in place of the full path, so the same
+file reads on every machine:
+
+```yaml
+entity: acme
+rules:
+  - "Never switch, reset or commit in {root}/site itself; work only in your worktree."
+  - Docs for this team live in {root}/docs/projects/site/.
+seats:
+  - role: implementer
+    name: builder
+    launch: zsh {root}/docs/tools/as-acme.sh codex -m gpt-6.1-sol
+    brief: "{root}/docs/briefs/builder.md"
+```
+
+The root itself is the machine's, never the team file's: it is the entity's `root:` in the
+owner's entities file, set and read with [`team config`](commands/config.md):
+
+```sh
+team config set acme.root ~/Code/acme    # on this machine
+team config get acme.root
+team config unset acme.root
+```
+
+- The word is filled when the file is read, in every value it writes — a launch line, a rule, a
+  seat's folder, a brief, a trust path — and never in a key. It reads as the absolute folder, so
+  `~/Code/acme` fills `{root}/docs` as the home's full path. `${root}`, the shell's own variable,
+  is left alone, and a `{secret:<entry>}` word on the same launch line is filled as before.
+- A value that starts with the word is quoted (`"{root}/site"`): unquoted, YAML reads the brace as
+  a map, and the reader says so.
+- A file that writes `{root}` on a machine where its entity names no root, or that names no
+  `entity:`, is refused when it is read — by `up`, `doctor`, `check` and every other command — on
+  the first line that writes it, with the command that sets one. A launch never runs a literal
+  `{root}`. A file that does not write the word reads exactly as before.
+- The entity's and the home project's rules (`<entity>.rules`, `project.<id>.rules`) read the word
+  the same way. They are not a team file, so where no root is named they keep the word as written,
+  and `team doctor` says so.
+- The resolved paths are part of the record an approval signs: setting the root of an entity, or
+  moving it, changes what its `{root}` teams read, and those teams need `team approve` again.
+- [`team doctor`](commands/doctor.md) warns about every value that writes a full path inside the
+  entity's root on this machine, and [`team migrate --root`](commands/migrate.md) rewrites those
+  paths as `{root}/…`: `--dry-run` first lists each line it would change.
+
 ## `tasks`
 
 Names the team's one task source. It is an owner section: only the owner writes it. Omitted, it
