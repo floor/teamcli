@@ -960,7 +960,10 @@ const INSTALL_STEPS: readonly string[] = [
   'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
   'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
   'if it still cannot start, the previous unit is put back and its daemon started again',
-  'once the mailbox router has reported a heartbeat, the shuttle units are stopped and removed',
+  // While retirement is held the install removes no shuttle unit, and the plan says so.
+  SHUTTLE_RETIREMENT_HELD
+    ? 'the shuttle units are left as they are: their retirement is held until the mailbox router can route an ask'
+    : 'once the mailbox router has reported a heartbeat, the shuttle units are stopped and removed',
   'once the new daemon answers, the kit folders still standing in the lobby move into the runtime home, each held while a loaded unit names it',
 ];
 
