@@ -18,10 +18,10 @@ machine with no broker handler never falls back to a per-clone broker.
 
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
-    team daemon restart [--dry-run] [--json]
-    team daemon uninstall [--home <folder>] [--json]
-    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon restart [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 A subcommand is required. `--root` is repeatable and names the checkouts this one daemon hosts;
 without it, the checkout whose folder the command runs in is hosted. `install` validates every
@@ -300,6 +300,9 @@ restart off and leaves the telling ([`team policy`](policy.md) carries the three
 | `--watch` | — | host one watch per checkout on the daemon's heartbeat; belongs to `run` and `install`, is written into the unit by `install`, is independent of `--presence`, and is off by default |
 | `--route` | a 32-character route id | the one hosted route to fault; belongs to `fault-watch`, where it is required |
 | `--dry-run` | — | print the install, restart or fault plan and write, stop or start nothing; belongs to `install`, `restart` and `fault-watch` |
+| `--request` | — | record the verb and its options for the owner seat to answer, and change nothing; belongs to `install`, `restart`, `uninstall` and `fault-watch` |
+| `--reason` | a short text | the reason the owner's card shows; goes with `--request` |
+| `--approval` | a request id | run the verb on the owner's signed answer to that request; belongs to the same four verbs, and never goes with `--request` |
 | `--json` | — | one JSON document instead of the line; belongs to `status`, `install`, `restart`, `uninstall` and `fault-watch` |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -348,6 +351,15 @@ dispatcher's door verifies the grant's chain, its key and the `daemon` op once, 
 verifies them again, so a grant whose chain, key or ops no longer verify `daemon` is refused
 (`daemon.grant-refused`) instead of falling back to the caller. The grant and the key admit the
 run and are never written into the unit.
+
+The owner's signed answer admits each of `install`, `restart`, `uninstall` and `fault-watch`,
+for any caller: `--request` records the verb and every option it names, bound to this home, and
+`--approval <request-id>` runs exactly that once the owner has answered. The answer is checked
+when the command starts, with nothing spent, and spent once just before the daemon is changed,
+so a run refused before that (no service manager, a root that cannot be read) keeps it; a dry run
+never spends it. On a machine whose owner seat is pinned from another machine this is the only
+way, and the request is carried with `team approvals export`. A refused answer is
+`daemon.approval-refused`.
 
 A caller who is not the owner, holds no such grant and is not a lead the dev-mode lift admits is
 refused with `only the owner, a general grant naming daemon, or a lead in development mode

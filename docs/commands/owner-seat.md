@@ -77,8 +77,20 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   spent once in this machine's approval ledger. A request that names no machine or another
   machine, carries no signed window or no words, is refused here; the signer machine never runs
   a request that names another machine.
-- **No owner signer is made here.** `team owner-seat setup` and `team setup` are refused, and no
-  `always` rule is kept here yet: `always` admits the one request once.
+- **Every owner-only command takes the answer.** The lifecycle commands, `team config` (a team's
+  record and an entity's own record: `<entity>.root`, `.worktrees`, `.names.unique`,
+  `.reminders`, `.rules`), `team daemon install|restart|uninstall|fault-watch`,
+  `team development-mode`, `team approvals revoke` and `team client general-grant` read
+  `--request` and `--approval <id>` themselves. Every other owner-only command takes the same
+  two options at the dispatcher on this machine: the request binds the exact command line —
+  its name and every word, `--dry-run` included — and the answer runs that line once, as the
+  owner. Two are never admitted this way: `team owner-seat` (its pins are trust on first use or
+  signed exports) and `team setup` (below). Several requests can travel in one file and be
+  signed with one card and one confirmation (`team approvals export <id> <id> …`).
+- **No owner signer and no charter are made here.** `team owner-seat setup` and `team setup` are
+  refused, and no `always` rule is kept here yet: `always` admits the one request once. The
+  machine keeps no charter of its own: a charter is standing consent signed for one machine's
+  folders, and every owner-only action here runs on its own answer instead.
 - **Where the owner state lives.** The pin, the machine record and the approval ledger are found
   by one rule, which never reads the environment's home: a system folder (`/etc/teamcli`) first,
   when it is present, owned by the system's administrator and writable by no one else, then the
@@ -89,8 +101,7 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
 - **The limit of the account's own folder.** On macOS, in the account's own folder, the owner
   state is as safe as the account's files: a process of the account can replace the pin, copy a
   machine record, or remove a ledger entry. A shared Linux server keeps all three out of the
-  agents' reach (below). Commands that have no `--request` door (`team daemon install`,
-  `team grant`) are refused from a terminal here until they have one.
+  agents' reach (below).
 
 ## A shared Linux server
 
