@@ -178,7 +178,10 @@ test('an unreadable state refuses without repeating synthetic secret-like conten
   writeFileSync(join(dir, 'team.state.json'), '{' + secret);
   const before = snapshot(rootB), caller = ioFor();
   const result = await serve(ownOptions(), caller.io);
-  expect(result.code).toBe(2); expect(result.replies).toEqual([]);
+  // An unreadable state is waited for while the client is answered: every reply is a refusal,
+  // and neither the replies nor the refusal repeat the state's content.
+  expect(result.code).toBe(2); expect(result.replies.every(reply => reply.result?.isError === true)).toBe(true);
+  expect(JSON.stringify(result.replies)).not.toContain(secret);
   expect(caller.error()).not.toContain(secret); expect(caller.error()).not.toContain('private synthetic body');
   expect(snapshot(rootB)).toEqual(before);
 });
