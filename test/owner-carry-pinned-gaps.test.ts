@@ -259,7 +259,7 @@ describe("an entity's record on a machine whose owner seat is pinned", () => {
     // The owner's card names the change and the machine, never a folder.
     expect(s.mac.store.prompts).toHaveLength(1);
     // The owner's card names the change in full: the operation, the key, the exact value and the file.
-    expect(s.mac.store.prompts[0]).toContain("change where an entity's projects sit");
+    expect(s.mac.store.prompts[0]).toContain("Change where an entity's projects sit");
     expect(s.mac.store.prompts[0]).toContain('Entity acme on server');
     // The prompt carries the change whole when it fits, else its length and digest; the terminal
     // shows it whole before the prompt either way.
@@ -327,7 +327,7 @@ describe('the machine daemon on a machine whose owner seat is pinned', () => {
     expect(service.calls).toEqual([]);
 
     const carried = await carry(s, [id]);
-    expect(s.mac.store.prompts[0]).toContain('remove the machine daemon');
+    expect(s.mac.store.prompts[0]).toContain('Remove the machine daemon');
     expect(s.mac.store.prompts[0]).toContain('Machine server');
     expect(s.mac.store.prompts[0]).toContain(`uninstall for home "${realpathSync(s.server.home)}"`);
     expect((await answerOn(s, carried.answer)).code).toBe(0);
