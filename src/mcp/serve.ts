@@ -24,7 +24,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { followBus, followBusRetrying, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { callerOf, callerVerdict, describeCaller, type SeatAtPane } from '../caller.ts';
+import { callerAncestors, callerOf, callerVerdict, describeCaller, type SeatAtPane } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { LoadResult, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
@@ -1017,15 +1017,19 @@ function seatAtPaneOf(seats: Record<string, SeatState>, pane: string): SeatAtPan
  * A pane herdr lists with no agent name yet — the window this server starts in — is placed by the
  * shell the seat's own record anchors there, through the sources read below.
  */
-export function placementOf(io: Io, stateDir: string, session: string, name: string): { ok: true } | { ok: false; why: string } {
+/** Why a placement failed: a state that cannot be read, a caller not placed yet (or a seat whose
+ *  pane is not recorded yet), or a caller that is another seat or another launch's pane. */
+export type PlacementMiss = 'unreadable' | 'unplaced' | 'no-pane' | 'another-pane' | 'other-seat';
+
+export function placementOf(io: Io, stateDir: string, session: string, name: string): { ok: true } | { ok: false; why: string; kind: PlacementMiss } {
   let sessions: State['sessions'];
   try {
     sessions = readState(stateDir).sessions;
   } catch (error) {
-    return { ok: false, why: `the team state cannot be read, so this server cannot prove its caller: ${(error as Error).message}` };
+    return { ok: false, kind: 'unreadable', why: `the team state cannot be read, so this server cannot prove its caller: ${(error as Error).message}` };
   }
   if (sessions[session] === undefined) {
-    return { ok: false, why: `the team state records no session ${JSON.stringify(session)}, so this server cannot prove which seat started it` };
+    return { ok: false, kind: 'no-pane', why: `the team state records no session ${JSON.stringify(session)}, so this server cannot prove which seat started it` };
   }
   const seats = sessions[session]?.seats ?? {};
   const caller = callerOf(io, session, { seatAtPane: (pane) => seatAtPaneOf(seats, pane) });
@@ -1035,19 +1039,19 @@ export function placementOf(io: Io, stateDir: string, session: string, name: str
   // match. A record with no pane proves no placement at all, and another pane is the seat
   // restarted elsewhere while this process lives.
   if (verdict.kind === 'no-pane') {
-    return { ok: false, why: `the state records no pane for seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, so this server cannot prove the pane it was started on; a lead stops that seat and runs \`team up\`` };
+    return { ok: false, kind: 'no-pane', why: `the state records no pane for seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, so this server cannot prove the pane it was started on; a lead stops that seat and runs \`team up\`` };
   }
   if (verdict.kind === 'another-pane') {
-    return { ok: false, why: `the state records pane ${verdict.recordedPane} for seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, not the pane this server runs in; a lead stops the team and starts it again` };
+    return { ok: false, kind: 'another-pane', why: `the state records pane ${verdict.recordedPane} for seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, not the pane this server runs in; a lead stops the team and starts it again` };
   }
   if (caller.kind === 'seat') {
     // A seat caller is refused for another name, or the same name placed in another session; the
     // sentence names the session when it is the difference, so the refusal is not read as a pane
     // fault.
     const placedIn = caller.session !== undefined && caller.session !== session ? ` in session ${JSON.stringify(caller.session)}` : '';
-    return { ok: false, why: `this server serves seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, and this call is placed as seat ${JSON.stringify(caller.name)}${placedIn}` };
+    return { ok: false, kind: 'other-seat', why: `this server serves seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, and this call is placed as seat ${JSON.stringify(caller.name)}${placedIn}` };
   }
-  return { ok: false, why: `this server serves seat ${JSON.stringify(name)} and starts inside that seat's own process; this call is ${describeCaller(caller)}` };
+  return { ok: false, kind: 'unplaced', why: `this server serves seat ${JSON.stringify(name)} and starts inside that seat's own process; this call is ${describeCaller(caller)}` };
 }
 
 /** How long `mcp serve` re-proves its caller's placement at start, and the pause between reads.
@@ -1057,6 +1061,9 @@ export function placementOf(io: Io, stateDir: string, session: string, name: str
  *  `alive()` re-proves with a single reading on every use and never waits. */
 export const SERVE_PLACEMENT_WAIT_MS = 5000;
 const SERVE_PLACEMENT_POLL_MS = 250;
+/** How many times the start reads a team file it could not read before it answers the handshake
+ *  (8 x 250 ms = 2 s, well inside a client's 30 s handshake). */
+const TEAM_READ_RETRIES = 8;
 /** Past the start bound, while the seat's own recorded pane still has no herdr name and the
  *  client is still connected, the placement is read again at this slower pace. */
 export const SERVE_PLACEMENT_SLOW_POLL_MS = 2000;
@@ -1076,13 +1083,29 @@ function recordedPaneOf(stateDir: string, session: string, name: string): string
 export type PlacementClock = {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
-  /** When this server's process started, in ms. Absent: the process's own start. */
-  startedAtMs?: number;
 };
 
-/** This process's start, read once: a claim written before it is the launch this process
- *  belongs to, never a later one. */
-const PROCESS_STARTED_MS = Date.now() - Math.round(process.uptime() * 1000);
+/**
+ * Whether the seat's current launch is this server's own: the CLI pids the state records for the
+ * seat's launch include one of this process's live ancestors. A launch records the CLI it
+ * started, and a relaunch records a new one, so an earlier launch's server — or a replacement it
+ * spawned that has left that CLI's tree — never matches a later launch. Null when the state
+ * records no launched CLI for the seat (an older record, or one not written yet), or cannot be
+ * read: nothing is proven either way.
+ */
+export function ownsCurrentLaunch(io: Pick<Io, 'callerSources'>, stateDir: string, session: string, name: string): boolean | null {
+  let pids: readonly number[] | undefined;
+  try {
+    pids = readState(stateDir).sessions[session]?.seats?.[name]?.launched?.cli;
+  } catch {
+    return null;
+  }
+  if (pids === undefined || pids.length === 0) return null;
+  const ancestors = callerAncestors(io);
+  if (ancestors === null || ancestors.length === 0) return false;
+  const live = new Set(ancestors.map((one) => one.pid));
+  return pids.some((pid) => live.has(pid));
+}
 
 /**
  * The start placement, with its one bounded wait: the first refusal is answered at once unless
@@ -1123,14 +1146,17 @@ export async function placementAtStart(
 export type StartReading<T = true> = { ok: true; value: T } | { ok: false; wait: boolean; why: string };
 
 /**
- * The placement alone, as a start reading. A caller that herdr has not named yet, in the pane the
- * seat's record holds or while the state records no pane for the seat (a restart rewriting it),
- * is worth waiting for. A caller outside herdr, or in a pane the record gives to another
- * launch, is foreign and refused.
+ * The placement alone, as a start reading. A state that cannot be read yet is waited for. A
+ * caller herdr has not named yet, or a seat whose pane the state does not record yet (a restart
+ * rewriting it), is waited for only from inside a herdr pane that is the seat's recorded one or
+ * while none is recorded. A caller placed as another seat, in another launch's pane, or outside
+ * herdr is foreign and refused.
  */
 export function placementReading(io: Io, stateDir: string, session: string, name: string): StartReading {
   const verdict = placementOf(io, stateDir, session, name);
   if (verdict.ok) return { ok: true, value: true };
+  if (verdict.kind === 'unreadable') return { ok: false, wait: true, why: verdict.why };
+  if (verdict.kind === 'other-seat' || verdict.kind === 'another-pane') return { ok: false, wait: false, why: verdict.why };
   const pane = io.env.HERDR_PANE_ID;
   const recorded = recordedPaneOf(stateDir, session, name);
   const wait = pane !== undefined && pane !== '' && (recorded === undefined || recorded === pane);
@@ -1206,7 +1232,7 @@ export async function proveWhileServing<T = true>(input: {
     );
   };
   let ended = false;
-  /** Answers the lines that arrive until `tick` settles; past the input's end, waits it out. */
+  /** Answers the lines that arrive until `tick` settles, or until the input ends. */
   const serveUntil = async (tick: Promise<void>): Promise<void> => {
     let ticked = false;
     let active = true;
@@ -1221,7 +1247,6 @@ export async function proveWhileServing<T = true>(input: {
     } finally {
       active = false;
     }
-    if (ended) await tick;
   };
   /** The loop of one wait: answer each line that arrives, until the tick or the input's end. */
   const answerUntilTick = async (tickedNow: () => boolean): Promise<void> => {
@@ -1366,7 +1391,6 @@ export async function runMcpServe(
     return refuse(`--epoch ${JSON.stringify(options.epoch)} is not a runtime epoch`);
   }
   const seatName = options.seat;
-  const startedAtMs = deps.startedAtMs ?? PROCESS_STARTED_MS;
   // A named file is the launch's own team file, read as given. Without one the team is the
   // registry's record for this seat: the folder the server starts in is a lobby for most seats,
   // and reading a team file from it would be reading the checkout's folder, not the seat's team.
@@ -1429,28 +1453,40 @@ export async function runMcpServe(
       return { ok: false, wait: true, why: `--epoch ${JSON.stringify(options.epoch)} names a launch the seat's state no longer holds` };
     }
     if (options.epoch === generation.epoch) return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: generation.epoch } };
-    const claimedAt = Date.parse(generation.at);
-    if (Number.isFinite(claimedAt) && claimedAt <= startedAtMs + SERVE_PLACEMENT_WAIT_MS) {
+    // An epoch from an earlier launch, or none, binds the current claim only when that launch is
+    // proven to be this server's own. A state that records no launched CLI proves nothing: a
+    // server with no epoch keeps the binding it always had, and a stale epoch waits.
+    const owns = ownsCurrentLaunch(io, stateDir, team.session, seat.name);
+    if (owns === true || (owns === null && options.epoch === undefined)) {
       return { ok: true, value: { loaded, team, seat, stateDir, boundEpoch: generation.epoch } };
     }
     return {
       ok: false,
       wait: true,
       why: options.epoch === undefined
-        ? `seat ${JSON.stringify(seat.name)} has a current brief claim written after this server started; it serves only the launch it started under`
-        : `--epoch ${JSON.stringify(options.epoch)} is not the seat's current launch epoch, and the current claim was written after this server started`,
+        ? `seat ${JSON.stringify(seat.name)} has a current brief claim of a launch this server is not part of; it serves only its own launch`
+        : `--epoch ${JSON.stringify(options.epoch)} is not the seat's current launch epoch, and this server is not part of the current launch`,
     };
   };
   // Before the start is proven, the handshake and the tool list are answered and every tool
   // call refuses with the reason: nothing reads the inbox, writes a receipt or pushes. The
   // channel capability is the declaration's word when the team file can be read at once.
-  const firstRead = ((): LoadResult => {
+  const readOnce = (): LoadResult => {
     if (options.file === undefined) {
       const registered = registeredRoot(host.home, seatName, options.session);
       if (registered.ok) registeredAt = registered.root;
     }
     return readTeam();
-  })();
+  };
+  // The handshake declares the channel capability, and nothing renegotiates it later, so the
+  // declaration's word is read before the first line is answered. A team file caught mid-write
+  // is read again for a short bound; past it the handshake declares no channel.
+  let firstRead = readOnce();
+  const firstSleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let tries = 0; !firstRead.ok && tries < TEAM_READ_RETRIES; tries += 1) {
+    await firstSleep(SERVE_PLACEMENT_POLL_MS);
+    firstRead = readOnce();
+  }
   const declaredFirst = firstRead.ok ? firstRead.team.seats.find((one) => one.name === seatName) : undefined;
   const pendingChannel = declaredFirst === undefined ? false : channelLaunchEnabled(declaredFirst.launch);
   let unplacedWhy = 'the start has not been read yet';
@@ -1483,7 +1519,10 @@ export async function runMcpServe(
     deps,
   });
   if (!placed.ok) return refuse(placed.why);
-  const { loaded, team, seat, stateDir, boundEpoch } = placed.value;
+  const { loaded, team, seat, stateDir } = placed.value;
+  // Mutable for one case only: a server bound to no claim takes the first claim of a launch
+  // proven to be its own (see `alive` below).
+  let boundEpoch = placed.value.boundEpoch;
   // The channel is the seat's own launch word: a line with the development-channels flag naming
   // this server. Nothing on the command line turns it on separately, and a marker without it is
   // an ordinary inbox the send walks past.
@@ -1566,7 +1605,17 @@ export async function runMcpServe(
     alive: () => {
       const now = placementOf(io, stateDir, team.session, seat.name);
       if (!now.ok) return now.why;
-      const staleLaunchNow = staleLaunch(generationOf(stateDir, team.session, seat.name), boundEpoch, seat.name);
+      const generationNow = generationOf(stateDir, team.session, seat.name);
+      // A server that bound no claim (it started before its launch wrote one) takes its own
+      // launch's first claim, once that launch is proven to be its own; any other claim stays a
+      // refusal, and a binding once taken is kept for the life of the process.
+      if (boundEpoch === undefined && generationNow.kind === 'claim'
+        && ownsCurrentLaunch(io, stateDir, team.session, seat.name) === true) {
+        boundEpoch = generationNow.epoch;
+        brief.epoch = generationNow.epoch;
+        writeListener(dropDir, { ...listener, epoch: generationNow.epoch });
+      }
+      const staleLaunchNow = staleLaunch(generationNow, boundEpoch, seat.name);
       if (staleLaunchNow !== null) return staleLaunchNow;
       const file = readTeam();
       if (!file.ok) {

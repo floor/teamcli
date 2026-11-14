@@ -333,8 +333,15 @@ export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string;
       if (!channelPairPresent(at, declared.name)) throw new ConfigRefusal('the project folder has no channel pair for this seat');
       // A pair an earlier build wrote pins the epoch of the launch it was written for. It is
       // rewritten, owned entry only, to name none, so this and every later launch serves.
-      if (!channelPairPinsEpoch(at)) return { ok: true, lease: { check() {}, release() {} } };
-      return publishChannelPair(planChannelPair({ ...input, epoch }, false), () => {});
+      // The launch's own claim must still be current through the rewrite and up to the spawn: a
+      // pair rewritten for a launch a relaunch has replaced would be read by the wrong server.
+      const stillCurrent = () => {
+        const current = currentBriefClaim(readState(dirname(loaded.path)).sessions[input.session]?.briefs?.[input.seat]);
+        if (current === null || current.epoch !== epoch) throw new ConfigRefusal('the channel launch epoch is no longer its current claim');
+      };
+      stillCurrent();
+      if (!channelPairPinsEpoch(at)) return { ok: true, lease: { check: stillCurrent, release() {} } };
+      return publishChannelPair(planChannelPair({ ...input, epoch }, false), stillCurrent);
     }
     const gate = verifyLobby(home, { lobby, create: false });
     if (!gate.ok || !('path' in gate)) throw new ConfigRefusal('the registered channel lobby is unsafe or missing');

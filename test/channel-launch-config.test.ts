@@ -336,16 +336,6 @@ describe('launch-scoped channel config', () => {
     expect(existsSync(join(w.root, '.agents/send-drops', SESSION, 'alpha/listener.json'))).toBe(false);
   });
 
-  test('a stale epoch in a registration serves the claim its launch wrote before the server started', async () => {
-    const w = world();
-    prepare(w).release();
-    const oldEpoch = entry(w).args.at(-1) as string;
-    w.claim(NEXT);
-    const io = testIo(join(w.lobby, 'alpha'), { kind: 'seat', name: 'alpha', pane: 'pane-alpha', session: SESSION });
-    const code = await runMcpServe({ seat: 'alpha', session: SESSION, epoch: oldEpoch }, io,
-      { lines: (async function* () {})(), write: () => {} }, { home: w.home });
-    expect(code, io.err).toBe(0);
-  });
 });
 
 describe('named project channel approval', () => {

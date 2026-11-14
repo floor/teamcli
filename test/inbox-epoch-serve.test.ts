@@ -187,8 +187,23 @@ test('the adopted server still reads one message', async () => {
 
 const BASE = Date.parse('2026-11-14T15:43:03.000Z');
 const SEAT = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION } as const;
+/** The CLI this scene's server runs under: its only ancestor. */
+const OWN_CLI = 4242;
 function claimAt(epoch: string, atMs: number, id = '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'): Record<string, unknown> {
   return { id, at: new Date(atMs).toISOString(), incarnation: 'inc_0123456789ab', epoch, sha256: 'a'.repeat(64), stage: 'claimed' };
+}
+/** The CLI pids the state records for the seat's current launch. */
+function launchedBy(root: string, pids: number[]): void {
+  const path = join(root, '.agents', 'team.state.json');
+  const state = JSON.parse(readFileSync(path, 'utf8')) as { sessions: Record<string, { seats: Record<string, Record<string, unknown>> }> };
+  state.sessions[SESSION]!.seats.lead!.launched = { shell: 1, cli: pids };
+  writeFileSync(path, `${JSON.stringify(state)}\n`);
+}
+/** A test Io whose process tree is the seat's CLI alone. */
+function ownIo(root: string, caller: Parameters<typeof testIo>[1] = SEAT) {
+  const io = testIo(root, caller);
+  io.callerSources = (() => ({ ancestors: () => [{ pid: OWN_CLI, name: 'claude' }] })) as never;
+  return io;
 }
 /** A client the scene drives: `push` a line, `end` closes the input. */
 function client(): { lines: AsyncIterable<string>; push(line: string): void; end(): void } {
@@ -212,21 +227,22 @@ const CHECK = (id: number): string => JSON.stringify({ jsonrpc: '2.0', id, metho
 async function until(ok: () => boolean): Promise<void> {
   for (let wait = 0; wait < 600 && !ok(); wait++) await new Promise((resolve) => setTimeout(resolve, 5));
 }
+const markerOf = (root: string): string => listenerPath(join(root, '.agents', 'send-drops', SESSION, 'lead'));
 
-test('a registration that pins an earlier launch epoch still serves the claim written before this server started', async () => {
+test('a registration that pins an earlier launch epoch serves the current claim of a launch proven its own', async () => {
   const at = place();
   try {
     // The 2026-11-14 case: the project file kept run_97d9..., the restart claimed run_df28...
-    claim(at.root, claimAt(EPOCH, BASE - 2_000));
+    claim(at.root, claimAt(EPOCH, BASE));
+    launchedBy(at.root, [OWN_CLI]);
     const peer = client();
-    const io = testIo(at.root, SEAT);
+    const io = ownIo(at.root);
     const replies: string[] = [];
     const running = runMcpServe({ seat: 'lead', session: SESSION, file: at.file, epoch: OTHER }, io,
-      { lines: peer.lines, write: (line) => replies.push(line) }, { home: at.home }, { startedAtMs: BASE });
-    const marker = listenerPath(join(at.root, '.agents', 'send-drops', SESSION, 'lead'));
-    await until(() => existsSync(marker));
-    expect(existsSync(marker), io.err).toBe(true);
-    expect((JSON.parse(readFileSync(marker, 'utf8')) as { epoch?: string }).epoch).toBe(EPOCH);
+      { lines: peer.lines, write: (line) => replies.push(line) }, { home: at.home });
+    await until(() => existsSync(markerOf(at.root)));
+    expect(existsSync(markerOf(at.root)), io.err).toBe(true);
+    expect((JSON.parse(readFileSync(markerOf(at.root), 'utf8')) as { epoch?: string }).epoch).toBe(EPOCH);
     peer.push(CHECK(1));
     await until(() => replies.length > 0);
     expect((JSON.parse(replies[0]!) as { result?: { isError?: boolean } }).result?.isError).not.toBe(true);
@@ -247,12 +263,11 @@ test('a server started before its launch claim waits, refusing calls, and serves
     let polls = 0;
     const running = runMcpServe({ seat: 'lead', session: SESSION, file: at.file, epoch: EPOCH }, io,
       { lines: peer.lines, write: (line) => replies.push(line) }, { home: at.home }, {
-        startedAtMs: BASE,
         now: () => polls * 250,
         sleep: async () => {
           polls += 1;
           await new Promise((resolve) => setTimeout(resolve, 1));
-          // The launch writes its claim well after the server started: the epoch names it.
+          // The launch writes its claim after the server started: the epoch names it.
           if (polls === 40) claim(at.root, claimAt(EPOCH, BASE + 60_000));
         },
       });
@@ -261,9 +276,8 @@ test('a server started before its launch claim waits, refusing calls, and serves
     const early = JSON.parse(replies[0]!) as { result?: { isError?: boolean; content?: { text: string }[] } };
     expect(early.result?.isError).toBe(true);
     expect(early.result?.content?.[0]?.text).toContain('no longer holds');
-    const marker = listenerPath(join(at.root, '.agents', 'send-drops', SESSION, 'lead'));
-    await until(() => existsSync(marker));
-    expect(existsSync(marker), io.err).toBe(true);
+    await until(() => existsSync(markerOf(at.root)));
+    expect(existsSync(markerOf(at.root)), io.err).toBe(true);
     peer.push(CHECK(2));
     await until(() => replies.length > 1);
     expect((JSON.parse(replies[1]!) as { result?: { isError?: boolean } }).result?.isError).not.toBe(true);
@@ -271,6 +285,31 @@ test('a server started before its launch claim waits, refusing calls, and serves
     expect(await running).toBe(0);
   } finally {
     at.cleanup();
+  }
+});
+
+test('a server bound to no claim takes its own launch\'s first claim, and refuses another launch\'s', async () => {
+  for (const own of [true, false]) {
+    const at = place();
+    try {
+      const peer = client();
+      const io = ownIo(at.root);
+      const replies: string[] = [];
+      const running = runMcpServe({ seat: 'lead', session: SESSION, file: at.file }, io,
+        { lines: peer.lines, write: (line) => replies.push(line) }, { home: at.home });
+      await until(() => existsSync(markerOf(at.root)));
+      claim(at.root, claimAt(EPOCH, BASE));
+      launchedBy(at.root, own ? [OWN_CLI] : [5555]);
+      peer.push(CHECK(1));
+      await until(() => replies.length > 0);
+      const reply = JSON.parse(replies[0]!) as { result?: { isError?: boolean } };
+      expect(reply.result?.isError === true, `own=${String(own)}`).toBe(!own);
+      if (own) expect((JSON.parse(readFileSync(markerOf(at.root), 'utf8')) as { epoch?: string }).epoch).toBe(EPOCH);
+      peer.end();
+      expect(await running).toBe(0);
+    } finally {
+      at.cleanup();
+    }
   }
 });
 
@@ -286,7 +325,6 @@ test('a state being rewritten at the start is waited for, not a reason to exit',
     let polls = 0;
     const running = runMcpServe({ seat: 'lead', session: SESSION, file: at.file }, io,
       { lines: peer.lines, write: () => {} }, { home: at.home }, {
-        startedAtMs: BASE,
         now: () => polls * 250,
         sleep: async () => {
           polls += 1;
@@ -294,9 +332,8 @@ test('a state being rewritten at the start is waited for, not a reason to exit',
           if (polls === 10) writeFileSync(statePath, good);
         },
       });
-    const marker = listenerPath(join(at.root, '.agents', 'send-drops', SESSION, 'lead'));
-    await until(() => existsSync(marker));
-    expect(existsSync(marker), io.err).toBe(true);
+    await until(() => existsSync(markerOf(at.root)));
+    expect(existsSync(markerOf(at.root)), io.err).toBe(true);
     peer.end();
     expect(await running).toBe(0);
   } finally {
@@ -304,25 +341,26 @@ test('a state being rewritten at the start is waited for, not a reason to exit',
   }
 });
 
-test('a claim written after this server started is a later launch: never adopted, and a gone client ends the wait', async () => {
+test('a claim of a launch this server is not part of is never adopted, and a gone client ends the wait', async () => {
   const at = place();
   try {
-    claim(at.root, claimAt(EPOCH, BASE - 2_000));
+    claim(at.root, claimAt(EPOCH, BASE));
+    launchedBy(at.root, [OWN_CLI]);
     const peer = client();
-    // Unplaced in its own pane while the seat is relaunched under a newer claim.
-    const io = testIo(at.root, { kind: 'unplaced', reason: 'it runs in pane pane-lead, whose agent has no herdr name' });
+    // Unplaced in its own pane while the seat is relaunched under a newer claim and a new CLI.
+    const io = ownIo(at.root, { kind: 'unplaced', reason: 'it runs in pane pane-lead, whose agent has no herdr name' });
     io.env = { HERDR_PANE_ID: 'pane-lead' };
     const replies: string[] = [];
     let polls = 0;
     const running = runMcpServe({ seat: 'lead', session: SESSION, file: at.file }, io,
       { lines: peer.lines, write: (line) => replies.push(line) }, { home: at.home }, {
-        startedAtMs: BASE,
         now: () => polls * 250,
         sleep: async () => {
           polls += 1;
           await new Promise((resolve) => setTimeout(resolve, 1));
           if (polls === 30) {
             claim(at.root, claimAt(OTHER, BASE + 7_500, '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4f'));
+            launchedBy(at.root, [5555]);
             io.caller = SEAT;
           }
           if (polls === 60) peer.end();
@@ -330,10 +368,10 @@ test('a claim written after this server started is a later launch: never adopted
       });
     peer.push(CHECK(1));
     expect(await running).toBe(2);
-    expect(io.err).toContain('written after this server started');
+    expect(io.err).toContain('not part of');
     const reply = JSON.parse(replies[0] ?? '{}') as { result?: { isError?: boolean } };
     expect(reply.result?.isError).toBe(true);
-    expect(existsSync(listenerPath(join(at.root, '.agents', 'send-drops', SESSION, 'lead')))).toBe(false);
+    expect(existsSync(markerOf(at.root))).toBe(false);
   } finally {
     at.cleanup();
   }
