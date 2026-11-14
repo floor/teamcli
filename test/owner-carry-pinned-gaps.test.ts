@@ -487,8 +487,10 @@ describe('a machine with a local owner keeps its behaviour', () => {
 describe("the credential helper's one-prompt signing", () => {
   test('sign-many returns one signature per message under one prompt; an older helper is said to be older', () => {
     const dir = tempBase('helper');
+    // The fake runs under this test's own runtime, whatever is on the PATH.
     const helper = join(dir, 'owner-seat-keystore');
-    copyFileSync(join(import.meta.dir, 'fixtures', 'owner-seat', 'fake-keystore.mjs'), helper);
+    copyFileSync(join(import.meta.dir, 'fixtures', 'owner-seat', 'fake-keystore.mjs'), join(dir, 'fake-keystore.mjs'));
+    writeFileSync(helper, `#!/bin/sh\nexec '${process.execPath}' '${join(dir, 'fake-keystore.mjs')}' "$@"\n`);
     chmodSync(helper, 0o700);
     const store = systemOwnerSeatKeyStore(helper);
     const created = store.create('mac');
