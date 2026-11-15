@@ -70,6 +70,10 @@ test('a send-endpoint probe held by the shared event loop is not counted as the 
   // However the loop is held, an endpoint with no answer for over a minute is missing.
   expect(sendProbeReading(false, 6_000, 61_000)).toBe('miss');
   expect(sendProbeReading(false, 6_000, 30_000)).toBe('held');
+  // A probe that only ran out of time is no miss on its own; a refusal is; a minute of silence is.
+  expect(sendProbeReading(false, 2_050, 10_000, true)).toBe('held');
+  expect(sendProbeReading(false, 2_050, 10_000, false)).toBe('miss');
+  expect(sendProbeReading(false, 2_050, 61_000, true)).toBe('miss');
 });
 
 test('the retry window is one deadline: an endpoint that holds connections silently gives up within it', async () => {

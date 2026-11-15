@@ -41,7 +41,7 @@ import { runRestoreSweepInChild } from './restore/spawn.ts';
 import { restoreLifecycleProblem } from '../launch/restore-lifecycle.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive, readState, type State } from '../state.ts';
-import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
+import { probeDaemonSocket, probeDaemonSocketReading, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
 import { choresPolicyFor } from './chores/policy.ts';
@@ -536,11 +536,15 @@ export const SEND_PROBE_LAG_FACTOR = 1.5;
 /** What one send-endpoint probe says: answered; a miss the endpoint is answerable for; or no
  *  reading, because the probe's own timeout fired well past its bound while the shared event loop
  *  was held. */
-export function sendProbeReading(answered: boolean, elapsedMs: number, sinceAnsweredMs = 0): 'answered' | 'miss' | 'held' {
+export function sendProbeReading(answered: boolean, elapsedMs: number, sinceAnsweredMs = 0, timedOut = false): 'answered' | 'miss' | 'held' {
   if (answered) return 'answered';
   // However the loop is held, an endpoint unanswered for this long is missing: the restart and
   // the fatal budget still run for an endpoint that died while the loop stalls.
   if (sinceAnsweredMs > SEND_ABSENT_MS) return 'miss';
+  // A probe that only ran out of time says nothing on its own: the endpoint shares this busy
+  // loop, and every root's endpoint timed out together under load (2026-11-15 11:46Z and
+  // 12:04Z, 13 restarts each). The absence bound above still catches one that died.
+  if (timedOut) return 'held';
   return elapsedMs > SEND_PROBE_TIMEOUT_MS * SEND_PROBE_LAG_FACTOR ? 'held' : 'miss';
 }
 
@@ -2285,7 +2289,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             } else if (status.send === 'serving' || status.send === 'already-running') {
               // Elapsed time on the monotonic clock: the injected wall clock may stand still.
               const probeBegan = performance.now();
-              const answered = watch.sendSocket === null || await probeDaemonSocket(watch.sendSocket, SEND_PROBE_TIMEOUT_MS);
+              const how = watch.sendSocket === null ? 'answered' : await probeDaemonSocketReading(watch.sendSocket, SEND_PROBE_TIMEOUT_MS);
+              const answered = how === 'answered';
               const probeEnded = performance.now();
               if (answered) watch.sendAnsweredAt = probeEnded;
               // The endpoint shares this event loop: a probe whose own timeout fired well past its
@@ -2293,7 +2298,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
               // endpoint. Such a miss is not counted; a restart would only close the connections
               // the endpoint holds (2026-11-15: every root's endpoint restarted every few
               // minutes, and senders lost their typed handoffs).
-              const probe = sendProbeReading(answered, probeEnded - probeBegan, probeEnded - watch.sendAnsweredAt);
+              const probe = sendProbeReading(answered, probeEnded - probeBegan, probeEnded - watch.sendAnsweredAt, how === 'timeout');
               if (probe === 'miss') {
                 watch.sendMisses += 1;
                 if (watch.sendMisses >= SEND_PROBE_MISSES) {
