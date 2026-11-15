@@ -3072,6 +3072,18 @@
               "takesValue": true
             },
             {
+              "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--unread",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -3083,7 +3095,8 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team drops archive [--dry-run] [--json]"
+            "team drops archive [--dry-run] [--json]",
+            "team drops archive --unread [--seat <seat>] [--json]"
           ],
           "who": {
             "gate": "team-change",
@@ -3094,7 +3107,8 @@
       "usage": [
         "team drops [--follow] [--json]",
         "team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]",
-        "team drops archive [--dry-run] [--json]"
+        "team drops archive [--dry-run] [--json]",
+        "team drops archive --unread [--seat <seat>] [--json]"
       ],
       "who": {
         "gate": "seat-only",

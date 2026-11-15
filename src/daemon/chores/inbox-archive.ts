@@ -19,7 +19,7 @@ import { cpus, loadavg } from 'node:os';
 import { join } from 'node:path';
 import type { TeamFile } from '../../file/types.ts';
 import { logLine } from '../../log.ts';
-import { readAgents } from '../../registry/agents.ts';
+import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
 import { teamIdOf } from '../../registry/teams.ts';
 import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
 import { archiveSeatInbox, seatDropFolders } from '../../send/inbox-retention.ts';
@@ -35,6 +35,10 @@ export const INBOX_ARCHIVE_PASS_LIMIT = 256;
 export const INBOX_ARCHIVE_MAX_LOAD_PER_CORE = 3;
 /** Unread mail to a stopped or retired seat moves once it is older than this. */
 export const STOPPED_UNREAD_KEEP_MS = 14 * 86_400_000;
+/** The most families one call looks at before the child's loop gets a turn. */
+export const INBOX_ARCHIVE_SCAN_CHUNK = 64;
+/** The most families one pass looks at, across all seats. */
+export const INBOX_ARCHIVE_SCAN_PER_PASS = 2_048;
 /** How many times the lead's line is tried in one day before it is left. */
 const NOTICE_TRIES = 3;
 
@@ -50,6 +54,8 @@ export type InboxArchiveRun = {
   unread: Record<string, number>;
   /** Passes skipped for load today. */
   loadSkips: number;
+  /** Where each seat folder's look stopped, `<session>/<seat>` to the last id looked at. */
+  cursor: Record<string, string>;
   /** The lead's line: its one id, whether it went, and how often it was tried. */
   notice?: { id: string; sent: boolean; tries: number };
 };
@@ -96,6 +102,7 @@ function readRun(root: string): InboxArchiveRun | null {
         moved: typeof value.moved === 'number' ? value.moved : 0,
         unread: value.unread !== null && typeof value.unread === 'object' ? value.unread : {},
         loadSkips: typeof value.loadSkips === 'number' ? value.loadSkips : 0,
+        cursor: value.cursor !== null && typeof value.cursor === 'object' ? value.cursor : {},
         ...(value.notice !== undefined ? { notice: value.notice } : {}),
       };
     });
@@ -104,36 +111,38 @@ function readRun(root: string): InboxArchiveRun | null {
   }
 }
 
-function writeRun(root: string, run: InboxArchiveRun): void {
+/** Whether the run file now holds `run`. A file that cannot be written leaves the day's totals
+ *  unsaved; the moves stand, and no line to the lead goes out on an unsaved state. */
+function writeRun(root: string, run: InboxArchiveRun): boolean {
   try {
     writeAtomic(runPath(root), `${JSON.stringify(run, null, 2)}\n`);
+    return true;
   } catch {
-    // A run file that cannot be written leaves the day's totals unsaved; the moves stand, and the
-    // next pass reads what is there.
+    return false;
   }
 }
 
 /**
  * Whether `seat`'s folder in `session` belongs to a seat at rest: stopped or retired, never
- * running. A seat the registry records as running or registered is not at rest, whatever the
- * team file says. A declared seat is at rest only when the team file marks it stopped or the
- * registry records it stopped. A seat the team file does not declare (another session's folder,
- * or a seat that was removed) is retired unless the registry still records it live. A person's
- * seat is never at rest here.
+ * running. `agents` is the whole registry, read completely; the caller moves no unread mail when
+ * it could not be. Names are compared without case, since a folder on a case-insensitive disk
+ * serves every spelling. A seat any registry record of this team names as running or registered,
+ * in any session, is not at rest; nor is a seat the team file marks as a person's, or `owner`.
+ * A seat the current session declares is at rest only when every declaration marks it stopped or
+ * the registry records it stopped in this session. A folder no declaration names (a seat that was
+ * removed, or a session that was renamed) is retired.
  */
-export function seatAtRest(home: string, teamId: string, team: TeamFile, session: string, seat: string): boolean {
-  if (seat === 'owner') return false;
-  let records: ReturnType<typeof readAgents>;
-  try {
-    records = readAgents(home).filter((agent) => agent.reach.team === teamId && agent.reach.seat === seat && agent.reach.session === session);
-  } catch {
-    return false;
-  }
+export function seatAtRest(agents: readonly Agent[], teamId: string, team: TeamFile, session: string, seat: string): boolean {
+  const name = seat.toLowerCase();
+  const inSession = session.toLowerCase() === team.session.toLowerCase();
+  if (name === 'owner') return false;
+  const declaredAny = team.seats.filter((entry) => entry.name.toLowerCase() === name);
+  if (declaredAny.some((entry) => entry.human === true)) return false;
+  const records = agents.filter((agent) => agent.reach.team === teamId && agent.reach.seat.toLowerCase() === name);
   if (records.some((agent) => agent.lifecycle === 'running' || agent.lifecycle === 'registered')) return false;
-  const declared = session === team.session ? team.seats.find((entry) => entry.name === seat) : undefined;
-  if (declared === undefined) return true;
-  if (declared.human === true) return false;
-  return declared.stopped || records.some((agent) => agent.lifecycle === 'stopped');
+  if (!inSession || declaredAny.length === 0) return true;
+  return declaredAny.every((entry) => entry.stopped)
+    || records.some((agent) => agent.reach.session.toLowerCase() === session.toLowerCase() && agent.lifecycle === 'stopped');
 }
 
 function noticeBody(run: InboxArchiveRun): string {
@@ -158,6 +167,7 @@ export async function inboxArchivePass(input: {
   team: TeamFile;
   now: Date;
   limit?: number;
+  scanLimit?: number;
   deps?: InboxArchiveDeps;
 }): Promise<InboxArchivePass> {
   const { root, home, team, now } = input;
@@ -166,13 +176,12 @@ export async function inboxArchivePass(input: {
   const held = readRun(root);
   let run: InboxArchiveRun = held !== null && held.day === day
     ? held
-    : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0 };
+    : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0, cursor: {} };
   if (run.done) {
     // The day's work is over. A line that did not go is tried again, a bounded number of times.
     const notice = run.notice;
     if (notice !== undefined && !notice.sent && notice.tries < NOTICE_TRIES) {
       const sent = await sendNotice(run, root, team, deps);
-      writeRun(root, run);
       return { kind: 'ran', moved: 0, unread: 0, done: true, refused: [], notice: sent };
     }
     return { kind: 'done' };
@@ -187,42 +196,69 @@ export async function inboxArchivePass(input: {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return { kind: 'no-key' };
   const teamId = teamIdOf(root);
+  // The registry is read whole once a pass. When any of it cannot be read, no unread mail moves
+  // this pass: a record it could not read may be a running seat's.
+  const agents = readAgentsComplete(home);
   let budget = input.limit ?? INBOX_ARCHIVE_PASS_LIMIT;
+  let scanBudget = input.scanLimit ?? INBOX_ARCHIVE_SCAN_PER_PASS;
   let moved = 0;
   let unread = 0;
   let more = false;
-  const refused: string[] = [];
-  for (const folder of seatDropFolders(root)) {
-    if (budget <= 0) {
-      more = true;
-      break;
-    }
-    const atRest = seatAtRest(home, teamId, team, folder.session, folder.seat);
+  const refused: string[] = agents === null ? ['the registry could not be read whole; no unread mail moves this pass'] : [];
+  seats: for (const folder of seatDropFolders(root)) {
+    const atRest = agents !== null && seatAtRest(agents, teamId, team, folder.session, folder.seat);
     const context: StatusContext = { to: folder.seat, root, session: folder.session };
-    const report = archiveSeatInbox({
-      dropDir: folder.dropDir,
-      seat: folder.seat,
-      context,
-      key: key.key,
-      home,
-      now,
-      dryRun: false,
-      options: { markPreChannel: false, unreadKeepMs: atRest ? STOPPED_UNREAD_KEEP_MS : null, limit: budget },
-    });
-    const unreadHere = report.move.filter((item) => item.unread === true).length;
-    moved += report.move.length - unreadHere;
-    unread += unreadHere;
-    if (unreadHere > 0) run.unread[folder.seat] = (run.unread[folder.seat] ?? 0) + unreadHere;
-    budget -= report.move.length;
-    if (report.more === true) more = true;
-    if (report.refused !== null) refused.push(report.refused);
-    if (deps.yieldTurn !== undefined && !(await deps.yieldTurn())) {
-      more = true;
-      break;
+    const key2 = `${folder.session}/${folder.seat}`;
+    for (;;) {
+      if (budget <= 0 || scanBudget <= 0) {
+        more = true;
+        break seats;
+      }
+      const after = run.cursor[key2];
+      const report = archiveSeatInbox({
+        dropDir: folder.dropDir,
+        seat: folder.seat,
+        context,
+        key: key.key,
+        home,
+        now,
+        dryRun: false,
+        options: {
+          markPreChannel: false,
+          unreadKeepMs: atRest ? STOPPED_UNREAD_KEEP_MS : null,
+          limit: budget,
+          scanLimit: Math.min(INBOX_ARCHIVE_SCAN_CHUNK, scanBudget),
+          ...(after === undefined ? {} : { after, orphans: false }),
+        },
+      });
+      const unreadHere = report.move.filter((item) => item.unread === true).length;
+      moved += report.move.length - unreadHere;
+      unread += unreadHere;
+      if (unreadHere > 0) run.unread[folder.seat] = (run.unread[folder.seat] ?? 0) + unreadHere;
+      budget -= report.move.length;
+      scanBudget -= Math.max(1, report.scanned ?? 0);
+      if (report.refused !== null) {
+        refused.push(report.refused);
+        delete run.cursor[key2];
+        break;
+      }
+      if (report.more === true && report.last !== null && report.last !== undefined) {
+        run.cursor[key2] = report.last;
+      } else if (report.more === true) {
+        // Stopped before looking at anything: the budget is spent, the cursor stays.
+      } else {
+        delete run.cursor[key2];
+      }
+      if (deps.yieldTurn !== undefined && !(await deps.yieldTurn())) {
+        more = true;
+        break seats;
+      }
+      if (report.more !== true) break;
     }
   }
   run.moved += moved;
   if (!more) run.done = true;
+  const saved = writeRun(root, run);
   if (moved > 0 || unread > 0 || refused.length > 0) {
     logLine(
       join(root, '.agents'),
@@ -234,25 +270,30 @@ export async function inboxArchivePass(input: {
   }
   let notice: 'sent' | 'failed' | 'none' = 'none';
   const anyMoved = run.moved > 0 || Object.values(run.unread).some((count) => count > 0);
-  if (run.done && anyMoved) notice = await sendNotice(run, root, team, deps);
-  writeRun(root, run);
+  if (saved && run.done && anyMoved) notice = await sendNotice(run, root, team, deps);
   return { kind: 'ran', moved, unread, done: run.done, refused, notice };
 }
 
+/** Sends the lead's line once. The id and the try are saved before the send, so a run file that
+ *  cannot be written sends nothing, and a send that is tried again carries the same id. */
 async function sendNotice(run: InboxArchiveRun, root: string, team: TeamFile, deps: InboxArchiveDeps): Promise<'sent' | 'failed' | 'none'> {
   const lead = team.orchestrator;
   if (lead === '' || deps.notify === undefined) return 'none';
   const notice = run.notice ?? { id: randomUUID(), sent: false, tries: 0 };
   run.notice = notice;
   if (notice.sent) return 'sent';
+  if (notice.tries >= NOTICE_TRIES) return 'failed';
   notice.tries += 1;
+  if (!writeRun(root, run)) return 'failed';
+  let ok = false;
   try {
-    const sent = await deps.notify({ root, session: team.session, lead, body: noticeBody(run), id: notice.id });
-    notice.sent = sent.ok;
-    return sent.ok ? 'sent' : 'failed';
+    ok = (await deps.notify({ root, session: team.session, lead, body: noticeBody(run), id: notice.id })).ok;
   } catch {
-    return 'failed';
+    ok = false;
   }
+  notice.sent = ok;
+  writeRun(root, run);
+  return ok ? 'sent' : 'failed';
 }
 
 function defaultLoadPerCore(): number {

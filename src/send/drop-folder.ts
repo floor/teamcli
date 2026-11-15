@@ -33,9 +33,12 @@ export function folderOfDrop(dropDir: string, id: string): string {
   for (const month of names) {
     if (!MONTH.test(month)) continue;
     const dir = join(root, month);
+    // Each folder on the way is checked itself, so a link standing for a month or for the unread
+    // folder is never followed to a record elsewhere.
+    if (heldAt(dir).kind !== 'folder') continue;
     if (heldAt(join(dir, id)).kind === 'file') return dir;
     const unread = join(dir, DROP_ARCHIVE_UNREAD);
-    if (heldAt(join(unread, id)).kind === 'file') return unread;
+    if (heldAt(unread).kind === 'folder' && heldAt(join(unread, id)).kind === 'file') return unread;
   }
   return dropDir;
 }

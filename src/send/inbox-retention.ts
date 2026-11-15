@@ -63,8 +63,15 @@ export type InboxArchivePlanOptions = {
   /** Move mail still unread when its signed `at` is older than this. Only for a seat the caller
    *  proved is stopped or retired; null or absent moves no unread mail. */
   unreadKeepMs?: number | null;
-  /** The most families one plan takes (moves and marks together). Absent: no bound. */
+  /** The most families one plan takes (moves and marks together), orphans finished first
+   *  included. Absent: no bound. */
   limit?: number;
+  /** The most families one plan looks at. With it, families are taken in id order. */
+  scanLimit?: number;
+  /** Look only at families whose id sorts after this one (a cursor from an earlier call). */
+  after?: string;
+  /** Finish orphaned sidecars and crash temps before planning. Default true. */
+  orphans?: boolean;
 };
 export type InboxArchiveMark = { seat: string; id: string };
 
@@ -75,8 +82,11 @@ export type InboxArchiveReport = {
   /** Ids whose move or mark stopped before it finished. The files already placed stay. */
   partial: string[];
   refused: string | null;
-  /** The plan stopped at its limit with families still to look at. */
+  /** The plan stopped at a limit with families still to look at. */
   more?: boolean;
+  /** How many families the plan looked at, and the id of the last one (null: none). */
+  scanned?: number;
+  last?: string | null;
 };
 
 /** The month folder a record's signed `at` belongs in, or null when `at` is not an instant. */
@@ -132,9 +142,17 @@ export function planSeatArchive(
   nowMs: number,
   channelStartMs: number | null,
   options: InboxArchivePlanOptions = {},
-): { move: InboxArchiveMove[]; markRead: InboxArchiveMark[]; more: boolean } | { refused: string } {
-  const families = familiesOf(dropDir);
-  if (families === null) return { refused: `${seat}: the drop folder cannot be read` };
+): { move: InboxArchiveMove[]; markRead: InboxArchiveMark[]; more: boolean; scanned: number; last: string | null } | { refused: string } {
+  const listed = familiesOf(dropDir);
+  if (listed === null) return { refused: `${seat}: the drop folder cannot be read` };
+  const ordered = options.scanLimit !== undefined || options.after !== undefined;
+  const after = options.after;
+  const families = ordered
+    ? listed.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).filter((family) => after === undefined || family.id > after)
+    : listed;
+  const scanLimit = options.scanLimit ?? Number.POSITIVE_INFINITY;
+  let scanned = 0;
+  let last: string | null = null;
   const move: InboxArchiveMove[] = [];
   const markRead: InboxArchiveMark[] = [];
   const limit = options.limit ?? Number.POSITIVE_INFINITY;
@@ -142,10 +160,12 @@ export function planSeatArchive(
   const markPreChannel = options.markPreChannel !== false;
   let more = false;
   for (const family of families) {
-    if (move.length + markRead.length >= limit) {
+    if (move.length + markRead.length >= limit || scanned >= scanLimit) {
       more = true;
       break;
     }
+    scanned += 1;
+    last = family.id;
     if (!family.files.includes(family.id)) continue;
     if (blocked(family.id, family.files)) continue;
     const looked = readRecord(join(dropDir, family.id), family.id);
@@ -190,7 +210,7 @@ export function planSeatArchive(
     if (!Number.isFinite(proofMs) || proofMs >= channelStartMs) continue;
     markRead.push({ seat, id: family.id });
   }
-  return { move, markRead, more };
+  return { move, markRead, more, scanned, last };
 }
 
 function channelStartMs(dropDir: string, context: StatusContext): number | null {
@@ -296,7 +316,7 @@ function moveFamily(dropDir: string, planned: InboxArchiveMove): string | null {
 }
 
 /** A temp name left from a crash, published onto the record's final name when that name is free. */
-function retireTemps(dropDir: string): void {
+function retireTemps(dropDir: string, budget: { left: number }): void {
   const root = join(dropDir, DROP_MONTH_ARCHIVE);
   if (heldAt(root).kind !== 'folder') return;
   let months: string[];
@@ -323,6 +343,8 @@ function retireTemps(dropDir: string): void {
     }
     for (const name of names) {
       if (!name.startsWith('.') || !name.endsWith('.arriving')) continue;
+      if (budget.left <= 0) return;
+      budget.left -= 1;
       const id = name.slice(1, -'.arriving'.length);
       const tmp = join(dir, name);
       const finalName = join(dir, id);
@@ -342,8 +364,9 @@ function retireTemps(dropDir: string): void {
 
 /** Sidecars left in the live folder after their record reached the archive. Place any the
  *  archive does not have, then drop the live name. Returns the ids this pass finished. */
-function finishOrphans(dropDir: string): string[] {
-  retireTemps(dropDir);
+function finishOrphans(dropDir: string, limit = Number.POSITIVE_INFINITY): string[] {
+  const budget = { left: limit };
+  retireTemps(dropDir, budget);
   let names: string[];
   try {
     names = readdirSync(dropDir);
@@ -357,6 +380,7 @@ function finishOrphans(dropDir: string): string[] {
     if (dot <= 0) continue;
     const id = name.slice(0, dot);
     if (!ID_NAME.test(id) || heldAt(join(dropDir, id)).kind === 'file') continue;
+    if (!done.has(id) && done.size >= budget.left) break;
     const monthDir = folderOfDrop(dropDir, id);
     if (monthDir === dropDir) continue;
     const from = join(dropDir, name);
@@ -384,6 +408,11 @@ export function archiveSeatInbox(input: {
   options?: InboxArchivePlanOptions;
 }): InboxArchiveReport {
   const nowMs = input.now.getTime();
+  const options = input.options ?? {};
+  // Orphans first, inside the same budget: a family finished here counts against the limit.
+  const orphans: InboxArchiveMove[] = input.dryRun || options.orphans === false
+    ? []
+    : finishOrphans(input.dropDir, options.limit).map((id) => ({ seat: input.seat, id, month: '', files: [] }));
   const planned = planSeatArchive(
     input.dropDir,
     input.seat,
@@ -391,26 +420,22 @@ export function archiveSeatInbox(input: {
     input.key,
     nowMs,
     channelStartMs(input.dropDir, input.context),
-    input.options,
+    options.limit === undefined ? options : { ...options, limit: Math.max(0, options.limit - orphans.length) },
   );
   if ('refused' in planned) {
-    return { dryRun: input.dryRun, move: [], markRead: [], partial: [], refused: planned.refused };
+    return { dryRun: input.dryRun, move: orphans, markRead: [], partial: [], refused: planned.refused };
   }
+  const seen = { more: planned.more, scanned: planned.scanned, last: planned.last };
   if (input.dryRun) {
-    return { dryRun: true, move: planned.move, markRead: planned.markRead, partial: [], refused: null, more: planned.more };
+    return { dryRun: true, move: planned.move, markRead: planned.markRead, partial: [], refused: null, ...seen };
   }
-  const moved: InboxArchiveMove[] = finishOrphans(input.dropDir).map((id) => ({
-    seat: input.seat,
-    id,
-    month: '',
-    files: [],
-  }));
+  const moved: InboxArchiveMove[] = orphans;
   const partial: string[] = [];
   for (const family of planned.move) {
     const problem = moveFamily(input.dropDir, family);
     if (problem !== null) {
       partial.push(family.id);
-      return { dryRun: false, move: moved, markRead: [], partial, refused: problem, more: planned.more };
+      return { dryRun: false, move: moved, markRead: [], partial, refused: problem, ...seen };
     }
     moved.push(family);
   }
@@ -439,7 +464,7 @@ export function archiveSeatInbox(input: {
     }
     marked.push(item);
   }
-  return { dryRun: false, move: moved, markRead: marked, partial, refused: null, more: planned.more };
+  return { dryRun: false, move: moved, markRead: marked, partial, refused: null, ...seen };
 }
 
 /** Writes the acknowledgement note beside the record. A read receipt already there is left as
@@ -492,6 +517,7 @@ export function listArchivedUnread(dropDir: string): ArchivedUnread[] {
   }
   const out: ArchivedUnread[] = [];
   for (const month of months) {
+    if (heldAt(join(root, month)).kind !== 'folder') continue;
     const dir = join(root, month, DROP_ARCHIVE_UNREAD);
     if (heldAt(dir).kind !== 'folder') continue;
     let names: string[];

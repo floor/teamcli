@@ -4,7 +4,7 @@
 // seat's, deletes nothing, and tells the lead once when the day's run ends.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDrops } from '../src/commands/drops.ts';
@@ -16,7 +16,7 @@ import { FALLBACK_STORE_PASS_MS } from '../src/daemon/fallback-sweep.ts';
 import { INBOX_ARCHIVE_PASS_LIMIT, inboxArchivePass, seatAtRest } from '../src/daemon/chores/inbox-archive.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { registerAgent } from '../src/registry/agents.ts';
+import { readAgentsComplete, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { folderOfDrop } from '../src/send/drop-folder.ts';
 import { listArchivedUnread } from '../src/send/inbox-retention.ts';
@@ -92,6 +92,22 @@ function liveNames(seat: string, session = 'acme'): string[] {
 
 const calm = () => 0.5;
 
+function registerRunning(seat: string): void {
+  registerAgent(home, {
+    name: seat,
+    signing: { model: 'Claude Opus', version: '5.5', role: 'builder' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamIdOf(root), seat, session: 'acme', pane: null, address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'owner',
+  });
+}
+
 beforeEach(() => {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-archive-')));
   root = join(base, 'acme');
@@ -161,23 +177,77 @@ describe('the daily inbox archive', () => {
   });
 
   test('a seat the registry records as running is never at rest, whatever the team file says', () => {
-    expect(seatAtRest(home, teamIdOf(root), team, 'acme', 'resting')).toBe(true);
-    registerAgent(home, {
-      name: 'resting',
-      signing: { model: 'Claude Opus', version: '5.5', role: 'builder' },
-      lab: 'test',
-      cli: 'claude-code',
-      launcher: null,
-      launch: 'claude',
-      reach: { team: teamIdOf(root), seat: 'resting', session: 'acme', pane: null, address: null },
-      mcp: [],
-      skills: [],
-      lifecycle: 'running',
-      by: 'owner',
-    });
-    expect(seatAtRest(home, teamIdOf(root), team, 'acme', 'resting')).toBe(false);
-    expect(seatAtRest(home, teamIdOf(root), team, 'acme', 'busy')).toBe(false);
-    expect(seatAtRest(home, teamIdOf(root), team, 'acme', 'gone')).toBe(true);
+    const at = (seat: string, session = 'acme') => seatAtRest(readAgentsComplete(home) ?? [], teamIdOf(root), team, session, seat);
+    expect(at('resting')).toBe(true);
+    registerRunning('resting');
+    expect(at('resting')).toBe(false);
+    // Any spelling, and any session of the same team: a renamed session is no way around it.
+    expect(at('Resting')).toBe(false);
+    expect(at('resting', 'old-session')).toBe(false);
+    expect(at('busy')).toBe(false);
+    expect(at('gone')).toBe(true);
+  });
+
+  test('a person\'s seat is never at rest, in any session', () => {
+    const humanTeam = validateTeamFile(TEAM_YAML.replace('    stopped: true\n', '    stopped: true\n    human: true\n'));
+    if (!humanTeam.ok) throw new Error(JSON.stringify(humanTeam.errors));
+    expect(seatAtRest([], teamIdOf(root), humanTeam.team, 'acme', 'resting')).toBe(false);
+    expect(seatAtRest([], teamIdOf(root), humanTeam.team, 'other', 'RESTING')).toBe(false);
+  });
+
+  test('a registry that cannot be read whole moves no unread mail', async () => {
+    plant('resting', id(3), OLD_ISO);
+    plant('busy', id(1), OLD_ISO);
+    markRead('busy', id(1), OLD_ISO);
+    mkdirSync(join(home, '.config', 'team', 'agents'), { recursive: true });
+    writeFileSync(join(home, '.config', 'team', 'agents', 'agt_0123456789ab.yaml'), 'not: [a record\n');
+    expect(readAgentsComplete(home)).toBeNull();
+    const pass = await inboxArchivePass({ root, home, team, now: NOW, deps: { loadPerCore: calm } });
+    expect(pass).toMatchObject({ kind: 'ran', moved: 1, unread: 0 });
+    expect(liveNames('resting')).toEqual([id(3)]);
+  });
+
+  test('an unread folder that is a link is never followed', async () => {
+    plant('resting', id(3), OLD_ISO);
+    const dir = recordDir(root, 'acme', 'resting');
+    const month = OLD_ISO.slice(0, 7);
+    const elsewhere = join(base, 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    writeFileSync(join(elsewhere, id(9)), 'planted\n');
+    mkdirSync(join(dir, 'archive', month), { recursive: true });
+    symlinkSync(elsewhere, join(dir, 'archive', month, 'unread'));
+    expect(folderOfDrop(dir, id(9))).toBe(dir);
+    expect(listArchivedUnread(dir)).toEqual([]);
+    const pass = await inboxArchivePass({ root, home, team, now: NOW, deps: { loadPerCore: calm } });
+    expect(pass).toMatchObject({ kind: 'ran', unread: 0 });
+    expect(pass.kind === 'ran' && pass.refused.join(' ')).toContain('not a folder');
+    expect(liveNames('resting')).toEqual([id(3)]);
+    expect(readdirSync(elsewhere)).toEqual([id(9)]);
+  });
+
+  test('no line goes to the lead while the run file cannot be written', async () => {
+    plant('busy', id(1), OLD_ISO);
+    markRead('busy', id(1), OLD_ISO);
+    // A folder where the run file goes: every write of it fails.
+    mkdirSync(join(root, '.agents', 'send-drops', '.drops-archive-run.json'), { recursive: true });
+    const sent: string[] = [];
+    const notify = async (input: { id: string }) => {
+      sent.push(input.id);
+      return { ok: true, text: '' };
+    };
+    for (let n = 0; n < 3; n += 1) await inboxArchivePass({ root, home, team, now: NOW, deps: { loadPerCore: calm, notify } });
+    expect(sent).toEqual([]);
+  });
+
+  test('a large folder is looked at in chunks across passes, by a cursor', async () => {
+    for (let n = 1; n <= 10; n += 1) plant('busy', id(n), OLD_ISO);
+    plant('busy', id(11), OLD_ISO);
+    markRead('busy', id(11), OLD_ISO);
+    const first = await inboxArchivePass({ root, home, team, now: NOW, scanLimit: 6, deps: { loadPerCore: calm } });
+    expect(first).toMatchObject({ kind: 'ran', moved: 0, done: false });
+    const second = await inboxArchivePass({ root, home, team, now: NOW, scanLimit: 6, deps: { loadPerCore: calm } });
+    expect(second).toMatchObject({ kind: 'ran', moved: 1, done: true });
+    expect(liveNames('busy').filter((name) => !name.includes('.'))).toHaveLength(10);
   });
 
   test('one pass moves at most the limit; the next pass goes on, and the lead hears once at the end', async () => {
