@@ -61,6 +61,8 @@ export type InboxArchiveRun = {
   recovered: string[];
   /** Where each seat folder's recovery stopped: the key of the last unit looked at. */
   recoverCursor: Record<string, string>;
+  /** The seat folders (`<session>/<seat>`) fully looked at today. */
+  completed: string[];
   /** The lead's line: its one id, whether it went, and how often it was tried. */
   notice?: { id: string; sent: boolean; tries: number };
 };
@@ -76,7 +78,7 @@ export type InboxArchiveDeps = {
 };
 
 export type InboxArchivePass =
-  | { kind: 'outside' | 'done' | 'no-key' }
+  | { kind: 'outside' | 'done' | 'no-key' | 'unsafe' }
   | { kind: 'load'; perCore: number; first: boolean }
   | { kind: 'ran'; moved: number; unread: number; done: boolean; refused: string[]; notice: 'sent' | 'failed' | 'none' };
 
@@ -96,7 +98,17 @@ function runPath(root: string): string {
   return join(root, '.agents', 'send-drops', INBOX_ARCHIVE_RUN_FILE);
 }
 
+/** Whether `.agents` and `send-drops` are plain folders and the run file, when there, a plain
+ *  file: the run file is read and written only then, never through a link. */
+function runPlaceOk(root: string): boolean {
+  if (heldAt(join(root, '.agents')).kind !== 'folder') return false;
+  if (heldAt(join(root, '.agents', 'send-drops')).kind !== 'folder') return false;
+  const held = heldAt(runPath(root)).kind;
+  return held === 'file' || held === 'missing';
+}
+
 function readRun(root: string): InboxArchiveRun | null {
+  if (heldAt(runPath(root)).kind !== 'file') return null;
   try {
     return readParsed(runPath(root), (text) => {
       const value = JSON.parse(text) as Partial<InboxArchiveRun> | null;
@@ -109,6 +121,7 @@ function readRun(root: string): InboxArchiveRun | null {
         unread: value.unread !== null && typeof value.unread === 'object' ? value.unread : {},
         loadSkips: typeof value.loadSkips === 'number' ? value.loadSkips : 0,
         cursor: value.cursor !== null && typeof value.cursor === 'object' ? value.cursor : {},
+        completed: Array.isArray(value.completed) ? value.completed.filter((entry): entry is string => typeof entry === 'string') : [],
         recoverCursor: value.recoverCursor !== null && typeof value.recoverCursor === 'object' ? value.recoverCursor : {},
         recovered: Array.isArray(value.recovered) ? value.recovered.filter((entry): entry is string => typeof entry === 'string') : [],
         ...(value.notice !== undefined ? { notice: value.notice } : {}),
@@ -122,6 +135,7 @@ function readRun(root: string): InboxArchiveRun | null {
 /** Whether the run file now holds `run`. A file that cannot be written leaves the day's totals
  *  unsaved; the moves stand, and no line to the lead goes out on an unsaved state. */
 function writeRun(root: string, run: InboxArchiveRun): boolean {
+  if (!runPlaceOk(root)) return false;
   try {
     writeAtomic(runPath(root), `${JSON.stringify(run, null, 2)}\n`);
     return true;
@@ -191,10 +205,13 @@ export async function inboxArchivePass(input: {
   const { root, home, team, now } = input;
   const deps = input.deps ?? {};
   const day = localDay(now);
+  // A run file whose place is not plain folders, or is itself not a plain file, stops the run:
+  // without it the day's state cannot be kept, and nothing moves on an unkept state.
+  if (!runPlaceOk(root)) return { kind: 'unsafe' };
   const held = readRun(root);
   let run: InboxArchiveRun = held !== null && held.day === day
     ? held
-    : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0, cursor: {}, recovered: [], recoverCursor: {} };
+    : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0, cursor: {}, recovered: [], recoverCursor: {}, completed: [] };
   if (run.done) {
     // The day's work is over. A line that did not go is tried again, a bounded number of times.
     const notice = run.notice;
@@ -225,17 +242,21 @@ export async function inboxArchivePass(input: {
   seats: for (const folder of seatDropFolders(root)) {
     const context: StatusContext = { to: folder.seat, root, session: folder.session };
     const key2 = `${folder.session}/${folder.seat}`;
+    // A folder fully looked at today is not looked at again until tomorrow.
+    if (run.completed.includes(key2)) continue;
     const chainOk = (): boolean => folderChainOk(root, folder.session, folder.seat);
     // 1. What an earlier move left part way: listed once a pass, worked through from a cursor
     //    that moves past every unit looked at, whatever it found, so nothing starves the rest.
     if (!run.recovered.includes(key2)) {
       if (!chainOk()) {
         refused.push(`${folder.seat}: the drop folder is not a plain folder; left alone`);
+        run.completed.push(key2);
         continue;
       }
       const work = listRecoveryWork(folder.dropDir);
       if (work === null) {
         refused.push(`${folder.seat}: the drop folder cannot be read`);
+        run.completed.push(key2);
         continue;
       }
       const from = run.recoverCursor[key2];
@@ -248,6 +269,7 @@ export async function inboxArchivePass(input: {
         }
         if (!chainOk()) {
           refused.push(`${folder.seat}: the drop folder changed into something that is not a plain folder; left alone`);
+          run.completed.push(key2);
           continue seats;
         }
         // Every unit looked at is charged to the scan budget; a family it finishes, to the moves.
@@ -269,11 +291,13 @@ export async function inboxArchivePass(input: {
     // 2. The folder is listed once this pass; its families are looked at a chunk a call.
     if (!chainOk()) {
       refused.push(`${folder.seat}: the drop folder changed into something that is not a plain folder; left alone`);
+      run.completed.push(key2);
       continue;
     }
     const families = listSeatFamilies(folder.dropDir);
     if (families === null) {
       refused.push(`${folder.seat}: the drop folder cannot be read`);
+      run.completed.push(key2);
       continue;
     }
     for (;;) {
@@ -285,6 +309,7 @@ export async function inboxArchivePass(input: {
       // link meanwhile is left alone.
       if (!chainOk()) {
         refused.push(`${folder.seat}: the drop folder changed into something that is not a plain folder; left alone`);
+        run.completed.push(key2);
         break;
       }
       // The registry is read whole before every chunk, after the loop's last turn: a seat that
@@ -324,12 +349,14 @@ export async function inboxArchivePass(input: {
       if (report.refused !== null) {
         refused.push(report.refused);
         delete run.cursor[key2];
+        run.completed.push(key2);
         break;
       }
       if (report.more === true && report.last !== null && report.last !== undefined) {
         run.cursor[key2] = report.last;
       } else if (report.more !== true) {
         delete run.cursor[key2];
+        run.completed.push(key2);
       }
       if (await stop('chunk')) {
         more = true;

@@ -4,7 +4,7 @@
 // seat's, deletes nothing, and tells the lead once when the day's run ends.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDrops } from '../src/commands/drops.ts';
@@ -456,5 +456,30 @@ describe('the daily inbox archive', () => {
     });
     expect(pass.kind === 'ran' && pass.refused.join(' ')).toContain('not a plain folder');
     expect(readdirSync(target)).toEqual([]);
+  });
+
+  test('a seat that fills a whole pass is done for the day, and the next seat gets its turn', async () => {
+    // busy: exactly one pass's scan of unread mail that stays; resting: old unread that moves.
+    for (let n = 1; n <= 6; n += 1) plant('busy', id(n), OLD_ISO);
+    plant('resting', id(100), OLD_ISO);
+    let pass = await inboxArchivePass({ root, home, team, now: NOW, scanLimit: 6, deps: { loadPerCore: calm } });
+    for (let n = 0; n < 4 && pass.kind === 'ran' && !pass.done; n += 1) {
+      pass = await inboxArchivePass({ root, home, team, now: NOW, scanLimit: 6, deps: { loadPerCore: calm } });
+    }
+    expect(pass).toMatchObject({ kind: 'ran', done: true });
+    expect(liveNames('resting')).toEqual([]);
+    expect(liveNames('busy').filter((name) => !name.includes('.'))).toHaveLength(6);
+  });
+
+  test('a run file that is a link stops the run before anything moves', async () => {
+    plant('busy', id(1), OLD_ISO);
+    markRead('busy', id(1), OLD_ISO);
+    const elsewhere = join(base, 'elsewhere.json');
+    writeFileSync(elsewhere, 'keep\n');
+    symlinkSync(elsewhere, join(root, '.agents', 'send-drops', '.drops-archive-run.json'));
+    const pass = await inboxArchivePass({ root, home, team, now: NOW, deps: { loadPerCore: calm } });
+    expect(pass.kind).toBe('unsafe');
+    expect(liveNames('busy')).toContain(id(1));
+    expect(readFileSync(elsewhere, 'utf8')).toBe('keep\n');
   });
 });

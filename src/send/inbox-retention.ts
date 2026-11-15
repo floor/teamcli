@@ -16,7 +16,7 @@
 // run lists both sets and writes nothing. A real run writes one audit line, including a move
 // that stopped part way.
 import { linkSync, lstatSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import { readListener } from '../mcp/inbox.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
@@ -189,13 +189,16 @@ export function planSeatArchive(
 ): { move: InboxArchiveMove[]; markRead: InboxArchiveMark[]; more: boolean; scanned: number; last: string | null } | { refused: string } {
   const after = options.after;
   let families: readonly Family[];
+  let from = 0;
   let fresh: Map<string, string[]> | null = null;
   if (options.families !== undefined) {
     // Sorted by `listSeatFamilies`: the cursor's place is found by a binary search, and the names
     // as they stand now are listed once for this call.
     fresh = currentNames(dropDir);
     if (fresh === null) return { refused: `${seat}: the drop folder cannot be read` };
-    families = options.families.slice(after === undefined ? 0 : firstAfter(options.families, after));
+    // Walked by index from the cursor's place: nothing past the chunk is copied.
+    families = options.families;
+    from = after === undefined ? 0 : firstAfter(options.families, after);
   } else {
     const listed = familiesOf(dropDir);
     if (listed === null) return { refused: `${seat}: the drop folder cannot be read` };
@@ -213,7 +216,8 @@ export function planSeatArchive(
   const unreadKeepMs = options.unreadKeepMs ?? null;
   const markPreChannel = options.markPreChannel !== false;
   let more = false;
-  for (const listedFamily of families) {
+  for (let index = from; index < families.length; index += 1) {
+    const listedFamily = families[index] as Family;
     if (move.length + markRead.length >= limit || scanned >= scanLimit) {
       more = true;
       break;
@@ -506,13 +510,27 @@ export function listRecoveryWork(dropDir: string): RecoveryItem[] | null {
   return items.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
 
+/** Whether every folder from `dropDir`'s archive down to `dir` is a plain folder now. */
+function archiveChainOk(dropDir: string, dir: string): boolean {
+  const root = join(dropDir, DROP_MONTH_ARCHIVE);
+  if (dir !== root && !dir.startsWith(`${root}/`)) return false;
+  let at = dir;
+  for (;;) {
+    if (heldAt(at).kind !== 'folder') return false;
+    if (at === root) return true;
+    at = dirname(at);
+  }
+}
+
 /** Does the given units of recovery work, each looked at once whatever it finds. Returns the
  *  ids whose sidecars it finished. */
 export function recoverItems(dropDir: string, items: readonly RecoveryItem[]): string[] {
   const done = new Set<string>();
   for (const item of items) {
     if (item.kind === 'temp') {
-      retireTemp(item.dir, item.name);
+      // The folders on the way from the seat folder to the temp are checked now, each one, so an
+      // archive, month or unread folder replaced by a link since the listing is not followed.
+      if (archiveChainOk(dropDir, item.dir)) retireTemp(item.dir, item.name);
       continue;
     }
     const id = finishSidecar(dropDir, item.name);
