@@ -3,7 +3,7 @@ import { captureModelDriftFences, clearRepairedModelDrifts } from '../send/model
 import { beginBeatWork } from '../diagnostics/beat-work.ts';
 import { refuseTyping } from '../send/no-pane-messaging.ts';
 import { machineAccountsOf } from '../information/machine-accounts.ts';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
 import { budgetsInForceOf } from '../approve/approval.ts';
 import { callerOf, describeCaller, fileOwnerRefusal, isOwner } from '../caller.ts';
@@ -16,6 +16,7 @@ import { currentTeam, rememberCurrent } from '../file/current.ts';
 import { isParseError, launchTeamFile, loadTeamFile } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
+import { sameFolder } from '../send/record.ts';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -116,6 +117,7 @@ import {
   type StatusTarget,
   type StatusWaitResult,
   type StatusWaitSeat,
+  type StatusClimb,
 } from '../watch/status-events.ts';
 
 export {
@@ -1030,6 +1032,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // doubling from five seconds up to the watch's interval, and resets when a read completes.
   let cutPasses = 0;
   let statusEngine: SeatStatusEngine | undefined;
+  // A hosted watch's prompt climbs to this team's own lead, waiting for the daemon's notice.
+  const hostedClimbs: { climb: StatusClimb; tries: number }[] = [];
   /** The current pass's native hold, replaced before the status engine, the pass and every
    *  automatic typed path read it. Empty until the first pass has read the store. */
   let nativeHeldNow: ReadonlySet<string> = new Set();
@@ -1283,6 +1287,15 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             graceMs: inForce.interval * 1000,
             publish: sources.busPublish,
             nativeHeld: () => nativeHeldNow,
+            ...(hosted !== undefined
+              ? {
+                deliverClimb: (climb: StatusClimb): boolean => {
+                  if (!hostedClimbTakes(climb, root, session, team)) return false;
+                  hostedClimbs.push({ climb, tries: 0 });
+                  return true;
+                },
+              }
+              : {}),
           });
           const panesBySeat: Record<string, string> = {};
           for (const seat of team.seats) {
@@ -1323,6 +1336,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             }
           }
           await statusEngine.tick(now);
+          if (hosted !== undefined && sources.home !== undefined && hostedClimbs.length > 0) {
+            await sendHostedClimbs(sources.home, root, team, session, hostedClimbs, dir, sources.now);
+          }
           const nextPanesKey = Object.entries(panesBySeat)
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([k, v]) => `${k}=${v}`)
@@ -1654,6 +1670,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (!foreign && hosted !== undefined && sources.home !== undefined) {
           await sendHostedBlockedEpisodes(
             sources.home, root, team, session, result.reports, reportTs, suppressed, memory, dir, sources.now,
+            (seat) => screenExcerpt(live, seat),
           );
         }
         if (!foreign && sources.busPublish !== undefined && hosted === undefined) {
@@ -2613,14 +2630,44 @@ async function sendHostedBlockedEpisodes(
   memory: Memory,
   dir: string,
   now: () => Date,
+  excerpt: (seat: string) => string | null = () => null,
 ): Promise<void> {
   const lead = team.orchestrator;
   if (lead === '') return;
   const episodes = memory.slots['seat-cant-work'] as Record<string, { since?: number; open?: boolean }> | undefined;
   const pending = (memory.slots['blocked-notice'] ??= {}) as Record<string, PendingBlockedNotice>;
+  const prompts = (memory.slots['prompt-notice'] ??= {}) as Record<string, PendingPromptNotice>;
   for (const seat of Object.keys(pending)) {
     if (episodes?.[seat] === undefined) delete pending[seat];
   }
+  const sendNotice = async (body: string, id: string): Promise<{ ok: boolean; text: string }> => {
+    try {
+      const sent = await sendDaemonDirect(
+        {
+          reminder: 'seat-blocked',
+          due: ts,
+          recipients: [{ root, session, seat: lead }],
+          notice: 'seat-blocked',
+        },
+        { root, seat: lead, body, id },
+        { ...realHost, home, now: () => now() },
+      );
+      return { ok: sent.ok, text: sent.text };
+    } catch (error) {
+      return { ok: false, text: (error as Error).message };
+    }
+  };
+  // A prompt, or a screen nobody recognises, is its own cause: it goes out under its own id even
+  // while a can't-work episode for the same seat is open, so a seat that moves from a wake it did
+  // not take to a dialog is told again, with what the dialog is. The same cause stays quiet.
+  const deliverPrompt = async (seat: string, body: string, id: string): Promise<void> => {
+    const held = prompts[seat];
+    if (held !== undefined && held.id === id && (held.sent || held.tries >= PROMPT_NOTICE_TRIES)) return;
+    const tries = held !== undefined && held.id === id ? held.tries + 1 : 1;
+    const sent = await sendNotice(body, id);
+    prompts[seat] = { id, body, sent: sent.ok, tries };
+    if (!sent.ok) logLine(dir, 'watch', 'watch', `${seat}: the prompt notice was not sent — ${sent.text}`, now());
+  };
   const deliver = async (seat: string, body: string, id: string): Promise<void> => {
     const held = pending[seat];
     if (held !== undefined && held.id === id && held.sent) return;
@@ -2647,7 +2694,20 @@ async function sendHostedBlockedEpisodes(
   };
   const seen = new Set<string>();
   for (const event of foldedWatchEvents(reports, session, ts)) {
-    if (event.kind !== 'seat.blocked' || event.seat === undefined || event.seat === '') continue;
+    if (event.seat === undefined || event.seat === '') continue;
+    if (event.kind === 'seat.at-prompt' || (event.kind === 'seat.blocked' && blockedEpisodeKey(event) === event.record_id)) {
+      if (suppressed.has(event.seat)) continue;
+      const cause = promptCause(event);
+      const shown = excerpt(event.seat);
+      const body = shown === null
+        ? event.reason ?? `${event.seat}: ${cause}`
+        : `${event.reason ?? `${event.seat}: ${cause}`}\n\nOn its screen:\n${shown}`;
+      const digest = createHash('sha256').update(`${cause}\n${event.reason ?? ''}`).digest('hex').slice(0, 12);
+      const start = episodes?.[event.seat]?.since;
+      await deliverPrompt(event.seat, body, `blocked-episode-${event.seat}-${typeof start === 'number' ? `${start}-` : ''}${digest}`);
+      continue;
+    }
+    if (event.kind !== 'seat.blocked') continue;
     seen.add(event.seat);
     if (suppressed.has(event.seat)) continue;
     const body = event.reason ?? `${event.seat}: can't work`;
@@ -2664,6 +2724,94 @@ async function sendHostedBlockedEpisodes(
     if (episodes?.[seat]?.open !== true) continue;
     await deliver(seat, held.body, held.id);
   }
+  // A prompt notice that did not go out is tried again on the next passes, a few times at most:
+  // its report is said once per spell, so no later pass would carry it again.
+  for (const seat of Object.keys(prompts)) {
+    const held = prompts[seat];
+    if (held === undefined || held.sent || suppressed.has(seat)) continue;
+    if (held.tries >= PROMPT_NOTICE_TRIES) continue;
+    await deliverPrompt(seat, held.body, held.id);
+  }
+}
+
+/** Whether a hosted watch delivers this climb itself: only when the entity's lead it climbs to is
+ *  this team's own lead, the one seat the daemon's notice may reach. Any other target keeps the
+ *  runtime mailbox record the engine writes. */
+export function hostedClimbTakes(climb: StatusClimb, root: string, session: string, team: TeamFile): boolean {
+  return team.orchestrator !== ''
+    && climb.target.seat === team.orchestrator
+    && climb.target.session === session
+    && sameFolder(climb.target.root, root);
+}
+
+/** Sends the queued climbs as the daemon's own notice to the team's lead, each under its own id.
+ *  One that does not go out is tried on the next passes, five times at most, then said in the
+ *  log and dropped. */
+async function sendHostedClimbs(
+  home: string,
+  root: string,
+  team: TeamFile,
+  session: string,
+  queue: { climb: StatusClimb; tries: number }[],
+  dir: string,
+  now: () => Date,
+): Promise<void> {
+  const lead = team.orchestrator;
+  const kept: { climb: StatusClimb; tries: number }[] = [];
+  for (const held of queue.splice(0)) {
+    let ok = false;
+    let text = '';
+    try {
+      const sent = await sendDaemonDirect(
+        {
+          reminder: 'seat-blocked',
+          due: held.climb.at ?? now().toISOString(),
+          recipients: [{ root, session, seat: lead }],
+          notice: 'seat-blocked',
+        },
+        { root, seat: lead, body: held.climb.text, id: held.climb.id },
+        { ...realHost, home, now: () => now() },
+      );
+      ok = sent.ok;
+      text = sent.text;
+    } catch (error) {
+      text = (error as Error).message;
+    }
+    if (ok) continue;
+    const tries = held.tries + 1;
+    if (tries < PROMPT_NOTICE_TRIES) kept.push({ climb: held.climb, tries });
+    else logLine(dir, 'watch', 'watch', `${held.climb.seat}: the prompt climb was not sent — ${text}`, now());
+  }
+  queue.push(...kept);
+}
+
+/** One prompt notice: its id names the seat, the open episode's start when there is one, and the
+ *  cause's digest. `tries` caps the retries of a notice whose send did not succeed. */
+type PendingPromptNotice = { id: string; body: string; sent: boolean; tries: number };
+
+const PROMPT_NOTICE_TRIES = 5;
+
+/** The words a prompt notice names its cause with: the prompt's kind, or the unrecognised screen. */
+function promptCause(event: EventAppendInput): string {
+  if (event.kind === 'seat.at-prompt') return `at a ${event.prompt ?? 'prompt'} prompt`;
+  return 'blocked on a screen the watch does not recognise';
+}
+
+/** The last rows a blocked seat's pane shows, for the lead's notice: at most eight non-blank
+ *  rows, each trimmed and cut at 160 characters, the dialog's frame marks left out. It is a
+ *  report of what the screen says, never an answer to it. Null when the pass read no screen. */
+export function screenExcerpt(live: Live | null, seat: string): string | null {
+  if (live === null) return null;
+  const agent = live.agents.find((candidate) => candidate.name === seat);
+  if (agent === undefined) return null;
+  const raw = live.screens[agent.pane];
+  if (raw === undefined || raw === '') return null;
+  const rows = raw
+    .split('\n')
+    .map((line) => line.replace(/^[\s┃│┆]+/, '').replace(/[\s█]+$/, ''))
+    .filter((line) => line !== '');
+  if (rows.length === 0) return null;
+  return rows.slice(-8).map((line) => `  ${line.length > 160 ? `${line.slice(0, 159)}…` : line}`).join('\n');
 }
 
 /** Publishes one event per observation, even when a check emits an operator line and an owner
