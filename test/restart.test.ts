@@ -2942,9 +2942,9 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     });
   }
 
-  test('a relaunch that fails after the close keeps the folder the seat ran in on record, id or not', async () => {
-    // A Grok seat whose own folder its sandbox refuses: the old pane is closed, the relaunch is
-    // left out, and the seat's record is gone. Where it ran stays carried for the placement check.
+  test('a seat whose own folder its sandbox refuses is not stopped: its record and folder stay as they are', async () => {
+    // A Grok seat whose own folder its sandbox refuses. Before 2026-11-15 the old pane was closed,
+    // the relaunch left out, and the record dropped; the relaunch plan is now read before the stop.
     const yaml = GROK_TEAM_YAML
       .replace('    launch: grok', '    launch: grok\n    cwd: web')
       .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
@@ -2963,10 +2963,12 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       pane === 'pane-old' ? (run.did.typed.length > 0 ? GROK_EXIT_TYPED : GROK_IDLE) : GROK_IDLE;
     mkdirSync(join(fixture.root, 'web'), { recursive: true });
     const io = testIo(fixture.root, { kind: 'owner' });
-    await runRestart(['worker'], io, run.sources);
-    const session = readState(fixture.dir).sessions.acme as { seats: Record<string, unknown>; retained_start_cwd?: Record<string, unknown> };
-    expect(session.seats.worker).toBeUndefined();
-    expect(session.retained_start_cwd).toEqual({ worker: '/elsewhere/where-it-ran' });
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toContain('left as it is');
+    expect(run.did.closed).toEqual([]);
+    const session = readState(fixture.dir).sessions.acme as { seats: Record<string, { start_cwd?: string }>; retained_start_cwd?: Record<string, unknown> };
+    expect(session.seats.worker?.start_cwd).toBe('/elsewhere/where-it-ran');
+    expect(session.retained_start_cwd).toBeUndefined();
   });
 
   test('a pane recorded in another folder than today\'s plan is not reused: the seat starts in a fresh workspace', async () => {
@@ -3006,6 +3008,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       (pane === 'pane-old' && exited() && run.did.runs.length === 0 ? { shell: 100, foreground: [100] } : { shell: 100, foreground: [200] });
     const paneText = run.sources.upLaunch.paneText;
     run.sources.upLaunch.paneText = (session, pane) => (pane === 'pane-old' && run.did.runs.length > 0 ? GROK_IDLE : paneText(session, pane));
+    run.sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
     return scene;
   }
 
