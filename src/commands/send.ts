@@ -1,5 +1,4 @@
 import { relayIfConfined } from '../send/confined-outbox.ts';
-import { SEND_FLAG_OPTIONS, SEND_VALUED_OPTIONS } from '../send/command-grammar.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
@@ -1423,7 +1422,9 @@ function sendCharterTargets(home: string, seatName: string | undefined, args: { 
 }
 
 async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, reportHolds = true): Promise<number> {
-  const args = readArgs(argv, [...SEND_VALUED_OPTIONS], [...SEND_FLAG_OPTIONS]);
+  // The literal lists the contract reads; src/send/command-grammar.ts carries the same words for
+  // the confined-seat relay, and test/confined-outbox.test.ts holds the two equal.
+  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.

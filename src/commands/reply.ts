@@ -35,7 +35,6 @@
 // reader was not confirmed. The reply rules themselves — who may answer, the thread, and the
 // read an answer marks — are decided before the walk and are untouched by it.
 import { relayIfConfined } from '../send/confined-outbox.ts';
-import { REPLY_FLAG_OPTIONS } from '../send/command-grammar.ts';
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -490,7 +489,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   if (relayed !== null) return relayed;
   // Raw argv, before the parser: `--nope --json` must still answer with the structured document.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, [], [...REPLY_FLAG_OPTIONS]);
+  const args = readArgs(argv, [], ['close', 'json']);
   if (args.error) return usage(io, json, args.error);
   const id = args.rest[0];
   const close = args.flags.has('close');

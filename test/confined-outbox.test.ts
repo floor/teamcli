@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, utimesSy
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { outboxFolder, relayOutboxes, relayRefusal, relayThroughOutbox, type OutboxCommand, type RelayCaller, type RelaySources } from '../src/send/confined-outbox.ts';
+import { REPLY_FLAG_OPTIONS, SEND_FLAG_OPTIONS, SEND_VALUED_OPTIONS } from '../src/send/command-grammar.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
 
@@ -129,6 +130,18 @@ describe('the confined seat outbox', () => {
     await relayOutboxes(dir, 's', ['keeper'], sources);
     expect(ran).toEqual([]);
     expect(existsSync(join(folder, `${id}.result.json`))).toBe(true);
+  });
+
+  test('the relay reads the same option grammar the commands publish in the contract', () => {
+    const contract = JSON.parse(readFileSync(new URL('../contract/cli.json', import.meta.url), 'utf8')) as {
+      commands: { name: string; flags: { name: string; takesValue: boolean }[] }[];
+    };
+    const options = (name: string) => contract.commands.find((one) => one.name === name)!.flags;
+    const has = (name: string, flag: string, takesValue: boolean) =>
+      options(name).some((one) => one.name === `--${flag}` && one.takesValue === takesValue);
+    for (const flag of SEND_VALUED_OPTIONS) expect(has('send', flag, true)).toBe(true);
+    for (const flag of SEND_FLAG_OPTIONS) expect(has('send', flag, false)).toBe(true);
+    for (const flag of REPLY_FLAG_OPTIONS) expect(has('reply', flag, false)).toBe(true);
   });
 
   test('options that name another authority or a file are refused on both sides', async () => {
