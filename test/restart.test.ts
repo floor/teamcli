@@ -2989,6 +2989,28 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
   });
 
+  for (const [cli, yamlOf, launch, argv0, screen] of [
+    ['cursor', () => CURSOR_TEAM_YAML.replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web'), 'cursor-agent --model cursor-model', 'cursor-agent', () => CURSOR_IDLE],
+  ] as const) {
+    test(`a ${cli} pane kept at its shell in the planned folder is relaunched there, not stopped and refused`, async () => {
+      // 2026-11-14: a restart stopped a seat, kept its pane, and then refused the in-place launch
+      // ("its reused pane has no recorded start folder"), leaving the seat stopped.
+      const yaml = yamlOf().replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+      const { fixture, run } = seeded({
+        registry: 'ses_keep', state: 'ses_keep', cli, model: 'Grok', version: '4.7', yaml,
+        launch, foregroundArgv0: argv0, newPaneScreen: screen(), launched: true,
+      });
+      mkdirSync(join(fixture.root, 'web'), { recursive: true });
+      updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = join(fixture.root, 'web'); });
+      run.sources.upLaunch.processInfo = (_session, pane) => (pane === 'pane-old' && run.did.runs.length === 0 ? { shell: 100, foreground: [100] } : { shell: 100, foreground: [201] });
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+      expect(io.err).not.toContain('no recorded start folder');
+      expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
+      expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
+    });
+  }
+
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {
     const launch = 'zsh /home/owner/as-floor.sh grok --model grok-4.7';
     const { fixture, run } = seeded({
