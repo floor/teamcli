@@ -8,7 +8,7 @@ import { machineAccountsOf } from '../information/machine-accounts.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
 import { budgetsInForceOf } from '../approve/approval.ts';
-import { callerOf, describeCaller, fileOwnerRefusal, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, fileOwnerRefusal, isOwner, type Caller } from '../caller.ts';
 import { loadReadings, overlayReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, runChecksOfAsync, type CheckOutcome } from '../budgets/run.ts';
 import type { ChildOptions } from '../child.ts';
@@ -825,6 +825,9 @@ async function admittedWatchdog(
 // 720 a day saying what one every ten minutes says.
 const READINGS_EVERY = 600;
 
+/** The caller a hosted watch's run names: the daemon itself, never derived from io. */
+const HOSTED_CALLER: Caller = { kind: 'daemon' };
+
 /** A hand-run `team watch` (no hosted loop). A boolean, not a type predicate, so the hosted
  *  loop below stays typed for both callers: the return that follows is what keeps a hand run
  *  out of it. */
@@ -868,7 +871,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     // exit: watch.file-owner
     return 1;
   }
-  const caller = callerOf(io, args.values.session);
+  // A hosted watch is the daemon's own loop: it takes no grant and never places a caller (a test
+  // may still hand its io one). Walking this process's parents read the whole process table with
+  // a synchronous `ps`, twice when the first timed out, on the child's only loop (2026-11-15:
+  // 4 reads, 7.9 s, in a chores child's first cycle under load).
+  const caller: Caller = hosted !== undefined ? io.caller ?? HOSTED_CALLER : callerOf(io, args.values.session);
   // No path starts a pane watch. A hand-run `team watch` — the owner, a seat, a pane, or a
   // pane the walk cannot place — only prints the daemon's watch and writes nothing. The hosted
   // loop below is the daemon's own watch; it is the one caller that still runs.
@@ -933,7 +940,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   const session = args.values.session ?? first.team.session;
   const { dir } = first;
 
-  const placed = callerOf(io, session);
+  const placed: Caller = hosted !== undefined ? io.caller ?? HOSTED_CALLER : callerOf(io, session);
   // A hosted loop never asks `watchdogGrant`: the front refusals do not apply to it. A dead
   // record is still rewritten once, here, before the loop, and a live one is left as it is.
   if (hosted !== undefined) takeOverDeadWatch(io.cwd, session, placed, sources);
@@ -977,7 +984,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // own command reads exactly so when herdr names no pane to it (a `pane run` whose process
   // carries no pane hint places nobody), and its first pass then records the pid every later
   // caller is judged by.
-  const elsewhere = placed.kind === 'owner' || placed.kind === 'owner-no-tty' || placed.kind === 'seat'
+  // The daemon is never the command a pane hand-over typed: it stands elsewhere, as its walk
+  // placed it (a process outside herdr with no terminal) whenever that `ps` answered.
+  const elsewhere = placed.kind === 'daemon'
+    || placed.kind === 'owner' || placed.kind === 'owner-no-tty' || placed.kind === 'seat'
     || (placed.kind === 'pane' && placed.pane !== other?.pane);
   const handOver = !elsewhere && other !== undefined && other.pid === undefined && other.pane !== undefined;
   const otherRunning = other && !handOver && other.pid !== sources.pid && watchRunning(other, {

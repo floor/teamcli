@@ -27,7 +27,7 @@ import { dirname, resolve } from 'node:path';
 import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
-import { launchTeamFile } from '../file/load.ts';
+import { holdGitRoots, launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { getTeam, noteStoppedTeamRunning, readTeams, teamIdOf } from '../registry/teams.ts';
@@ -603,8 +603,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const beatWork = createBeatWork();
   const stopBeatWork = observeBeatWork(beatWork);
+  // The beat reads every hosted root's team file: git names each root once per hold, never as
+  // a synchronous child on every endpoint refresh.
+  const releaseGitRoots = holdGitRoots();
   const releaseLock = (): void => {
     stopBeatWork();
+    releaseGitRoots();
     if (readLockPid(lockPath) === pid) {
       try {
         unlinkSync(lockPath);
