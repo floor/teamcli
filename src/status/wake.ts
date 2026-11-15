@@ -36,13 +36,57 @@ export type SeatWake = {
   oldest_unread_seconds: number | null;
   /** Plain-text drops an earlier build wrote: never served, counted apart from `unread`. */
   legacy_unsigned?: number;
+  /** Seconds since a message to this seat last proved it can be reached: delivered, or read on
+   *  its receipt. Absent when the history holds none for the seat (or was not read). */
+  last_wake_seconds?: number;
+  /** Seconds since a send to this seat last ended undelivered or unwoken with no later proof:
+   *  the seat's route failed and nothing has reached it since. Absent otherwise. */
+  wake_failed_seconds?: number;
 };
+
+/** What a history line says about reaching its seat: proof that a message got through, a send
+ *  that did not reach it, or nothing (a send still in flight, a hold, a reply). */
+export function wakeEvidenceOf(outcome: string): 'proven' | 'failed' | null {
+  if (outcome.startsWith('delivered') || outcome === 'answered') return outcome === 'delivered-but-blocked' ? null : 'proven';
+  if (outcome === 'not delivered' || outcome === 'unreachable' || outcome === 'wake not taken' || outcome.startsWith('wake not taken')) return 'failed';
+  return null;
+}
+
+/** The last proof and the last unanswered failure of reaching one seat, from the history lines
+ *  addressed to it, in seconds before `now`. */
+export function wakeHealthOf(
+  entries: readonly { ts: string; to: string; outcome: string }[],
+  seat: string,
+  now: Date,
+): { last_wake_seconds?: number; wake_failed_seconds?: number } {
+  let proven = -Infinity;
+  let failed = -Infinity;
+  for (const entry of entries) {
+    if (entry.to !== seat) continue;
+    const at = Date.parse(entry.ts);
+    if (!Number.isFinite(at)) continue;
+    const kind = wakeEvidenceOf(entry.outcome);
+    if (kind === 'proven' && at > proven) proven = at;
+    if (kind === 'failed' && at > failed) failed = at;
+  }
+  const age = (at: number) => Math.max(0, Math.floor((now.getTime() - at) / 1000));
+  return {
+    ...(Number.isFinite(proven) ? { last_wake_seconds: age(proven) } : {}),
+    ...(Number.isFinite(failed) && failed > proven ? { wake_failed_seconds: age(failed) } : {}),
+  };
+}
 
 /** One seat's wakeability reading: where its records live, its declared row and runtime record,
  *  the registry home, the team's lead seat (a clearance signed by that seat settles here; a
  *  caller that does not name it settles only the owner's clearances), and the instant the unread
  *  age is measured from. */
-export type SeatWakeInput = SeatDeliveryInput & { now: Date; lead?: string };
+export type SeatWakeInput = SeatDeliveryInput & {
+  now: Date;
+  lead?: string;
+  /** The project's message history, read once by the caller: the row's last proven wake and
+   *  any failure since come from it. Absent: the row carries neither. */
+  history?: readonly { ts: string; to: string; outcome: string }[];
+};
 
 /**
  * The reading for one seat. The class comes from the same `seatDeliveryClass` a send reads and
@@ -110,6 +154,7 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
       unread: unreadCount,
       oldest_unread_seconds: oldest,
       ...(legacyCount > 0 ? { legacy_unsigned: legacyCount } : {}),
+      ...(input.history === undefined ? {} : wakeHealthOf(input.history, input.seat, input.now)),
     },
     words: delivery.words,
     watchWake: delivery.evidence.watchWake,
@@ -140,6 +185,8 @@ export function wakeCell(wake: SeatWake): string {
   if (wake.listener) notes.push('inbox');
   if (wake.oldest_unread_seconds !== null) notes.push(`unread ${wakeAge(wake.oldest_unread_seconds)}`);
   if (wake.legacy_unsigned !== undefined) notes.push(`${String(wake.legacy_unsigned)} unsigned old drop(s), not served`);
+  if (wake.wake_failed_seconds !== undefined) notes.push(`last send not delivered ${wakeAge(wake.wake_failed_seconds)} ago`);
+  if (wake.last_wake_seconds !== undefined) notes.push(`last reached ${wakeAge(wake.last_wake_seconds)} ago`);
   const word = `${wake.wakeable ? '' : '!'}${wake.class}`;
   return notes.length === 0 ? word : `${word} (${notes.join(', ')})`;
 }

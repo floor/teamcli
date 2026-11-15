@@ -1,3 +1,4 @@
+import { readHistory } from '../send/history.ts';
 import { modelDriftNotes } from '../send/model-drift.ts';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -812,6 +813,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The compact table's wakeability reading, one read per row it shows. The expanded table gets
   // the same fact from `seatRegistryRows` (`wake: true` above), so the two can never disagree;
   // this path runs only where that table is not built.
+  // The project's history, read once for every row's last proven wake and failure since.
+  const history = all || json || sources.home === undefined ? undefined : (() => {
+    const read = readHistory(team.project, root, sources.home);
+    return read.ok ? read.entries : undefined;
+  })();
   const compactReadings = all || json
     ? undefined
     : new Map<string, SeatWakeReading>(visibleRows.map((row): [string, SeatWakeReading] => {
@@ -827,6 +833,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         ...(sources.home !== undefined ? { home: sources.home } : {}),
         lead: team.orchestrator,
         now,
+        ...(history === undefined ? {} : { history }),
       })];
     }));
   const compactWake = compactReadings === undefined
