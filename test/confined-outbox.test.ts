@@ -1,7 +1,7 @@
 // A confined seat's send and reply go through its outbox: the seat writes the request into its
 // own seat-state folder, the team's watch runs that command as the seat and writes the result
 // back, and the seat's command prints it.
-import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { outboxFolder, relayOutboxes, relayRefusal, relayThroughOutbox, type OutboxCommand, type RelayCaller, type RelaySources } from '../src/send/confined-outbox.ts';
@@ -134,14 +134,62 @@ describe('the confined seat outbox', () => {
   test('options that name another authority or a file are refused on both sides', async () => {
     expect(relayRefusal('send', ['lead', 'hi', '--file', '/etc/hosts'])).toContain('--file');
     expect(relayRefusal('send', ['lead', 'hi', '--key=/x'])).toContain('--key');
-    expect(relayRefusal('send', ['lead', '--', '--file'])).toBeNull();
-    expect(relayRefusal('reply', ['abc', 'thanks'])).toBeNull();
+    // The line is read with the command's own grammar: a value that looks like an end of options
+    // does not hide what follows it.
+    expect(relayRefusal('send', ['lead', '--subject', '--', '--file', '/outside'])).toContain('--file');
+    expect(relayRefusal('send', ['lead', 'hello', '--subject', '--', '--wait', '--timeout', '86400'])).not.toBeNull();
+    expect(relayRefusal('send', ['lead', '--', 'x'])).toContain('does not read');
+    expect(relayRefusal('send', ['lead', 'hi', '--subject', 'news', '--json'])).toBeNull();
+    expect(relayRefusal('reply', ['abc', 'thanks', '--close'])).toBeNull();
     const { root, dir } = team();
     const { sources, ran } = relay();
     const { code, err } = await sendThroughOutbox(root, dir, sources, ['lead', 'hi', '--approval', 'x']);
     expect(code).toBe(1);
     expect(err).toContain('--approval');
     expect(ran).toEqual([]);
+  });
+
+  test('a request that is not an object, too large, or not a plain file ends in a refusal, never a crash', async () => {
+    const { root, dir } = team();
+    const folder = outboxFolder(dir, 's', 'keeper')!;
+    mkdirSync(folder, { recursive: true });
+    const ids = ['00000000-0000-4000-8000-00000000000a', '00000000-0000-4000-8000-00000000000b', '00000000-0000-4000-8000-00000000000c'];
+    writeFileSync(join(folder, `${ids[0]}.request.json`), 'null');
+    writeFileSync(join(folder, `${ids[1]}.request.json`), 'x'.repeat(300 * 1024));
+    symlinkSync(join(root, 'nowhere'), join(folder, `${ids[2]}.request.json`));
+    const { sources, ran } = relay();
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(ran).toEqual([]);
+    for (const id of ids) expect(existsSync(join(folder, `${id}.result.json`))).toBe(true);
+  });
+
+  test('a request a stopped pass took is answered as cut off, with its outcome unknown', async () => {
+    const { dir } = team();
+    const folder = outboxFolder(dir, 's', 'keeper')!;
+    mkdirSync(folder, { recursive: true });
+    const id = '00000000-0000-4000-8000-00000000000d';
+    writeFileSync(join(folder, `${id}.taking`), '{}');
+    const later = new Date(Date.now() + 6 * 60_000);
+    const { sources } = relay({ now: () => later });
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(existsSync(join(folder, `${id}.taking`))).toBe(false);
+    expect(readFileSync(join(folder, `${id}.result.json`), 'utf8')).toContain('whether it was sent is unknown');
+  });
+
+  test('one pass runs at most three requests; the rest wait for the next', async () => {
+    const { root, dir } = team();
+    const folder = outboxFolder(dir, 's', 'keeper')!;
+    mkdirSync(folder, { recursive: true });
+    for (let k = 0; k < 5; k++) {
+      const id = `00000000-0000-4000-8000-00000000001${String(k)}`;
+      writeFileSync(join(folder, `${id}.request.json`), JSON.stringify({
+        v: 1, id, command: 'send', argv: ['lead', `m${String(k)}`], cwd: root, seat: 'keeper', session: 's', pane: 'pane-k', at: new Date().toISOString(),
+      }));
+    }
+    const { sources, ran } = relay();
+    expect(await relayOutboxes(dir, 's', ['keeper'], sources)).toBe(3);
+    expect(await relayOutboxes(dir, 's', ['keeper'], sources)).toBe(2);
+    expect(ran.map((one) => one.argv[1])).toEqual(['m0', 'm1', 'm2', 'm3', 'm4']);
   });
 
   test('a seat whose result does not come in time is told its request is queued', async () => {

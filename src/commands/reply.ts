@@ -483,13 +483,16 @@ export function raiseSecurityRefusal(
   });
 }
 
+/** `team reply`'s flags; it takes no valued option. The confined-seat relay parses with these. */
+export const REPLY_FLAG_OPTIONS = ['close', 'json'] as const;
+
 export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise<number> {
   // A seat its sandbox confines cannot write the sender's drop: its outbox carries the reply.
   const relayed = await relayIfConfined('reply', argv, io);
   if (relayed !== null) return relayed;
   // Raw argv, before the parser: `--nope --json` must still answer with the structured document.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, [], ['close', 'json']);
+  const args = readArgs(argv, [], [...REPLY_FLAG_OPTIONS]);
   if (args.error) return usage(io, json, args.error);
   const id = args.rest[0];
   const close = args.flags.has('close');

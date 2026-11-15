@@ -1421,8 +1421,13 @@ function sendCharterTargets(home: string, seatName: string | undefined, args: { 
   return [];
 }
 
+/** `team send`'s option grammar: the names that take a value, and the flags. The confined-seat
+ *  relay parses a relayed line with exactly this grammar (src/send/confined-outbox.ts). */
+export const SEND_VALUED_OPTIONS = ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'] as const;
+export const SEND_FLAG_OPTIONS = ['wait', 'json', 'list', 'dry-run', 'request'] as const;
+
 async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, reportHolds = true): Promise<number> {
-  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
+  const args = readArgs(argv, [...SEND_VALUED_OPTIONS], [...SEND_FLAG_OPTIONS]);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.

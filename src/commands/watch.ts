@@ -1343,8 +1343,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           }
           // A seat its sandbox confines sends and replies through its outbox: the daemon's
           // watch runs those commands for it, as that seat (src/send/confined-outbox.ts).
-          if (hosted !== undefined) {
-            await relayConfinedOutboxes(dir, session, team, live.agents, sources.now);
+          // The relay runs beside the pass, one batch per team at a time, so a send waiting on
+          // its receipt never holds the watch; a batch cut off by a stop is answered next time.
+          if (hosted !== undefined && !relayRunning.has(dir)) {
+            relayRunning.add(dir);
+            const agentsNow = live.agents.map((agent) => ({ name: agent.name, pane: agent.pane }));
+            void relayConfinedOutboxes(dir, session, team, agentsNow, sources.now)
+              .catch((error: unknown) => logLine(dir, 'watch', 'watch', `the outbox relay failed: ${(error as Error).message}`, sources.now()))
+              .finally(() => relayRunning.delete(dir));
           }
           const nextPanesKey = Object.entries(panesBySeat)
             .sort(([a], [b]) => a.localeCompare(b))
@@ -2742,6 +2748,9 @@ async function sendHostedBlockedEpisodes(
     await deliverPrompt(seat, held.body, held.id);
   }
 }
+
+/** The teams whose outbox relay batch is running in this process. */
+const relayRunning = new Set<string>();
 
 /** Runs the waiting outbox requests of this team's seats as those seats, with the ordinary send
  *  and reply commands and their ordinary admission; what each run said goes back to the seat. */
