@@ -422,24 +422,31 @@ function acquireDaemonLock(
 }
 
 /** Probes `<socketPath>` with `{ v: 1, op: 'ping' }`. Resolves `true` when a live daemon answers `pong`. */
-export function probeDaemonSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
+export async function probeDaemonSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
+  return (await probeDaemonSocketReading(socketPath, timeoutMs)) === 'answered';
+}
+
+/** The same probe, saying how it ended: answered; refused (no socket, a connection error, a
+ *  close or a reply that is no pong: the endpoint said no); or timed out (no word at all within
+ *  the bound, which an endpoint sharing a busy event loop cannot be blamed for on its own). */
+export function probeDaemonSocketReading(socketPath: string, timeoutMs = 400): Promise<'answered' | 'refused' | 'timeout'> {
   return new Promise((resolve) => {
     if (heldAt(socketPath) !== 'socket') {
-      resolve(false);
+      resolve('refused');
       return;
     }
     const socket = connect({ path: socketPath });
     let buffer = '';
     let settled = false;
-    const finish = (ok: boolean): void => {
+    const finish = (how: 'answered' | 'refused' | 'timeout'): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       socket.destroy();
-      resolve(ok);
+      resolve(how);
     };
-    const timer = setTimeout(() => finish(false), timeoutMs);
-    socket.on('error', () => finish(false));
+    const timer = setTimeout(() => finish('timeout'), timeoutMs);
+    socket.on('error', () => finish('refused'));
     socket.on('connect', () => {
       socket.write(`${JSON.stringify({ v: 1, op: 'ping' })}\n`);
     });
@@ -449,12 +456,12 @@ export function probeDaemonSocket(socketPath: string, timeoutMs = 400): Promise<
       if (nl === -1) return;
       try {
         const parsed = JSON.parse(buffer.slice(0, nl)) as { ok?: unknown; pong?: unknown };
-        finish(parsed.ok === true && parsed.pong === true);
+        finish(parsed.ok === true && parsed.pong === true ? 'answered' : 'refused');
       } catch {
-        finish(false);
+        finish('refused');
       }
     });
-    socket.on('close', () => finish(false));
+    socket.on('close', () => finish('refused'));
   });
 }
 
