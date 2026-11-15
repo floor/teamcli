@@ -117,6 +117,10 @@ export type DeliveryWordsContext = {
   watchWake?: boolean;
   /** The typed wake this run made. */
   wake?: WakeOutcome;
+  /** The seat's profile takes a message only through the CLI's own session call (`session_cli`,
+   *  a new remote session per brief) and registers no inbox: a queued message is read by nothing
+   *  on this machine, and a restart does not change that. */
+  sessionOnly?: boolean;
 };
 
 /** The class in plain words, for a console line after the leg's own word. Never a bare
@@ -125,7 +129,7 @@ export type DeliveryWordsContext = {
  *  the run's, never inferred from the profile: a wake that ran and did not deliver says so, and
  *  one the run never reached says that instead. */
 export function deliveryWords(cls: DeliveryClass, seat: string, context: DeliveryWordsContext = {}): string {
-  const { human = false, typedWake = false, watchWake = false, wake } = context;
+  const { human = false, typedWake = false, watchWake = false, wake, sessionOnly = false } = context;
   const wakeLine = wake === undefined
     ? ''
     : wake.woke === true
@@ -146,6 +150,9 @@ export function deliveryWords(cls: DeliveryClass, seat: string, context: Deliver
         : `${seat} reads it at its next turn, and nothing here gives it one (pull-only)`);
     case 'none':
       if (human) return lead(`${seat} has no way to be woken while idle`);
+      if (sessionOnly && !typedWake) {
+        return lead(`${seat} takes a message only as a new remote session (its CLI's own session call, public repositories only) and reads no inbox; nothing reads a queued message until a person hands it over, and a restart does not change that`);
+      }
       if (!typedWake) return lead(`nothing wakes ${seat} while it is idle; a person or a restart must give it a turn`);
       // The same for a seat with no watcher: the wake this run typed is the one thing that
       // gave it a turn, so the sentence names what else could, never that nothing could.
@@ -358,6 +365,7 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
   const typedWake = !human && (profile?.typedWake ?? null) !== null;
   // The seat's own word wins over its profile's; the retry needs a typed wake either way.
   const watchWake = typedWake && (input.declared?.watchWake ?? profile?.watchWake === true);
+  const sessionOnly = !human && !typedWake && (profile?.sessionCli ?? null) !== null;
   return {
     seat: input.seat,
     class: cls,
@@ -365,6 +373,7 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
       ...(human ? { human: true } : {}),
       ...(typedWake ? { typedWake: true } : {}),
       ...(watchWake ? { watchWake: true } : {}),
+      ...(sessionOnly ? { sessionOnly: true } : {}),
     }),
     evidence: {
       cli,

@@ -109,7 +109,9 @@ describe('the plain words', () => {
     expect(deliveryWords('none', 'helper', { typedWake: true, watchWake: true })).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn');
     expect(deliveryWords('none', 'helper', { typedWake: true, watchWake: false })).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn');
     // A watch retry without the typed wake it retries is not a route, and is never said.
-    expect(deliveryWords('none', 'helper', { watchWake: true })).toBe('queued; nothing wakes helper while it is idle; a person or a restart must give it a turn');
+    expect(deliveryWords('none', 'helper', { watchWake: true })).toBe('queued; nothing wakes helper while it is idle; a person or a restart must give it a turn');    // A seat that takes mail only as a new remote session reads no inbox: the words say so, and
+    // never that a restart would give it a turn.
+    expect(deliveryWords('none', 'helper', { sessionOnly: true })).toBe('queued; helper takes a message only as a new remote session (its CLI\'s own session call, public repositories only) and reads no inbox; nothing reads a queued message until a person hands it over, and a restart does not change that');
   });
 
   test('a wake this run made says what it saw, and one it never reached says that instead', () => {
@@ -508,6 +510,22 @@ describe('a seat read from its records', () => {
     });
     expect(`${nothing.evidence.watcherFrom} ${nothing.evidence.watcher}`).toBe('derived none');
     expect(nothing.class).toBe('none');
+  });
+
+  test('a jules seat says it takes mail only as a new remote session; a gemini seat names its typed wake', () => {
+    const jules = read({
+      declared: { cli: 'jules', launch: 'jules' },
+      state: { cli: 'jules', watcher: 'none' },
+    });
+    expect(jules.class).toBe('none');
+    expect(jules.evidence.typedWake).toBe(false);
+    expect(jules.words).toContain('takes a message only as a new remote session');
+    expect(jules.words).toContain('a restart does not change that');
+    const gemini = read({
+      declared: { cli: 'gemini', launch: 'gemini --approval-mode yolo' },
+    });
+    expect(gemini.evidence.typedWake).toBe(true);
+    expect(gemini.words).not.toContain('remote session');
   });
 
   test('a CLI with no inbox or adapter is none, and a person’s pane is none', () => {
