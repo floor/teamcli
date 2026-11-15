@@ -39,6 +39,7 @@ function team(): TeamFile {
   const parsed = validateTeamFile(`format: 1
 project: crew
 coordinator: lead
+operator: lead
 session: crew
 workspace:
   mode: shared
@@ -48,14 +49,16 @@ seats:
     cli: claude-code
     vendor: test
     model: Test
+    version: "1"
     launch: claude
   - role: worker
     name: worker-1
     cli: grok
     vendor: test
     model: Test
+    version: "1"
     launch: grok
-`, 'team.yaml');
+`);
   if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
   return parsed.team;
 }
