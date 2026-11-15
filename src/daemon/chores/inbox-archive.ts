@@ -217,7 +217,7 @@ export async function inboxArchivePass(input: {
         break seats;
       }
       const recovery = recoverSeatArchive(folder.dropDir, Math.min(budget, INBOX_ARCHIVE_SCAN_CHUNK));
-      budget -= Math.max(1, recovery.used);
+      budget -= recovery.used;
       moved += recovery.finished.length;
       if (!recovery.more) run.recovered.push(key2);
       if (await stop()) {

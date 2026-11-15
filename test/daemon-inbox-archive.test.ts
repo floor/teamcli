@@ -363,7 +363,8 @@ describe('the daily inbox archive', () => {
         loadPerCore: calm,
         yieldTurn: async () => {
           turns += 1;
-          if (turns === 1) registerRunning('resting');
+          // Turn 1 follows the folder's recovery step, turn 2 the first chunk of 64.
+          if (turns === 2) registerRunning('resting');
           return true;
         },
       },
