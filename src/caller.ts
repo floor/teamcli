@@ -857,7 +857,7 @@ export function callerOf(
     cachedCallerSourcesRef = sources;
     cachedCurrentCallers.clear();
   }
-  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}\0${(io as { cwd?: string }).cwd ?? ''}`;
+  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}\0${(io as { cwd?: string }).cwd ?? process.cwd()}`;
   if (snapId !== null) {
     const hit = cachedCurrentCallers.get(key);
     if (hit !== undefined) return hit;
@@ -894,7 +894,7 @@ export function currentCaller(
     cachedCallerSnapshotId = snapId;
     cachedCurrentCallers.clear();
   }
-  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}\0${(io as { cwd?: string }).cwd ?? ''}`;
+  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}\0${(io as { cwd?: string }).cwd ?? process.cwd()}`;
   if (snapId !== null) {
     const hit = cachedCurrentCallers.get(key);
     if (hit !== undefined) return hit;

@@ -92,6 +92,18 @@ describe('confinedSeatAt', () => {
     expect(confinedSeatAt(root, 'pane-k', 's', confinedTo([own], 'unproved'))).toBeNull();
   });
 
+  test('a folder replaced while it is probed proves nothing', () => {
+    const { root, dir } = team();
+    const own = join(dir, 'seat-state', 's', 'keeper');
+    let probed = false;
+    const sources: ConfinedSources = {
+      ...confinedTo([own]),
+      probe: (folder) => { probed = true; return folder === own ? 'created' : 'sandbox-refused'; },
+      identity: (folder) => `${folder}:${probed ? 'after' : 'before'}`,
+    };
+    expect(confinedSeatAt(root, 'pane-k', 's', sources)).toBeNull();
+  });
+
   test('a seat folder reached through a link proves nothing', () => {
     const { root, dir } = team();
     const elsewhere = join(root, 'elsewhere');

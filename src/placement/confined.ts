@@ -9,8 +9,10 @@
 //     grants, `cliHookStatePath`'s folder, with the session's folder name encoded the same way);
 //   - the caller is refused, by the sandbox, a file in the session's seat-state folder and in the
 //     team's `.agents` folder. A sandbox refusal is EPERM; the folder's own mode must allow its
-//     owner to write and the folder must be this user's, so a read-only folder (EACCES) proves
-//     nothing;
+//     owner to write, the folder must be this user's, and it must carry no immutable or
+//     append-only flag, so a read-only or locked folder proves nothing. Only macOS's Seatbelt is
+//     read this way: elsewhere the proof is never made;
+//   - each folder is the same directory (device and inode) before and after its probe;
 //   - none of the three folders is reached through a link: each one's real path is its own path
 //     read from the real `.agents`, so a link cannot lend another seat's grant.
 // No launch grants a seat the session's seat-state folder or `.agents` itself, so the second half
@@ -41,6 +43,8 @@ export type ConfinedSources = {
   /** The folder's real path, or null when it cannot be read or is not a directory reached
    *  without a link at its last step. */
   realFolder(folder: string): string | null;
+  /** The folder's device and inode, as one string; null when it cannot be read. */
+  identity(folder: string): string | null;
 };
 
 /** The confined seat at `pane`, or null when no record holds that pane or the proof fails. */
@@ -76,9 +80,14 @@ export function confinedSeatAt(
     const tail = own.slice(dir.length);
     if (sources.realFolder(own) !== realDir + tail) return null;
     if (sources.realFolder(sessionFolder) !== realDir + sessionFolder.slice(dir.length)) return null;
+    const before = [own, sessionFolder, dir].map((folder) => sources.identity(folder));
+    if (before.some((one) => one === null)) return null;
     if (sources.probe(own) !== 'created') return null;
     if (sources.probe(sessionFolder) !== 'sandbox-refused') return null;
     if (sources.probe(dir) !== 'sandbox-refused') return null;
+    // The folders probed are the folders checked: none was replaced in between.
+    const after = [own, sessionFolder, dir].map((folder) => sources.identity(folder));
+    if (after.some((one, at) => one === null || one !== before[at])) return null;
     return { name, session: sessionName, dir };
   }
   return null;
@@ -89,12 +98,14 @@ function probe(folder: string): Probe {
   try {
     writeFileSync(path, '', { flag: 'wx', mode: 0o600 });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EPERM') return 'unproved';
-    // EPERM on a folder whose own mode lets its owner write, owned by this user: the sandbox's.
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM' || process.platform !== 'darwin') return 'unproved';
+    // EPERM on a folder this user owns, whose mode lets its owner write and which carries no
+    // immutable or append-only flag: the sandbox's refusal, not the folder's own.
     try {
       const stat = statSync(folder);
-      const mine = typeof process.getuid !== 'function' || stat.uid === process.getuid();
-      return stat.isDirectory() && mine && (stat.mode & 0o200) !== 0 ? 'sandbox-refused' : 'unproved';
+      const mine = typeof process.getuid === 'function' && stat.uid === process.getuid();
+      if (!stat.isDirectory() || !mine || (stat.mode & 0o200) === 0) return 'unproved';
+      return unlockedOnDarwin(folder) ? 'sandbox-refused' : 'unproved';
     } catch {
       return 'unproved';
     }
@@ -106,6 +117,35 @@ function probe(folder: string): Probe {
     return 'unproved';
   }
   return 'created';
+}
+
+/** UF_IMMUTABLE, UF_APPEND, SF_IMMUTABLE and SF_APPEND (sys/stat.h): any of them refuses a new
+ *  file with EPERM whatever the mode says. */
+const LOCK_FLAGS = 0x2 | 0x4 | 0x20000 | 0x40000;
+
+/** Whether the folder carries none of the lock flags, read with macOS's own stat(1); false when
+ *  they cannot be read. */
+function unlockedOnDarwin(folder: string): boolean {
+  try {
+    const hex = execFileSync('/usr/bin/stat', ['-f', '%Xf', folder], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2_000,
+    }).trim();
+    if (!/^[0-9a-fA-F]+$/.test(hex)) return false;
+    return (Number.parseInt(hex, 16) & LOCK_FLAGS) === 0;
+  } catch {
+    return false;
+  }
+}
+
+function identity(folder: string): string | null {
+  try {
+    const stat = lstatSync(folder);
+    return stat.isDirectory() ? `${String(stat.dev)}:${String(stat.ino)}` : null;
+  } catch {
+    return null;
+  }
 }
 
 function realFolder(folder: string): string | null {
@@ -162,4 +202,4 @@ function recordedPanes(dir: string): Record<string, Record<string, string | unde
   }
 }
 
-export const realConfinedSources: ConfinedSources = { probe, agentDirs, recordedPanes, realFolder };
+export const realConfinedSources: ConfinedSources = { probe, agentDirs, recordedPanes, realFolder, identity };
