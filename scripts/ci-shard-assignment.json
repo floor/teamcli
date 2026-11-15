@@ -629,6 +629,7 @@
     "test/leads-authority-scope-independent.test.ts": 1,
     "test/leads-authority.test.ts": 3,
     "test/leads-door-abandon-independent.test.ts": 2,
+    "test/legacy-inbox-retention.test.ts": 5,
     "test/legacy-label.test.ts": 4,
     "test/limit-tail-screen-independent.test.ts": 3,
     "test/linear.test.ts": 3,
