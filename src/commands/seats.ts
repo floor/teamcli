@@ -51,6 +51,9 @@ export type SeatsSources = StatusSources & {
  *  standing in for no store at all — the message trace is skipped, as status.ts's store-backed
  *  differences are. */
 export type SeatTraceSources = {
+  /** The project's message history, read once by the caller, for each row's last proven wake
+   *  and any failure since (src/status/wake.ts). Absent: rows carry neither. */
+  history?: readonly { ts: string; to: string; outcome: string; id?: string }[];
   project: string;
   root: string;
   home?: string;
@@ -375,6 +378,7 @@ export function seatRegistryRows(
           ...(traceSources.home !== undefined ? { home: traceSources.home } : {}),
           lead: team.orchestrator,
           now,
+          ...(traceSources.history === undefined ? {} : { history: traceSources.history }),
         })
       : undefined;
     rows.push({

@@ -668,8 +668,15 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.
+  // The project's history, read once for every row's last proven wake and failure since: the
+  // compact cell, the expanded table and the JSON rows all carry it.
+  const history = sources.home === undefined ? undefined : (() => {
+    const read = readHistory(team.project, root, sources.home);
+    return read.ok ? read.entries : undefined;
+  })();
   const registryRows = all || json
     ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, {
+        ...(history === undefined ? {} : { history }),
         project: team.project, root, home: sources.home, stateDir: dir, session,
         presenceChannelHealthy: presenceHealthy,
         ...(presenceSeats === undefined ? {} : { presenceSeats }),
@@ -813,11 +820,6 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The compact table's wakeability reading, one read per row it shows. The expanded table gets
   // the same fact from `seatRegistryRows` (`wake: true` above), so the two can never disagree;
   // this path runs only where that table is not built.
-  // The project's history, read once for every row's last proven wake and failure since.
-  const history = all || json || sources.home === undefined ? undefined : (() => {
-    const read = readHistory(team.project, root, sources.home);
-    return read.ok ? read.entries : undefined;
-  })();
   const compactReadings = all || json
     ? undefined
     : new Map<string, SeatWakeReading>(visibleRows.map((row): [string, SeatWakeReading] => {

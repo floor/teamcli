@@ -45,34 +45,52 @@ export type SeatWake = {
 };
 
 /** What a history line says about reaching its seat: proof that a message got through, a send
- *  that did not reach it, or nothing (a send still in flight, a hold, a reply). */
+ *  that did not reach it, or nothing (a send still in flight, a hold, a reply wait that timed out:
+ *  a timeout does not say whether the message itself was taken). */
 export function wakeEvidenceOf(outcome: string): 'proven' | 'failed' | null {
-  if (outcome.startsWith('delivered') || outcome === 'answered') return outcome === 'delivered-but-blocked' ? null : 'proven';
-  if (outcome === 'not delivered' || outcome === 'unreachable' || outcome === 'wake not taken' || outcome.startsWith('wake not taken')) return 'failed';
+  if (outcome === 'delivered-but-blocked') return null;
+  if (outcome.startsWith('delivered') || outcome === 'answered') return 'proven';
+  if (
+    outcome === 'not delivered' || outcome === 'unreachable' || outcome.startsWith('wake not taken')
+    || outcome.startsWith('queued, not woken') || outcome === 'not-submitted'
+  ) return 'failed';
   return null;
 }
 
 /** The last proof and the last unanswered failure of reaching one seat, from the history lines
- *  addressed to it, in seconds before `now`. */
+ *  addressed to it, in seconds before `now`. A failure is answered only by proof for the same
+ *  message, or for a message first sent after it: a receipt promoted late for an older message
+ *  never clears a newer failure. */
 export function wakeHealthOf(
-  entries: readonly { ts: string; to: string; outcome: string }[],
+  entries: readonly { ts: string; to: string; outcome: string; id?: string }[],
   seat: string,
   now: Date,
 ): { last_wake_seconds?: number; wake_failed_seconds?: number } {
-  let proven = -Infinity;
-  let failed = -Infinity;
+  const firstSent = new Map<string, number>();
+  const ownLines: { at: number; kind: 'proven' | 'failed'; id: string | undefined }[] = [];
   for (const entry of entries) {
     if (entry.to !== seat) continue;
     const at = Date.parse(entry.ts);
     if (!Number.isFinite(at)) continue;
+    if (entry.id !== undefined && !(firstSent.get(entry.id)! <= at)) firstSent.set(entry.id, at);
     const kind = wakeEvidenceOf(entry.outcome);
-    if (kind === 'proven' && at > proven) proven = at;
-    if (kind === 'failed' && at > failed) failed = at;
+    if (kind !== null) ownLines.push({ at, kind, id: entry.id });
+  }
+  const sentAt = (line: { at: number; id: string | undefined }) => (line.id === undefined ? line.at : firstSent.get(line.id) ?? line.at);
+  let proven = -Infinity;
+  for (const line of ownLines) if (line.kind === 'proven' && line.at > proven) proven = line.at;
+  let failed = -Infinity;
+  for (const line of ownLines) {
+    if (line.kind !== 'failed' || line.at <= failed) continue;
+    const failedSent = sentAt(line);
+    const answered = ownLines.some((other) => other.kind === 'proven'
+      && ((line.id !== undefined && other.id === line.id) || sentAt(other) > failedSent));
+    if (!answered) failed = line.at;
   }
   const age = (at: number) => Math.max(0, Math.floor((now.getTime() - at) / 1000));
   return {
     ...(Number.isFinite(proven) ? { last_wake_seconds: age(proven) } : {}),
-    ...(Number.isFinite(failed) && failed > proven ? { wake_failed_seconds: age(failed) } : {}),
+    ...(Number.isFinite(failed) ? { wake_failed_seconds: age(failed) } : {}),
   };
 }
 
@@ -85,7 +103,7 @@ export type SeatWakeInput = SeatDeliveryInput & {
   lead?: string;
   /** The project's message history, read once by the caller: the row's last proven wake and
    *  any failure since come from it. Absent: the row carries neither. */
-  history?: readonly { ts: string; to: string; outcome: string }[];
+  history?: readonly { ts: string; to: string; outcome: string; id?: string }[];
 };
 
 /**

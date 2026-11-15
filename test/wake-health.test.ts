@@ -9,8 +9,8 @@ const at = (minutesAgo: number) => new Date(NOW.getTime() - minutesAgo * 60_000)
 
 test('the outcomes that prove a seat was reached, and those that say it was not', () => {
   for (const outcome of ['delivered', 'delivered (read)', 'delivered (typed wake)', 'delivered (late)', 'answered']) expect(wakeEvidenceOf(outcome)).toBe('proven');
-  for (const outcome of ['not delivered', 'unreachable', 'wake not taken']) expect(wakeEvidenceOf(outcome)).toBe('failed');
-  for (const outcome of ['held', 'sent (unconfirmed)', 'awaiting receipt', 'delivered-but-blocked']) expect(wakeEvidenceOf(outcome)).toBeNull();
+  for (const outcome of ['not delivered', 'unreachable', 'wake not taken', 'queued, not woken', 'not-submitted']) expect(wakeEvidenceOf(outcome)).toBe('failed');
+  for (const outcome of ['held', 'sent (unconfirmed)', 'awaiting receipt', 'delivered-but-blocked', 'timeout']) expect(wakeEvidenceOf(outcome)).toBeNull();
 });
 
 test('a failure after the last proof is flagged; a proof after it clears the flag', () => {
@@ -22,6 +22,18 @@ test('a failure after the last proof is flagged; a proof after it clears the fla
   expect(wakeHealthOf(history, 'reviewer', NOW)).toEqual({ last_wake_seconds: 7200, wake_failed_seconds: 2640 });
   expect(wakeHealthOf([...history, { ts: at(3), to: 'reviewer', outcome: 'delivered (read)' }], 'reviewer', NOW)).toEqual({ last_wake_seconds: 180 });
   expect(wakeHealthOf(history, 'nobody', NOW)).toEqual({});
+});
+
+test('a receipt promoted late for an older message does not clear a newer failure', () => {
+  const history = [
+    { ts: at(90), to: 'reviewer', outcome: 'not delivered', id: 'old' },
+    { ts: at(40), to: 'reviewer', outcome: 'not delivered', id: 'new' },
+    // The watch noticed the old message's receipt only now: it proves the old one, not the new.
+    { ts: at(2), to: 'reviewer', outcome: 'delivered (read)', id: 'old' },
+  ];
+  expect(wakeHealthOf(history, 'reviewer', NOW)).toEqual({ last_wake_seconds: 120, wake_failed_seconds: 2400 });
+  // The newer message read: the failure is answered.
+  expect(wakeHealthOf([...history, { ts: at(1), to: 'reviewer', outcome: 'delivered (read)', id: 'new' }], 'reviewer', NOW)).toEqual({ last_wake_seconds: 60 });
 });
 
 test('the status cell names the failure and the last time the seat was reached', () => {
