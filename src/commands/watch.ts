@@ -1,3 +1,4 @@
+import { messageFile } from './messages.ts';
 import { traceChildStep } from '../diagnostics/child-steps.ts';
 import { captureModelDriftFences, clearRepairedModelDrifts } from '../send/model-drift.ts';
 import { beginBeatWork } from '../diagnostics/beat-work.ts';
@@ -2887,6 +2888,11 @@ async function sendHostedClimbs(
   for (const held of queue.splice(0)) {
     // The climb's own target: this team's lead, or the entity's orchestrator in its own checkout.
     const target = held.climb.target;
+    // A fallback record a stopped run already left settles the climb: no second copy anywhere.
+    if (existsSync(messageFile(target.root, target.seat, held.climb.id))) {
+      releaseHeldClimb(dir, held.climb.id);
+      continue;
+    }
     let ok = false;
     let text = '';
     try {
@@ -2926,8 +2932,9 @@ async function sendHostedClimbs(
       session: target.session,
       ...(held.climb.at === undefined ? {} : { at: held.climb.at }),
     });
-    logLine(dir, 'watch', 'watch', `${held.climb.seat}: the prompt climb to ${target.seat} was not sent — ${text}${outcome.ok ? '; it was left in the runtime mailbox' : ''}`, now());
-    releaseHeldClimb(dir, held.climb.id);
+    logLine(dir, 'watch', 'watch', `${held.climb.seat}: the prompt climb to ${target.seat} was not sent — ${text}${outcome.ok ? '; it was left in the runtime mailbox' : '; it stays held and is tried again'}`, now());
+    // Only a climb stored somewhere is let go: one that reached neither store stays held.
+    if (outcome.ok) releaseHeldClimb(dir, held.climb.id);
   }
   queue.push(...kept);
 }
