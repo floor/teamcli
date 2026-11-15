@@ -42,7 +42,7 @@ import { MailPass } from '../src/watch/mail-pass.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
 import { defaultWatch } from '../src/file/sections/watch.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_PULL_SECONDS, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds } from '../src/watch/rhythm.ts';
-import { reportStuckSeats, reportUnreadDrops, reportedPath, wakeBackoffMs, WAKE_SLOW_MAX_AGE_MS, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
+import { reportStuckSeats, reportUnreadDrops, reportedPath, wakeBackoffMs, wakeLinesPath, WAKE_SLOW_MAX_AGE_MS, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
@@ -1011,6 +1011,42 @@ describe("the watch's typed wake retry", () => {
     await wakeUnreadDrops(at(20 * MIN), { unreadAfter: N });
     expect(calls).toHaveLength(5);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
+  test('the slow retries stop once the seat reads the message', async () => {
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nread me', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_FAILED, TYPED_FAILED, TYPED_FAILED, TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+    const at = (ms: number) => sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + ms) });
+    for (const ms of [0, 5_000, 15_000]) await wakeUnreadDrops(at(ms), { unreadAfter: N });
+    expect(calls).toHaveLength(3);
+    // The seat reads it on its own turn: no slow retry is ever typed for it.
+    readInbox(made, UNREAD_A, 'helper', 'acme');
+    for (const ms of [10 * MIN, 40 * MIN, 3 * 60 * MIN]) await wakeUnreadDrops(at(ms), { unreadAfter: N });
+    expect(calls).toHaveLength(3);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+  });
+
+  test('a pane takes at most six typed lines an hour from the retry, however many messages wait', async () => {
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_FAILED, TYPED_FAILED], calls));
+    const live = liveWith('helper', 'helper-pane');
+    // Six lines already typed into this pane within the hour: the due message waits.
+    const recent = Array.from({ length: 6 }, (_, k) => NOW.getTime() - (k + 1) * 5 * MIN);
+    writeFileSync(wakeLinesPath(dropDir), `${JSON.stringify({ at: recent })}\n`);
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+    expect(calls).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    // Once the oldest of them is more than an hour old, one more line may go.
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 31 * MIN) }), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(readFileSync(wakeLinesPath(dropDir), 'utf8')).at).toHaveLength(6);
   });
 
   test('a message older than the slow retries\' age bound is not retried again', async () => {
