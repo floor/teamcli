@@ -390,13 +390,19 @@ async function screenRead(sources: WatchSources, gate: ReadGate, pane: string, s
     : sources.screen(pane, session);
 }
 
-/** The one read a blocked seat gets outside the pass's budget, bounded by its own deadline. */
+/** The one read a blocked seat gets outside the pass's budget, and the allowance every such read
+ *  in one pass shares. */
 const BLOCKED_SCREEN_READ_MS = 5_000;
+const BLOCKED_SCREEN_READS_PER_PASS_MS = 10_000;
 
-async function blockedScreenRead(sources: WatchSources, pane: string, session: string, signal: AbortSignal | undefined): Promise<string | null> {
-  if (signal?.aborted === true) return null;
+/** One blocked seat's read, under one absolute deadline that covers every attempt the read makes
+ *  (its styled read and the plain retry), and the loop's stop. */
+async function blockedScreenRead(sources: WatchSources, pane: string, session: string, stop: AbortSignal | undefined, budgetMs: number): Promise<string | null> {
+  if (stop?.aborted === true || budgetMs <= 0) return null;
+  const deadline = AbortSignal.timeout(budgetMs);
+  const signal = stop === undefined ? deadline : AbortSignal.any([stop, deadline]);
   return sources.screenAsync !== undefined
-    ? await sources.screenAsync(pane, session, { timeoutMs: BLOCKED_SCREEN_READ_MS, ...(signal === undefined ? {} : { signal }) })
+    ? await sources.screenAsync(pane, session, { timeoutMs: budgetMs, signal })
     : sources.screen(pane, session);
 }
 
@@ -1342,6 +1348,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               : {}),
           });
           const panesBySeat: Record<string, string> = {};
+          // The blocked seats' own reads share one allowance per pass.
+          let blockedReadsLeftMs = BLOCKED_SCREEN_READS_PER_PASS_MS;
           for (const seat of team.seats) {
             // Between seats: the screen read below is synchronous and can be slow.
             await yieldBeat();
@@ -1362,8 +1370,16 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             // its prompt's kind and text are what its lead is told, and without a screen the
             // notice could only say the screen was not recognised (2026-11-15: a Grok approval
             // dialog reported that way twice under load). One bounded read per blocked seat.
-            if (agent.status === 'blocked' && (liveScreen === undefined || liveScreen === '') && (extra === undefined || extra === null || extra === '')) {
-              extra = await blockedScreenRead(sources, agent.pane, session, hosted?.signal);
+            if (
+              agent.status === 'blocked' && (liveScreen === undefined || liveScreen === '')
+              && (extra === undefined || extra === null || extra === '') && blockedReadsLeftMs > 0
+            ) {
+              const began = Date.now();
+              extra = await blockedScreenRead(sources, agent.pane, session, hosted?.signal, Math.min(BLOCKED_SCREEN_READ_MS, blockedReadsLeftMs));
+              blockedReadsLeftMs -= Date.now() - began;
+              // A stop that cut the read ends the pass here: nothing is observed or escalated
+              // from a read the stop aborted.
+              if (hosted?.signal.aborted === true) break;
             }
             const rawScreen = readScreenNow
               ? (liveScreen !== undefined && liveScreen !== '' ? liveScreen : (extra ?? liveScreen))
