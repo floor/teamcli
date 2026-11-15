@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { afterEach, expect, test } from 'bun:test';
 import { retryDaemonHandoff } from '../src/commands/send.ts';
 import { requestDaemon } from '../src/send/daemon.ts';
+import { sendProbeReading } from '../src/daemon/host.ts';
 
 const servers: Server[] = [];
 afterEach(() => {
@@ -57,4 +58,13 @@ test('a dropped handoff is asked again under the same id once the endpoint answe
 test('an endpoint that never answers again leaves the handoff unanswered after the window', async () => {
   const gone = join(mkdtempSync(join(tmpdir(), 'hr-')), 'none.sock');
   expect(await retryDaemonHandoff(gone, request as never, { handoffRetryMs: 0 })).toBeNull();
+});
+
+test('a send-endpoint probe held by the shared event loop is not counted as the endpoint\'s miss', () => {
+  expect(sendProbeReading(true, 9_000)).toBe('answered');
+  // Refused or timed out on time: the endpoint's own miss.
+  expect(sendProbeReading(false, 5)).toBe('miss');
+  expect(sendProbeReading(false, 2_050)).toBe('miss');
+  // The two-second timer fired seconds late: the loop was held, and nothing is counted.
+  expect(sendProbeReading(false, 6_000)).toBe('held');
 });

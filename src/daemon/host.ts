@@ -527,6 +527,16 @@ type EndpointWatch = {
 };
 const SEND_PROBE_MISSES = 3;
 const SEND_PROBE_TIMEOUT_MS = 2_000;
+/** A probe that took longer than its timeout times this factor was held by the event loop. */
+export const SEND_PROBE_LAG_FACTOR = 1.5;
+
+/** What one send-endpoint probe says: answered; a miss the endpoint is answerable for; or no
+ *  reading, because the probe's own timeout fired well past its bound while the shared event loop
+ *  was held. */
+export function sendProbeReading(answered: boolean, elapsedMs: number): 'answered' | 'miss' | 'held' {
+  if (answered) return 'answered';
+  return elapsedMs > SEND_PROBE_TIMEOUT_MS * SEND_PROBE_LAG_FACTOR ? 'held' : 'miss';
+}
 
 /** A bus socket has no ping op, so one successful connect is the whole liveness answer. */
 function probeBusSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
@@ -2261,7 +2271,15 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
               // step, under the same capped backoff a bus revive uses.
               await restartHostedSend(watch);
             } else if (status.send === 'serving' || status.send === 'already-running') {
-              if (watch.sendSocket !== null && !(await probeDaemonSocket(watch.sendSocket, SEND_PROBE_TIMEOUT_MS))) {
+              const probeBegan = now().getTime();
+              const answered = watch.sendSocket === null || await probeDaemonSocket(watch.sendSocket, SEND_PROBE_TIMEOUT_MS);
+              // The endpoint shares this event loop: a probe whose own timeout fired well past its
+              // bound was held by the loop (a synchronous read elsewhere), not refused by the
+              // endpoint. Such a miss is not counted; a restart would only close the connections
+              // the endpoint holds (2026-11-15: every root's endpoint restarted every few
+              // minutes, and senders lost their typed handoffs).
+              const probe = sendProbeReading(answered, now().getTime() - probeBegan);
+              if (probe === 'miss') {
                 watch.sendMisses += 1;
                 if (watch.sendMisses >= SEND_PROBE_MISSES) {
                   watch.sendMisses = 0;
@@ -2274,7 +2292,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                   logLine(`root ${status.root}: send endpoint stopped answering (${String(SEND_PROBE_MISSES)} probes in a row)`);
                   await restartHostedSend(watch);
                 }
-              } else {
+              } else if (probe === 'answered') {
                 watch.sendMisses = 0;
               }
             }
