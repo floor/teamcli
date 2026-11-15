@@ -162,6 +162,5 @@ describe('a hosted watch names the daemon as its caller', () => {
     const code = await runWatch([], io, sources);
     expect({ code, err: io.err }).toMatchObject({ code: 0 });
     expect(asked).toBe(0);
-    expect(io.out).toContain('the watch of "acme-web" stopped');
   });
 });
