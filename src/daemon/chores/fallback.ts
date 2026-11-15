@@ -78,6 +78,7 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
       // mail already read; delivery and the inbox are unaffected.
       const said = `drop store: archiving read mail is off (${drops.refused}); delivery and the inbox are unaffected`;
       if (!SAID_DROP_REFUSALS.has(said)) {
+        if (SAID_DROP_REFUSALS.size >= SAID_DROP_LIMIT) SAID_DROP_REFUSALS.clear();
         SAID_DROP_REFUSALS.add(said);
         notes.push(said);
       }
