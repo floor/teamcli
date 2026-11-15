@@ -1403,13 +1403,21 @@ export async function retryDaemonHandoff(
   request: Parameters<typeof requestDaemon>[1],
   host: Pick<SendHost, 'handoffRetryMs'>,
 ): Promise<DaemonResponse | null> {
+  // One deadline on the monotonic clock covers the pings and the one replay.
   const window = host.handoffRetryMs ?? HANDOFF_RETRY_WAIT_MS;
-  for (let waited = 0; ; waited += HANDOFF_RETRY_POLL_MS) {
-    if (await probeDaemonSocket(socketPath)) return requestDaemon(socketPath, request);
-    if (waited + HANDOFF_RETRY_POLL_MS > window) return null;
+  const deadline = performance.now() + window;
+  const left = () => Math.max(0, deadline - performance.now());
+  for (;;) {
+    if (await probeDaemonSocket(socketPath, Math.min(400, Math.max(50, left())))) {
+      return requestDaemon(socketPath, request, Math.max(1_000, Math.min(HANDOFF_REPLAY_MS, left())));
+    }
+    if (left() < HANDOFF_RETRY_POLL_MS) return null;
     await new Promise<void>((resolve) => setTimeout(resolve, HANDOFF_RETRY_POLL_MS));
   }
 }
+
+/** The longest the one replay of a dropped handoff waits for its answer. */
+const HANDOFF_REPLAY_MS = 10_000;
 
 /** The team session the rest of this send will judge the caller in, read once from the folder
  *  the shell is in. `default` is the sessionless key `judgeCallerIn` already uses. A folder

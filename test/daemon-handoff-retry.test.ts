@@ -67,4 +67,14 @@ test('a send-endpoint probe held by the shared event loop is not counted as the 
   expect(sendProbeReading(false, 2_050)).toBe('miss');
   // The two-second timer fired seconds late: the loop was held, and nothing is counted.
   expect(sendProbeReading(false, 6_000)).toBe('held');
+  // However the loop is held, an endpoint with no answer for over a minute is missing.
+  expect(sendProbeReading(false, 6_000, 61_000)).toBe('miss');
+  expect(sendProbeReading(false, 6_000, 30_000)).toBe('held');
+});
+
+test('the retry window is one deadline: a silent endpoint gives up within it', async () => {
+  const gone = join(mkdtempSync(join(tmpdir(), 'hr-')), 'none.sock');
+  const began = performance.now();
+  expect(await retryDaemonHandoff(gone, request as never, { handoffRetryMs: 1_200 })).toBeNull();
+  expect(performance.now() - began).toBeLessThan(2_500);
 });
