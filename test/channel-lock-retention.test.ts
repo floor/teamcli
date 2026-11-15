@@ -162,7 +162,7 @@ describe('channel handoff sidecars retire with the record', () => {
     ]);
   });
 
-  test('refuses the whole pass when an unknown file sits beside a handoff sidecar', async () => {
+  test('an unknown file beside a handoff sidecar is left and said; the record retires with its sidecar', async () => {
     plant(EMITTED_ID);
     markRead(EMITTED_ID);
     writeFileSync(live(`${EMITTED_ID}.channel-emitted`), 'emitted\n');
@@ -176,12 +176,12 @@ describe('channel handoff sidecars retire with the record', () => {
       slices: { sliceMs: 2_000, stopping: () => false, yield: async () => true },
     });
 
-    expect(report.refused).toContain('unexpected');
-    expect(report.archived).toEqual([]);
-    expect(existsSync(live(EMITTED_ID))).toBe(true);
-    expect(existsSync(live(`${EMITTED_ID}.channel-emitted`))).toBe(true);
-    expect(existsSync(live(`${EMITTED_ID}.read.json`))).toBe(true);
-    expect(readdirSync(join(root, '.agents', 'send-drops')).includes(DROP_ARCHIVE_DIR)).toBe(false);
+    expect(report.refused).toBeNull();
+    expect(report.skipped.join('\n')).toContain('mystery.tar.gz');
+    expect(existsSync(live('mystery.tar.gz'))).toBe(true);
+    expect(existsSync(live(EMITTED_ID))).toBe(false);
+    expect(existsSync(live(`${EMITTED_ID}.channel-emitted`))).toBe(false);
+    expect(readdirSync(join(root, '.agents', 'send-drops')).includes(DROP_ARCHIVE_DIR)).toBe(true);
   });
 });
 
