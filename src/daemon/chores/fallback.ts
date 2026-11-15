@@ -58,6 +58,14 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
     }
   }
   if (drops !== null) {
+    // An entry the pass left alone is said once per process and entry, like a refusal.
+    for (const why of drops.skipped ?? []) {
+      const said = `drop store: left an entry it does not know where it is (${why}); the rest is archived`;
+      if (!SAID_DROP_REFUSALS.has(said)) {
+        SAID_DROP_REFUSALS.add(said);
+        notes.push(said);
+      }
+    }
     if (drops.refused !== null) {
       // The same refusal every pass is one fact, not a stream: said once per process and reason
       // (2026-11-13: one line every 30 s for a runtime that cannot archive). Archiving only moves
