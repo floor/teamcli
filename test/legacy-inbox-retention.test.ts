@@ -409,11 +409,11 @@ describe('the older messages store archive', () => {
     expect(first.recoveryDone).toBe(false);
     expect(first.recoveryLast).toBe('evt-work-p1.read.json');
     const second = plan(first.recoveryLast ?? undefined);
+    // The last two probes fit the limit exactly; discovery reaches the end and is done.
     expect(second.scanned).toBe(2);
-    expect(second.recoveryLast).toBe('evt-work-p3.read.json');
-    const third = plan(second.recoveryLast ?? undefined);
-    expect(third.recoveryDone).toBe(true);
-    expect(third.more).toBe(false);
+    expect(second.recoveryDone).toBe(true);
+    expect(second.recoveryLast).toBeNull();
+    expect(second.more).toBe(false);
   });
 
   test('a move stopped after the record left is finished by the next pass', () => {
