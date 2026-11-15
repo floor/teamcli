@@ -3002,7 +3002,14 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       });
       mkdirSync(join(fixture.root, 'web'), { recursive: true });
       updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = join(fixture.root, 'web'); });
-      run.sources.upLaunch.processInfo = (_session, pane) => (pane === 'pane-old' && run.did.runs.length === 0 ? { shell: 100, foreground: [100] } : { shell: 100, foreground: [201] });
+      // The launched CLI (200) is in front until the stop exits it; the pane then stands at its
+      // shell (100) until the relaunch runs there.
+      let exited = false;
+      const typeText = run.sources.launch!.typeText;
+      run.sources.launch!.typeText = (session, pane, text) => { exited = true; return typeText(session, pane, text); };
+      const sendKey = run.sources.launch!.sendKey;
+      run.sources.launch!.sendKey = (session, pane, key) => { exited = true; return sendKey(session, pane, key); };
+      run.sources.upLaunch.processInfo = (_session, pane) => (pane === 'pane-old' && exited && run.did.runs.length === 0 ? { shell: 100, foreground: [100] } : { shell: 100, foreground: [200] });
       // The kept pane draws the CLI's own idle prompt once the relaunch runs in it.
       const paneText = run.sources.upLaunch.paneText;
       run.sources.upLaunch.paneText = (session, pane) => (pane === 'pane-old' && run.did.runs.length > 0 ? screen() : paneText(session, pane));
