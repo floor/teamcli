@@ -25,7 +25,9 @@ export type Caller =
   // `session` is the session the placement was made in: the command passed it to `callerOf` and
   // the caller's pane root was found in that session's agent list. Absent when no session was
   // asked about (the caller's own server answered) and on callers a test hands in.
-  | { kind: 'seat'; name: string; pane: string; session?: string }
+  // `confined` marks a seat placed by its sandbox grant (src/placement/confined.ts): it cannot
+  // write outside its own folders, so its sends and replies go through its outbox.
+  | { kind: 'seat'; name: string; pane: string; session?: string; confined?: true }
   // An agentless herdr pane whose root process is among the caller's ancestors. The pane id
   // comes from the hint; the pid is what places it. `session` is recorded when the placement
   // was asked about one, and absent when none was.
@@ -245,8 +247,8 @@ function confinedCaller(sources: CallerSources, session?: string): Caller | null
     if (agents.some((agent) => agent.name === seat.name && agent.pane !== hint)) return null;
   }
   return session === undefined
-    ? { kind: 'seat', name: seat.name, pane: hint }
-    : { kind: 'seat', name: seat.name, pane: hint, session };
+    ? { kind: 'seat', name: seat.name, pane: hint, confined: true }
+    : { kind: 'seat', name: seat.name, pane: hint, session, confined: true };
 }
 
 /** A caller whose nearest Codex ancestor is a seat's own managed app-server is that seat: the

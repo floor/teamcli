@@ -97,6 +97,8 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/caller.ts',
       // Places a sandboxed seat by the folders its confinement lets it write.
       'src/placement/confined.ts',
+      // Runs a confined seat's send and reply as that seat, from its outbox.
+      'src/send/confined-outbox.ts',
       'src/process-tools-adapter.ts',
       'src/herdr.ts',
       // Ends processes a closed pane left behind (the service manager's reaper).
@@ -282,6 +284,7 @@ export const ADMISSION_MODULES: readonly string[] = [
   'src/quota/token-fallback.ts',
   'src/caller.ts',
   'src/placement/confined.ts',
+  'src/send/confined-outbox.ts',
   'src/process-tools-adapter.ts',
   'src/check/signature.ts',
   'src/file/signature.ts',

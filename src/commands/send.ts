@@ -1,3 +1,4 @@
+import { relayIfConfined } from '../send/confined-outbox.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
@@ -1374,6 +1375,11 @@ export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Pro
   const host = snapshotSendHost(rawHost);
   enterRunMemo();
   try {
+    // A seat its sandbox confines cannot write the recipient's drop or lock: its outbox carries
+    // the send to the team's watch, which runs this same command as that seat. The placement is
+    // the snapshot's own, so the send's gate reads the same one.
+    const relayed = await relayIfConfined('send', argv, io);
+    if (relayed !== null) return relayed;
     return await runSendWithSnapshot(argv, io, host);
   } finally {
     leaveRunMemo();
@@ -1416,6 +1422,8 @@ function sendCharterTargets(home: string, seatName: string | undefined, args: { 
 }
 
 async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, reportHolds = true): Promise<number> {
+  // The literal lists the contract reads; src/send/command-grammar.ts carries the same words for
+  // the confined-seat relay, and test/confined-outbox.test.ts holds the two equal.
   const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
