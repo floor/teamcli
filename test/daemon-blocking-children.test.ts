@@ -158,7 +158,8 @@ describe('a hosted watch names the daemon as its caller', () => {
       alive: () => false,
       pid: 4242,
     };
-    const code = await runWatch(['--file', '.agents/team.yaml'], io, sources);
+    // The daemon's own run: no arguments, as `hostedWatchRun` makes it.
+    const code = await runWatch([], io, sources);
     expect({ code, err: io.err }).toMatchObject({ code: 0 });
     expect(asked).toBe(0);
     expect(io.out).toContain('the watch of "acme-web" stopped');
