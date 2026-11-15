@@ -922,7 +922,7 @@ export function verifyDropArchive(raw: unknown, key: KeyObject): DropArchivePayl
 
 /** Whether `name` is an expected regular file name inside `.agents/send-drops/<session>/<seat>/`. */
 function isExpectedSeatDropFile(name: string): boolean {
-  if (name === '.inbox-listener' || name === '.unread.json') return true;
+  if (name === '.inbox-listener' || name === '.unread.json' || name === '.wake-lines.json') return true;
   if (UNREAD_TEMP_NAME.test(name) || RESERVE_TEMP_NAME.test(name)) return true;
   if (!name.includes('.')) return RECORD_NAME.test(name);
   const dot = name.indexOf('.');
