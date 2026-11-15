@@ -1049,6 +1049,22 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   let statusWaiters: { stop(): void; done: Promise<void> } | undefined;
   let statusWaitersKey = '';
   let finishWatchPass = () => {};
+  // A sandboxed seat's send waits in its outbox for this watch (src/send/confined-outbox.ts). The
+  // relay runs on its own tick, every `RELAY_EVERY_MS`, one batch at a time: a pass paced to
+  // minutes under load must not make a seat's send wait that long (2026-11-15: the floor pass ran
+  // every 240 s and Iris's send outlived her command's 45 s wait). Until a pass has read the team,
+  // the relay reads the team file the watch started with and no live panes.
+  let relayContext: { team: TeamFile; agents: { name: string | null; pane: string }[] | null } = { team: first.team, agents: null };
+  const relayTimer = hosted === undefined ? undefined : setInterval(() => {
+    if (hosted?.signal.aborted === true || relayRunning.has(dir)) return;
+    relayRunning.add(dir);
+    const context = relayContext;
+    void relayConfinedOutboxes(dir, session, context.team, context.agents, sources.now)
+      .catch((error: unknown) => logLine(dir, 'watch', 'watch', `the outbox relay failed: ${(error as Error).message}`, sources.now()))
+      .finally(() => relayRunning.delete(dir));
+  }, RELAY_EVERY_MS);
+  relayTimer?.unref?.();
+  hosted?.signal.addEventListener('abort', () => { if (relayTimer !== undefined) clearInterval(relayTimer); }, { once: true });
   try {
     for (;;) {
       // A hosted pass starts only while the host still wants one.
@@ -1345,14 +1361,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           }
           // A seat its sandbox confines sends and replies through its outbox: the daemon's
           // watch runs those commands for it, as that seat (src/send/confined-outbox.ts).
-          // The relay runs beside the pass, one batch per team at a time, so a send waiting on
-          // its receipt never holds the watch; a batch cut off by a stop is answered next time.
-          if (hosted !== undefined && !relayRunning.has(dir)) {
-            relayRunning.add(dir);
-            const agentsNow = live.agents.map((agent) => ({ name: agent.name, pane: agent.pane }));
-            void relayConfinedOutboxes(dir, session, team, agentsNow, sources.now)
-              .catch((error: unknown) => logLine(dir, 'watch', 'watch', `the outbox relay failed: ${(error as Error).message}`, sources.now()))
-              .finally(() => relayRunning.delete(dir));
+          // The pass hands the outbox relay its latest reading of the team and the live panes;
+          // the relay runs on its own short tick (below), not at the pass's pace.
+          if (hosted !== undefined) {
+            relayContext = { team, agents: live.agents.map((agent) => ({ name: agent.name, pane: agent.pane })) };
           }
           const nextPanesKey = Object.entries(panesBySeat)
             .sort(([a], [b]) => a.localeCompare(b))
@@ -2037,6 +2049,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       if (!(await sources.wait(waitSeconds, sweep))) break;
     }
   } finally {
+    if (relayTimer !== undefined) clearInterval(relayTimer);
     finishWatchPass();
     statusWaiters?.stop();
     await statusWaiters?.done;
@@ -2767,16 +2780,21 @@ const relayRunning = new Set<string>();
 
 /** Runs the waiting outbox requests of this team's seats as those seats, with the ordinary send
  *  and reply commands and their ordinary admission; what each run said goes back to the seat. */
+/** How often a hosted watch runs its seats' outbox requests, whatever its pass pace. */
+const RELAY_EVERY_MS = 3_000;
+
 async function relayConfinedOutboxes(
   dir: string,
   session: string,
   team: TeamFile,
-  agents: readonly { name: string | null; pane: string }[],
+  agents: readonly { name: string | null; pane: string }[] | null,
   now: () => Date,
 ): Promise<void> {
   await relayOutboxes(dir, session, team.seats.map((seat) => seat.name), {
     recordedPane: (seat) => readState(dir).sessions[session]?.seats[seat]?.pane,
-    agents: () => agents.map((agent) => ({ name: agent.name, pane: agent.pane })),
+    // The last pass's live panes; null until a pass has read them, and the relay then checks the
+    // pane the state records alone.
+    agents: () => (agents === null ? null : agents.map((agent) => ({ name: agent.name, pane: agent.pane }))),
     now,
     log: (line) => logLine(dir, 'watch', 'watch', line, now()),
     run: async (command, argv, cwd, caller) => {
