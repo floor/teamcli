@@ -38,7 +38,9 @@ import { watchReadLimits, type ReadLimits } from '../watch/read-limits.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchRunning } from '../watch/pane.ts';
 import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand } from './up.ts';
-import { realHost, redeliverChannelOnSocket } from './send.ts';
+import { realHost, redeliverChannelOnSocket, runSend } from './send.ts';
+import { realHost as realReplyHost, runReply } from './reply.ts';
+import { relayOutboxes } from '../send/confined-outbox.ts';
 import { sendDaemonDirect } from '../reminder/direct-send.ts';
 import { runRestart } from './restart.ts';
 import { notify } from '../watch/notify.ts';
@@ -1338,6 +1340,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           await statusEngine.tick(now);
           if (hosted !== undefined && sources.home !== undefined && hostedClimbs.length > 0) {
             await sendHostedClimbs(sources.home, root, team, session, hostedClimbs, dir, sources.now);
+          }
+          // A seat its sandbox confines sends and replies through its outbox: the daemon's
+          // watch runs those commands for it, as that seat (src/send/confined-outbox.ts).
+          if (hosted !== undefined) {
+            await relayConfinedOutboxes(dir, session, team, live.agents, sources.now);
           }
           const nextPanesKey = Object.entries(panesBySeat)
             .sort(([a], [b]) => a.localeCompare(b))
@@ -2734,6 +2741,47 @@ async function sendHostedBlockedEpisodes(
     if (held.tries >= PROMPT_NOTICE_TRIES) continue;
     await deliverPrompt(seat, held.body, held.id);
   }
+}
+
+/** Runs the waiting outbox requests of this team's seats as those seats, with the ordinary send
+ *  and reply commands and their ordinary admission; what each run said goes back to the seat. */
+async function relayConfinedOutboxes(
+  dir: string,
+  session: string,
+  team: TeamFile,
+  agents: readonly { name: string | null; pane: string }[],
+  now: () => Date,
+): Promise<void> {
+  await relayOutboxes(dir, session, team.seats.map((seat) => seat.name), {
+    recordedPane: (seat) => readState(dir).sessions[session]?.seats[seat]?.pane,
+    agents: () => agents.map((agent) => ({ name: agent.name, pane: agent.pane })),
+    now,
+    log: (line) => logLine(dir, 'watch', 'watch', line, now()),
+    run: async (command, argv, cwd, caller) => {
+      let out = '';
+      let err = '';
+      const io: Io = {
+        stdout: (text) => { out += text; },
+        stderr: (text) => { err += text; },
+        cwd,
+        env: process.env,
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+        stderrIsTTY: false,
+        caller,
+      };
+      let code: number;
+      try {
+        code = command === 'send'
+          ? await runSend(argv, io, realHost)
+          : await runReply(argv, io, realReplyHost);
+      } catch (error) {
+        code = 1;
+        err += `team ${command}: ${(error as Error).message}\n`;
+      }
+      return { code, out, err };
+    },
+  });
 }
 
 /** Whether a hosted watch delivers this climb itself: only when the entity's lead it climbs to is

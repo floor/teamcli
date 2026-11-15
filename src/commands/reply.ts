@@ -34,6 +34,7 @@
 // (`landsWhereRead`), and a write that cannot be confirmed says where it wrote and that the
 // reader was not confirmed. The reply rules themselves — who may answer, the thread, and the
 // read an answer marks — are decided before the walk and are untouched by it.
+import { relayIfConfined } from '../send/confined-outbox.ts';
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -483,6 +484,9 @@ export function raiseSecurityRefusal(
 }
 
 export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise<number> {
+  // A seat its sandbox confines cannot write the sender's drop: its outbox carries the reply.
+  const relayed = await relayIfConfined('reply', argv, io);
+  if (relayed !== null) return relayed;
   // Raw argv, before the parser: `--nope --json` must still answer with the structured document.
   const json = hasJsonFlag(argv);
   const args = readArgs(argv, [], ['close', 'json']);

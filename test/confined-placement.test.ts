@@ -153,7 +153,7 @@ describe('placeCaller with a confined seat', () => {
 
   test('an unreadable walk with a proved confinement places the seat', () => {
     const caller = placeCaller(base({ confinedSeat: () => ({ name: 'keeper', session: 's', dir: '/x' }) }), 's');
-    expect(caller).toEqual({ kind: 'seat', name: 'keeper', pane: 'pane-k', session: 's' });
+    expect(caller).toEqual({ kind: 'seat', name: 'keeper', pane: 'pane-k', session: 's', confined: true });
   });
 
   test('no proof keeps the refusal it had', () => {

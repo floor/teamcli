@@ -1,3 +1,4 @@
+import { relayIfConfined } from '../send/confined-outbox.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
@@ -1369,6 +1370,10 @@ function snapshotSendIo(io: Io): Io {
 }
 
 export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Promise<number> {
+  // A seat its sandbox confines cannot write the recipient's drop or lock: its outbox carries the
+  // send to the team's watch, which runs this same command as that seat.
+  const relayed = await relayIfConfined('send', argv, rawIo);
+  if (relayed !== null) return relayed;
   const snapshotId = beginHerdrSnapshot();
   const io = snapshotSendIo(rawIo);
   const host = snapshotSendHost(rawHost);
