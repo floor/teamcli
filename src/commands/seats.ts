@@ -53,7 +53,7 @@ export type SeatsSources = StatusSources & {
 export type SeatTraceSources = {
   /** The project's message history, read once by the caller, for each row's last proven wake
    *  and any failure since (src/status/wake.ts). Absent: rows carry neither. */
-  history?: readonly { ts: string; to: string; outcome: string; id?: string }[];
+  history?: readonly { ts: string; to: string; outcome: string; id?: string; via?: string }[];
   project: string;
   root: string;
   home?: string;

@@ -45,9 +45,11 @@ export type SeatWake = {
 };
 
 /** What a history line says about reaching its seat: proof that a message got through, a send
- *  that did not reach it, or nothing (a send still in flight, a hold, a reply wait that timed out:
- *  a timeout does not say whether the message itself was taken). */
-export function wakeEvidenceOf(outcome: string): 'proven' | 'failed' | null {
+ *  that did not reach it, or nothing (a send still in flight, a hold). A reply wait that timed out
+ *  is written by the leg that delivered the message: on a live leg it is proof the message got
+ *  there; on the stored inbox alone (`drop`, `mcp-inbox`) it proves nothing. */
+export function wakeEvidenceOf(outcome: string, via?: string): 'proven' | 'failed' | null {
+  if (outcome === 'timeout') return via !== undefined && via !== 'drop' && via !== 'mcp-inbox' ? 'proven' : null;
   if (outcome === 'delivered-but-blocked') return null;
   if (outcome.startsWith('delivered') || outcome === 'answered') return 'proven';
   if (
@@ -62,7 +64,7 @@ export function wakeEvidenceOf(outcome: string): 'proven' | 'failed' | null {
  *  message, or for a message first sent after it: a receipt promoted late for an older message
  *  never clears a newer failure. */
 export function wakeHealthOf(
-  entries: readonly { ts: string; to: string; outcome: string; id?: string }[],
+  entries: readonly { ts: string; to: string; outcome: string; id?: string; via?: string }[],
   seat: string,
   now: Date,
 ): { last_wake_seconds?: number; wake_failed_seconds?: number } {
@@ -73,7 +75,7 @@ export function wakeHealthOf(
     const at = Date.parse(entry.ts);
     if (!Number.isFinite(at)) continue;
     if (entry.id !== undefined && !(firstSent.get(entry.id)! <= at)) firstSent.set(entry.id, at);
-    const kind = wakeEvidenceOf(entry.outcome);
+    const kind = wakeEvidenceOf(entry.outcome, entry.via);
     if (kind !== null) ownLines.push({ at, kind, id: entry.id });
   }
   const sentAt = (line: { at: number; id: string | undefined }) => (line.id === undefined ? line.at : firstSent.get(line.id) ?? line.at);
@@ -103,7 +105,7 @@ export type SeatWakeInput = SeatDeliveryInput & {
   lead?: string;
   /** The project's message history, read once by the caller: the row's last proven wake and
    *  any failure since come from it. Absent: the row carries neither. */
-  history?: readonly { ts: string; to: string; outcome: string; id?: string }[];
+  history?: readonly { ts: string; to: string; outcome: string; id?: string; via?: string }[];
 };
 
 /**

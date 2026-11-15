@@ -11,6 +11,12 @@ test('the outcomes that prove a seat was reached, and those that say it was not'
   for (const outcome of ['delivered', 'delivered (read)', 'delivered (typed wake)', 'delivered (late)', 'answered']) expect(wakeEvidenceOf(outcome)).toBe('proven');
   for (const outcome of ['not delivered', 'unreachable', 'wake not taken', 'queued, not woken', 'not-submitted']) expect(wakeEvidenceOf(outcome)).toBe('failed');
   for (const outcome of ['held', 'sent (unconfirmed)', 'awaiting receipt', 'delivered-but-blocked', 'timeout']) expect(wakeEvidenceOf(outcome)).toBeNull();
+  // A reply wait that timed out after a live leg delivered the message is proof it got there;
+  // after the stored inbox alone it is not.
+  expect(wakeEvidenceOf('timeout', 'typed')).toBe('proven');
+  expect(wakeEvidenceOf('timeout', 'socket')).toBe('proven');
+  expect(wakeEvidenceOf('timeout', 'drop')).toBeNull();
+  expect(wakeEvidenceOf('timeout', 'mcp-inbox')).toBeNull();
 });
 
 test('a failure after the last proof is flagged; a proof after it clears the flag', () => {
@@ -34,6 +40,14 @@ test('a receipt promoted late for an older message does not clear a newer failur
   expect(wakeHealthOf(history, 'reviewer', NOW)).toEqual({ last_wake_seconds: 120, wake_failed_seconds: 2400 });
   // The newer message read: the failure is answered.
   expect(wakeHealthOf([...history, { ts: at(1), to: 'reviewer', outcome: 'delivered (read)', id: 'new' }], 'reviewer', NOW)).toEqual({ last_wake_seconds: 60 });
+});
+
+test('a send that waited for a reply and timed out after a typed delivery clears an earlier failure', () => {
+  const history = [
+    { ts: at(30), to: 'reviewer', outcome: 'not delivered', id: 'a' },
+    { ts: at(10), to: 'reviewer', outcome: 'timeout', id: 'b', via: 'typed' },
+  ];
+  expect(wakeHealthOf(history, 'reviewer', NOW)).toEqual({ last_wake_seconds: 600 });
 });
 
 test('the status cell names the failure and the last time the seat was reached', () => {
