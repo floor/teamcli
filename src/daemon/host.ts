@@ -14,13 +14,20 @@ import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fchmodSync,
+  fstatSync,
+  ftruncateSync,
   lstatSync,
+  openSync,
   readFileSync,
   realpathSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from 'node:fs';
+import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -148,6 +155,8 @@ export type NextPrincipalCheck = (input: {
 export type NextDispatchHandler = (input: NextHandlerInput) => Promise<NextAnswer>;
 
 export type StartMachineDaemonInput = {
+  /** A test's stand-in for the kernel lock; production uses the shared flock binding. */
+  kernelLock?: DaemonKernelLock;
   home?: string;
   /** The checkouts whose send and bus endpoints this one process hosts. */
   roots: string[];
@@ -420,7 +429,9 @@ async function settlesWithin(run: Promise<unknown>, ms: number): Promise<boolean
   }
 }
 
-type LockResult = { ok: true } | { ok: false; holder: number | null };
+type LockResult =
+  | { ok: true; release: () => void }
+  | { ok: false; holder: number | null; unbound?: true };
 
 function readLockPid(path: string): number | null {
   try {
@@ -433,24 +444,73 @@ function readLockPid(path: string): number | null {
   }
 }
 
-/** One lock file, 0600. A live holder is returned; a dead holder's file is removed once. */
-function acquireLock(path: string, pid: number): LockResult {
-  for (let attempt = 0; attempt < 2; attempt++) {
+/** The kernel lock the daemon's single instance stands on: the shared flock binding, or a test's
+ *  stand-in for it. */
+export type DaemonKernelLock = { bound(): boolean; exclusive(fd: number): boolean };
+const KERNEL_LOCK: DaemonKernelLock = { bound: flockBound, exclusive: flockExclusive };
+
+/** The refusal a runtime with no flock binding meets: no by-name lock stands in for it. */
+export const DAEMON_NEEDS_FLOCK = 'the daemon needs a kernel lock (flock through Bun); this runtime has none: run it with bun';
+
+/** Whether the descriptor is still the file at `path`: a lock taken on a file a releasing holder
+ *  had already unlinked locks nothing anyone else can see. */
+function lockStillNamed(fd: number, path: string): boolean {
+  try {
+    const open = fstatSync(fd);
+    const named = lstatSync(path);
+    return open.isFile() && named.isFile() && open.dev === named.dev && open.ino === named.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The daemon's single-instance lock, held by the kernel for the process's lifetime. The file is
+ * opened in place and flocked; only the holder writes its pid into it. A crash or a kill closes
+ * the descriptor and the kernel frees the lock at once, so a dead holder's file is never removed
+ * by path: two starts after a crash cannot each remove it and each take a fresh one. A start
+ * keeps the lock only while the descriptor is still the file at the path (a clean release
+ * unlinks it while still holding it, and a start that flocked the old file opens it again).
+ */
+function acquireLock(path: string, pid: number, kernel: DaemonKernelLock): LockResult {
+  // Asked before anything is opened: a runtime with no binding creates no lock file at all.
+  if (!kernel.bound()) return { ok: false, holder: null, unbound: true };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let fd: number;
     try {
-      writeFileSync(path, `${String(pid)}\n`, { flag: 'wx', mode: 0o600 });
-      chmodSync(path, 0o600);
-      return { ok: true };
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') return { ok: false, holder: null };
-    }
-    const holder = readLockPid(path);
-    if (holder !== null && pidAlive(holder)) return { ok: false, holder };
-    try {
-      unlinkSync(path);
+      fd = openSync(path, fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW, 0o600);
     } catch {
-      return { ok: false, holder };
+      return { ok: false, holder: readLockPid(path) };
     }
+    const held = kernel.exclusive(fd);
+    if (!held) {
+      closeSync(fd);
+      return { ok: false, holder: readLockPid(path) };
+    }
+    if (!lockStillNamed(fd, path)) {
+      closeSync(fd);
+      continue;
+    }
+    try {
+      fchmodSync(fd, 0o600);
+      ftruncateSync(fd, 0);
+      writeSync(fd, `${String(pid)}\n`, 0);
+    } catch {
+      closeSync(fd);
+      return { ok: false, holder: null };
+    }
+    let released = false;
+    return {
+      ok: true,
+      release: () => {
+        if (released) return;
+        released = true;
+        // Unlinked while still held: a start that opened this file before the unlink finds it
+        // no longer named once it gets the lock, and opens the path again.
+        try { if (lockStillNamed(fd, path)) unlinkSync(path); } catch { /* already gone */ }
+        try { closeSync(fd); } catch { /* already closed */ }
+      },
+    };
   }
   return { ok: false, holder: readLockPid(path) };
 }
@@ -591,8 +651,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const since = now().toISOString();
 
   ensureMachineDir(home);
-  const lock = acquireLock(lockPath, pid);
+  const lock = acquireLock(lockPath, pid, input.kernelLock ?? KERNEL_LOCK);
   if (!lock.ok) {
+    if (lock.unbound === true) return { kind: 'bind-failed', reason: DAEMON_NEEDS_FLOCK };
     if (lock.holder !== null && pidAlive(lock.holder)) {
       const answer = await probeDaemonHealth(socketPath, { id: `start-${randomUUID()}` });
       if (answer.kind === 'answered') return { kind: 'already-running', pid: answer.health.pid };
@@ -609,14 +670,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const releaseLock = (): void => {
     stopBeatWork();
     releaseGitRoots();
-    if (readLockPid(lockPath) === pid) {
-      try {
-        unlinkSync(lockPath);
-      } catch {
-        // Already gone.
-      }
-    }
+    lock.release();
   };
+
+  // The socket is probed, and a stale one removed, only while this process holds the lock: no
+  // second start can stand between its own probe and its own unlink, so one daemon binds per home.
 
   const entry = lstatSync(socketPath, { throwIfNoEntry: false });
   if (entry && !entry.isSocket()) {
