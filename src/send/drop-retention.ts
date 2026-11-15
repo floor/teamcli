@@ -922,7 +922,8 @@ export function verifyDropArchive(raw: unknown, key: KeyObject): DropArchivePayl
 
 /** Whether `name` is an expected regular file name inside `.agents/send-drops/<session>/<seat>/`. */
 function isExpectedSeatDropFile(name: string): boolean {
-  if (name === '.inbox-listener' || name === '.unread.json' || name === '.wake-lines.json') return true;
+  // `.stuck` is the watch's stuck-episode marker (src/watch/mail-pass.ts STUCK_MARKER).
+  if (name === '.inbox-listener' || name === '.unread.json' || name === '.wake-lines.json' || name === '.stuck' || name === '.DS_Store') return true;
   if (UNREAD_TEMP_NAME.test(name) || RESERVE_TEMP_NAME.test(name)) return true;
   if (!name.includes('.')) return RECORD_NAME.test(name);
   const dot = name.indexOf('.');
@@ -1419,6 +1420,8 @@ export function* dropRetirementSteps(
     for (const session of sessionEntries) {
       yield;
       if (session === DROP_ARCHIVE_DIR) continue;
+      // Finder's folder file is no team entry: it never stops the archive (teamcli, 2026-11-15).
+      if (session === '.DS_Store') continue;
       const sessionDir = join(sendDropsDir, session);
       if (!insideSendDrops(sendDropsDir, sessionDir) || !RECORD_NAME.test(session)) {
         return fail(`${sessionDir}: unexpected entry in send-drops`);
@@ -1442,6 +1445,11 @@ export function* dropRetirementSteps(
 
       for (const seat of seatEntries) {
         yield;
+        // A client's own inbox (`.clients/<client>`, src/client/inbox.ts) is not a seat's mail and
+        // has its own reader; the archive leaves it alone instead of stopping on it, and Finder's
+        // folder file is skipped. 2026-11-15: archiving was off on every root because of these,
+        // so read mail piled up (one seat folder held thousands of files) and every pass walked it.
+        if (seat === '.clients' || seat === '.DS_Store') continue;
         const seatDir = join(sessionDir, seat);
         if (!insideSendDrops(sendDropsDir, seatDir) || !RECORD_NAME.test(seat)) {
           return fail(`${seatDir}: unexpected entry in session drop folder`);

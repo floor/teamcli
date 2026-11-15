@@ -22,7 +22,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { listDrops, runDrops } from '../src/commands/drops.ts';
 import { listUnackedMessages, plantRecord, recordDir, runMessages } from '../src/commands/messages.ts';
@@ -547,6 +547,27 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
     expect(report2.refused).toContain('unexpected');
     expect(report2.archived).toEqual([]);
     expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+  });
+
+  test('archives past the entries a team writes beside the mail: a stuck marker, a client inbox and Finder\'s folder file', async () => {
+    // 2026-11-15: archiving was off on every root because the pass stopped on these, so read
+    // mail piled up and every chores pass walked thousands of files.
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+    writeFileSync(livePath('worker', '.stuck'), '{}');
+    writeFileSync(livePath('worker', '.DS_Store'), '');
+    const clientInbox = join(dirname(livePath('worker', 'x')), '..', '.clients', 'grok-bot');
+    mkdirSync(clientInbox, { recursive: true });
+    writeFileSync(join(clientInbox, 'note'), 'a client record');
+    writeFileSync(join(dirname(livePath('worker', 'x')), '..', '.DS_Store'), '');
+    const report = await retireDropsSliced({ root, home, team, at: NOW, slices: defaultSlices() });
+    expect(report.refused).toBeNull();
+    expect(report.archived.length).toBeGreaterThan(0);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(false);
+    // The entries themselves are left where they are.
+    expect(existsSync(livePath('worker', '.stuck'))).toBe(true);
+    expect(existsSync(join(clientInbox, 'note'))).toBe(true);
   });
 
   test('refuses check-then-rename race when archive destination or manifest parent is swapped for a symlink mid-pass', async () => {
