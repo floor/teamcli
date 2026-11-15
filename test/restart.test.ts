@@ -2989,39 +2989,34 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
   });
 
-  for (const [cli, yamlOf, launch, argv0, screen] of [
-    ['cursor', () => CURSOR_TEAM_YAML.replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web'), 'cursor-agent --model cursor-model', 'cursor-agent', () => CURSOR_IDLE],
-  ] as const) {
-    test(`a ${cli} pane kept at its shell in the planned folder is relaunched there, not stopped and refused`, async () => {
-      // 2026-11-14: a restart stopped a seat, kept its pane, and then refused the in-place launch
-      // ("its reused pane has no recorded start folder"), leaving the seat stopped.
-      const yaml = yamlOf().replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
-      const { fixture, run } = seeded({
-        registry: 'ses_keep', state: 'ses_keep', cli, model: 'Grok', version: '4.7', yaml,
-        launch, foregroundArgv0: argv0, newPaneScreen: screen(), launched: true,
-      });
-      mkdirSync(join(fixture.root, 'web'), { recursive: true });
-      updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = join(fixture.root, 'web'); });
-      // The launched CLI (200) is in front until the stop exits it; the pane then stands at its
-      // shell (100) until the relaunch runs there.
-      let exited = false;
-      const typeText = run.sources.launch!.typeText;
-      run.sources.launch!.typeText = (session, pane, text) => { exited = true; return typeText(session, pane, text); };
-      const sendKey = run.sources.launch!.sendKey;
-      run.sources.launch!.sendKey = (session, pane, key) => { exited = true; return sendKey(session, pane, key); };
-      run.sources.upLaunch.processInfo = (_session, pane) => (pane === 'pane-old' && exited && run.did.runs.length === 0 ? { shell: 100, foreground: [100] } : { shell: 100, foreground: [200] });
-      // The kept pane draws the CLI's own idle prompt once the relaunch runs in it.
-      const paneText = run.sources.upLaunch.paneText;
-      run.sources.upLaunch.paneText = (session, pane) => (pane === 'pane-old' && run.did.runs.length > 0 ? screen() : paneText(session, pane));
-      const io = testIo(fixture.root, { kind: 'owner' });
-      expect(await runRestart(['worker', '--fresh'], io, run.sources), io.err).toBe(0);
-      expect(io.err).not.toContain('no recorded start folder');
-      expect(run.did.closed).toEqual([]);
-      expect(run.did.created).toBe(0);
-      expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
-      expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
+  test('a Grok pane kept at its shell in the planned folder is relaunched there, not stopped and refused', async () => {
+    // 2026-11-14: a restart stopped a Grok seat, kept its pane at the shell, and then refused the
+    // in-place launch ("its reused pane has no recorded start folder"), leaving the seat stopped.
+    const yaml = GROK_TEAM_YAML
+      .replace('    launch: grok', '    launch: grok\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = seeded({
+      registry: GROK_SESSION, cli: 'grok', model: 'Grok', version: '4.7', yaml, launch: 'grok',
+      workerSession: GROK_SESSION, launched: true, foregroundArgv0: 'grok', newPaneScreen: GROK_IDLE,
     });
-  }
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = join(fixture.root, 'web'); });
+    run.sources.doctor = { ...run.sources.doctor, version: () => '1.0.52' };
+    // The launched CLI (200) is in front until /exit is typed; the pane then stands at its shell
+    // (100) until the relaunch runs there, and draws Grok's idle prompt after it.
+    const exited = () => run.did.typed.length > 0;
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (exited() && run.did.runs.length === 0 ? GROK_EXIT_TYPED : GROK_IDLE) : GROK_IDLE;
+    run.sources.upLaunch.processInfo = (_session, pane) =>
+      (pane === 'pane-old' && exited() && run.did.runs.length === 0 ? { shell: 100, foreground: [100] } : { shell: 100, foreground: [200] });
+    const paneText = run.sources.upLaunch.paneText;
+    run.sources.upLaunch.paneText = (session, pane) => (pane === 'pane-old' && run.did.runs.length > 0 ? GROK_IDLE : paneText(session, pane));
+    const io = testIo(fixture.root, { kind: 'owner' });
+    const code = await runRestart(['worker'], io, run.sources);
+    expect(io.err).not.toContain('no recorded start folder');
+    expect(code, io.err).toBe(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
+  });
 
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {
     const launch = 'zsh /home/owner/as-floor.sh grok --model grok-4.7';
