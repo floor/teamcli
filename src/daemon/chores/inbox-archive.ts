@@ -369,6 +369,7 @@ export async function inboxArchivePass(input: {
   // 3. The older `.agents/messages/<seat>` store the runtime still writes its notices into: the
   //    same rules for this team's session, after the drop folders, inside the same budgets.
   const busy: string[] = [];
+  let flockMissing = false;
   if (!more) {
     legacy: for (const folder of legacySeatFolders(root)) {
       const key2 = `messages/${folder.seat}`;
@@ -407,6 +408,13 @@ export async function inboxArchivePass(input: {
             ...(recoveryAfter === undefined ? {} : { recoveryAfter }),
           },
         });
+        if (report.unbound === true) {
+          // No kernel lock in this process: the store is never moved without one. Said once.
+          if (!flockMissing) refused.push('flock could not be bound; the older messages store was not moved (dry run only)');
+          flockMissing = true;
+          run.completed.push(key2);
+          continue legacy;
+        }
         if (report.busy !== null) {
           // Another archiver (a manual `team drops archive`) holds this mailbox: skipped for this
           // pass, not an error; the day stays open so a later pass comes back to it.

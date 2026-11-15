@@ -29,11 +29,12 @@
 // in-process mutex keeps two calls off one mailbox. A manual `team drops archive` never moves
 // here, with or without a daemon: it lists what is due and leaves it to the nightly pass.
 //
-// The lock file `<seat>/.archiver.lock` (O_EXCL; pid, host, start time, boot) stays as the guard
-// for the one remaining overlap: a chores child that died across a daemon restart. It is broken
-// only when its pid is dead on this host or the machine booted since, never on age while its pid
-// lives; a mailbox whose lock is held is skipped and reported busy. The holder checks the lock is
-// still its own before every unit, so a claim seen by a holder belongs to a mover that stopped.
+// The mover also holds `<seat>/.archiver.lock` with a kernel lock (flock, LOCK_EX|LOCK_NB, from
+// src/lock/flock.ts) on one descriptor kept for the whole run. The kernel drops it when the
+// process ends, so no holder is ever judged stale and nothing is renamed or broken; the file stays
+// on disk. A mailbox whose lock is held is skipped and reported busy, so even two daemon fleets
+// cannot move one mailbox at once. When flock cannot be bound, nothing moves: the run is a dry run
+// and says so. A claim the holder sees was left by a mover that has stopped.
 //
 // Recovery (a claim a stopped pass left, a live receipt whose record is already archived) is
 // bounded by the same limits as the moves, before them: every claim and every archive probe for
@@ -42,10 +43,9 @@
 // Nothing is deleted. A runtime writer that writes a record once per id asks
 // `legacyArchivedRecordExists`, which also sees a claimed record, so a notice is not written twice.
 import type { KeyObject } from 'node:crypto';
-import { randomBytes } from 'node:crypto';
-import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
-import { hostname, uptime } from 'node:os';
+import { closeSync, constants, ftruncateSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { daemonStateAlive, readDaemonState } from '../daemon/state.ts';
+import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { join } from 'node:path';
 import { heldAt } from '../held.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
@@ -137,130 +137,57 @@ export function daemonServesRoot(home: string, root: string): boolean {
 /** The archiver lock's name in a seat's mailbox folder. */
 export const LEGACY_ARCHIVER_LOCK = '.archiver.lock';
 
-/** A lock file with no readable holder this long after it was made is a crash's leftover. */
-const LOCK_UNWRITTEN_MS = 60_000;
+/** How the lock reaches the kernel; a test swaps them. */
+export type LockDeps = { bound: () => boolean; exclusive: (fd: number) => boolean };
 
-/** How far two readings of the boot instant may differ and still be the same boot. */
-const BOOT_SLACK_MS = 120_000;
+export const realLockDeps = (): LockDeps => ({ bound: flockBound, exclusive: flockExclusive });
 
-type LockHolder = { pid: number; host: string; started: string; boot: string; token: string };
+export type ArchiverLock =
+  | { kind: 'held'; release: () => void }
+  | { kind: 'busy'; holder: string }
+  | { kind: 'unbound' }
+  | { kind: 'refused'; why: string };
 
-/** The machine's boot instant, to the second: now less the uptime. */
-export function bootInstant(): string {
-  return new Date(Math.round((Date.now() - uptime() * 1000) / 1000) * 1000).toISOString();
-}
-
-function pidLives(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-function readHolder(path: string): LockHolder | null {
-  const parsed = readJsonNoLink(path) as Partial<LockHolder> | undefined;
-  if (parsed === undefined || typeof parsed !== 'object' || parsed === null) return null;
-  if (typeof parsed.pid !== 'number' || typeof parsed.host !== 'string' || typeof parsed.boot !== 'string' || typeof parsed.token !== 'string') return null;
-  return parsed as LockHolder;
-}
-
-/** Whether a lock may be broken: its pid is dead on this host, or this host booted since. A lock
- *  from another host, or a live pid of this boot, is never stale, whatever its age. */
-function lockStale(path: string, holder: LockHolder | null, deps: LockDeps): boolean {
-  if (holder === null) {
-    try {
-      return Date.now() - lstatSync(path).mtimeMs > LOCK_UNWRITTEN_MS;
-    } catch {
-      return false;
-    }
-  }
-  if (holder.host !== deps.host) return false;
-  const was = Date.parse(holder.boot);
-  const now = Date.parse(deps.boot);
-  if (!Number.isFinite(was) || !Number.isFinite(now) || Math.abs(was - now) > BOOT_SLACK_MS) return true;
-  return !deps.alive(holder.pid);
-}
-
-/** What the lock reads of the machine; a test swaps them. */
-export type LockDeps = { pid: number; host: string; boot: string; alive: (pid: number) => boolean };
-
-export const realLockDeps = (): LockDeps => ({ pid: process.pid, host: hostname(), boot: bootInstant(), alive: pidLives });
-
-export type ArchiverLock = { kind: 'held'; path: string; token: string; still: () => boolean; release: () => void } | { kind: 'busy'; holder: string };
-
-function create(path: string, deps: LockDeps): ArchiverLock | 'exists' | string {
-  const holder: LockHolder = { pid: deps.pid, host: deps.host, started: new Date().toISOString(), boot: deps.boot, token: randomBytes(12).toString('hex') };
+/** Opens the mailbox's lock file once and takes the kernel lock on it, without waiting. The
+ *  descriptor is kept until `release`, which closes it; the file is never removed. */
+export function takeArchiverLock(dir: string, deps: LockDeps = realLockDeps()): ArchiverLock {
+  if (!deps.bound()) return { kind: 'unbound' };
+  const path = join(dir, LEGACY_ARCHIVER_LOCK);
+  const kind = heldAt(path).kind;
+  if (kind !== 'file' && kind !== 'missing') return { kind: 'refused', why: 'the archiver lock is not a plain file' };
   let fd: number;
   try {
-    fd = openSync(path, 'wx', 0o600);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'exists' : 'the archiver lock could not be made';
+    fd = openSync(path, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  } catch {
+    return { kind: 'refused', why: 'the archiver lock could not be opened' };
   }
-  try {
-    writeSync(fd, `${JSON.stringify(holder)}\n`);
-    fsyncSync(fd);
-  } finally {
+  if (!deps.exclusive(fd)) {
+    let holder = 'another archiver';
+    try {
+      const text = readFileSync(path, 'utf8').trim();
+      if (text !== '') holder = text;
+    } catch {
+      // The holder line is for people; the kernel lock is the fact.
+    }
     closeSync(fd);
+    return { kind: 'busy', holder };
   }
-  const still = (): boolean => readHolder(path)?.token === holder.token;
+  // Who holds it, for a person reading the folder. The kernel lock, not this line, is the hold.
+  try {
+    ftruncateSync(fd, 0);
+    writeSync(fd, `pid ${String(process.pid)} since ${new Date().toISOString()}\n`, 0);
+  } catch {
+    // Informational only.
+  }
+  let open = true;
   return {
     kind: 'held',
-    path,
-    token: holder.token,
-    still,
     release: () => {
-      if (!still()) return;
-      try {
-        unlinkSync(path);
-      } catch {
-        // Already gone; the next archiver makes its own.
-      }
+      if (!open) return;
+      open = false;
+      closeSync(fd);
     },
   };
-}
-
-function describeHolder(holder: LockHolder | null): string {
-  return holder === null ? 'an archiver whose lock is still being written' : `pid ${String(holder.pid)} on ${holder.host} since ${holder.started}`;
-}
-
-/** Takes the mailbox's archiver lock, breaking it once when its holder is provably gone. */
-export function takeArchiverLock(dir: string, deps: LockDeps = realLockDeps()): ArchiverLock | { kind: 'refused'; why: string } {
-  const path = join(dir, LEGACY_ARCHIVER_LOCK);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (heldAt(path).kind === 'link') return { kind: 'refused', why: 'the archiver lock is a link' };
-    const made = create(path, deps);
-    if (typeof made === 'object') return made;
-    if (made !== 'exists') return { kind: 'refused', why: made };
-    const holder = readHolder(path);
-    if (attempt === 1 || !lockStale(path, holder, deps)) return { kind: 'busy', holder: describeHolder(holder) };
-    // Move the stale lock aside (only one breaker can), then check it is the one judged stale: a
-    // fresh lock taken in between is put back, and its holder keeps it.
-    const aside = join(dir, `${LEGACY_ARCHIVER_LOCK}.broken.${randomBytes(6).toString('hex')}`);
-    try {
-      renameSync(path, aside);
-    } catch {
-      continue;
-    }
-    const moved = readHolder(aside);
-    const same = holder === null ? moved === null : moved?.token === holder.token;
-    if (!same) {
-      try {
-        linkSync(aside, path);
-        unlinkSync(aside);
-      } catch {
-        // Another lock was taken meanwhile; the one moved aside fails its holder's next check.
-      }
-      return { kind: 'busy', holder: describeHolder(moved) };
-    }
-    try {
-      unlinkSync(aside);
-    } catch {
-      // A lock file, not mail; a leftover name is harmless.
-    }
-  }
-  return { kind: 'busy', holder: 'another archiver' };
 }
 
 type Judge = {
@@ -673,6 +600,8 @@ export type LegacyArchiveReport = {
   kept: number;
   /** Another archiver holds this mailbox: nothing was done, and the pass should come back. */
   busy: string | null;
+  /** flock could not be bound in this process, so the run moved nothing (a dry run). */
+  unbound?: true;
   refused: string | null;
 };
 
@@ -704,10 +633,15 @@ export function archiveLegacySeat(input: {
   inProcess.add(dir);
   try {
     const lock = takeArchiverLock(dir, input.lockDeps);
+    if (lock.kind === 'unbound') {
+      // No kernel lock in this process: nothing moves. The plan is still what a dry run shows.
+      const plan = planLegacySeatArchive({ ...input, nowMs });
+      return { dryRun: true, plan, moved: [], finished: 0, kept: 0, busy: null, refused: null, unbound: true };
+    }
     if (lock.kind === 'busy') return { dryRun: false, plan: { ...empty, more: true }, moved: [], finished: 0, kept: 0, busy: lock.holder, refused: null };
     if (lock.kind === 'refused') return { dryRun: false, plan: { ...empty, more: false }, moved: [], finished: 0, kept: 0, busy: null, refused: `${input.seat}: ${lock.why}` };
     try {
-      return archiveHeld(input, dir, nowMs, lock);
+      return archiveHeld(input, dir, nowMs);
     } finally {
       lock.release();
     }
@@ -722,19 +656,11 @@ function archiveHeld(
   input: { root: string; session: string; seat: string; key: KeyObject; options: LegacyPlanOptions; hooks?: LegacyMoveHooks },
   dir: string,
   nowMs: number,
-  lock: Extract<ArchiverLock, { kind: 'held' }>,
 ): LegacyArchiveReport {
   const plan = planLegacySeatArchive({ ...input, nowMs });
   const report: LegacyArchiveReport = { dryRun: false, plan, moved: [], finished: 0, kept: 0, busy: null, refused: null };
-  const lost = (): boolean => {
-    if (lock.still()) return false;
-    report.busy = 'the archiver lock was taken over';
-    report.plan.more = true;
-    return true;
-  };
   const j: Judge = { root: input.root, session: input.session, seat: input.seat, key: input.key, nowMs, unreadKeepMs: input.options.unreadKeepMs };
   for (const item of plan.recovery) {
-    if (lost()) return report;
     const problem = recover(dir, j, item);
     if (problem !== null) {
       report.refused = problem;
@@ -743,7 +669,6 @@ function archiveHeld(
     report.finished += 1;
   }
   for (const move of plan.move) {
-    if (lost()) return report;
     const out = moveClaimed(dir, j, move.id, input.hooks, false);
     if (out.kind === 'refused') {
       report.refused = out.why;
