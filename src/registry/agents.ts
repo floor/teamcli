@@ -182,9 +182,11 @@ function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Ag
   try {
     names = readdirSync(agentsDir(home));
   } catch {
+    forgetCachedHome(home);
     memo?.agents.set(home, []);
     return [];
   }
+  touchCachedHome(home);
   const agents: Agent[] = [];
   const seen = new Set<string>();
   for (const name of names.sort()) {
@@ -210,6 +212,31 @@ function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Ag
  *  own copy. */
 const parsedAgentFiles = new Map<string, { text: string; agent: Agent | null }>();
 
+/** The homes whose files the cache holds, most recently read last; at most `CACHED_HOMES`. */
+const cachedHomes: string[] = [];
+const CACHED_HOMES = 4;
+
+/** Drops every cached file of a home. */
+function forgetCachedHome(home: string): void {
+  const prefix = `${agentsDir(home)}/`;
+  for (const path of [...parsedAgentFiles.keys()]) if (path.startsWith(prefix)) parsedAgentFiles.delete(path);
+  const at = cachedHomes.indexOf(home);
+  if (at !== -1) cachedHomes.splice(at, 1);
+}
+
+/** Marks a home as just read, and lets the least recently read go past the bound. */
+function touchCachedHome(home: string): void {
+  const at = cachedHomes.indexOf(home);
+  if (at !== -1) cachedHomes.splice(at, 1);
+  cachedHomes.push(home);
+  while (cachedHomes.length > CACHED_HOMES) forgetCachedHome(cachedHomes[0]!);
+}
+
+/** A deep copy: the cache's own record is never reachable by a caller. */
+function cachedCopy(agent: Agent): Agent {
+  return structuredClone(agent);
+}
+
 function readAgentFileCached(path: string, id: string): Agent | null {
   let text: string;
   try {
@@ -219,9 +246,9 @@ function readAgentFileCached(path: string, id: string): Agent | null {
     return null;
   }
   const cached = parsedAgentFiles.get(path);
-  if (cached !== undefined && cached.text === text) return cached.agent === null ? null : cloneAgent(cached.agent);
+  if (cached !== undefined && cached.text === text) return cached.agent === null ? null : cachedCopy(cached.agent);
   const agent = parseAgentText(text, path, id);
-  parsedAgentFiles.set(path, { text, agent: agent === null ? null : cloneAgent(agent) });
+  parsedAgentFiles.set(path, { text, agent: agent === null ? null : cachedCopy(agent) });
   return agent;
 }
 

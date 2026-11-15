@@ -660,6 +660,10 @@ test('team remove --keep does not mark a seat stopped while its unnamed pane sti
   expect(closed).toEqual([]);
   expect(said(io)).toContain('was not stopped and is left running');
   expect(seatState()).toBeDefined();
+  // --abandon keeps its admitted path: the same pane is no refusal there.
+  const abandoned = testIo(root, { kind: 'owner' });
+  await runRemove([WORKER, '--keep', '--abandon'], abandoned, sources);
+  expect(said(abandoned)).not.toContain('was not stopped and is left running');
 });
 
 test('team remove leaves a human owner pane unswept', async () => {

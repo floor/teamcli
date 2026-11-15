@@ -1,3 +1,4 @@
+import { paneHoldsOnlyShell } from '../launch/identity.ts';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -804,6 +805,22 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         return clientRefused(plainLine(stood));
       }
     }
+    // A seat herdr names no agent for whose own recorded pane still runs a process beside its
+    // shell has a CLI nobody stopped: it is not marked stopped or removed while it runs (jedi,
+    // 2026-11-15 10:47Z). The reading comes first, before any endpoint, file, state or registry
+    // change; `--abandon` keeps its admitted path, and a pane the host no longer lists, or one
+    // that cannot be read, keeps today's behaviour.
+    if (live && !agent && !human && !abandon && recorded?.pane !== undefined && sources.processes !== undefined) {
+      const paneNow = sources.processes(session, recorded.pane);
+      if (paneNow !== null && !paneHoldsOnlyShell(paneNow)) {
+        const why = `${name}: its pane ${recorded.pane} still runs a process beside its shell that the terminal host does not name; the seat was not stopped and is left running. Stop its CLI, or run \`team remove ${name} --abandon\`, then remove it again`;
+        if (json) refuse(io, json, 'remove', { id: 'remove.still-running', message: why, repair: null });
+        else io.stderr(`team remove: ${why}\n`);
+        logLine(dir, 'remove', whoText, why, sources.now());
+        // exit: remove.still-running
+        return 1;
+      }
+    }
     // A seat herdr no longer lists has no CLI left to stop, but the endpoint its launch started
     // may still be alive. It is stopped before the file and state are written; a stop that
     // cannot prove the recorded process refuses the removal and keeps the record that names it.
@@ -872,7 +889,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // it, while the record still names the pane. A human's declaration leaves both alone, and
     // a stopped seat's own close already closed what it made.
     if (live && !agent && !human && recorded?.workspace !== undefined) {
-      const swept = await sweepVacated({
+      await sweepVacated({
         io: noteIo,
         dir,
         session,
@@ -885,17 +902,6 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         caller: whoText,
         ...(callerPane === undefined ? {} : { callerPane }),
       });
-      // The host names no agent here, but the pane still runs something (a CLI the host has not
-      // named, a working screen, unsent text): nothing stopped it, so the seat is not marked
-      // stopped or removed while it runs (jedi, 2026-11-15 10:47Z). The run says so and stops.
-      if (swept.stillRunning !== undefined) {
-        const why = `${name}: its pane ${swept.stillRunning}; the seat was not stopped and is left running. Stop its CLI (or run \`team remove ${name} --abandon\`), then remove it again`;
-        if (json) refuse(io, json, 'remove', { id: 'remove.still-running', message: why, repair: null });
-        else io.stderr(`team remove: ${why}\n`);
-        logLine(dir, 'remove', whoText, why, sources.now());
-        // exit: remove.still-running
-        return 1;
-      }
     }
 
     let kept: string | null = null;
@@ -1209,13 +1215,9 @@ export async function sweepVacated(input: {
   caller: string;
   /** The pane this command runs in: a workspace holding it is never closed. */
   callerPane?: string;
-}): Promise<{ stillRunning?: string }> {
+}): Promise<void> {
   const launch = input.sources.launch;
-  if (!launch) return {};
-  // The sweep's own reasons for leaving a workspace that still runs something: the caller must
-  // not record the seat as stopped while its pane does.
-  let stillRunning: string | undefined;
-  const runningWords = ['holds a process beside its shell', 'holds a screen that is working', 'holds unsent text'];
+  if (!launch) return;
   const { sources, session } = input;
   const host: Host = {
     startServer: () => false,
@@ -1236,11 +1238,7 @@ export async function sweepVacated(input: {
     running() {},
     drop() {},
     say: (line) => input.io.stdout(line),
-    log: (who, what) => {
-      const words = runningWords.find((one) => what.includes(one));
-      if (words !== undefined) stillRunning = words.replace('holds', 'still holds');
-      logLine(input.dir, input.logCommand, input.caller, `${who}: ${what}`, sources.now());
-    },
+    log: (who, what) => logLine(input.dir, input.logCommand, input.caller, `${who}: ${what}`, sources.now()),
     agentList: (name) => sources.agents(name),
     workspacePanes: sources.workspacePanes ? (name, workspace) => sources.workspacePanes!(name, workspace) : undefined,
     processInfo: sources.processes ? (name, pane) => sources.processes!(name, pane) : undefined,
@@ -1264,5 +1262,4 @@ export async function sweepVacated(input: {
     session,
     host,
   );
-  return stillRunning === undefined ? {} : { stillRunning };
 }

@@ -387,6 +387,9 @@ describe('the long-lived reader', () => {
     // A caller that changes its copy changes nothing another caller reads.
     const copy = readAgents(home)[0]!;
     copy.reach.pane = 'mutated';
+    copy.skills.push('mutated');
     expect(readAgents(home)[0]?.reach.pane).toBe('w98:p1');
+    expect(readAgents(home)[0]?.skills).toEqual([]);
+    expect(readAgents(home, { fresh: true })[0]?.skills).toEqual([]);
   });
 });
