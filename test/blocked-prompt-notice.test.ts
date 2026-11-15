@@ -154,6 +154,74 @@ test('an unrecognised prompt escalates, then reminds once after the long window,
   expect(PROMPT_REMINDER_MS).toBe(60 * MIN);
 });
 
+function entityWorld(): { root: string; home: string } {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'blocked-prompt-')));
+  cleanups.push(() => rmSync(base, { recursive: true, force: true }));
+  const root = join(base, 'crew');
+  const home = join(base, 'home');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  mkdirSync(join(home, '.config', 'team'), { recursive: true });
+  upsertTeam(home, teamIdOf(root), {
+    project: 'crew',
+    entity: 'crew',
+    session: 'crew',
+    root,
+    roster: [{ agent: 'agt_lead00000000', seat: 'lead', role: 'coordinator', leads: true }],
+    lifecycle: 'running',
+  });
+  return { root, home };
+}
+
+test('an overdue tick raises the escalation and the reminder under two mailbox identities', async () => {
+  const climbs: StatusClimb[] = [];
+  const { root, home } = entityWorld();
+  let clock = Date.parse('2026-11-14T18:18:00.000Z');
+  const engine = createSeatStatusEngine({
+    team: team(),
+    root,
+    home,
+    source: blockedSource(),
+    now: () => clock,
+    promptEscalationSeconds: 300,
+    promptReminderMs: 60 * MIN,
+    deliverClimb: (climb) => {
+      climbs.push(climb);
+      return true;
+    },
+  });
+  await engine.observe('worker-1', 'blocked', clock, 'p1', '');
+  clock += 90 * MIN;
+  const emitted = await engine.tick(clock);
+  expect(emitted.filter((event) => event.input.kind === 'seat.prompt-escalated')).toHaveLength(2);
+  expect(climbs).toHaveLength(2);
+  expect(new Set(climbs.map((climb) => climb.id)).size).toBe(2);
+  expect(climbs.some((climb) => climb.id.startsWith('evt-prompt-remind-worker-1-'))).toBe(true);
+});
+
+test('the lead\'s own prompt climbs at once and is never reminded', async () => {
+  const climbs: StatusClimb[] = [];
+  const { root, home } = entityWorld();
+  let clock = Date.parse('2026-11-14T18:18:00.000Z');
+  const engine = createSeatStatusEngine({
+    team: team(),
+    root,
+    home,
+    source: blockedSource(),
+    now: () => clock,
+    promptEscalationSeconds: 300,
+    promptReminderMs: 60 * MIN,
+    deliverClimb: (climb) => {
+      climbs.push(climb);
+      return true;
+    },
+  });
+  await engine.observe('lead', 'blocked', clock, 'p0', '');
+  clock += 3 * 60 * MIN;
+  const emitted = await engine.tick(clock);
+  expect(emitted.filter((event) => event.input.record_id.startsWith('status:prompt-reminder:'))).toHaveLength(0);
+  expect(climbs.filter((climb) => climb.id.startsWith('evt-prompt-remind-'))).toHaveLength(0);
+});
+
 test('a hosted watch tells the lead a grok seat waits at its command approval, with the screen, once', async () => {
   const when = new Date('2026-11-14T18:18:00.000Z');
   const made = world(null, [{ name: 'gravel', role: 'implementer', cli: 'grok', launch: 'grok' }]);

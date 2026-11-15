@@ -2702,9 +2702,11 @@ async function sendHostedBlockedEpisodes(
       const body = shown === null
         ? event.reason ?? `${event.seat}: ${cause}`
         : `${event.reason ?? `${event.seat}: ${cause}`}\n\nOn its screen:\n${shown}`;
+      // A prompt report is said once per spell, so the pass that carries it names the spell: the
+      // same dialog met again after the seat moved on is a new spell and a new notice.
       const digest = createHash('sha256').update(`${cause}\n${event.reason ?? ''}`).digest('hex').slice(0, 12);
-      const start = episodes?.[event.seat]?.since;
-      await deliverPrompt(event.seat, body, `blocked-episode-${event.seat}-${typeof start === 'number' ? `${start}-` : ''}${digest}`);
+      const spell = ts.replace(/[^0-9A-Za-z]/g, '');
+      await deliverPrompt(event.seat, body, `blocked-episode-${event.seat}-${digest}-${spell}`);
       continue;
     }
     if (event.kind !== 'seat.blocked') continue;
@@ -2785,8 +2787,8 @@ async function sendHostedClimbs(
   queue.push(...kept);
 }
 
-/** One prompt notice: its id names the seat, the open episode's start when there is one, and the
- *  cause's digest. `tries` caps the retries of a notice whose send did not succeed. */
+/** One prompt notice: its id names the seat, the cause's digest and the pass that said the spell.
+ *  `tries` caps the retries of a notice whose send did not succeed. A seat keeps its latest one. */
 type PendingPromptNotice = { id: string; body: string; sent: boolean; tries: number };
 
 const PROMPT_NOTICE_TRIES = 5;

@@ -822,7 +822,10 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       if (target !== null && target.seat !== eventInput.seat) {
         const stamp = (eventInput.ts ?? new Date(now()).toISOString()).replace(/[^0-9A-Za-z]/g, '');
         const climbed = eventInput.kind === 'seat.prompt-escalated';
-        const id = `evt-prompt-${climbed ? 'climb' : 'lead'}-${eventInput.seat}-${stamp}`;
+        // The reminder is its own record: an overdue tick can raise it in the same instant as the
+        // escalation, and the two must not share one mailbox identity.
+        const rung = eventInput.record_id.startsWith('status:prompt-reminder:') ? 'remind' : climbed ? 'climb' : 'lead';
+        const id = `evt-prompt-${rung}-${eventInput.seat}-${stamp}`;
         const text = `${team.project}: ${options.climbMailboxWhy}`;
         const taken = input.deliverClimb?.({
           seat: eventInput.seat,
@@ -1226,6 +1229,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         && state.promptSpell.clearedAt === undefined
         && state.promptSpell.escalated
         && state.promptSpell.reminded !== true
+        && !isLead
         && atMs - state.promptSpell.since >= reminderWindowMs
       ) {
         state.promptSpell.reminded = true;
