@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { daemonLockPath } from '../src/daemon/paths.ts';
 import { writeDaemonState } from '../src/daemon/state.ts';
-import { holdClimb, hostedClimbTakes, loadHeldClimbs, releaseHeldClimb, runWatch, screenExcerpt } from '../src/commands/watch.ts';
+import { holdClimb, HELD_CLIMB_STALE_MS, hostedClimbTakes, loadHeldClimbs, releaseHeldClimb, runWatch, screenExcerpt, supersededClimbs } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -319,4 +319,28 @@ test('a taken climb is held on disk until it is sent, so a restarted daemon stil
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('only the newest climb per seat and prompt is sent, and none a run held more than 30 minutes ago', () => {
+  // 2026-11-15: a climb held by the run before a restart went out beside the new run's climb for
+  // the same prompt, and the lead got the escalation twice.
+  const now = new Date('2026-11-15T11:40:00.000Z');
+  const target = { seat: 'orchestrator', root: '/r/main', session: 'main' };
+  const climb = (id: string, at: string): { climb: StatusClimb; tries: number } => ({ climb: { seat: 'worker-1', id, text: 'x', at, target }, tries: 0 });
+  const dropped: string[] = [];
+  const kept = supersededClimbs([
+    climb('evt-prompt-climb-worker-1-a', '2026-11-15T11:20:00.000Z'),
+    climb('evt-prompt-climb-worker-1-b', '2026-11-15T11:38:00.000Z'),
+    climb('evt-prompt-remind-worker-1-c', '2026-11-15T11:39:00.000Z'),
+    climb('evt-prompt-climb-worker-2-d', new Date(now.getTime() - HELD_CLIMB_STALE_MS - 1).toISOString()),
+  ], now, (one) => dropped.push(one.id));
+  expect(kept.map((one) => one.climb.id)).toEqual(['evt-prompt-climb-worker-1-b', 'evt-prompt-remind-worker-1-c']);
+  expect(dropped).toEqual(['evt-prompt-climb-worker-1-a', 'evt-prompt-climb-worker-2-d']);
+  // A lead's unread climb is raised once per episode: it never expires.
+  const lead = supersededClimbs([climb('evt-prompt-lead-worker-3-e', '2026-11-15T09:00:00.000Z')], now, () => {});
+  expect(lead).toHaveLength(1);
+  // An undated climb reads its id's stamp, and never outranks a newer dated one.
+  const undated = { climb: { seat: 'worker-1', id: 'evt-prompt-climb-worker-1-20261115T113000000Z', text: 'x', target }, tries: 2 };
+  const order = supersededClimbs([undated, climb('evt-prompt-climb-worker-1-f', '2026-11-15T11:39:00.000Z')], now, () => {});
+  expect(order.map((one) => one.climb.id)).toEqual(['evt-prompt-climb-worker-1-f']);
 });

@@ -2926,6 +2926,64 @@ export function releaseHeldClimb(dir: string, id: string): void {
   }
 }
 
+/** A held climb older than this was taken by an earlier run: the seat's prompt is read again by
+ *  this run's engine, which raises its own climb if the prompt still stands. */
+export const HELD_CLIMB_STALE_MS = 30 * 60_000;
+
+/** The climbs worth sending from a queue: per seat and rung (`evt-prompt-<rung>-<seat>-<stamp>`)
+ *  only the newest, and none older than `HELD_CLIMB_STALE_MS`. 2026-11-15: a climb an earlier
+ *  daemon run had held was sent after a restart beside the new run's climb for the same prompt,
+ *  and the lead got the same escalation twice. The dropped ones are handed to `drop`. */
+export function supersededClimbs(
+  queue: readonly { climb: StatusClimb; tries: number }[],
+  at: Date,
+  drop: (climb: StatusClimb, why: string) => void,
+): { climb: StatusClimb; tries: number }[] {
+  const keyOf = (climb: StatusClimb): string => {
+    const match = /^evt-prompt-([a-z]+)-/.exec(climb.id);
+    return `${match?.[1] ?? climb.id}\0${climb.seat}\0${climb.target.root}\0${climb.target.seat}`;
+  };
+  // The climb's instant: its `at`, else the stamp its id carries; null when neither reads, and
+  // such a climb never outranks a dated one and is never dropped as stale.
+  const instant = (climb: StatusClimb): number | null => {
+    const parsed = Date.parse(climb.at ?? '');
+    if (Number.isFinite(parsed)) return parsed;
+    const stamp = /-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z$/.exec(climb.id);
+    if (stamp === null) return null;
+    const fromId = Date.parse(`${stamp[1]}-${stamp[2]}-${stamp[3]}T${stamp[4]}:${stamp[5]}:${stamp[6]}.${stamp[7]}Z`);
+    return Number.isFinite(fromId) ? fromId : null;
+  };
+  // Only the prompt rungs the engine raises again while the prompt stands may expire; a lead's
+  // unread climb (`evt-prompt-lead-`) is raised once per episode and is kept until it is sent.
+  const expires = (climb: StatusClimb): boolean => /^evt-prompt-(climb|remind)-/.test(climb.id);
+  const newest = new Map<string, number>();
+  for (const held of queue) {
+    const when = instant(held.climb);
+    if (when === null) continue;
+    const key = keyOf(held.climb);
+    newest.set(key, Math.max(newest.get(key) ?? -Infinity, when));
+  }
+  const kept: { climb: StatusClimb; tries: number }[] = [];
+  const seen = new Set<string>();
+  for (const held of queue) {
+    const key = keyOf(held.climb);
+    const when = instant(held.climb);
+    if (when !== null && expires(held.climb) && at.getTime() - when > HELD_CLIMB_STALE_MS) {
+      drop(held.climb, 'it is older than 30 minutes; this run reads the seat again');
+      continue;
+    }
+    const best = newest.get(key);
+    // An undated climb stands only when no dated one exists for the same seat and prompt.
+    if ((when === null && best !== undefined) || (when !== null && best !== undefined && when < best) || seen.has(key)) {
+      drop(held.climb, 'a newer climb for the same seat and prompt stands');
+      continue;
+    }
+    seen.add(key);
+    kept.push(held);
+  }
+  return kept;
+}
+
 /** Whether a hosted watch delivers this climb itself, as the daemon's notice: to this team's own
  *  lead, or across teams to the entity's orchestrator, which is the lead of its own team (the one
  *  seat a blocked-episode notice may reach in that team's checkout). A climb with no seat to
@@ -2954,7 +3012,10 @@ async function sendHostedClimbs(
   now: () => Date,
 ): Promise<void> {
   const kept: { climb: StatusClimb; tries: number }[] = [];
-  for (const held of queue.splice(0)) {
+  for (const held of supersededClimbs(queue.splice(0), now(), (climb, why) => {
+    releaseHeldClimb(dir, climb.id);
+    logLine(dir, 'watch', 'watch', `${climb.seat}: the prompt climb ${climb.id} was not sent: ${why}`, now());
+  })) {
     // The climb's own target: this team's lead, or the entity's orchestrator in its own checkout.
     const target = held.climb.target;
     // A fallback record a stopped run already left settles the climb: no second copy anywhere.
