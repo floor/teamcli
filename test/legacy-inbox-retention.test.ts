@@ -89,7 +89,7 @@ function read(seat: string, id: string, at: string): void {
 
 function live(seat: string): string[] {
   const dir = legacySeatDir(root, seat);
-  return existsSync(dir) ? readdirSync(dir).filter((name) => name !== 'archive').sort() : [];
+  return existsSync(dir) ? readdirSync(dir).filter((name) => name !== 'archive' && name !== LEGACY_ARCHIVER_LOCK).sort() : [];
 }
 
 function archived(seat: string, ...below: string[]): string[] {
