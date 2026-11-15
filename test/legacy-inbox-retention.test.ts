@@ -357,7 +357,7 @@ describe('the older messages store archive', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runDrops(['archive'], io, { home })).toBe(0);
     expect(io.out).toContain('daemon will move evt-work-a');
-    expect(io.out).toContain('the daemon serves this checkout and moves them at its nightly pass');
+    expect(io.out).toContain("the daemon's nightly pass (03:00-06:00) moves them\n");
     expect(live('lead')).toEqual(['evt-fallback-b.json', 'evt-work-a.json', 'evt-work-a.read.json']);
     // The daemon's own pass is the archiver: it moves the record.
     const pass = await inboxArchivePass({ root, home, team, now: NOW, deps: { loadPerCore: () => 0.5, notify: async () => ({ ok: true, text: '' }) } });
