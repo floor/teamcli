@@ -22,8 +22,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSy
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerAncestors, callerOf } from '../caller.ts';
-import { REPLY_FLAG_OPTIONS } from '../commands/reply.ts';
-import { SEND_FLAG_OPTIONS, SEND_VALUED_OPTIONS } from '../commands/send.ts';
+import { REPLY_FLAG_OPTIONS, SEND_FLAG_OPTIONS, SEND_VALUED_OPTIONS } from './command-grammar.ts';
 import type { Io } from '../io.ts';
 import { cliHookStatePath } from '../launch/cli-hook.ts';
 import { confinedSeatAt } from '../placement/confined.ts';

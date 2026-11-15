@@ -1,4 +1,5 @@
 import { relayIfConfined } from '../send/confined-outbox.ts';
+import { SEND_FLAG_OPTIONS, SEND_VALUED_OPTIONS } from '../send/command-grammar.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
@@ -1420,11 +1421,6 @@ function sendCharterTargets(home: string, seatName: string | undefined, args: { 
   if (!('error' in parsed) && (parsed.kind === 'seat' || parsed.kind === 'nickname')) return [charterTargetOf(io.cwd)];
   return [];
 }
-
-/** `team send`'s option grammar: the names that take a value, and the flags. The confined-seat
- *  relay parses a relayed line with exactly this grammar (src/send/confined-outbox.ts). */
-export const SEND_VALUED_OPTIONS = ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'] as const;
-export const SEND_FLAG_OPTIONS = ['wait', 'json', 'list', 'dry-run', 'request'] as const;
 
 async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, reportHolds = true): Promise<number> {
   const args = readArgs(argv, [...SEND_VALUED_OPTIONS], [...SEND_FLAG_OPTIONS]);

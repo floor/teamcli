@@ -35,6 +35,7 @@
 // reader was not confirmed. The reply rules themselves — who may answer, the thread, and the
 // read an answer marks — are decided before the walk and are untouched by it.
 import { relayIfConfined } from '../send/confined-outbox.ts';
+import { REPLY_FLAG_OPTIONS } from '../send/command-grammar.ts';
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -482,9 +483,6 @@ export function raiseSecurityRefusal(
     now,
   });
 }
-
-/** `team reply`'s flags; it takes no valued option. The confined-seat relay parses with these. */
-export const REPLY_FLAG_OPTIONS = ['close', 'json'] as const;
 
 export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise<number> {
   // A seat its sandbox confines cannot write the sender's drop: its outbox carries the reply.
