@@ -361,10 +361,10 @@ describe('the daily inbox archive', () => {
       now: NOW,
       deps: {
         loadPerCore: calm,
-        yieldTurn: async () => {
-          turns += 1;
-          // Turn 1 follows the folder's recovery step, turn 2 the first chunk of 64.
-          if (turns === 2) registerRunning('resting');
+        yieldTurn: async (after) => {
+          if (after === 'chunk') turns += 1;
+          // The first turn after a planning chunk of 64.
+          if (turns === 1 && after === 'chunk') registerRunning('resting');
           return true;
         },
       },
@@ -419,9 +419,9 @@ describe('the daily inbox archive', () => {
       now: NOW,
       deps: {
         loadPerCore: calm,
-        yieldTurn: async () => {
-          turns += 1;
-          if (turns === 2) writeFileSync(join(dir, `${id(70)}.fallback-note-1`), '{}\n');
+        yieldTurn: async (after) => {
+          if (after === 'chunk') turns += 1;
+          if (turns === 1 && after === 'chunk') writeFileSync(join(dir, `${id(70)}.fallback-note-1`), '{}\n');
           return true;
         },
       },
@@ -444,9 +444,9 @@ describe('the daily inbox archive', () => {
       now: NOW,
       deps: {
         loadPerCore: calm,
-        yieldTurn: async () => {
-          turns += 1;
-          if (turns === 2) {
+        yieldTurn: async (after) => {
+          if (after === 'chunk') turns += 1;
+          if (turns === 1 && after === 'chunk' && !existsSync(moved)) {
             renameSync(dir, moved);
             symlinkSync(target, dir);
           }

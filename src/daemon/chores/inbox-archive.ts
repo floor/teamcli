@@ -70,8 +70,9 @@ export type InboxArchiveDeps = {
   loadPerCore?: () => number;
   /** Sends the lead's line. Absent: the line is not sent and the state says so. */
   notify?: (input: { root: string; session: string; lead: string; body: string; id: string }) => Promise<{ ok: boolean; text: string }>;
-  /** Gives the caller's loop a turn between seats. False ends the pass. */
-  yieldTurn?: () => Promise<boolean>;
+  /** Gives the caller's loop a turn after a recovery chunk or a planning chunk. False ends the
+   *  pass. */
+  yieldTurn?: (after: 'recovery' | 'chunk') => Promise<boolean>;
 };
 
 export type InboxArchivePass =
@@ -220,7 +221,7 @@ export async function inboxArchivePass(input: {
   let more = false;
   const refused: string[] = [];
   let registrySaid = false;
-  const stop = async (): Promise<boolean> => deps.yieldTurn !== undefined && !(await deps.yieldTurn());
+  const stop = async (after: 'recovery' | 'chunk'): Promise<boolean> => deps.yieldTurn !== undefined && !(await deps.yieldTurn(after));
   seats: for (const folder of seatDropFolders(root)) {
     const context: StatusContext = { to: folder.seat, root, session: folder.session };
     const key2 = `${folder.session}/${folder.seat}`;
@@ -257,7 +258,7 @@ export async function inboxArchivePass(input: {
         scanBudget -= chunk.length;
         at += chunk.length;
         run.recoverCursor[key2] = (chunk[chunk.length - 1] as { key: string }).key;
-        if (await stop()) {
+        if (await stop('recovery')) {
           more = true;
           break seats;
         }
@@ -330,7 +331,7 @@ export async function inboxArchivePass(input: {
       } else if (report.more !== true) {
         delete run.cursor[key2];
       }
-      if (await stop()) {
+      if (await stop('chunk')) {
         more = true;
         break seats;
       }
