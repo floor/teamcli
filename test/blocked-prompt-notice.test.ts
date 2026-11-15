@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { daemonLockPath } from '../src/daemon/paths.ts';
 import { writeDaemonState } from '../src/daemon/state.ts';
-import { hostedClimbTakes, runWatch, screenExcerpt } from '../src/commands/watch.ts';
+import { holdClimb, hostedClimbTakes, loadHeldClimbs, releaseHeldClimb, runWatch, screenExcerpt } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -297,4 +297,26 @@ test('a hosted watch tells the lead a grok seat waits at its command approval, w
   expect(body).toContain('gravel waits at a permission prompt');
   expect(body).toContain('On its screen:');
   expect(body).toContain('Yes, proceed');
+});
+
+test('a taken climb is held on disk until it is sent, so a restarted daemon still sends it', () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'climbs-held-')));
+  try {
+    const climb: StatusClimb = { seat: 'worker-1', id: 'evt-prompt-lead-worker-1-abc', text: 'crew: x', target: { seat: 'orchestrator', root: '/r/main', session: 'main' } };
+    const first: { climb: StatusClimb; tries: number }[] = [];
+    holdClimb(dir, first, climb);
+    holdClimb(dir, first, climb);
+    expect(first).toHaveLength(1);
+    // A new process: its queue starts empty and reads the held climb back, once.
+    const after: { climb: StatusClimb; tries: number }[] = [];
+    loadHeldClimbs(dir, after);
+    loadHeldClimbs(dir, after);
+    expect(after.map((held) => held.climb)).toEqual([climb]);
+    releaseHeldClimb(dir, climb.id);
+    const released: { climb: StatusClimb; tries: number }[] = [];
+    loadHeldClimbs(dir, released);
+    expect(released).toEqual([]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

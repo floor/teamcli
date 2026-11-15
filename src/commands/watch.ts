@@ -17,7 +17,7 @@ import { isParseError, launchTeamFile, loadTeamFile } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { sameFolder } from '../send/record.ts';
-import { chmodSync, existsSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceRename, type PaneProcesses } from '../herdr.ts';
@@ -1293,7 +1293,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               ? {
                 deliverClimb: (climb: StatusClimb): boolean => {
                   if (!hostedClimbTakes(climb, root, session, team)) return false;
-                  hostedClimbs.push({ climb, tries: 0 });
+                  holdClimb(dir, hostedClimbs, climb);
                   return true;
                 },
               }
@@ -1338,8 +1338,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             }
           }
           await statusEngine.tick(now);
-          if (hosted !== undefined && sources.home !== undefined && hostedClimbs.length > 0) {
-            await sendHostedClimbs(sources.home, root, team, session, hostedClimbs, dir, sources.now);
+          if (hosted !== undefined && sources.home !== undefined) {
+            loadHeldClimbs(dir, hostedClimbs);
+            if (hostedClimbs.length > 0) await sendHostedClimbs(sources.home, root, team, session, hostedClimbs, dir, sources.now);
           }
           // A seat its sandbox confines sends and replies through its outbox: the daemon's
           // watch runs those commands for it, as that seat (src/send/confined-outbox.ts).
@@ -1883,7 +1884,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               ...(hosted === undefined ? {} : {
                 deliverClimb: (climb: StatusClimb): boolean => {
                   if (!hostedClimbTakes(climb, root, session, team)) return false;
-                  hostedClimbs.push({ climb, tries: 0 });
+                  holdClimb(dir, hostedClimbs, climb);
                   return true;
                 },
               }),
@@ -2804,6 +2805,57 @@ async function relayConfinedOutboxes(
   });
 }
 
+/** Where a taken climb waits until it is sent or left in the runtime mailbox: one file per climb,
+ *  so a daemon stopped before the next pass sends it after its restart. */
+function heldClimbsDir(dir: string): string {
+  return join(dir, 'climbs-held');
+}
+
+const HELD_CLIMB_ID = /^evt-prompt-[A-Za-z0-9_.-]+$/;
+
+/** Takes a climb: written to its file first, then queued. A climb whose file cannot be written is
+ *  not taken, and the engine writes its runtime record as before. */
+export function holdClimb(dir: string, queue: { climb: StatusClimb; tries: number }[], climb: StatusClimb): void {
+  if (HELD_CLIMB_ID.test(climb.id)) {
+    try {
+      mkdirSync(heldClimbsDir(dir), { recursive: true, mode: 0o700 });
+      writeFileSync(join(heldClimbsDir(dir), `${climb.id}.json`), `${JSON.stringify(climb)}\n`, { mode: 0o600 });
+    } catch {
+      // Queued in memory only: still sent this run.
+    }
+  }
+  if (!queue.some((held) => held.climb.id === climb.id)) queue.push({ climb, tries: 0 });
+}
+
+/** The climbs a stopped run had taken and not sent, back into the queue once each. */
+export function loadHeldClimbs(dir: string, queue: { climb: StatusClimb; tries: number }[]): void {
+  let names: string[];
+  try {
+    names = readdirSync(heldClimbsDir(dir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json') || !HELD_CLIMB_ID.test(name.slice(0, -5))) continue;
+    try {
+      const climb = JSON.parse(readFileSync(join(heldClimbsDir(dir), name), 'utf8')) as StatusClimb;
+      if (typeof climb?.id !== 'string' || climb.id !== name.slice(0, -5) || typeof climb.text !== 'string'
+        || typeof climb.target?.seat !== 'string' || typeof climb.target.root !== 'string' || typeof climb.target.session !== 'string') continue;
+      if (!queue.some((held) => held.climb.id === climb.id)) queue.push({ climb, tries: 0 });
+    } catch {
+      // An unreadable file is left for the next pass.
+    }
+  }
+}
+
+export function releaseHeldClimb(dir: string, id: string): void {
+  try {
+    unlinkSync(join(heldClimbsDir(dir), `${id}.json`));
+  } catch {
+    // Not held, or gone already.
+  }
+}
+
 /** Whether a hosted watch delivers this climb itself, as the daemon's notice: to this team's own
  *  lead, or across teams to the entity's orchestrator, which is the lead of its own team (the one
  *  seat a blocked-episode notice may reach in that team's checkout). A climb with no seat to
@@ -2848,12 +2900,17 @@ async function sendHostedClimbs(
         { root: target.root, seat: target.seat, body: held.climb.text, id: held.climb.id },
         { ...realHost, home, now: () => now() },
       );
-      ok = sent.ok;
+      // A record staged under the notice's id is in the seat's inbox already: a failed
+      // transport after it is not a reason to leave a second copy anywhere.
+      ok = sent.ok || sent.staged;
       text = sent.text;
     } catch (error) {
       text = (error as Error).message;
     }
-    if (ok) continue;
+    if (ok) {
+      releaseHeldClimb(dir, held.climb.id);
+      continue;
+    }
     const tries = held.tries + 1;
     if (tries < PROMPT_NOTICE_TRIES) {
       kept.push({ climb: held.climb, tries });
@@ -2870,6 +2927,7 @@ async function sendHostedClimbs(
       ...(held.climb.at === undefined ? {} : { at: held.climb.at }),
     });
     logLine(dir, 'watch', 'watch', `${held.climb.seat}: the prompt climb to ${target.seat} was not sent — ${text}${outcome.ok ? '; it was left in the runtime mailbox' : ''}`, now());
+    releaseHeldClimb(dir, held.climb.id);
   }
   queue.push(...kept);
 }
