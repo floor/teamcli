@@ -1395,6 +1395,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       const plannedFolder = sameFolderOnDisk(root, recordedStartFolder(freshRecorded), planSeat.cwd);
       if (keptPane !== undefined && atShell && plannedFolder) {
         planSeat.repair = { pane: keptPane.pane, workspace: keptPane.workspace, launched: { shell: keptShell!.shell, cli: [] }, cli: next.cli, reuse: true };
+        // The in-place launch checks the folder the reused pane really starts in: the record's,
+        // which the line above proved is the planned one. Without it the plan refuses the reused
+        // pane after the seat was already stopped.
+        const recordedFolder = recordedStartFolder(freshRecorded);
+        if (recordedFolder !== undefined) planSeat.startCwd = recordedFolder;
       } else if (keptPane !== undefined && !sources.upLaunch.closeWorkspace(session, keptPane.workspace)) {
         return { kind: 'busy', message: `${name} did not close its old pane; left as it is${keptAt(draftCopy)}` };
       } else if (keptPane === undefined && stopObs.agent && sources.upLaunch.agentPanes(session)?.includes(stopObs.agent.pane)) {
@@ -1522,7 +1527,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, input.command, who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({
+    const planNow = () => upPlan({
       root,
       session,
       sessionRunning: true,
@@ -1541,6 +1546,21 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       ...(sources.upLaunch.secretStore === undefined ? {} : { secretStore: sources.upLaunch.secretStore }),
       ...(resolveLaunch ? { resolveLaunch: true as const, launcherDiscovery } : {}),
     });
+    let plan = planNow();
+    // The seat is already stopped here. A plan that refuses the reused pane must not leave it
+    // stopped: the pane is closed and the seat starts in a fresh workspace, as a pane that could
+    // not be kept does. A plan that refuses the seat for any other reason refused it in the
+    // preflight too, before anything was stopped.
+    const reused = planSeat.repair?.reuse === true ? planSeat.repair : undefined;
+    if (reused !== undefined && plan.some((step) => step.do?.do === 'refuse' && step.do.seat === name)) {
+      delete planSeat.repair;
+      delete planSeat.startCwd;
+      if (!sources.upLaunch.closeWorkspace(session, reused.workspace)) {
+        return { kind: 'busy', message: `${name} did not close its old pane; left as it is${keptAt(draftCopy)}` };
+      }
+      logLine(dir, input.command, who, `${name}: the reused pane was refused; starting it in a new workspace`, sources.now());
+      plan = planNow();
+    }
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
     // plan starts.
     resetCliHookState(dir, session, [planSeat.name]);
