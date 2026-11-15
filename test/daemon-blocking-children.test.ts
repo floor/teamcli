@@ -1,7 +1,8 @@
 // The daemon's loops start no synchronous child they do not need. A long-lived process holds the
 // roots git named, so a beat that reads every hosted root's team file asks git once per root,
-// not on every read; a hold never keeps a folder git did not place, nor a root whose folder or
-// common directory has gone, and a CLI run outside a hold asks git as before. A hosted watch
+// not on every read; a hold never keeps a folder git did not place, nor an answer whose binding
+// changed (a common directory gone, a worktree or folder replaced at the same path, a repository
+// initialised in between), and a CLI run outside a hold asks git as before. A hosted watch
 // names the daemon as its caller and never walks its own parents with `ps`. Synthetic folders,
 // a synthetic team and injected sources; no live daemon, herdr or CLI.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -40,6 +41,14 @@ function repo(name: string): string {
   mkdirSync(root, { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   return root;
+}
+
+function git(cwd: string, args: string[]): void {
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], { cwd, stdio: 'ignore' });
+}
+
+function commitEmpty(root: string): void {
+  git(root, ['commit', '-q', '--allow-empty', '-m', 'start']);
 }
 
 /** The answer findRoot gives while no `git` can be started: a held root answers, a read that
@@ -105,6 +114,63 @@ describe('git roots in a long-lived process', () => {
     renameSync(join(root, '.git'), join(base, 'moved-git'));
     expect(withoutGit(root)).toBeNull();
     expect(findRoot(root)).toBeNull();
+  });
+
+  test('a worktree replaced at the same path by another repository answers the new root', () => {
+    const first = repo('first');
+    const second = repo('second');
+    for (const root of [first, second]) commitEmpty(root);
+    const tree = join(base, 'tree');
+    git(first, ['worktree', 'add', '-q', '--detach', tree]);
+    hold();
+    expect(findRoot(tree)).toBe(first);
+    git(first, ['worktree', 'remove', '--force', tree]);
+    git(second, ['worktree', 'add', '-q', '--detach', tree]);
+    // The old common directory and the queried path both survive; the binding does not.
+    expect(withoutGit(tree)).toBeNull();
+    expect(findRoot(tree)).toBe(second);
+    expect(withoutGit(tree)).toBe(second);
+  });
+
+  test('a repository initialised between a held folder and its root answers the nested root', () => {
+    const outer = repo('outer');
+    const middle = join(outer, 'middle');
+    const deep = join(middle, 'deep');
+    mkdirSync(deep, { recursive: true });
+    hold();
+    expect(findRoot(deep)).toBe(outer);
+    execFileSync('git', ['init', '-q'], { cwd: middle, stdio: 'ignore' });
+    expect(withoutGit(deep)).toBeNull();
+    expect(findRoot(deep)).toBe(middle);
+  });
+
+  test('a subfolder of a worktree kept outside its root answers a new root once the worktree is replaced', () => {
+    const first = repo('first-out');
+    const second = repo('second-out');
+    for (const root of [first, second]) commitEmpty(root);
+    const tree = join(base, 'elsewhere', 'tree');
+    mkdirSync(join(base, 'elsewhere'));
+    git(first, ['worktree', 'add', '-q', '--detach', tree]);
+    const sub = join(tree, 'sub');
+    mkdirSync(sub);
+    hold();
+    expect(findRoot(sub)).toBe(first);
+    git(first, ['worktree', 'remove', '--force', tree]);
+    git(second, ['worktree', 'add', '-q', '--detach', tree]);
+    mkdirSync(sub);
+    expect(withoutGit(sub)).toBeNull();
+    expect(findRoot(sub)).toBe(second);
+  });
+
+  test('a folder replaced at the same path is asked again', () => {
+    const root = repo('swapped');
+    const sub = join(root, 'sub');
+    mkdirSync(sub);
+    hold();
+    expect(findRoot(sub)).toBe(root);
+    renameSync(sub, join(root, 'sub-old'));
+    mkdirSync(sub);
+    expect(withoutGit(sub)).toBeNull();
   });
 
   test('a folder git did not place is never held', () => {

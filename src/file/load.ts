@@ -165,10 +165,58 @@ function realOrResolved(path: string): string {
 /** A long-lived process's own memory of the roots git named: the machine daemon and its children
  *  read the same dozen checkouts on every beat, and each read was a synchronous `git` child on
  *  the one event loop (2026-11-15: 14 reads, up to 12.9 s, inside one endpoint refresh under
- *  load). Only a found root is kept, and a hit stands only while the folder asked about and the
- *  common directory git named both still exist; a folder git did not place is asked again every
- *  time, as before. A CLI run never holds one: its per-run memo covers it. */
-type HeldGitRoot = { root: string; common: string; at: number };
+ *  load). Only a found root is kept, and a hit stands only while its binding reads the same
+ *  (`gitBinding`); a folder git did not place is asked again every time, as before. A CLI run never holds one: its per-run memo covers it. */
+type HeldGitRoot = { root: string; common: string; at: number; binding: string };
+
+/** The identity a held answer stands on, read with lstat alone: the queried folder itself, every
+ *  `.git` entry (or its absence) from that folder up to the root git named, and the common
+ *  directory. A folder replaced at the same path, a worktree whose `.git` file was written again,
+ *  or a repository initialised in between all read differently, and the held answer is dropped.
+ *  A `.git` directory is judged by device and inode only: git rewrites its contents on ordinary
+ *  reads, and a moved or recloned repository is a new directory. Null when any part is missing. */
+function gitBinding(key: string, root: string, common: string): string | null {
+  const id = (path: string, withTimes: boolean): string | null => {
+    // ENOENT is an answer (no `.git` at this level); any other failure leaves no binding.
+    try {
+      const st = lstatSync(path);
+      const kind = st.isDirectory() ? 'd' : st.isSymbolicLink() ? 'l' : 'f';
+      const base = `${kind}:${String(st.dev)}:${String(st.ino)}`;
+      if (!withTimes || kind === 'd') return base;
+      // A `.git` file is a worktree's one-line pointer: its words are the binding, read whole
+      // (a few hundred bytes at most), since a replaced file can reuse an inode and a size.
+      const words = kind === 'f' && st.size <= 4096 ? readFileSync(path, 'utf8') : '';
+      return `${base}:${String(st.mtimeMs)}:${String(st.size)}:${words}`;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? '-' : null;
+    }
+  };
+  const parts: string[] = [];
+  // The walk follows the folder's real path, as git's own answer does: a path through a link
+  // still reads every `.git` between the real folder and the root.
+  const real = realOrResolved(key);
+  const folder = id(real, false);
+  if (folder === null || folder === '-') return null;
+  parts.push(`${real}=${folder}`);
+  const top = realOrResolved(root);
+  let at = real;
+  for (let depth = 0; depth < 256; depth++) {
+    const entry = id(join(at, '.git'), true);
+    if (entry === null) return null;
+    parts.push(entry);
+    if (at === top) break;
+    // A folder outside the root git named (in a linked worktree kept elsewhere) is walked up to
+    // the first `.git` entry, which binds it; one under the root is walked to the root.
+    if (entry !== '-' && !real.startsWith(`${top}${sep}`)) break;
+    const up = dirname(at);
+    if (up === at) return null;
+    at = up;
+  }
+  const shared = id(common, false);
+  if (shared === null || shared === '-') return null;
+  parts.push(shared);
+  return parts.join('|');
+}
 type GitRootHold = { entries: Map<string, HeldGitRoot>; ttlMs: number; now: () => number; holders: number };
 let gitRootHold: GitRootHold | null = null;
 
@@ -198,7 +246,7 @@ function heldGitRoot(key: string): string | undefined {
   if (hold === null) return undefined;
   const held = hold.entries.get(key);
   if (held === undefined) return undefined;
-  if (hold.now() - held.at >= hold.ttlMs || !existsSync(key) || !existsSync(held.common)) {
+  if (hold.now() - held.at >= hold.ttlMs || gitBinding(key, held.root, held.common) !== held.binding) {
     hold.entries.delete(key);
     return undefined;
   }
@@ -208,11 +256,13 @@ function heldGitRoot(key: string): string | undefined {
 function keepGitRoot(key: string, root: string, common: string): void {
   const hold = gitRootHold;
   if (hold === null) return;
+  const binding = gitBinding(key, root, common);
+  if (binding === null) return;
   if (!hold.entries.has(key) && hold.entries.size >= HELD_GIT_ROOT_LIMIT) {
     const oldest = hold.entries.keys().next();
     if (oldest.done !== true) hold.entries.delete(oldest.value);
   }
-  hold.entries.set(key, { root, common, at: hold.now() });
+  hold.entries.set(key, { root, common, at: hold.now(), binding });
 }
 
 export function findRoot(cwd: string): string | null {
