@@ -32,6 +32,7 @@ import type { EventPayload } from './log.ts';
 import type { RoutingChain } from './routing.ts';
 import { readSeatResolver } from './seats.ts';
 import { statusLeadReason } from '../status/reported-reason.ts';
+import { legacyArchivedRecordExists } from '../send/legacy-inbox-retention.ts';
 
 /** The mailbox the owner's own `team messages` run reads. `owner` is the seat-equivalent name the
  *  bus already knows (Amendment 01 §4.4). */
@@ -216,7 +217,10 @@ export function writeRuntimeMailboxRecord(
     return { ok: false, error: `the message key could not be read: ${String(error)}` };
   }
   const path = messageFile(input.root, input.to, input.id);
-  if (input.once === true && existsSync(path)) return { ok: true, path, existing: true };
+  // An archived copy counts too: the daily archive moves settled notices out of the live folder.
+  if (input.once === true && (existsSync(path) || legacyArchivedRecordExists(input.root, input.to, input.id))) {
+    return { ok: true, path, existing: true };
+  }
   try {
     writePrivateAtomic(path, `${JSON.stringify({ payload, signature }, null, 2)}\n`);
   } catch (error) {

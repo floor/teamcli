@@ -557,7 +557,7 @@ async function runArchive(
   }
   const dryRun = args.flags.has('dry-run');
   const now = new Date();
-  const report = runInboxRetention(loaded.root, { now, home: sources.home, dryRun, seats });
+  const report = runInboxRetention(loaded.root, { now, home: sources.home, dryRun, seats, session: loaded.team.session });
   if (report.refused !== null) {
     if (!json) {
       const verbWord = dryRun ? 'would move' : 'moved';

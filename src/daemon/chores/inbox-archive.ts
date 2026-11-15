@@ -23,6 +23,7 @@ import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
 import { teamIdOf } from '../../registry/teams.ts';
 import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
 import { archiveSeatInbox, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
+import { archiveLegacySeat, legacySeatFolders } from '../../send/legacy-inbox-retention.ts';
 import { heldAt } from '../../held.ts';
 import type { StatusContext } from '../../send/record.ts';
 import { readParsed, writeAtomic } from '../../state.ts';
@@ -363,6 +364,69 @@ export async function inboxArchivePass(input: {
         break seats;
       }
       if (report.more !== true) break;
+    }
+  }
+  // 3. The older `.agents/messages/<seat>` store the runtime still writes its notices into: the
+  //    same rules for this team's session, after the drop folders, inside the same budgets.
+  if (!more) {
+    legacy: for (const folder of legacySeatFolders(root)) {
+      const key2 = `messages/${folder.seat}`;
+      if (run.completed.includes(key2)) continue;
+      for (;;) {
+        if (budget <= 0 || scanBudget <= 0) {
+          more = true;
+          break legacy;
+        }
+        if (heldAt(folder.dir).kind !== 'folder') {
+          refused.push(`${folder.seat}: the messages folder is not a plain folder; left alone`);
+          run.completed.push(key2);
+          break;
+        }
+        const agents = readAgentsComplete(home);
+        if (agents === null && !registrySaid) {
+          registrySaid = true;
+          refused.push('the registry could not be read whole; no unread mail moved');
+        }
+        const atRest = agents !== null && seatAtRest(agents, teamId, team, team.session, folder.seat);
+        const after = run.cursor[key2];
+        const report = archiveLegacySeat({
+          root,
+          session: team.session,
+          seat: folder.seat,
+          key: key.key,
+          now,
+          dryRun: false,
+          options: {
+            unreadKeepMs: atRest ? STOPPED_UNREAD_KEEP_MS : null,
+            limit: budget,
+            scanLimit: Math.min(INBOX_ARCHIVE_SCAN_CHUNK, scanBudget),
+            ...(after === undefined ? {} : { after }),
+          },
+        });
+        const unreadHere = report.moved.filter((item) => item.unread === true).length;
+        moved += report.moved.length - unreadHere + report.finished;
+        unread += unreadHere;
+        if (unreadHere > 0) run.unread[folder.seat] = (run.unread[folder.seat] ?? 0) + unreadHere;
+        budget -= report.moved.length + report.finished;
+        scanBudget -= Math.max(1, report.plan.scanned);
+        if (report.refused !== null) {
+          refused.push(report.refused);
+          delete run.cursor[key2];
+          run.completed.push(key2);
+          break;
+        }
+        if (report.plan.more && report.plan.last !== null) {
+          run.cursor[key2] = report.plan.last;
+        } else {
+          delete run.cursor[key2];
+          run.completed.push(key2);
+        }
+        if (await stop('chunk')) {
+          more = true;
+          break legacy;
+        }
+        if (!report.plan.more) break;
+      }
     }
   }
   run.moved += moved;

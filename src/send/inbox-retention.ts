@@ -36,6 +36,7 @@ import {
   type StatusContext,
 } from './record.ts';
 import { clearUnread } from './unread-hint.ts';
+import { archiveLegacySeat, legacySeatFolders } from './legacy-inbox-retention.ts';
 
 /** `read_by` on the note `team ack` writes. A plain read receipt does not carry it. */
 export const EXPLICIT_ACK_READ_BY = 'ack';
@@ -763,7 +764,7 @@ export function seatDropFolders(root: string): SeatDropFolder[] {
  */
 export function runInboxRetention(
   root: string,
-  options: { now: Date; home: string; dryRun?: boolean; seats?: readonly string[] },
+  options: { now: Date; home: string; dryRun?: boolean; seats?: readonly string[]; session?: string },
 ): { move: string[]; markRead: string[]; partial: string[]; refused: string | null } {
   const key = messageKeyState(options.home);
   if (key.kind !== 'key') return { move: [], markRead: [], partial: [], refused: null };
@@ -808,6 +809,24 @@ export function runInboxRetention(
       move.push(...report.move.map((item) => item.id));
       markRead.push(...report.markRead.map((item) => item.id));
       partial.push(...report.partial);
+      if (report.refused !== null) refusals.push(report.refused);
+    }
+  }
+  // The older `.agents/messages` store, for this session: read records only (a manual run never
+  // knows a seat is at rest, so no unread record moves here; the daily pass moves those).
+  if (options.session !== undefined) {
+    for (const folder of legacySeatFolders(root)) {
+      if (options.seats !== undefined && !options.seats.includes(folder.seat)) continue;
+      const report = archiveLegacySeat({
+        root,
+        session: options.session,
+        seat: folder.seat,
+        key: key.key,
+        now: options.now,
+        dryRun,
+        options: { unreadKeepMs: null },
+      });
+      move.push(...(dryRun ? report.plan.move : report.moved).map((item) => item.id));
       if (report.refused !== null) refusals.push(report.refused);
     }
   }
