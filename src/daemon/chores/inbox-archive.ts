@@ -22,7 +22,7 @@ import { logLine } from '../../log.ts';
 import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
 import { teamIdOf } from '../../registry/teams.ts';
 import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
-import { archiveSeatInbox, seatDropFolders } from '../../send/inbox-retention.ts';
+import { archiveSeatInbox, listSeatFamilies, recoverSeatArchive, seatDropFolders } from '../../send/inbox-retention.ts';
 import type { StatusContext } from '../../send/record.ts';
 import { readParsed, writeAtomic } from '../../state.ts';
 import { messageKeyState } from '../../store/keys.ts';
@@ -56,6 +56,8 @@ export type InboxArchiveRun = {
   loadSkips: number;
   /** Where each seat folder's look stopped, `<session>/<seat>` to the last id looked at. */
   cursor: Record<string, string>;
+  /** The seat folders (`<session>/<seat>`) whose part-way moves were finished today. */
+  recovered: string[];
   /** The lead's line: its one id, whether it went, and how often it was tried. */
   notice?: { id: string; sent: boolean; tries: number };
 };
@@ -103,6 +105,7 @@ function readRun(root: string): InboxArchiveRun | null {
         unread: value.unread !== null && typeof value.unread === 'object' ? value.unread : {},
         loadSkips: typeof value.loadSkips === 'number' ? value.loadSkips : 0,
         cursor: value.cursor !== null && typeof value.cursor === 'object' ? value.cursor : {},
+        recovered: Array.isArray(value.recovered) ? value.recovered.filter((entry): entry is string => typeof entry === 'string') : [],
         ...(value.notice !== undefined ? { notice: value.notice } : {}),
       };
     });
@@ -176,7 +179,7 @@ export async function inboxArchivePass(input: {
   const held = readRun(root);
   let run: InboxArchiveRun = held !== null && held.day === day
     ? held
-    : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0, cursor: {} };
+    : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0, cursor: {}, recovered: [] };
   if (run.done) {
     // The day's work is over. A line that did not go is tried again, a bounded number of times.
     const notice = run.notice;
@@ -196,24 +199,52 @@ export async function inboxArchivePass(input: {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return { kind: 'no-key' };
   const teamId = teamIdOf(root);
-  // The registry is read whole once a pass. When any of it cannot be read, no unread mail moves
-  // this pass: a record it could not read may be a running seat's.
-  const agents = readAgentsComplete(home);
   let budget = input.limit ?? INBOX_ARCHIVE_PASS_LIMIT;
   let scanBudget = input.scanLimit ?? INBOX_ARCHIVE_SCAN_PER_PASS;
   let moved = 0;
   let unread = 0;
   let more = false;
-  const refused: string[] = agents === null ? ['the registry could not be read whole; no unread mail moves this pass'] : [];
+  const refused: string[] = [];
+  let registrySaid = false;
+  const stop = async (): Promise<boolean> => deps.yieldTurn !== undefined && !(await deps.yieldTurn());
   seats: for (const folder of seatDropFolders(root)) {
-    const atRest = agents !== null && seatAtRest(agents, teamId, team, folder.session, folder.seat);
     const context: StatusContext = { to: folder.seat, root, session: folder.session };
     const key2 = `${folder.session}/${folder.seat}`;
+    // 1. What an earlier move left part way, within the pass budget, until nothing is left.
+    while (!run.recovered.includes(key2)) {
+      if (budget <= 0) {
+        more = true;
+        break seats;
+      }
+      const recovery = recoverSeatArchive(folder.dropDir, Math.min(budget, INBOX_ARCHIVE_SCAN_CHUNK));
+      budget -= Math.max(1, recovery.used);
+      moved += recovery.finished.length;
+      if (!recovery.more) run.recovered.push(key2);
+      if (await stop()) {
+        more = true;
+        break seats;
+      }
+    }
+    // 2. The folder is listed once this pass; its families are looked at a chunk a call.
+    const families = listSeatFamilies(folder.dropDir);
+    if (families === null) {
+      refused.push(`${folder.seat}: the drop folder cannot be read`);
+      continue;
+    }
     for (;;) {
       if (budget <= 0 || scanBudget <= 0) {
         more = true;
         break seats;
       }
+      // The registry is read whole before every chunk, after the loop's last turn: a seat that
+      // started meanwhile keeps its unread mail. When any of it cannot be read, no unread mail
+      // moves: a record it could not read may be a running seat's.
+      const agents = readAgentsComplete(home);
+      if (agents === null && !registrySaid) {
+        registrySaid = true;
+        refused.push('the registry could not be read whole; no unread mail moved');
+      }
+      const atRest = agents !== null && seatAtRest(agents, teamId, team, folder.session, folder.seat);
       const after = run.cursor[key2];
       const report = archiveSeatInbox({
         dropDir: folder.dropDir,
@@ -228,7 +259,9 @@ export async function inboxArchivePass(input: {
           unreadKeepMs: atRest ? STOPPED_UNREAD_KEEP_MS : null,
           limit: budget,
           scanLimit: Math.min(INBOX_ARCHIVE_SCAN_CHUNK, scanBudget),
-          ...(after === undefined ? {} : { after, orphans: false }),
+          orphans: false,
+          families,
+          ...(after === undefined ? {} : { after }),
         },
       });
       const unreadHere = report.move.filter((item) => item.unread === true).length;
@@ -244,12 +277,10 @@ export async function inboxArchivePass(input: {
       }
       if (report.more === true && report.last !== null && report.last !== undefined) {
         run.cursor[key2] = report.last;
-      } else if (report.more === true) {
-        // Stopped before looking at anything: the budget is spent, the cursor stays.
-      } else {
+      } else if (report.more !== true) {
         delete run.cursor[key2];
       }
-      if (deps.yieldTurn !== undefined && !(await deps.yieldTurn())) {
+      if (await stop()) {
         more = true;
         break seats;
       }

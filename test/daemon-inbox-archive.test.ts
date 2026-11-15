@@ -4,7 +4,7 @@
 // seat's, deletes nothing, and tells the lead once when the day's run ends.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDrops } from '../src/commands/drops.ts';
@@ -349,5 +349,45 @@ describe('the daily inbox archive', () => {
     expect(notes).toContain('drops archive: moved 0 read, 1 unread to seats at rest');
     expect(liveNames('resting')).toEqual([]);
     expect(told).toEqual(['lead']);
+  });
+
+  test('a seat that starts between chunks keeps the rest of its unread mail', async () => {
+    for (let n = 1; n <= 70; n += 1) plant('resting', id(n), OLD_ISO);
+    let turns = 0;
+    const pass = await inboxArchivePass({
+      root,
+      home,
+      team,
+      now: NOW,
+      deps: {
+        loadPerCore: calm,
+        yieldTurn: async () => {
+          turns += 1;
+          if (turns === 1) registerRunning('resting');
+          return true;
+        },
+      },
+    });
+    expect(pass).toMatchObject({ kind: 'ran', unread: 64 });
+    expect(liveNames('resting').filter((name) => !name.includes('.'))).toHaveLength(6);
+  });
+
+  test('part-way moves are finished within the budget, and a pass that runs out leaves the day open', async () => {
+    const dir = recordDir(root, 'acme', 'busy');
+    const month = OLD_ISO.slice(0, 7);
+    mkdirSync(join(dir, 'archive', month), { recursive: true });
+    for (let n = 1; n <= 3; n += 1) {
+      plant('busy', id(n), OLD_ISO);
+      markRead('busy', id(n), OLD_ISO);
+      // The record already left; its read receipt is still live, as a crash would leave it.
+      renameSync(join(dir, id(n)), join(dir, 'archive', month, id(n)));
+    }
+    const first = await inboxArchivePass({ root, home, team, now: NOW, limit: 2, deps: { loadPerCore: calm } });
+    expect(first).toMatchObject({ kind: 'ran', moved: 2, done: false });
+    expect(liveNames('busy')).toHaveLength(1);
+    const second = await inboxArchivePass({ root, home, team, now: NOW, limit: 2, deps: { loadPerCore: calm } });
+    expect(second).toMatchObject({ kind: 'ran', done: true });
+    expect(liveNames('busy')).toEqual([]);
+    for (let n = 1; n <= 3; n += 1) expect(existsSync(join(dir, 'archive', month, `${id(n)}.read.json`))).toBe(true);
   });
 });

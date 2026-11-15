@@ -72,6 +72,9 @@ export type InboxArchivePlanOptions = {
   after?: string;
   /** Finish orphaned sidecars and crash temps before planning. Default true. */
   orphans?: boolean;
+  /** The folder's families as `listSeatFamilies` read them once, so a caller that plans in
+   *  chunks lists the folder once rather than every chunk. A family gone since is skipped. */
+  families?: readonly SeatFamily[];
 };
 export type InboxArchiveMark = { seat: string; id: string };
 
@@ -98,6 +101,23 @@ export function archiveMonth(at: string): string | null {
 }
 
 type Family = { id: string; files: string[] };
+export type SeatFamily = Family;
+
+/** A family read some time ago, as it stands now: the names still there, or null when a sidecar
+ *  that holds a message back has appeared since (the folder is not read again for that). */
+function currentFamily(dropDir: string, family: Family): Family | null {
+  for (const name of [`${family.id}.pending`, `${family.id}.taken`, `${family.id}.fallback.json`]) {
+    if (heldAt(join(dropDir, name)).kind !== 'missing') return null;
+  }
+  const files = family.files.filter((name) => heldAt(join(dropDir, name)).kind !== 'missing');
+  return { id: family.id, files };
+}
+
+/** One seat folder's message families, in id order, or null when the folder cannot be read. */
+export function listSeatFamilies(dropDir: string): SeatFamily[] | null {
+  const families = familiesOf(dropDir);
+  return families === null ? null : families.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
 
 function familiesOf(dropDir: string): Family[] | null {
   let names: string[];
@@ -143,9 +163,9 @@ export function planSeatArchive(
   channelStartMs: number | null,
   options: InboxArchivePlanOptions = {},
 ): { move: InboxArchiveMove[]; markRead: InboxArchiveMark[]; more: boolean; scanned: number; last: string | null } | { refused: string } {
-  const listed = familiesOf(dropDir);
+  const listed = options.families !== undefined ? [...options.families] : familiesOf(dropDir);
   if (listed === null) return { refused: `${seat}: the drop folder cannot be read` };
-  const ordered = options.scanLimit !== undefined || options.after !== undefined;
+  const ordered = options.families !== undefined || options.scanLimit !== undefined || options.after !== undefined;
   const after = options.after;
   const families = ordered
     ? listed.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).filter((family) => after === undefined || family.id > after)
@@ -159,13 +179,15 @@ export function planSeatArchive(
   const unreadKeepMs = options.unreadKeepMs ?? null;
   const markPreChannel = options.markPreChannel !== false;
   let more = false;
-  for (const family of families) {
+  for (const listedFamily of families) {
     if (move.length + markRead.length >= limit || scanned >= scanLimit) {
       more = true;
       break;
     }
     scanned += 1;
-    last = family.id;
+    last = listedFamily.id;
+    const family = options.families === undefined ? listedFamily : currentFamily(dropDir, listedFamily);
+    if (family === null) continue;
     if (!family.files.includes(family.id)) continue;
     if (blocked(family.id, family.files)) continue;
     const looked = readRecord(join(dropDir, family.id), family.id);
@@ -316,7 +338,7 @@ function moveFamily(dropDir: string, planned: InboxArchiveMove): string | null {
 }
 
 /** A temp name left from a crash, published onto the record's final name when that name is free. */
-function retireTemps(dropDir: string, budget: { left: number }): void {
+function retireTemps(dropDir: string, budget: { left: number; more: boolean }): void {
   const root = join(dropDir, DROP_MONTH_ARCHIVE);
   if (heldAt(root).kind !== 'folder') return;
   let months: string[];
@@ -343,7 +365,10 @@ function retireTemps(dropDir: string, budget: { left: number }): void {
     }
     for (const name of names) {
       if (!name.startsWith('.') || !name.endsWith('.arriving')) continue;
-      if (budget.left <= 0) return;
+      if (budget.left <= 0) {
+        budget.more = true;
+        return;
+      }
       budget.left -= 1;
       const id = name.slice(1, -'.arriving'.length);
       const tmp = join(dir, name);
@@ -364,14 +389,14 @@ function retireTemps(dropDir: string, budget: { left: number }): void {
 
 /** Sidecars left in the live folder after their record reached the archive. Place any the
  *  archive does not have, then drop the live name. Returns the ids this pass finished. */
-function finishOrphans(dropDir: string, limit = Number.POSITIVE_INFINITY): string[] {
-  const budget = { left: limit };
+function finishOrphans(dropDir: string, limit = Number.POSITIVE_INFINITY): SeatRecovery {
+  const budget = { left: limit, more: false };
   retireTemps(dropDir, budget);
   let names: string[];
   try {
     names = readdirSync(dropDir);
   } catch {
-    return [];
+    return { finished: [], used: limit - budget.left, more: budget.more };
   }
   const done = new Set<string>();
   for (const name of names) {
@@ -380,7 +405,12 @@ function finishOrphans(dropDir: string, limit = Number.POSITIVE_INFINITY): strin
     if (dot <= 0) continue;
     const id = name.slice(0, dot);
     if (!ID_NAME.test(id) || heldAt(join(dropDir, id)).kind === 'file') continue;
-    if (!done.has(id) && done.size >= budget.left) break;
+    // Every sidecar looked at here is work, finished or not: it is charged to the budget.
+    if (budget.left <= 0) {
+      budget.more = true;
+      break;
+    }
+    budget.left -= 1;
     const monthDir = folderOfDrop(dropDir, id);
     if (monthDir === dropDir) continue;
     const from = join(dropDir, name);
@@ -390,7 +420,18 @@ function finishOrphans(dropDir: string, limit = Number.POSITIVE_INFINITY): strin
     clearUnread(dropDir, id);
     done.add(id);
   }
-  return [...done];
+  return { finished: [...done], used: limit - budget.left, more: budget.more };
+}
+
+/** What one recovery call did: the ids it finished, the work it used (temps and sidecars looked
+ *  at, finished or not), and whether it stopped at its limit with more to look at. */
+export type SeatRecovery = { finished: string[]; used: number; more: boolean };
+
+/** Finishes, within `limit`, what an earlier move left part way in one seat folder: crash temps
+ *  in the archive, and sidecars whose record already left. The daemon's daily run calls this
+ *  before it plans, and again while `more` holds. */
+export function recoverSeatArchive(dropDir: string, limit: number): SeatRecovery {
+  return finishOrphans(dropDir, limit);
 }
 
 /**
@@ -412,7 +453,7 @@ export function archiveSeatInbox(input: {
   // Orphans first, inside the same budget: a family finished here counts against the limit.
   const orphans: InboxArchiveMove[] = input.dryRun || options.orphans === false
     ? []
-    : finishOrphans(input.dropDir, options.limit).map((id) => ({ seat: input.seat, id, month: '', files: [] }));
+    : finishOrphans(input.dropDir, options.limit).finished.map((id) => ({ seat: input.seat, id, month: '', files: [] }));
   const planned = planSeatArchive(
     input.dropDir,
     input.seat,
