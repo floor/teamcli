@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OWNER_RECORD_FROM, writeRuntimeMailboxRecord } from '../src/bus/owner.ts';
 import { runDrops } from '../src/commands/drops.ts';
+import { writeDaemonState } from '../src/daemon/state.ts';
 import { inboxArchivePass } from '../src/daemon/chores/inbox-archive.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -318,7 +319,8 @@ describe('the older messages store archive', () => {
         },
       },
     });
-    expect(second?.busy).toContain(`pid ${String(process.pid)}`);
+    // Same process: the in-process mutex answers before the lock file is ever tried.
+    expect(second?.busy).toBe('this process is archiving it');
     expect(second?.moved).toEqual([]);
     expect(second?.refused).toBeNull();
     expect(second?.plan.more).toBe(true);
@@ -335,6 +337,30 @@ describe('the older messages store archive', () => {
     const next = archiveLegacySeat({ root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: false, options: { unreadKeepMs: null } });
     expect(next.refused).toContain('is already in the archive');
     expect(existsSync(join(dir, 'evt-fallback-r.json'))).toBe(true);
+  });
+
+  test('a manual run while the daemon serves the root moves nothing in the older store, and lists what is due', async () => {
+    notice('lead', 'evt-work-a', OLD_ISO);
+    read('lead', 'evt-work-a', OLD_ISO);
+    notice('lead', 'evt-fallback-b', RECENT_ISO);
+    writeDaemonState(home, {
+      format: 1, pid: process.pid, uid: process.getuid?.() ?? -1, since: NOW.toISOString(), startedBy: 'synthetic', version: 'test',
+      heartbeatAt: NOW.toISOString(), socket: join(home, 'daemon.sock'), features: { broker: 'absent' }, stuck: [],
+      roots: [{ root, team: 'acme', send: 'serving', bus: 'serving', why: null }],
+    });
+    const report = runInboxRetention(root, { now: NOW, home, seats: ['lead'], session: 'acme' });
+    expect(report.move).toEqual([]);
+    expect(report.daemon).toEqual({ due: ['evt-work-a'], stay: 1 });
+    expect(live('lead')).toEqual(['evt-fallback-b.json', 'evt-work-a.json', 'evt-work-a.read.json']);
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runDrops(['archive'], io, { home })).toBe(0);
+    expect(io.out).toContain('daemon will move evt-work-a');
+    expect(io.out).toContain('the daemon serves this checkout and moves them at its nightly pass');
+    expect(live('lead')).toEqual(['evt-fallback-b.json', 'evt-work-a.json', 'evt-work-a.read.json']);
+    // The daemon's own pass is the archiver: it moves the record.
+    const pass = await inboxArchivePass({ root, home, team, now: NOW, deps: { loadPerCore: () => 0.5, notify: async () => ({ ok: true, text: '' }) } });
+    expect(pass).toMatchObject({ kind: 'ran', moved: 1 });
+    expect(archived('lead')).toEqual(['evt-work-a.json', 'evt-work-a.read.json']);
   });
 
   test('a lock is broken only when its pid is dead on this host or the boot differs, never on age', () => {

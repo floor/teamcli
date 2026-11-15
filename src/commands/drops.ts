@@ -580,6 +580,7 @@ async function runArchive(
       mark_read: report.markRead,
       partial: report.partial,
       ...(report.busy === undefined ? {} : { busy: report.busy }),
+      ...(report.daemon === undefined ? {} : { messages_store: { by: 'daemon', due: report.daemon.due, stay: report.daemon.stay } }),
     });
   } else {
     const verbWord = dryRun ? 'would move' : 'moved';
@@ -588,6 +589,12 @@ async function runArchive(
     for (const id of report.markRead) io.stdout(`${markWord} ${id}\n`);
     for (const id of report.partial) io.stdout(`partial ${id}\n`);
     for (const seat of report.busy ?? []) io.stdout(`busy ${seat}: another archive is working this mailbox; run again later\n`);
+    if (report.daemon !== undefined) {
+      for (const id of report.daemon.due) io.stdout(`daemon will move ${id}\n`);
+      io.stdout(
+        `older messages store: ${String(report.daemon.due.length)} due, ${String(report.daemon.stay)} stay; the daemon serves this checkout and moves them at its nightly pass (03:00-06:00)\n`,
+      );
+    }
   }
   // exit: drops.archive.ok
   return 0;

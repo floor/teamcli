@@ -24,11 +24,17 @@
 // there, the older claimed one was replaced and goes to `archive/<YYYY-MM>/superseded/`. Only the
 // claim names are ever unlinked, and only once the same file is in its place.
 //
-// Only one archiver works a mailbox at a time: a real run takes `<seat>/.archiver.lock`, created
-// with O_EXCL and holding the pid, host, start time and boot. A lock is broken only when its pid
-// is dead on this host or the machine booted since; never on age while its pid lives. A mailbox
-// whose lock is held is skipped for the pass and reported busy. The holder checks the lock is
-// still its own before every unit. So a claim seen by a holder belongs to a mover that stopped.
+// Only one archiver works a mailbox, by design rather than by a lock protocol. The real move runs
+// in the daemon's chores child for that root (one process per root), and inside it an in-process
+// mutex keeps two calls off one mailbox. A manual `team drops archive` moves nothing here while
+// the daemon serves the root (`daemonServesRoot`): it lists what is due and leaves it to the
+// nightly pass. Only with no daemon may the manual run move, and then it is the one contender.
+//
+// The lock file `<seat>/.archiver.lock` (O_EXCL; pid, host, start time, boot) stays as the guard
+// for the one remaining overlap: a chores child that died across a daemon restart. It is broken
+// only when its pid is dead on this host or the machine booted since, never on age while its pid
+// lives; a mailbox whose lock is held is skipped and reported busy. The holder checks the lock is
+// still its own before every unit, so a claim seen by a holder belongs to a mover that stopped.
 //
 // Recovery (a claim a stopped pass left, a live receipt whose record is already archived) is
 // bounded by the same limits as the moves, before them: every claim and every archive probe for
@@ -40,6 +46,7 @@ import type { KeyObject } from 'node:crypto';
 import { randomBytes } from 'node:crypto';
 import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { hostname, uptime } from 'node:os';
+import { daemonStateAlive, readDaemonState } from '../daemon/state.ts';
 import { join } from 'node:path';
 import { heldAt } from '../held.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
@@ -113,6 +120,20 @@ export type LegacyMoveHooks = {
   beforeClaim?: (id: string) => void;
   afterClaim?: (id: string) => void;
 };
+
+/** Mailbox folders this process is archiving now: a second call in the same process waits its
+ *  turn as busy, never as a second archiver. */
+const inProcess = new Set<string>();
+
+/** Whether a running daemon serves `root`, so its chores child is the store's one archiver. An
+ *  unreadable daemon record counts as serving: a manual run then moves nothing, which is safe. */
+export function daemonServesRoot(home: string, root: string): boolean {
+  const read = readDaemonState(home);
+  if (read.kind === 'missing') return false;
+  if (read.kind === 'unreadable') return true;
+  if (!daemonStateAlive(read.state)) return false;
+  return read.state.roots.some((entry) => sameFolder(entry.root, root));
+}
 
 /** The archiver lock's name in a seat's mailbox folder. */
 export const LEGACY_ARCHIVER_LOCK = '.archiver.lock';
@@ -678,13 +699,21 @@ export function archiveLegacySeat(input: {
   if (input.seat === LEGACY_OWNER_MAILBOX || heldAt(dir).kind !== 'folder') {
     return { dryRun: false, plan: { ...empty, more: false }, moved: [], finished: 0, kept: 0, busy: null, refused: null };
   }
-  const lock = takeArchiverLock(dir, input.lockDeps);
-  if (lock.kind === 'busy') return { dryRun: false, plan: { ...empty, more: true }, moved: [], finished: 0, kept: 0, busy: lock.holder, refused: null };
-  if (lock.kind === 'refused') return { dryRun: false, plan: { ...empty, more: false }, moved: [], finished: 0, kept: 0, busy: null, refused: `${input.seat}: ${lock.why}` };
+  if (inProcess.has(dir)) {
+    return { dryRun: false, plan: { ...empty, more: true }, moved: [], finished: 0, kept: 0, busy: 'this process is archiving it', refused: null };
+  }
+  inProcess.add(dir);
   try {
-    return archiveHeld(input, dir, nowMs, lock);
+    const lock = takeArchiverLock(dir, input.lockDeps);
+    if (lock.kind === 'busy') return { dryRun: false, plan: { ...empty, more: true }, moved: [], finished: 0, kept: 0, busy: lock.holder, refused: null };
+    if (lock.kind === 'refused') return { dryRun: false, plan: { ...empty, more: false }, moved: [], finished: 0, kept: 0, busy: null, refused: `${input.seat}: ${lock.why}` };
+    try {
+      return archiveHeld(input, dir, nowMs, lock);
+    } finally {
+      lock.release();
+    }
   } finally {
-    lock.release();
+    inProcess.delete(dir);
   }
 }
 

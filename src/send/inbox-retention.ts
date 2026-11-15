@@ -36,7 +36,7 @@ import {
   type StatusContext,
 } from './record.ts';
 import { clearUnread } from './unread-hint.ts';
-import { archiveLegacySeat, legacySeatFolders } from './legacy-inbox-retention.ts';
+import { archiveLegacySeat, daemonServesRoot, legacySeatFolders } from './legacy-inbox-retention.ts';
 
 /** `read_by` on the note `team ack` writes. A plain read receipt does not carry it. */
 export const EXPLICIT_ACK_READ_BY = 'ack';
@@ -765,7 +765,15 @@ export function seatDropFolders(root: string): SeatDropFolder[] {
 export function runInboxRetention(
   root: string,
   options: { now: Date; home: string; dryRun?: boolean; seats?: readonly string[]; session?: string },
-): { move: string[]; markRead: string[]; partial: string[]; refused: string | null; busy?: string[] } {
+): {
+  move: string[];
+  markRead: string[];
+  partial: string[];
+  refused: string | null;
+  busy?: string[];
+  /** The older store while the daemon serves the root: due ids it moves at its nightly pass. */
+  daemon?: { due: string[]; stay: number };
+} {
   const key = messageKeyState(options.home);
   if (key.kind !== 'key') return { move: [], markRead: [], partial: [], refused: null };
   const base = join(root, '.agents', 'send-drops');
@@ -818,6 +826,10 @@ export function runInboxRetention(
   // rest, so unread mail from a real sender stays; unread runtime notices past fourteen days move.
   // A mailbox another archiver holds (the daemon's daily pass) is skipped and named, not refused.
   const busy: string[] = [];
+  // While the daemon serves this root its chores child is the store's one archiver: this run only
+  // lists what is due, as a dry run would, and moves nothing.
+  const deferred = options.session !== undefined && daemonServesRoot(options.home, root);
+  const daemon = { due: [] as string[], stay: 0 };
   if (options.session !== undefined) {
     for (const folder of legacySeatFolders(root)) {
       if (options.seats !== undefined && !options.seats.includes(folder.seat)) continue;
@@ -827,9 +839,14 @@ export function runInboxRetention(
         seat: folder.seat,
         key: key.key,
         now: options.now,
-        dryRun,
+        dryRun: dryRun || deferred,
         options: { unreadKeepMs: null },
       });
+      if (deferred) {
+        daemon.due.push(...report.plan.move.map((item) => item.id));
+        daemon.stay += Object.values(report.plan.stays).reduce((total, count) => total + count, 0);
+        continue;
+      }
       move.push(...(dryRun ? report.plan.move : report.moved).map((item) => item.id));
       if (report.busy !== null) busy.push(folder.seat);
       if (report.refused !== null) refusals.push(report.refused);
@@ -845,7 +862,14 @@ export function runInboxRetention(
     ].join('; ');
     logLine(join(root, '.agents'), 'drops archive', 'retention', line, options.now);
   }
-  return { move, markRead, partial, refused: refusals.length === 0 ? null : refusals.join('; '), ...(busy.length === 0 ? {} : { busy }) };
+  return {
+    move,
+    markRead,
+    partial,
+    refused: refusals.length === 0 ? null : refusals.join('; '),
+    ...(busy.length === 0 ? {} : { busy }),
+    ...(deferred ? { daemon } : {}),
+  };
 }
 
 /** One audit line for a real archive run. A dry run does not call this. */
