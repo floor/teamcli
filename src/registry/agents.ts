@@ -13,7 +13,7 @@ import { traceChildStep } from '../diagnostics/child-steps.ts';
 // (src/send/admit.ts).
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isSeatId, updateState, withLock, type SeatState } from '../state.ts';
 import { currentRunMemo } from '../run-memo.ts';
@@ -204,24 +204,24 @@ function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Ag
   return agents;
 }
 
-/** Each agent file's last parse, by path, with the stat it was parsed at. A long-lived process
- *  (the daemon's chores workers read the registry dozens of times a pass) parses a file again
- *  only when its size, modification time or inode changed; every caller gets its own copy. */
-const parsedAgentFiles = new Map<string, { stamp: string; agent: Agent | null }>();
+/** Each agent file's last parse, by path, with the exact text it was parsed from. A long-lived
+ *  process (the daemon's chores workers read the registry dozens of times a pass) still reads
+ *  every file each time, but parses one again only when its text changed; every caller gets its
+ *  own copy. */
+const parsedAgentFiles = new Map<string, { text: string; agent: Agent | null }>();
 
 function readAgentFileCached(path: string, id: string): Agent | null {
-  let stamp: string;
+  let text: string;
   try {
-    const stat = statSync(path, { bigint: true });
-    stamp = `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeNs)}:${String(stat.ctimeNs)}`;
+    text = readFileSync(path, 'utf8');
   } catch {
     parsedAgentFiles.delete(path);
     return null;
   }
   const cached = parsedAgentFiles.get(path);
-  if (cached !== undefined && cached.stamp === stamp) return cached.agent === null ? null : cloneAgent(cached.agent);
-  const agent = readAgentFile(path, id);
-  parsedAgentFiles.set(path, { stamp, agent: agent === null ? null : cloneAgent(agent) });
+  if (cached !== undefined && cached.text === text) return cached.agent === null ? null : cloneAgent(cached.agent);
+  const agent = parseAgentText(text, path, id);
+  parsedAgentFiles.set(path, { text, agent: agent === null ? null : cloneAgent(agent) });
   return agent;
 }
 
@@ -536,6 +536,11 @@ function readAgentFile(path: string, id: string): Agent | null {
   } catch {
     return null;
   }
+  return parseAgentText(text, path, id);
+}
+
+/** One agent file's text as the record it names, or null; a numeric reach id throws. */
+function parseAgentText(text: string, path: string, id: string): Agent | null {
   let value: YamlValue;
   try {
     value = toValue(parseYaml(text));
