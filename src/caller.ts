@@ -12,6 +12,7 @@ import { readState, type SeatState } from './state.ts';
 import { CLI_PROCESSES, processNameMatches } from './clis.ts';
 import { processStartOf, seatOfManagedEndpoint } from './launch/codex-endpoint.ts';
 import { ownerSetupNoteOnThisAccount, ownerSignsElsewhereOnThisAccount } from './client/owner-pin-path.ts';
+import { confinedSeatAt, type ConfinedSeat } from './placement/confined.ts';
 
 // Who runs this command, placed by its parent processes, never by its environment. This guards
 // against a mistaken agent, not a hostile one: every seat runs as the owner's user.
@@ -94,6 +95,10 @@ export type CallerSources = {
    *  the owner. The process's own sources read the account (`ownerSignsElsewhereOnThisAccount`);
    *  sources a test hands in that leave it out place as a machine with a local owner. */
   ownerSignsElsewhere?(): boolean;
+  /** The seat a sandbox confines this caller to, proved by what the confinement lets it write
+   *  (src/placement/confined.ts); null when no record holds `pane` or the proof fails. Read only
+   *  when the parent walk could not be read at all. Absent: such a caller stays unplaced. */
+  confinedSeat?(pane: string, session: string | undefined): ConfinedSeat | null;
 };
 
 /** Whether a pane herdr lists without a name is the pane the seat's record holds. The proof is
@@ -129,8 +134,11 @@ function placedAtRecordedPane(
 // of that pane, under the same pid proof: the hint names the pane, the root pid decides.
 export function placeCaller(sources: CallerSources, session?: string): Caller {
   const ancestors = sources.ancestors();
-  // A walk that stopped early may have stopped below a herdr server: it places nobody.
-  if (!ancestors?.length) return { kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' };
+  // A walk that stopped early may have stopped below a herdr server: it places nobody, unless the
+  // caller is a confined seat whose sandbox hides every process outside it. That seat is placed
+  // by its own grant, never by the variable that names its pane.
+  if (!ancestors?.length) return confinedCaller(sources, session)
+    ?? { kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' };
   const pids = new Set(ancestors.map((process) => process.pid));
 
   // A herdr server is normally one of the caller's ancestors. A live handoff re-parents every
@@ -218,6 +226,24 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
   const served = endpointSeat(ancestors, sources, session);
   if (served !== null) return served;
   return walkOutside(ancestors, sources);
+}
+
+/** The confined-seat reading (src/placement/confined.ts) for a caller whose parent walk could not
+ *  be read. The pane variable only names which record to test. When the terminal host answers,
+ *  a pane it lists under another seat's name refuses the reading. */
+function confinedCaller(sources: CallerSources, session?: string): Caller | null {
+  const hint = sources.env.HERDR_PANE_ID;
+  if (hint === undefined || hint === '' || sources.confinedSeat === undefined) return null;
+  const seat = sources.confinedSeat(hint, session);
+  if (seat === null) return null;
+  const agents = sources.agents();
+  if (agents !== null) {
+    const listed = agents.find((agent) => agent.pane === hint);
+    if (listed !== undefined && listed.name && listed.name !== seat.name) return null;
+  }
+  return session === undefined
+    ? { kind: 'seat', name: seat.name, pane: hint }
+    : { kind: 'seat', name: seat.name, pane: hint, session };
 }
 
 /** A caller whose nearest Codex ancestor is a seat's own managed app-server is that seat: the
@@ -841,7 +867,7 @@ export function callerOf(
 }
 
 export function currentCaller(
-  io: { env: Record<string, string | undefined>; stdinIsTTY: boolean },
+  io: { env: Record<string, string | undefined>; stdinIsTTY: boolean; cwd?: string },
   session?: string,
   extra?: Partial<CallerSources>,
 ): Caller {
@@ -857,6 +883,7 @@ export function currentCaller(
     home: homedir(),
     processStartOf: (pid) => processStartOf(pid),
     ownerSignsElsewhere: ownerSignsElsewhereOnThisAccount,
+    confinedSeat: (pane, asked) => confinedSeatAt(io.cwd ?? process.cwd(), pane, asked),
   };
   if (extra !== undefined) return placeCaller({ ...sources, ...extra }, session);
   const snapId = activeHerdrSnapshotId();
