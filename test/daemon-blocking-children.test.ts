@@ -2,7 +2,8 @@
 // roots git named, so a beat that reads every hosted root's team file asks git once per root,
 // not on every read; a hold never keeps a folder git did not place, nor an answer whose binding
 // changed (a common directory gone, a worktree or folder replaced at the same path, a repository
-// initialised in between), and a CLI run outside a hold asks git as before. A hosted watch
+// initialised in between, also while git itself was answering), and a CLI run outside a hold
+// asks git as before. A hosted watch
 // names the daemon as its caller and never walks its own parents with `ps`. Synthetic folders,
 // a synthetic team and injected sources; no live daemon, herdr or CLI.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -12,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
-import { findRoot, holdGitRoots, HELD_GIT_ROOT_MS } from '../src/file/load.ts';
+import { findRoot, holdGitRoots, HELD_GIT_ROOT_MS, setGitAnsweredHook } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { hostedLoop } from './helpers/hosted-watch.ts';
@@ -171,6 +172,50 @@ describe('git roots in a long-lived process', () => {
     renameSync(sub, join(root, 'sub-old'));
     mkdirSync(sub);
     expect(withoutGit(sub)).toBeNull();
+  });
+
+  test('a worktree replaced after git answered and before the hold keeps it is not held', () => {
+    const first = repo('race-first');
+    const second = repo('race-second');
+    for (const root of [first, second]) commitEmpty(root);
+    mkdirSync(join(base, 'race'));
+    const tree = join(base, 'race', 'tree');
+    git(first, ['worktree', 'add', '-q', '--detach', tree]);
+    hold();
+    let fired = 0;
+    setGitAnsweredHook(() => {
+      fired += 1;
+      git(first, ['worktree', 'remove', '--force', tree]);
+      git(second, ['worktree', 'add', '-q', '--detach', tree]);
+    });
+    try {
+      // Git's own answer is returned, and never paired with the tree that replaced it.
+      expect(findRoot(tree)).toBe(first);
+    } finally {
+      setGitAnsweredHook(null);
+    }
+    expect(fired).toBe(1);
+    expect(withoutGit(tree)).toBeNull();
+    expect(findRoot(tree)).toBe(second);
+    expect(withoutGit(tree)).toBe(second);
+  });
+
+  test('a repository initialised after git answered and before the hold keeps it is not held', () => {
+    const outer = repo('race-outer');
+    const middle = join(outer, 'middle');
+    const deep = join(middle, 'deep');
+    mkdirSync(deep, { recursive: true });
+    hold();
+    setGitAnsweredHook(() => {
+      execFileSync('git', ['init', '-q'], { cwd: middle, stdio: 'ignore' });
+    });
+    try {
+      expect(findRoot(deep)).toBe(outer);
+    } finally {
+      setGitAnsweredHook(null);
+    }
+    expect(withoutGit(deep)).toBeNull();
+    expect(findRoot(deep)).toBe(middle);
   });
 
   test('a folder git did not place is never held', () => {

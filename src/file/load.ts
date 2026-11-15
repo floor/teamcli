@@ -166,59 +166,96 @@ function realOrResolved(path: string): string {
  *  read the same dozen checkouts on every beat, and each read was a synchronous `git` child on
  *  the one event loop (2026-11-15: 14 reads, up to 12.9 s, inside one endpoint refresh under
  *  load). Only a found root is kept, and a hit stands only while its binding reads the same
- *  (`gitBinding`); a folder git did not place is asked again every time, as before. A CLI run never holds one: its per-run memo covers it. */
+ *  (`gitWitness`); a folder git did not place is asked again every time, as before. A CLI run
+ *  never holds one: its per-run memo covers it. */
 type HeldGitRoot = { root: string; common: string; at: number; binding: string };
 
-/** The identity a held answer stands on, read with lstat alone: the queried folder itself, every
- *  `.git` entry (or its absence) from that folder up to the root git named, and the common
- *  directory. A folder replaced at the same path, a worktree whose `.git` file was written again,
- *  or a repository initialised in between all read differently, and the held answer is dropped.
- *  A `.git` directory is judged by device and inode only: git rewrites its contents on ordinary
- *  reads, and a moved or recloned repository is a new directory. Null when any part is missing. */
-function gitBinding(key: string, root: string, common: string): string | null {
-  const id = (path: string, withTimes: boolean): string | null => {
-    // ENOENT is an answer (no `.git` at this level); any other failure leaves no binding.
-    try {
-      const st = lstatSync(path);
-      const kind = st.isDirectory() ? 'd' : st.isSymbolicLink() ? 'l' : 'f';
-      const base = `${kind}:${String(st.dev)}:${String(st.ino)}`;
-      if (!withTimes || kind === 'd') return base;
-      // A `.git` file is a worktree's one-line pointer: its words are the binding, read whole
-      // (a few hundred bytes at most), since a replaced file can reuse an inode and a size.
-      const words = kind === 'f' && st.size <= 4096 ? readFileSync(path, 'utf8') : '';
-      return `${base}:${String(st.mtimeMs)}:${String(st.size)}:${words}`;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? '-' : null;
-    }
-  };
-  const parts: string[] = [];
-  // The walk follows the folder's real path, as git's own answer does: a path through a link
-  // still reads every `.git` between the real folder and the root.
+/** One path's identity, read with lstat alone; `-` when nothing is there, null on any other
+ *  failure. A `.git` directory is judged by device and inode only (git rewrites its contents on
+ *  ordinary reads; a moved or recloned repository is a new directory). A `.git` file is a
+ *  worktree's one-line pointer, and its words are part of it, since a replaced file can reuse an
+ *  inode and a size. */
+function pathId(path: string, pointer: boolean): string | null {
+  try {
+    const st = lstatSync(path);
+    const kind = st.isDirectory() ? 'd' : st.isSymbolicLink() ? 'l' : 'f';
+    const base = `${kind}:${String(st.dev)}:${String(st.ino)}`;
+    if (!pointer || kind !== 'f') return base;
+    const words = st.size <= 4096 ? readFileSync(path, 'utf8') : '';
+    return `${base}:${String(st.mtimeMs)}:${String(st.size)}:${words}`;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? '-' : null;
+  }
+}
+
+type GitWitness = { text: string; bound: { level: string; kind: 'd' | 'f' | 'l' } | null };
+
+/** Everything git's answer for `key` can depend on in the tree, read without git: the folder's
+ *  real path and inode, and every `.git` entry (or its absence) from that folder up to the
+ *  filesystem's top. A folder or worktree replaced at the same path, or a repository initialised
+ *  anywhere above the folder, reads differently. `bound` is the nearest `.git` entry: the one
+ *  git binds the folder to. Null when any part cannot be read. */
+function gitWitness(key: string): GitWitness | null {
   const real = realOrResolved(key);
-  const folder = id(real, false);
+  const folder = pathId(real, false);
   if (folder === null || folder === '-') return null;
-  parts.push(`${real}=${folder}`);
-  const top = realOrResolved(root);
+  const parts = [`${real}=${folder}`];
+  let bound: GitWitness['bound'] = null;
   let at = real;
   for (let depth = 0; depth < 256; depth++) {
-    const entry = id(join(at, '.git'), true);
+    const entry = pathId(join(at, '.git'), true);
     if (entry === null) return null;
     parts.push(entry);
-    if (at === top) break;
-    // A folder outside the root git named (in a linked worktree kept elsewhere) is walked up to
-    // the first `.git` entry, which binds it; one under the root is walked to the root.
-    if (entry !== '-' && !real.startsWith(`${top}${sep}`)) break;
+    if (bound === null && entry !== '-') bound = { level: at, kind: entry[0] as 'd' | 'f' | 'l' };
     const up = dirname(at);
-    if (up === at) return null;
+    if (up === at) return { text: parts.join('|'), bound };
     at = up;
   }
-  const shared = id(common, false);
-  if (shared === null || shared === '-') return null;
-  parts.push(shared);
-  return parts.join('|');
+  return null;
 }
+
+/** Whether git's common directory is the one the nearest `.git` entry names: the directory
+ *  itself, or the `commondir` of the worktree folder a pointer file names. Anything else (a link,
+ *  an unreadable pointer, an environment that steered git elsewhere) is not held. */
+function witnessAgrees(witness: GitWitness, common: string): boolean {
+  const bound = witness.bound;
+  if (bound === null) return false;
+  const named = realOrResolved(common);
+  const dotGit = join(bound.level, '.git');
+  if (bound.kind === 'd') return realOrResolved(dotGit) === named;
+  if (bound.kind !== 'f') return false;
+  try {
+    const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf8'))?.[1];
+    if (pointer === undefined) return false;
+    const gitdir = resolve(bound.level, pointer);
+    let shared = gitdir;
+    try {
+      shared = resolve(gitdir, readFileSync(join(gitdir, 'commondir'), 'utf8').trim());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+    }
+    return realOrResolved(shared) === named;
+  } catch {
+    return false;
+  }
+}
+
+/** The held binding: the witness and the common directory's own identity. */
+function heldBinding(witness: GitWitness | null, common: string): string | null {
+  if (witness === null) return null;
+  const shared = pathId(common, false);
+  if (shared === null || shared === '-') return null;
+  return `${witness.text}|${shared}`;
+}
+
 type GitRootHold = { entries: Map<string, HeldGitRoot>; ttlMs: number; now: () => number; holders: number };
 let gitRootHold: GitRootHold | null = null;
+
+/** A test's seam between git's answer and the second witness; null outside a test. */
+let gitAnsweredHook: ((cwd: string) => void) | null = null;
+export function setGitAnsweredHook(hook: ((cwd: string) => void) | null): void {
+  gitAnsweredHook = hook;
+}
 
 /** How long a held root stands before git is asked again, and how many folders are held. */
 export const HELD_GIT_ROOT_MS = 10 * 60_000;
@@ -246,17 +283,23 @@ function heldGitRoot(key: string): string | undefined {
   if (hold === null) return undefined;
   const held = hold.entries.get(key);
   if (held === undefined) return undefined;
-  if (hold.now() - held.at >= hold.ttlMs || gitBinding(key, held.root, held.common) !== held.binding) {
+  if (hold.now() - held.at >= hold.ttlMs || heldBinding(gitWitness(key), held.common) !== held.binding) {
     hold.entries.delete(key);
     return undefined;
   }
   return held.root;
 }
 
-function keepGitRoot(key: string, root: string, common: string): void {
+/** Holds git's answer only when one stable binding produced it: the witness read before git ran
+ *  and the one read after it are the same, and the nearest `.git` entry names the common
+ *  directory git answered. A change while git ran leaves its answer unheld, never paired with a
+ *  later tree. */
+function keepGitRoot(key: string, before: GitWitness | null, root: string, common: string): void {
   const hold = gitRootHold;
-  if (hold === null) return;
-  const binding = gitBinding(key, root, common);
+  if (hold === null || before === null) return;
+  const after = gitWitness(key);
+  if (after === null || after.text !== before.text || !witnessAgrees(after, common)) return;
+  const binding = heldBinding(after, common);
   if (binding === null) return;
   if (!hold.entries.has(key) && hold.entries.size >= HELD_GIT_ROOT_LIMIT) {
     const oldest = hold.entries.keys().next();
@@ -277,6 +320,7 @@ export function findRoot(cwd: string): string | null {
     memo?.gitRoots.set(key, held);
     return held;
   }
+  const before = gitRootHold === null ? null : gitWitness(key);
   try {
     const common = traceBeatWork('git root read (sync)', () => execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
       cwd,
@@ -285,7 +329,10 @@ export function findRoot(cwd: string): string | null {
       timeout: syncChildTimeout(5_000),
     })).trim();
     const root = common ? dirname(common) : null;
-    if (root !== null) keepGitRoot(key, root, common);
+    if (root !== null && gitRootHold !== null) {
+      gitAnsweredHook?.(cwd);
+      keepGitRoot(key, before, root, common);
+    }
     if (memo !== null) {
       memo.gitRoots.set(key, root ?? '');
       if (root !== null) {
