@@ -144,6 +144,56 @@ export function wakeBackoffMs(tries: number): number {
   return Math.min(WAKE_TRY_BASE_MS * 2 ** Math.max(0, tries - 1), WAKE_TRY_MAX_MS);
 }
 
+/** The most typed wake lines the retry puts into one seat's pane in any hour. */
+export const WAKE_LINES_PER_HOUR = 6;
+
+/** The dot-named record of the retry's typed lines beside a seat's mail: never read as a message. */
+export function wakeLinesPath(dropDir: string): string {
+  return join(dropDir, '.wake-lines.json');
+}
+
+function typedLinesOf(dropDir: string): number[] {
+  try {
+    const parsed = JSON.parse(readFileSync(wakeLinesPath(dropDir), 'utf8')) as { at?: unknown };
+    return Array.isArray(parsed.at) ? parsed.at.filter((one): one is number => typeof one === 'number' && Number.isFinite(one)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** How many lines the retry typed into this seat's pane in the hour before `nowMs`. */
+function typedLinesWithinHour(dropDir: string, nowMs: number): number {
+  return typedLinesOf(dropDir).filter((at) => at > nowMs - 60 * 60_000 && at <= nowMs).length;
+}
+
+/** Records one typed line; only the last hour is kept. Best effort: an unwritable record only
+ *  loosens the cap, it never blocks a wake. */
+function noteTypedLine(dropDir: string, nowMs: number): void {
+  const kept = typedLinesOf(dropDir).filter((at) => at > nowMs - 60 * 60_000 && at <= nowMs);
+  try {
+    writeFileSync(wakeLinesPath(dropDir), `${JSON.stringify({ at: [...kept, nowMs] })}\n`, { mode: 0o600 });
+  } catch {
+    // The cap reads what it can.
+  }
+}
+
+/** The first slow retry, once the profile's fast bound is spent; each later one doubles. */
+const WAKE_SLOW_BASE_MS = 5 * 60_000;
+
+/** The slow retries never wait longer than this. */
+const WAKE_SLOW_MAX_MS = 30 * 60_000;
+
+/** A message older than this is not retried any more: the report and the seat's own turn-start
+ *  read are what is left. */
+export const WAKE_SLOW_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
+/** The wait before the next attempt once `tries` attempts have failed under a fast bound of
+ *  `fastTries`: the fast backoff inside the bound, then 5, 10, 20 and 30 minutes. */
+export function wakeRetryDelayMs(tries: number, fastTries: number): number {
+  if (tries < fastTries) return wakeBackoffMs(tries);
+  return Math.min(WAKE_SLOW_BASE_MS * 2 ** Math.max(0, tries - fastTries), WAKE_SLOW_MAX_MS);
+}
+
 /** The typed wake ledger, when it can be read; null when the message has had no typed wake
  *  attempt. The file is written whole and 0600, like every record beside a message. */
 function wakeTryOf(dropDir: string, id: string): WakeTry | null {
@@ -226,8 +276,11 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
  * - `.wake` or `.reported`: the one wake was sent, or the word has already gone out.
  *
  * A seat whose typed wake retry is on (`watch_wake`) also reads its ledger: an attempt inside
- * its backoff is not due yet, and one at the profile's bound is never due again — the report
- * at twice the window is what speaks after that.
+ * its backoff is not due yet. Past the profile's bound the fast retries end and the slow ones
+ * begin: every five minutes, doubling to half an hour, for as long as the message stays unread
+ * and younger than `WAKE_SLOW_MAX_AGE_MS`. The report at twice the window still speaks once; it
+ * no longer ends the slow retries, so a seat that was busy through the fast ones and then sits
+ * idle is woken (2026-11-14: messages to idle Grok and Antigravity seats sat unread for days).
  */
 function dueForWake(
   dropDir: string,
@@ -240,15 +293,13 @@ function dueForWake(
   if (!(age >= unreadAfter * 1000)) return false;
   if (existsSync(pendingDropPath(dropDir, message.id))) return false;
   if (existsSync(wakePath(dropDir, message.id))) return false;
-  if (existsSync(reportedPath(dropDir, message.id))) return false;
-  if (retryTries !== null) {
-    const ledger = wakeTryOf(dropDir, message.id);
-    if (ledger !== null) {
-      if (ledger.tries >= retryTries) return false;
-      const next = Date.parse(ledger.next_at);
-      if (Number.isFinite(next) && nowMs < next) return false;
-    }
-  }
+  if (retryTries === null) return !existsSync(reportedPath(dropDir, message.id));
+  const ledger = wakeTryOf(dropDir, message.id);
+  // Before any typed attempt, a report already written is the word that stands.
+  if (ledger === null) return !existsSync(reportedPath(dropDir, message.id));
+  if (ledger.tries >= retryTries && !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
+  const next = Date.parse(ledger.next_at);
+  if (Number.isFinite(next) && nowMs < next) return false;
   return true;
 }
 
@@ -772,7 +823,14 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // That wake is delivered only when the profile's working screen showed; a refused or
       // failed attempt gives its reservations back, so it never spends the message's one wake.
       if (retry !== null && !preserveDraft) {
+        // One pane takes at most `WAKE_LINES_PER_HOUR` typed lines from this retry, whatever
+        // number of messages wait: the slow retries must never flood a seat's box.
+        if (scene.sources.typedWake !== undefined && typedLinesWithinHour(dropDir, nowMs) >= WAKE_LINES_PER_HOUR) {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          continue;
+        }
         const typed = await scene.sources.typedWake?.(pane, line, seat.cli, scene.session);
+        if (typed?.typed === true) noteTypedLine(dropDir, nowMs);
         if (typed === undefined) {
           // No seam bound: nothing was attempted, so nothing is spent and no attempt is counted.
           for (const id of reserved) release(wakePath(dropDir, id));
@@ -795,7 +853,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
             recordWakeTry(dropDir, id, {
               tries,
               typed: before?.typed === true || typed.typed,
-              next_at: new Date(nowMs + wakeBackoffMs(tries)).toISOString(),
+              next_at: new Date(nowMs + wakeRetryDelayMs(tries, retry.tries)).toISOString(),
             });
           }
           continue;
