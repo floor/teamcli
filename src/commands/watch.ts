@@ -390,6 +390,16 @@ async function screenRead(sources: WatchSources, gate: ReadGate, pane: string, s
     : sources.screen(pane, session);
 }
 
+/** The one read a blocked seat gets outside the pass's budget, bounded by its own deadline. */
+const BLOCKED_SCREEN_READ_MS = 5_000;
+
+async function blockedScreenRead(sources: WatchSources, pane: string, session: string, signal: AbortSignal | undefined): Promise<string | null> {
+  if (signal?.aborted === true) return null;
+  return sources.screenAsync !== undefined
+    ? await sources.screenAsync(pane, session, { timeoutMs: BLOCKED_SCREEN_READ_MS, ...(signal === undefined ? {} : { signal }) })
+    : sources.screen(pane, session);
+}
+
 /** A pane's foreground names, awaited when the source supplies the bounded read, else read
  *  synchronously; null when the budget is spent or the pane can't be read. */
 async function foregroundRead(sources: WatchSources, gate: ReadGate, pane: string, session: string): Promise<string[] | null> {
@@ -1345,9 +1355,16 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             // The fallback read is the same bounded, awaited call when the source supplies one:
             // a pane whose screen the whole-session read could not take is asked once more,
             // never with the pass's budget already spent.
-            const extra = readScreenNow && (liveScreen === undefined || liveScreen === '')
+            let extra = readScreenNow && (liveScreen === undefined || liveScreen === '')
               ? await screenRead(sources, gate, agent.pane, session)
               : undefined;
+            // A seat the host reports blocked is read even when the pass's read budget is spent:
+            // its prompt's kind and text are what its lead is told, and without a screen the
+            // notice could only say the screen was not recognised (2026-11-15: a Grok approval
+            // dialog reported that way twice under load). One bounded read per blocked seat.
+            if (agent.status === 'blocked' && (liveScreen === undefined || liveScreen === '') && (extra === undefined || extra === null || extra === '')) {
+              extra = await blockedScreenRead(sources, agent.pane, session, hosted?.signal);
+            }
             const rawScreen = readScreenNow
               ? (liveScreen !== undefined && liveScreen !== '' ? liveScreen : (extra ?? liveScreen))
               : undefined;

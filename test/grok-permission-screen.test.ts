@@ -15,6 +15,15 @@ test('the 1.0.77 command approval classifies as permission', () => {
   expect(classifyPromptKind('grok', raw)).toBe('permission');
 });
 
+test('the 1.0.77 command approval in a narrow pane, its footer without the scrollback cell, classifies as permission', () => {
+  // 2026-11-15: a seat stopped on this dialog was reported as an unrecognised screen. The capture
+  // is from a live pane; its paths, ids and names are replaced.
+  const raw = fixture('1.0.77', 'permission-narrow.txt');
+  expect(raw).not.toContain('Esc:scrollback');
+  expect(classify('grok', raw.split('\n')).kind).toBe('permission');
+  expect(classifyPromptKind('grok', raw)).toBe('permission');
+});
+
 test('the 1.0.52 answer widget stays a question, and an idle prompt is no permission', () => {
   expect(classify('grok', fixture('1.0.52', 'permission.txt').split('\n')).kind).toBe('question');
   expect(classify('grok', fixture('1.0.50', 'idle.txt').split('\n')).kind).not.toBe('permission');
