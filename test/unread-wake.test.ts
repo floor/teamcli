@@ -998,18 +998,17 @@ describe("the watch's typed wake retry", () => {
 
     for (const ms of [0, 5_000, 15_000]) await wakeUnreadDrops(at(ms), { unreadAfter: N });
     expect(calls).toHaveLength(3);
-    // The report speaks once at twice the window; it does not end the slow retries.
-    reportUnreadDrops(at(MIN), { unreadAfter: N });
-    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
-
-    // Inside the first slow wait nothing is typed; at its end the seam is asked again.
+    // Inside the first slow wait (five minutes from the third attempt) nothing is typed.
     await wakeUnreadDrops(at(4 * MIN), { unreadAfter: N });
     expect(calls).toHaveLength(3);
-    await wakeUnreadDrops(at(15_000 + 5 * MIN), { unreadAfter: N });
+    // The report speaks once at twice the window; it does not end the slow retries.
+    reportUnreadDrops(at(10 * MIN), { unreadAfter: N });
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    await wakeUnreadDrops(at(10 * MIN), { unreadAfter: N });
     expect(calls).toHaveLength(4);
-    expect(ledgerOf(dropDir, UNREAD_A)?.next_at).toBe(new Date(NOW.getTime() + 15_000 + 15 * MIN).toISOString());
     // The next slow wait is ten minutes; the attempt after it lands.
-    await wakeUnreadDrops(at(15_000 + 15 * MIN), { unreadAfter: N });
+    expect(ledgerOf(dropDir, UNREAD_A)?.next_at).toBe(new Date(NOW.getTime() + 20 * MIN).toISOString());
+    await wakeUnreadDrops(at(20 * MIN), { unreadAfter: N });
     expect(calls).toHaveLength(5);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
