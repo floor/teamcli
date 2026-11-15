@@ -2178,6 +2178,12 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
   // list are taken once for the whole pass; absent, this call takes its own.
   const scan = mail ?? new MailPass({ dir, root, session: team.session, home, lead: team.orchestrator });
   const servedByDrops = new Map<string, Set<string>>();
+  // Each seat's current brief claim, read once per call.
+  const claimIds = new Map<string, string | null>();
+  const claimIdOf = (seat: string): string | null => {
+    if (!claimIds.has(seat)) claimIds.set(seat, currentClaimIn(root, team.session, seat)?.id ?? null);
+    return claimIds.get(seat) ?? null;
+  };
   const waitingIds = (seat: string): Set<string> => {
     let ids = servedByDrops.get(seat);
     if (ids === undefined) {
@@ -2212,7 +2218,7 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
       served: waitingIds(record.to).has(record.id),
       // The seat's current launch brief, by the claim its state holds (never by the sender's
       // word): it waits on the seat's own turn-start read, not on a wake.
-      brief: currentClaimIn(root, team.session, record.to)?.id === record.id,
+      brief: claimIdOf(record.to) === record.id,
       inDrops: existsSync(join(scan.dropDir(record.to), record.id)),
       text,
     };
