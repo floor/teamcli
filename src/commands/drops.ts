@@ -579,6 +579,7 @@ async function runArchive(
       move: report.move,
       mark_read: report.markRead,
       partial: report.partial,
+      ...(report.busy === undefined ? {} : { busy: report.busy }),
     });
   } else {
     const verbWord = dryRun ? 'would move' : 'moved';
@@ -586,6 +587,7 @@ async function runArchive(
     for (const id of report.move) io.stdout(`${verbWord} ${id}\n`);
     for (const id of report.markRead) io.stdout(`${markWord} ${id}\n`);
     for (const id of report.partial) io.stdout(`partial ${id}\n`);
+    for (const seat of report.busy ?? []) io.stdout(`busy ${seat}: another archive is working this mailbox; run again later\n`);
   }
   // exit: drops.archive.ok
   return 0;

@@ -6,7 +6,7 @@
 // `team drops archive` both reach the store.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OWNER_RECORD_FROM, writeRuntimeMailboxRecord } from '../src/bus/owner.ts';
@@ -19,8 +19,11 @@ import {
   archiveLegacySeat,
   legacyArchivedRecordExists,
   legacySeatDir,
+  LEGACY_ARCHIVER_LOCK,
   planLegacySeatArchive,
+  realLockDeps,
   RUNTIME_SENDER,
+  takeArchiverLock,
 } from '../src/send/legacy-inbox-retention.ts';
 import { MESSAGE_DOMAIN, RECEIPT_DOMAIN, messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
@@ -296,6 +299,121 @@ describe('the older messages store archive', () => {
       ['messages', 'acme', 'lead', 'evt-fallback.v2'],
       ['messages', 'acme', 'resting', 'mail.with.dots'],
     ]);
+  });
+
+  test('two archivers and a writer: the second archiver finds the mailbox busy, nothing is lost', () => {
+    notice('lead', 'evt-fallback-r', OLD_ISO);
+    const dir = legacySeatDir(root, 'lead');
+    const key = messageKeyOf(home);
+    let second: ReturnType<typeof archiveLegacySeat> | undefined;
+    let manual: ReturnType<typeof runInboxRetention> | undefined;
+    const first = archiveLegacySeat({
+      root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: false, options: { unreadKeepMs: null },
+      hooks: {
+        afterClaim: () => {
+          // A writer replaces the live record, then a second archiver and a manual run start.
+          notice('lead', 'evt-fallback-r', OLD_ISO);
+          second = archiveLegacySeat({ root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: false, options: { unreadKeepMs: null } });
+          manual = runInboxRetention(root, { now: NOW, home, seats: ['lead'], session: 'acme' });
+        },
+      },
+    });
+    expect(second?.busy).toContain(`pid ${String(process.pid)}`);
+    expect(second?.moved).toEqual([]);
+    expect(second?.refused).toBeNull();
+    expect(second?.plan.more).toBe(true);
+    expect(manual?.busy).toEqual(['lead']);
+    expect(manual?.refused).toBeNull();
+    expect(first.refused).toBeNull();
+    expect(first.moved.map((item) => item.id)).toEqual(['evt-fallback-r']);
+    // The first record is archived, the writer's replacement is live, the lock is gone.
+    expect(archived('lead', 'unread')).toEqual(['evt-fallback-r.json']);
+    expect(existsSync(join(dir, 'evt-fallback-r.json'))).toBe(true);
+    expect(existsSync(join(dir, LEGACY_ARCHIVER_LOCK))).toBe(false);
+    // The replacement is old too: the next run, alone, archives it beside the first under a free
+    // name check, which refuses rather than overwrite.
+    const next = archiveLegacySeat({ root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: false, options: { unreadKeepMs: null } });
+    expect(next.refused).toContain('is already in the archive');
+    expect(existsSync(join(dir, 'evt-fallback-r.json'))).toBe(true);
+  });
+
+  test('a lock is broken only when its pid is dead on this host or the boot differs, never on age', () => {
+    const dir = legacySeatDir(root, 'lead');
+    mkdirSync(dir, { recursive: true });
+    const deps = realLockDeps();
+    const lockPath = join(dir, LEGACY_ARCHIVER_LOCK);
+    const plantLock = (holder: Record<string, unknown>) => writeFileSync(lockPath, `${JSON.stringify({ token: 'other', ...holder })}\n`);
+    // A live pid of this boot, started a year ago: busy.
+    plantLock({ pid: process.pid, host: deps.host, started: '2025-11-15T00:00:00.000Z', boot: deps.boot });
+    expect(takeArchiverLock(dir, deps).kind).toBe('busy');
+    expect(existsSync(lockPath)).toBe(true);
+    // Another host: never judged, busy.
+    plantLock({ pid: 1, host: 'elsewhere', started: NOW.toISOString(), boot: deps.boot });
+    expect(takeArchiverLock(dir, { ...deps, alive: () => false }).kind).toBe('busy');
+    // A dead pid on this host: broken and taken.
+    plantLock({ pid: 999_999, host: deps.host, started: NOW.toISOString(), boot: deps.boot });
+    const taken = takeArchiverLock(dir, { ...deps, alive: () => false });
+    expect(taken.kind).toBe('held');
+    if (taken.kind === 'held') taken.release();
+    // A live pid from an earlier boot: broken and taken.
+    plantLock({ pid: process.pid, host: deps.host, started: NOW.toISOString(), boot: '2026-01-01T00:00:00.000Z' });
+    const reboot = takeArchiverLock(dir, deps);
+    expect(reboot.kind).toBe('held');
+    if (reboot.kind === 'held') {
+      expect(reboot.still()).toBe(true);
+      reboot.release();
+    }
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("a leftover claim is recovered only by the lock's holder, never beside a live mover", () => {
+    notice('lead', 'evt-work-c', OLD_ISO);
+    read('lead', 'evt-work-c', OLD_ISO);
+    const dir = legacySeatDir(root, 'lead');
+    // A mover renamed the record to its claim name and is still working (its lock is live).
+    renameSync(join(dir, 'evt-work-c.json'), join(dir, '.evt-work-c.json.claim'));
+    const deps = realLockDeps();
+    writeFileSync(join(dir, LEGACY_ARCHIVER_LOCK), `${JSON.stringify({ pid: process.pid, host: deps.host, started: NOW.toISOString(), boot: deps.boot, token: 'mover' })}\n`);
+    const key = messageKeyOf(home);
+    const busy = archiveLegacySeat({ root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: false, options: { unreadKeepMs: null } });
+    expect(busy.busy).not.toBeNull();
+    expect(busy.finished).toBe(0);
+    expect(existsSync(join(dir, '.evt-work-c.json.claim'))).toBe(true);
+    // The mover died: its lock is stale, and the claim is finished.
+    const done = archiveLegacySeat({
+      root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: false, options: { unreadKeepMs: null },
+      lockDeps: { ...deps, alive: (pid) => pid !== process.pid },
+    });
+    expect(done.busy).toBeNull();
+    expect(done.finished).toBe(1);
+    expect(archived('lead')).toEqual(['evt-work-c.json', 'evt-work-c.read.json']);
+    expect(live('lead')).toEqual([]);
+  });
+
+  test('recovery discovery charges every archive probe to the scan limit and resumes from its cursor', () => {
+    const dir = legacySeatDir(root, 'lead');
+    mkdirSync(dir, { recursive: true });
+    // Four receipts with no record anywhere: each is a probe that finds nothing.
+    for (let n = 0; n < 4; n += 1) {
+      notice('lead', `evt-work-p${String(n)}`, OLD_ISO);
+      read('lead', `evt-work-p${String(n)}`, OLD_ISO);
+      renameSync(join(dir, `evt-work-p${String(n)}.json`), join(base, `gone-${String(n)}.json`));
+    }
+    const key = messageKeyOf(home);
+    const plan = (recoveryAfter?: string) =>
+      planLegacySeatArchive({ root, session: 'acme', seat: 'lead', key, nowMs: NOW.getTime(), options: { unreadKeepMs: null, scanLimit: 2, ...(recoveryAfter === undefined ? {} : { recoveryAfter }) } });
+    const first = plan();
+    expect(first.scanned).toBe(2);
+    expect(first.recovery).toEqual([]);
+    expect(first.more).toBe(true);
+    expect(first.recoveryDone).toBe(false);
+    expect(first.recoveryLast).toBe('evt-work-p1.read.json');
+    const second = plan(first.recoveryLast ?? undefined);
+    expect(second.scanned).toBe(2);
+    expect(second.recoveryLast).toBe('evt-work-p3.read.json');
+    const third = plan(second.recoveryLast ?? undefined);
+    expect(third.recoveryDone).toBe(true);
+    expect(third.more).toBe(false);
   });
 
   test('a move stopped after the record left is finished by the next pass', () => {

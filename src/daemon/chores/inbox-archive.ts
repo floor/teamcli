@@ -368,6 +368,7 @@ export async function inboxArchivePass(input: {
   }
   // 3. The older `.agents/messages/<seat>` store the runtime still writes its notices into: the
   //    same rules for this team's session, after the drop folders, inside the same budgets.
+  const busy: string[] = [];
   if (!more) {
     legacy: for (const folder of legacySeatFolders(root)) {
       const key2 = `messages/${folder.seat}`;
@@ -389,6 +390,7 @@ export async function inboxArchivePass(input: {
         }
         const atRest = agents !== null && seatAtRest(agents, teamId, team, team.session, folder.seat);
         const after = run.cursor[key2];
+        const recoveryAfter = run.recoverCursor[key2];
         const report = archiveLegacySeat({
           root,
           session: team.session,
@@ -400,9 +402,18 @@ export async function inboxArchivePass(input: {
             unreadKeepMs: atRest ? STOPPED_UNREAD_KEEP_MS : null,
             limit: budget,
             scanLimit: Math.min(INBOX_ARCHIVE_SCAN_CHUNK, scanBudget),
+            skipRecovery: run.recovered.includes(key2),
             ...(after === undefined ? {} : { after }),
+            ...(recoveryAfter === undefined ? {} : { recoveryAfter }),
           },
         });
+        if (report.busy !== null) {
+          // Another archiver (a manual `team drops archive`) holds this mailbox: skipped for this
+          // pass, not an error; the day stays open so a later pass comes back to it.
+          busy.push(folder.seat);
+          more = true;
+          continue legacy;
+        }
         const unreadHere = report.moved.filter((item) => item.unread === true).length;
         moved += report.moved.length - unreadHere + report.finished;
         unread += unreadHere;
@@ -417,8 +428,14 @@ export async function inboxArchivePass(input: {
           run.completed.push(key2);
           break;
         }
+        if (report.plan.recoveryDone) {
+          delete run.recoverCursor[key2];
+          if (!run.recovered.includes(key2)) run.recovered.push(key2);
+        } else if (report.plan.recoveryLast !== null) {
+          run.recoverCursor[key2] = report.plan.recoveryLast;
+        }
         if (report.plan.more) {
-          // Recovery that filled the chunk leaves the cursor where it was: the records wait.
+          // Recovery that filled the chunk leaves the record cursor where it was: the records wait.
           if (report.plan.last !== null) run.cursor[key2] = report.plan.last;
         } else {
           delete run.cursor[key2];
@@ -435,12 +452,12 @@ export async function inboxArchivePass(input: {
   run.moved += moved;
   if (!more) run.done = true;
   const saved = writeRun(root, run);
-  if (moved > 0 || unread > 0 || refused.length > 0) {
+  if (moved > 0 || unread > 0 || refused.length > 0 || busy.length > 0) {
     logLine(
       join(root, '.agents'),
       'drops archive',
       'daemon',
-      `daily ${day}: moved ${String(moved)} read or acknowledged, ${String(unread)} unread to seats at rest${more ? '; more next pass' : ''}${refused.length === 0 ? '' : `; ${refused.join('; ')}`}`,
+      `daily ${day}: moved ${String(moved)} read or acknowledged, ${String(unread)} unread to seats at rest${more ? '; more next pass' : ''}${busy.length === 0 ? '' : `; busy (another archiver): ${busy.join(', ')}`}${refused.length === 0 ? '' : `; ${refused.join('; ')}`}`,
       now,
     );
   }

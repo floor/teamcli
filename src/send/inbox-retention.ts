@@ -765,7 +765,7 @@ export function seatDropFolders(root: string): SeatDropFolder[] {
 export function runInboxRetention(
   root: string,
   options: { now: Date; home: string; dryRun?: boolean; seats?: readonly string[]; session?: string },
-): { move: string[]; markRead: string[]; partial: string[]; refused: string | null } {
+): { move: string[]; markRead: string[]; partial: string[]; refused: string | null; busy?: string[] } {
   const key = messageKeyState(options.home);
   if (key.kind !== 'key') return { move: [], markRead: [], partial: [], refused: null };
   const base = join(root, '.agents', 'send-drops');
@@ -816,6 +816,8 @@ export function runInboxRetention(
   }
   // The older `.agents/messages` store, for this session. A manual run never knows a seat is at
   // rest, so unread mail from a real sender stays; unread runtime notices past fourteen days move.
+  // A mailbox another archiver holds (the daemon's daily pass) is skipped and named, not refused.
+  const busy: string[] = [];
   if (options.session !== undefined) {
     for (const folder of legacySeatFolders(root)) {
       if (options.seats !== undefined && !options.seats.includes(folder.seat)) continue;
@@ -829,6 +831,7 @@ export function runInboxRetention(
         options: { unreadKeepMs: null },
       });
       move.push(...(dryRun ? report.plan.move : report.moved).map((item) => item.id));
+      if (report.busy !== null) busy.push(folder.seat);
       if (report.refused !== null) refusals.push(report.refused);
     }
   }
@@ -837,11 +840,12 @@ export function runInboxRetention(
       `moved ${move.join(' ')}`,
       `marked ${markRead.join(' ')} read`,
       ...(partial.length === 0 ? [] : [`partial ${partial.join(' ')}`]),
+      ...(busy.length === 0 ? [] : [`busy ${busy.join(' ')}`]),
       ...refusals,
     ].join('; ');
     logLine(join(root, '.agents'), 'drops archive', 'retention', line, options.now);
   }
-  return { move, markRead, partial, refused: refusals.length === 0 ? null : refusals.join('; ') };
+  return { move, markRead, partial, refused: refusals.length === 0 ? null : refusals.join('; '), ...(busy.length === 0 ? {} : { busy }) };
 }
 
 /** One audit line for a real archive run. A dry run does not call this. */
