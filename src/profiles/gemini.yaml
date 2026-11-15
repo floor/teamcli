@@ -23,6 +23,20 @@ rules:
 # The delivery class a run measured: the seat reads its registered MCP inbox when it takes a
 # turn; this CLI has no event adapter that reaches it while idle.
 delivery: pull-on-turn
+# The typed wake, read on the 0.64.0 frames in test/fixtures/gemini/0.64.0/: a send may type one
+# trigger line into a composer two reads showed as the empty idle prompt (`idle.txt`, the
+# ` *   Type your message or @path/to/file` box), presses Enter only while the box still holds
+# exactly that line (`unsent.txt`), and calls itself delivered only when the `working` spinner
+# row appears (`working.txt`). Enter submits on this CLI (`rules-accepted.txt`), so no
+# `wake: agent-prompt`. A draft in the box is never typed over. Nothing else is typed, and a wake
+# that cannot deliver leaves the message in the bus inbox. See src/send/typed-wake.ts.
+typed_wake: screen
+# The longest wake line. The box wraps a long line across rows (`rules-line.txt`: five rows at
+# 53 columns); 600 bytes stays inside the wake's 40-line read at that width.
+typed_wake_max: 600
+# The inbox is registered in the seat's own `.gemini/settings.json` (mcp_inbox below):
+# `inbox_check` lists the waiting messages with the ids `inbox_read` takes.
+read_hint: 'Read it with: call inbox_check now.'
 # `gemini --help` (0.64.0) offers no non-interactive auth check command.
 login:
   hint: gemini

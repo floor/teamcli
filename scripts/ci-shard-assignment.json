@@ -485,6 +485,7 @@
     "test/first-minute-start.test.ts": 0,
     "test/foreground.test.ts": 5,
     "test/gate-pane-root-registration-independent.test.ts": 2,
+    "test/gemini-typed-wake.test.ts": 0,
     "test/general-brief.test.ts": 0,
     "test/general-door-narrow.test.ts": 2,
     "test/general-door.test.ts": 5,

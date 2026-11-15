@@ -705,6 +705,7 @@ function classWords(read: ClassRead, seat: string, wake?: WakeOutcome): string {
     ...(read.human ? { human: true } : {}),
     ...(!read.human && (profileFor(read.cli)?.typedWake ?? null) !== null ? { typedWake: true } : {}),
     ...(read.watchWake ? { watchWake: true } : {}),
+    ...(!read.human && (profileFor(read.cli)?.typedWake ?? null) === null && (profileFor(read.cli)?.sessionCli ?? null) !== null ? { sessionOnly: true } : {}),
     ...(wake === undefined ? {} : { wake }),
   });
 }
