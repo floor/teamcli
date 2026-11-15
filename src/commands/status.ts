@@ -1,3 +1,4 @@
+import { readHistory } from '../send/history.ts';
 import { modelDriftNotes } from '../send/model-drift.ts';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -667,8 +668,15 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.
+  // The project's history, read once for every row's last proven wake and failure since: the
+  // compact cell, the expanded table and the JSON rows all carry it.
+  const history = sources.home === undefined ? undefined : (() => {
+    const read = readHistory(team.project, root, sources.home);
+    return read.ok ? read.entries : undefined;
+  })();
   const registryRows = all || json
     ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, {
+        ...(history === undefined ? {} : { history }),
         project: team.project, root, home: sources.home, stateDir: dir, session,
         presenceChannelHealthy: presenceHealthy,
         ...(presenceSeats === undefined ? {} : { presenceSeats }),
@@ -827,6 +835,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         ...(sources.home !== undefined ? { home: sources.home } : {}),
         lead: team.orchestrator,
         now,
+        ...(history === undefined ? {} : { history }),
       })];
     }));
   const compactWake = compactReadings === undefined

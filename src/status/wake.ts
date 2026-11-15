@@ -36,13 +36,77 @@ export type SeatWake = {
   oldest_unread_seconds: number | null;
   /** Plain-text drops an earlier build wrote: never served, counted apart from `unread`. */
   legacy_unsigned?: number;
+  /** Seconds since a message to this seat last proved it can be reached: delivered, or read on
+   *  its receipt. Absent when the history holds none for the seat (or was not read). */
+  last_wake_seconds?: number;
+  /** Seconds since a send to this seat last ended undelivered or unwoken with no later proof:
+   *  the seat's route failed and nothing has reached it since. Absent otherwise. */
+  wake_failed_seconds?: number;
 };
+
+/** What a history line says about reaching its seat: proof that a message got through, a send
+ *  that did not reach it, or nothing (a send still in flight, a hold). A reply wait that timed out
+ *  is written by the leg that delivered the message: on a live leg it is proof the message got
+ *  there; on the stored inbox alone (`drop`, `mcp-inbox`) it proves nothing. */
+export function wakeEvidenceOf(outcome: string, via?: string): 'proven' | 'failed' | null {
+  if (outcome === 'timeout') return via !== undefined && via !== 'drop' && via !== 'mcp-inbox' ? 'proven' : null;
+  if (outcome === 'delivered-but-blocked') return null;
+  if (outcome.startsWith('delivered') || outcome === 'answered') return 'proven';
+  if (
+    outcome === 'not delivered' || outcome === 'unreachable' || outcome.startsWith('wake not taken')
+    || outcome.startsWith('queued, not woken') || outcome === 'not-submitted'
+  ) return 'failed';
+  return null;
+}
+
+/** The last proof and the last unanswered failure of reaching one seat, from the history lines
+ *  addressed to it, in seconds before `now`. A failure is answered only by proof for the same
+ *  message, or for a message first sent after it: a receipt promoted late for an older message
+ *  never clears a newer failure. */
+export function wakeHealthOf(
+  entries: readonly { ts: string; to: string; outcome: string; id?: string; via?: string }[],
+  seat: string,
+  now: Date,
+): { last_wake_seconds?: number; wake_failed_seconds?: number } {
+  const firstSent = new Map<string, number>();
+  const ownLines: { at: number; kind: 'proven' | 'failed'; id: string | undefined }[] = [];
+  for (const entry of entries) {
+    if (entry.to !== seat) continue;
+    const at = Date.parse(entry.ts);
+    if (!Number.isFinite(at)) continue;
+    if (entry.id !== undefined && !(firstSent.get(entry.id)! <= at)) firstSent.set(entry.id, at);
+    const kind = wakeEvidenceOf(entry.outcome, entry.via);
+    if (kind !== null) ownLines.push({ at, kind, id: entry.id });
+  }
+  const sentAt = (line: { at: number; id: string | undefined }) => (line.id === undefined ? line.at : firstSent.get(line.id) ?? line.at);
+  let proven = -Infinity;
+  for (const line of ownLines) if (line.kind === 'proven' && line.at > proven) proven = line.at;
+  let failed = -Infinity;
+  for (const line of ownLines) {
+    if (line.kind !== 'failed' || line.at <= failed) continue;
+    const failedSent = sentAt(line);
+    const answered = ownLines.some((other) => other.kind === 'proven'
+      && ((line.id !== undefined && other.id === line.id) || sentAt(other) > failedSent));
+    if (!answered) failed = line.at;
+  }
+  const age = (at: number) => Math.max(0, Math.floor((now.getTime() - at) / 1000));
+  return {
+    ...(Number.isFinite(proven) ? { last_wake_seconds: age(proven) } : {}),
+    ...(Number.isFinite(failed) ? { wake_failed_seconds: age(failed) } : {}),
+  };
+}
 
 /** One seat's wakeability reading: where its records live, its declared row and runtime record,
  *  the registry home, the team's lead seat (a clearance signed by that seat settles here; a
  *  caller that does not name it settles only the owner's clearances), and the instant the unread
  *  age is measured from. */
-export type SeatWakeInput = SeatDeliveryInput & { now: Date; lead?: string };
+export type SeatWakeInput = SeatDeliveryInput & {
+  now: Date;
+  lead?: string;
+  /** The project's message history, read once by the caller: the row's last proven wake and
+   *  any failure since come from it. Absent: the row carries neither. */
+  history?: readonly { ts: string; to: string; outcome: string; id?: string; via?: string }[];
+};
 
 /**
  * The reading for one seat. The class comes from the same `seatDeliveryClass` a send reads and
@@ -110,6 +174,7 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
       unread: unreadCount,
       oldest_unread_seconds: oldest,
       ...(legacyCount > 0 ? { legacy_unsigned: legacyCount } : {}),
+      ...(input.history === undefined ? {} : wakeHealthOf(input.history, input.seat, input.now)),
     },
     words: delivery.words,
     watchWake: delivery.evidence.watchWake,
@@ -140,6 +205,8 @@ export function wakeCell(wake: SeatWake): string {
   if (wake.listener) notes.push('inbox');
   if (wake.oldest_unread_seconds !== null) notes.push(`unread ${wakeAge(wake.oldest_unread_seconds)}`);
   if (wake.legacy_unsigned !== undefined) notes.push(`${String(wake.legacy_unsigned)} unsigned old drop(s), not served`);
+  if (wake.wake_failed_seconds !== undefined) notes.push(`last send not delivered ${wakeAge(wake.wake_failed_seconds)} ago`);
+  if (wake.last_wake_seconds !== undefined) notes.push(`last reached ${wakeAge(wake.last_wake_seconds)} ago`);
   const word = `${wake.wakeable ? '' : '!'}${wake.class}`;
   return notes.length === 0 ? word : `${word} (${notes.join(', ')})`;
 }
