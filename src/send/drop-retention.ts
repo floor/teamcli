@@ -943,6 +943,15 @@ export const SEAT_DROP_LEFT_SUFFIXES: readonly string[] = ['.ack.json', '.postin
  *  (src/send/drop-folder.ts DROP_MONTH_ARCHIVE). Never walked or moved here. */
 export const SEAT_DROP_KNOWN_FOLDERS: readonly string[] = ['archive'];
 
+/** Folder names an earlier build left in seat drop folders: the quarantine of plain-text drops
+ *  it could not sign (`legacy-unsigned-<YYYY-MM-DD>`). Never walked or moved here. */
+export const SEAT_DROP_LEGACY_FOLDER = /^legacy-unsigned-\d{4}-\d{2}-\d{2}$/;
+
+/** Record names the daemon's own notices use whose length can exceed a record name here: the
+ *  blocked-episode notice (src/commands/watch.ts, `blocked-episode-<seat>-<…>`). Such a record
+ *  and its sidecars are left whole, silently; the notice's own retention is its sender's. */
+export const SEAT_DROP_LEFT_PREFIXES: readonly string[] = ['blocked-episode-'];
+
 /** Entries TeamCLI keeps in a session's drop folder beside the seats: a client's own inbox
  *  (src/client/inbox.ts, `.clients/<client>`), and Finder's folder file. Never walked here. */
 export const SESSION_DROP_KNOWN_ENTRIES: readonly string[] = ['.clients', '.DS_Store'];
@@ -1543,7 +1552,12 @@ export function* dropRetirementSteps(
             return fail(`${filePath}: path escapes send-drops`);
           }
           const held = heldAt(filePath);
-          if (held.kind === 'folder' && SEAT_DROP_KNOWN_FOLDERS.includes(name)) continue;
+          if (held.kind === 'folder' && (SEAT_DROP_KNOWN_FOLDERS.includes(name) || SEAT_DROP_LEGACY_FOLDER.test(name))) continue;
+          if (SEAT_DROP_LEFT_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+            const dot = name.indexOf('.');
+            heldBack.add(dot > 0 ? name.slice(0, dot) : name);
+            continue;
+          }
           if (held.kind === 'link') {
             holdBack(name, 'a symbolic link was found and not followed');
             continue;
