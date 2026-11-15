@@ -10,6 +10,10 @@ Captured from the installed Grok Build CLI on 2026-11-11 with `herdr pane read`.
   its allow rules did not cover (a `cd … && for … do team drops …; done` loop). Paths, ids and
   names are replaced by synthetic ones. Three numbered choices under the command, and the
   footer `1/3:select │ Tab:next option │ … │ Ctrl+c:cancel`. Nothing was answered.
+- `permission-narrow.txt`: the same approval in a narrower pane on 2026-11-15, for a
+  `cd … && team ack …; echo …` command: the option rows keep the `┃` gutter, and the footer
+  ends at `Ctrl+c:cancel` without the `Esc:scrollback` cell. Paths, ids and names are
+  replaced. Nothing was answered.
 
 ## Not produced
 

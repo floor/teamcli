@@ -1485,6 +1485,13 @@
       "provenance": "capture"
     },
     {
+      "file": "grok/1.0.77/permission-narrow.txt",
+      "cli": "grok",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
       "file": "grok/1.0.52/idle.txt",
       "cli": "grok",
       "classify": "idle",

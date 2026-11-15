@@ -390,6 +390,22 @@ async function screenRead(sources: WatchSources, gate: ReadGate, pane: string, s
     : sources.screen(pane, session);
 }
 
+/** The one read a blocked seat gets outside the pass's budget, and the allowance every such read
+ *  in one pass shares. */
+const BLOCKED_SCREEN_READ_MS = 5_000;
+const BLOCKED_SCREEN_READS_PER_PASS_MS = 10_000;
+
+/** One blocked seat's read, under one absolute deadline that covers every attempt the read makes
+ *  (its styled read and the plain retry), and the loop's stop. */
+async function blockedScreenRead(sources: WatchSources, pane: string, session: string, stop: AbortSignal | undefined, budgetMs: number): Promise<string | null> {
+  if (stop?.aborted === true || budgetMs <= 0) return null;
+  const deadline = AbortSignal.timeout(budgetMs);
+  const signal = stop === undefined ? deadline : AbortSignal.any([stop, deadline]);
+  return sources.screenAsync !== undefined
+    ? await sources.screenAsync(pane, session, { timeoutMs: budgetMs, signal })
+    : sources.screen(pane, session);
+}
+
 /** A pane's foreground names, awaited when the source supplies the bounded read, else read
  *  synchronously; null when the budget is spent or the pane can't be read. */
 async function foregroundRead(sources: WatchSources, gate: ReadGate, pane: string, session: string): Promise<string[] | null> {
@@ -1332,6 +1348,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               : {}),
           });
           const panesBySeat: Record<string, string> = {};
+          // The blocked seats' own reads share one allowance per pass.
+          let blockedReadsLeftMs = BLOCKED_SCREEN_READS_PER_PASS_MS;
           for (const seat of team.seats) {
             // Between seats: the screen read below is synchronous and can be slow.
             await yieldBeat();
@@ -1345,9 +1363,24 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             // The fallback read is the same bounded, awaited call when the source supplies one:
             // a pane whose screen the whole-session read could not take is asked once more,
             // never with the pass's budget already spent.
-            const extra = readScreenNow && (liveScreen === undefined || liveScreen === '')
+            let extra = readScreenNow && (liveScreen === undefined || liveScreen === '')
               ? await screenRead(sources, gate, agent.pane, session)
               : undefined;
+            // A seat the host reports blocked is read even when the pass's read budget is spent:
+            // its prompt's kind and text are what its lead is told, and without a screen the
+            // notice could only say the screen was not recognised (2026-11-15: a Grok approval
+            // dialog reported that way twice under load). One bounded read per blocked seat.
+            if (
+              agent.status === 'blocked' && (liveScreen === undefined || liveScreen === '')
+              && (extra === undefined || extra === null || extra === '') && blockedReadsLeftMs > 0
+            ) {
+              const began = Date.now();
+              extra = await blockedScreenRead(sources, agent.pane, session, hosted?.signal, Math.min(BLOCKED_SCREEN_READ_MS, blockedReadsLeftMs));
+              blockedReadsLeftMs -= Date.now() - began;
+              // A stop that cut the read ends the pass here: nothing is observed or escalated
+              // from a read the stop aborted.
+              if (hosted?.signal.aborted === true) break;
+            }
             const rawScreen = readScreenNow
               ? (liveScreen !== undefined && liveScreen !== '' ? liveScreen : (extra ?? liveScreen))
               : undefined;
@@ -1369,7 +1402,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               await statusEngine.observe(seat.name, agent.status, now, agent.pane, verifyScreen);
             }
           }
-          await statusEngine.tick(now);
+          // A stop during the seats' reads observes and escalates nothing more this pass.
+          if (hosted?.signal.aborted !== true) await statusEngine.tick(now);
           if (hosted !== undefined && sources.home !== undefined) {
             loadHeldClimbs(dir, hostedClimbs);
             if (hostedClimbs.length > 0) await sendHostedClimbs(sources.home, root, team, session, hostedClimbs, dir, sources.now);

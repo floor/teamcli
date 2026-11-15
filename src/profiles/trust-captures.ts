@@ -256,6 +256,7 @@ export const TRUST_CAPTURES: readonly string[] = [
   "grok grok/1.0.52/question.txt",
   "grok grok/1.0.52/working.txt",
   "grok grok/1.0.70/idle.txt",
+  "grok grok/1.0.77/permission-narrow.txt",
   "grok grok/1.0.77/permission.txt",
   "grok grok/1.0.77/trust.txt",
   "jules jules/0.1.42/done.txt",
