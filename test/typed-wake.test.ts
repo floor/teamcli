@@ -798,7 +798,7 @@ describe('the typed wake spaces its two opening reads by its own measured settle
 });
 
 describe('the typed wake is a profile word', () => {
-  test('the word is closed, and only Muse, Cursor, Antigravity, Grok and Codex declare it', () => {
+  test('the word is closed, and only Muse, Cursor, Antigravity, Grok, Codex and Gemini declare it', () => {
     expect(typedWakeKey('typed_wake: screen')).toBe('screen');
     expect(typedWakeKey('cli: muse')).toBeNull();
     expect(() => typedWakeKey('typed_wake: typing')).toThrow(/typed_wake/);
@@ -807,7 +807,8 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('antigravity')?.typedWake).toBe('screen');
     expect(profileFor('grok')?.typedWake).toBe('screen');
     expect(profileFor('codex')?.typedWake).toBe('screen');
-    for (const cli of ['claude-code', 'gemini', 'jules']) {
+    expect(profileFor('gemini')?.typedWake).toBe('screen');
+    for (const cli of ['claude-code', 'jules']) {
       expect(profileFor(cli)?.typedWake, cli).toBeNull();
     }
   });
@@ -820,7 +821,8 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('antigravity')?.watchWake).toBe(true);
     expect(profileFor('grok')?.watchWake).toBe(true);
     expect(profileFor('codex')?.watchWake).toBe(true);
-    for (const cli of ['claude-code', 'gemini', 'jules']) {
+    expect(profileFor('gemini')?.watchWake).toBe(true);
+    for (const cli of ['claude-code', 'jules']) {
       expect(profileFor(cli)?.watchWake, cli).toBe(false);
     }
     // The bound is the loader's default unless a profile names one, and the shipped ones name none.
@@ -830,6 +832,7 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('antigravity')?.watchWakeTries).toBe(3);
     expect(profileFor('grok')?.watchWakeTries).toBe(3);
     expect(profileFor('codex')?.watchWakeTries).toBe(3);
+    expect(profileFor('gemini')?.watchWakeTries).toBe(3);
   });
 
   test('the wake settle is a profile setting with a floor', () => {
@@ -858,13 +861,14 @@ describe('the typed wake is a profile word', () => {
     // call that lists the waiting messages: the typed line never carries the id `inbox_read`
     // takes, so the read is always reached through `inbox_check`.
     expect(profileFor('cursor')?.readHint).toBe('Read it with: call inbox_check now.');
+    expect(profileFor('gemini')?.readHint).toBe('Read it with: call inbox_check now.');
     // Antigravity has no inbox_check tool. Its wake names the drops read.
     expect(profileFor('antigravity')?.readHint).toBe('Read it with: run team drops --read');
     expect(profileFor('antigravity')?.wake).toBe('agent-prompt');
     expect(profileFor('grok')?.wake).toBe('agent-prompt');
     // Muse types too, but reads with the drops command: the shipped sentence stands, as it does
     // for a profile that declares no hint at all.
-    for (const cli of ['muse', 'claude-code', 'codex', 'grok', 'gemini', 'jules']) {
+    for (const cli of ['muse', 'claude-code', 'codex', 'grok', 'jules']) {
       expect(profileFor(cli)?.readHint, cli).toBeNull();
     }
   });
