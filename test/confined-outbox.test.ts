@@ -1,7 +1,7 @@
 // A confined seat's send and reply go through its outbox: the seat writes the request into its
 // own seat-state folder, the team's watch runs that command as the seat and writes the result
 // back, and the seat's command prints it.
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { outboxFolder, relayOutboxes, relayRefusal, relayThroughOutbox, type OutboxCommand, type RelayCaller, type RelaySources } from '../src/send/confined-outbox.ts';
@@ -183,8 +183,10 @@ describe('the confined seat outbox', () => {
     const id = '00000000-0000-4000-8000-00000000000e';
     writeFileSync(join(folder, `${id}.taking`), '{}');
     writeFileSync(join(folder, `.${id}.result.tmp`), 'partial');
-    const muchLater = new Date(Date.now() + 2 * 24 * 60 * 60_000);
-    const { sources } = relay({ now: () => muchLater });
+    // The take was made two days ago: the pass that took it never came back.
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60_000);
+    utimesSync(join(folder, `${id}.taking`), twoDaysAgo, twoDaysAgo);
+    const { sources } = relay();
     await relayOutboxes(dir, 's', ['keeper'], sources);
     expect(readFileSync(join(folder, `${id}.result.json`), 'utf8')).toContain('whether it was sent is unknown');
     expect(existsSync(join(folder, `${id}.taking`))).toBe(false);
