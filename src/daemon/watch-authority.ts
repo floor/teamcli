@@ -549,7 +549,9 @@ async function runAuthoritativeHost(
     if (epoch === undefined) return 0;
 
     const proxy: HostedLoop = {
-      signal: loss.signal,
+      // The run sees both ends: the authority lost, or the host stopped (a daemon shutdown). A
+      // reader that only watches the signal (the outbox relay's tick) stops at either.
+      signal: AbortSignal.any([loop.signal, loss.signal]),
       async wait(ms) {
         // A loss that happened during the pass must end the loop now: an aborted signal alone
         // never settles a wait registered after the abort.
