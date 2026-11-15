@@ -1,14 +1,16 @@
 // One machine daemon per home, held by the kernel. Starts racing in separate processes after a
 // crash (a dead holder's lock file and a socket nobody listens on) leave exactly one daemon
-// serving, and a daemon killed outright frees the lock for the next start at once. Real child
-// processes in a scratch home; no live daemon, service manager or herdr.
+// serving, and a daemon killed outright frees the lock for the next start at once. A runtime
+// with no kernel lock refuses to start and leaves nothing behind. Real child processes in a
+// scratch home; no live daemon, service manager or herdr.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { daemonHealth } from '../src/daemon/health.ts';
+import { DAEMON_NEEDS_FLOCK, startMachineDaemon } from '../src/daemon/host.ts';
 import { daemonLockPath, daemonSocketPath, machineConfigDir } from '../src/daemon/paths.ts';
 
 const CHILD = join(import.meta.dir, 'helpers', 'daemon-start-child.ts');
@@ -116,6 +118,23 @@ describe('one machine daemon per home', () => {
     next.child.stdin!.end();
     await exited(next.child);
   }, 30_000);
+
+  test('with no kernel lock bound the start refuses and leaves no lock file and no socket', async () => {
+    const { home } = scratch();
+    let exclusiveAsked = 0;
+    const started = await startMachineDaemon({
+      home,
+      roots: [],
+      startedBy: 'manual',
+      version: 'test',
+      kernelLock: { bound: () => false, exclusive: () => { exclusiveAsked += 1; return true; } },
+    });
+    expect(started).toEqual({ kind: 'bind-failed', reason: DAEMON_NEEDS_FLOCK });
+    expect(DAEMON_NEEDS_FLOCK).toBe('the daemon needs a kernel lock (flock through Bun); this runtime has none: run it with bun');
+    expect(exclusiveAsked).toBe(0);
+    expect(existsSync(daemonLockPath(home))).toBe(false);
+    expect(existsSync(daemonSocketPath(home))).toBe(false);
+  });
 
   test('a daemon killed outright frees the lock for the next start', async () => {
     const { home, barrier } = scratch();

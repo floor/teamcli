@@ -25,10 +25,9 @@ import {
   readFileSync,
   realpathSync,
   unlinkSync,
-  writeFileSync,
   writeSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
+import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -156,6 +155,8 @@ export type NextPrincipalCheck = (input: {
 export type NextDispatchHandler = (input: NextHandlerInput) => Promise<NextAnswer>;
 
 export type StartMachineDaemonInput = {
+  /** A test's stand-in for the kernel lock; production uses the shared flock binding. */
+  kernelLock?: DaemonKernelLock;
   home?: string;
   /** The checkouts whose send and bus endpoints this one process hosts. */
   roots: string[];
@@ -428,7 +429,9 @@ async function settlesWithin(run: Promise<unknown>, ms: number): Promise<boolean
   }
 }
 
-type LockResult = { ok: true; release: () => void } | { ok: false; holder: number | null };
+type LockResult =
+  | { ok: true; release: () => void }
+  | { ok: false; holder: number | null; unbound?: true };
 
 function readLockPid(path: string): number | null {
   try {
@@ -441,44 +444,13 @@ function readLockPid(path: string): number | null {
   }
 }
 
-// The kernel's own advisory lock, bound through the runtime's foreign-function interface. The
-// same binding lives in src/mcp/channel.ts; both move to one shared module when the branch that
-// lifts it out merges, and this local copy goes then.
-const LOCK_EX = 2;
-const LOCK_NB = 4;
-type Flock = (fd: number, operation: number) => number;
-let flockImpl: Flock | null | undefined;
+/** The kernel lock the daemon's single instance stands on: the shared flock binding, or a test's
+ *  stand-in for it. */
+export type DaemonKernelLock = { bound(): boolean; exclusive(fd: number): boolean };
+const KERNEL_LOCK: DaemonKernelLock = { bound: flockBound, exclusive: flockExclusive };
 
-/** An exclusive, non-blocking flock on `fd`: true when this process now holds it. Null when the
- *  runtime offers no binding (plain Node), which the caller must not read as "held elsewhere". */
-function daemonFlock(fd: number): boolean | null {
-  if (flockImpl === undefined) flockImpl = bindDaemonFlock();
-  if (flockImpl === null) return null;
-  return flockImpl(fd, LOCK_EX | LOCK_NB) === 0;
-}
-
-function bindDaemonFlock(): Flock | null {
-  try {
-    const req = createRequire(import.meta.url);
-    if (process.versions.bun !== undefined) {
-      const ffi = req('bun:ffi') as {
-        dlopen: (
-          library: string,
-          symbols: Record<string, { args: unknown[]; returns: unknown }>,
-        ) => { symbols: { flock: Flock } };
-        FFIType: { i32: unknown };
-      };
-      const library = process.platform === 'linux' ? 'libc.so.6' : 'libSystem.B.dylib';
-      const lib = ffi.dlopen(library, {
-        flock: { args: [ffi.FFIType.i32, ffi.FFIType.i32], returns: ffi.FFIType.i32 },
-      });
-      return (fd, operation) => lib.symbols.flock(fd, operation);
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
+/** The refusal a runtime with no flock binding meets: no by-name lock stands in for it. */
+export const DAEMON_NEEDS_FLOCK = 'the daemon needs a kernel lock (flock through Bun); this runtime has none: run it with bun';
 
 /** Whether the descriptor is still the file at `path`: a lock taken on a file a releasing holder
  *  had already unlinked locks nothing anyone else can see. */
@@ -500,7 +472,9 @@ function lockStillNamed(fd: number, path: string): boolean {
  * keeps the lock only while the descriptor is still the file at the path (a clean release
  * unlinks it while still holding it, and a start that flocked the old file opens it again).
  */
-function acquireLock(path: string, pid: number): LockResult {
+function acquireLock(path: string, pid: number, kernel: DaemonKernelLock): LockResult {
+  // Asked before anything is opened: a runtime with no binding creates no lock file at all.
+  if (!kernel.bound()) return { ok: false, holder: null, unbound: true };
   for (let attempt = 0; attempt < 4; attempt++) {
     let fd: number;
     try {
@@ -508,11 +482,7 @@ function acquireLock(path: string, pid: number): LockResult {
     } catch {
       return { ok: false, holder: readLockPid(path) };
     }
-    const held = daemonFlock(fd);
-    if (held === null) {
-      closeSync(fd);
-      return acquireLockByName(path, pid);
-    }
+    const held = kernel.exclusive(fd);
     if (!held) {
       closeSync(fd);
       return { ok: false, holder: readLockPid(path) };
@@ -541,34 +511,6 @@ function acquireLock(path: string, pid: number): LockResult {
         try { closeSync(fd); } catch { /* already closed */ }
       },
     };
-  }
-  return { ok: false, holder: readLockPid(path) };
-}
-
-/** The lock by name alone, for a runtime with no flock binding: the file is created
- *  exclusively, and a dead holder's (or an emptied) file is removed once. */
-function acquireLockByName(path: string, pid: number): LockResult {
-  const release = (): void => {
-    if (readLockPid(path) === pid) {
-      try { unlinkSync(path); } catch { /* already gone */ }
-    }
-  };
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      writeFileSync(path, `${String(pid)}\n`, { flag: 'wx', mode: 0o600 });
-      chmodSync(path, 0o600);
-      return { ok: true, release };
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') return { ok: false, holder: null };
-    }
-    const holder = readLockPid(path);
-    if (holder !== null && pidAlive(holder)) return { ok: false, holder };
-    try {
-      unlinkSync(path);
-    } catch {
-      return { ok: false, holder };
-    }
   }
   return { ok: false, holder: readLockPid(path) };
 }
@@ -709,8 +651,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const since = now().toISOString();
 
   ensureMachineDir(home);
-  const lock = acquireLock(lockPath, pid);
+  const lock = acquireLock(lockPath, pid, input.kernelLock ?? KERNEL_LOCK);
   if (!lock.ok) {
+    if (lock.unbound === true) return { kind: 'bind-failed', reason: DAEMON_NEEDS_FLOCK };
     if (lock.holder !== null && pidAlive(lock.holder)) {
       const answer = await probeDaemonHealth(socketPath, { id: `start-${randomUUID()}` });
       if (answer.kind === 'answered') return { kind: 'already-running', pid: answer.health.pid };
