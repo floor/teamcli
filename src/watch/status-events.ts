@@ -679,9 +679,15 @@ export function climbUnreadLead(input: {
   episode: string;
   why: string;
   at: string;
+  /** A hosted watch's sink: the climb goes out as the daemon's notice to the target's real
+   *  inbox. True when it took the climb; absent or false keeps the runtime record. */
+  deliver?: (climb: StatusClimb) => boolean;
 }): void {
   const target = readEntityOrchestrator(input.home, teamIdOf(input.root));
   if (target === null || target.seat === input.seat) return;
+  const id = `evt-prompt-lead-${input.seat}-${input.episode}`;
+  const text = `${input.project}: ${input.why}`;
+  if (input.deliver?.({ seat: input.seat, id, text, at: input.at, target: { seat: target.seat, root: target.root, session: target.session } }) === true) return;
   writeRuntimeMailboxRecord({
     root: target.root,
     home: input.home,

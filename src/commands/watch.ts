@@ -1876,7 +1876,18 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             stuckReading,
           );
           await wakeUnreadDrops(
-            { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },
+            {
+              dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow,
+              ...(mail === undefined ? {} : { mail }),
+              // A hosted watch sends the unread-lead climb as the daemon's notice, like a prompt's.
+              ...(hosted === undefined ? {} : {
+                deliverClimb: (climb: StatusClimb): boolean => {
+                  if (!hostedClimbTakes(climb, root, session, team)) return false;
+                  hostedClimbs.push({ climb, tries: 0 });
+                  return true;
+                },
+              }),
+            },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, ...(quiet || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
@@ -2793,14 +2804,19 @@ async function relayConfinedOutboxes(
   });
 }
 
-/** Whether a hosted watch delivers this climb itself: only when the entity's lead it climbs to is
- *  this team's own lead, the one seat the daemon's notice may reach. Any other target keeps the
- *  runtime mailbox record the engine writes. */
+/** Whether a hosted watch delivers this climb itself, as the daemon's notice: to this team's own
+ *  lead, or across teams to the entity's orchestrator, which is the lead of its own team (the one
+ *  seat a blocked-episode notice may reach in that team's checkout). A climb with no seat to
+ *  reach keeps the runtime mailbox record the engine writes. */
 export function hostedClimbTakes(climb: StatusClimb, root: string, session: string, team: TeamFile): boolean {
-  return team.orchestrator !== ''
-    && climb.target.seat === team.orchestrator
-    && climb.target.session === session
-    && sameFolder(climb.target.root, root);
+  if (climb.target.seat === '') return false;
+  // In this checkout only this team's own lead, in this session, is reachable this way.
+  if (sameFolder(climb.target.root, root)) {
+    return climb.target.session === session && team.orchestrator !== '' && climb.target.seat === team.orchestrator;
+  }
+  // Another checkout: the entity's orchestrator there, whose own team's lead it is; the daemon's
+  // admission checks that, and a refusal leaves the record where it went before.
+  return true;
 }
 
 /** Sends the queued climbs as the daemon's own notice to the team's lead, each under its own id.
@@ -2815,9 +2831,10 @@ async function sendHostedClimbs(
   dir: string,
   now: () => Date,
 ): Promise<void> {
-  const lead = team.orchestrator;
   const kept: { climb: StatusClimb; tries: number }[] = [];
   for (const held of queue.splice(0)) {
+    // The climb's own target: this team's lead, or the entity's orchestrator in its own checkout.
+    const target = held.climb.target;
     let ok = false;
     let text = '';
     try {
@@ -2825,10 +2842,10 @@ async function sendHostedClimbs(
         {
           reminder: 'seat-blocked',
           due: held.climb.at ?? now().toISOString(),
-          recipients: [{ root, session, seat: lead }],
+          recipients: [{ root: target.root, session: target.session, seat: target.seat }],
           notice: 'seat-blocked',
         },
-        { root, seat: lead, body: held.climb.text, id: held.climb.id },
+        { root: target.root, seat: target.seat, body: held.climb.text, id: held.climb.id },
         { ...realHost, home, now: () => now() },
       );
       ok = sent.ok;
@@ -2838,8 +2855,21 @@ async function sendHostedClimbs(
     }
     if (ok) continue;
     const tries = held.tries + 1;
-    if (tries < PROMPT_NOTICE_TRIES) kept.push({ climb: held.climb, tries });
-    else logLine(dir, 'watch', 'watch', `${held.climb.seat}: the prompt climb was not sent — ${text}`, now());
+    if (tries < PROMPT_NOTICE_TRIES) {
+      kept.push({ climb: held.climb, tries });
+      continue;
+    }
+    // The notice could not be sent: the record still goes where it went before, and the log says so.
+    const outcome = writeRuntimeMailboxRecord({
+      root: target.root,
+      home,
+      to: target.seat,
+      id: held.climb.id,
+      text: held.climb.text,
+      session: target.session,
+      ...(held.climb.at === undefined ? {} : { at: held.climb.at }),
+    });
+    logLine(dir, 'watch', 'watch', `${held.climb.seat}: the prompt climb to ${target.seat} was not sent — ${text}${outcome.ok ? '; it was left in the runtime mailbox' : ''}`, now());
   }
   queue.push(...kept);
 }

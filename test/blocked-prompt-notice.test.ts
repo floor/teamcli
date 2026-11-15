@@ -87,13 +87,16 @@ test('the excerpt is the last rows the pane shows, without the frame marks, and 
   expect(screenExcerpt({ ...live, screens: {} }, 'worker-1')).toBeNull();
 });
 
-test('a hosted climb is taken only when it climbs to this team\'s own lead', () => {
+test('a hosted climb is taken to this team\'s own lead, or across teams to the entity\'s orchestrator', () => {
   const crew = team();
   const climb = (seat: string, root: string, session: string): StatusClimb => ({
     seat: 'worker-1', id: 'evt-prompt-climb-x', text: 'crew: x', target: { seat, root, session },
   });
   expect(hostedClimbTakes(climb('lead', '/r/crew', 'crew'), '/r/crew', 'crew', crew)).toBe(true);
-  expect(hostedClimbTakes(climb('lead', '/r/other', 'crew'), '/r/crew', 'crew', crew)).toBe(false);
+  // 2026-11-15: a climb to the entity's orchestrator in another checkout went to a runtime record
+  // nobody reads. It now goes out as the daemon's notice to that seat's real inbox.
+  expect(hostedClimbTakes(climb('orchestrator', '/r/other', 'other'), '/r/crew', 'crew', crew)).toBe(true);
+  expect(hostedClimbTakes(climb('', '/r/other', 'other'), '/r/crew', 'crew', crew)).toBe(false);
   expect(hostedClimbTakes(climb('lead', '/r/crew', 'other'), '/r/crew', 'crew', crew)).toBe(false);
   expect(hostedClimbTakes(climb('worker-1', '/r/crew', 'crew'), '/r/crew', 'crew', crew)).toBe(false);
 });

@@ -494,6 +494,7 @@ function noteLeadEpisode(
       episode: id.replace(/[^0-9A-Za-z]/g, ''),
       why: `The lead ${seat} had unread mail and no read receipt within 5 minutes of the first wake, so the entity's orchestrator is told now`,
       at: new Date(nowMs).toISOString(),
+      ...(scene.deliverClimb === undefined ? {} : { deliver: scene.deliverClimb }),
     });
   } catch {
     return;
