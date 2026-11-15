@@ -1071,10 +1071,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     relayStopped = true;
     if (relayTimer !== undefined) clearInterval(relayTimer);
   };
+  // The tick stops with the authority (the signal) and with the loop (the finally below). A host
+  // stop is seen by the loop at its next wait, so a stop during a pass leaves the tick running
+  // until that pass ends: a batch cut off then is answered as cut off on the next start
+  // (src/send/confined-outbox.ts). A second waiter on the host is not registered for it: the
+  // host's waits are the loop's own seam.
   hosted?.signal.addEventListener('abort', stopRelay, { once: true });
-  // The host's own stop: `wait` answers false once the host stops (a daemon shutdown), which the
-  // signal above may not carry; no tick ever reaches this bound, so only a stop answers it.
-  if (hosted !== undefined) void hosted.wait(Number.MAX_SAFE_INTEGER).then((due) => { if (!due) stopRelay(); });
   try {
     for (;;) {
       // A hosted pass starts only while the host still wants one.
