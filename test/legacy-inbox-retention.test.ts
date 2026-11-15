@@ -324,7 +324,9 @@ describe('the older messages store archive', () => {
     expect(second?.moved).toEqual([]);
     expect(second?.refused).toBeNull();
     expect(second?.plan.more).toBe(true);
-    expect(manual?.busy).toEqual(['lead']);
+    // A manual run never moves the older store: it only lists, so it is no second mover.
+    expect(manual?.move).toEqual([]);
+    expect(manual?.busy).toBeUndefined();
     expect(manual?.refused).toBeNull();
     expect(first.refused).toBeNull();
     expect(first.moved.map((item) => item.id)).toEqual(['evt-fallback-r']);
@@ -350,7 +352,7 @@ describe('the older messages store archive', () => {
     });
     const report = runInboxRetention(root, { now: NOW, home, seats: ['lead'], session: 'acme' });
     expect(report.move).toEqual([]);
-    expect(report.daemon).toEqual({ due: ['evt-work-a'], stay: 1 });
+    expect(report.daemon).toEqual({ running: true, due: ['evt-work-a'], stay: 1 });
     expect(live('lead')).toEqual(['evt-fallback-b.json', 'evt-work-a.json', 'evt-work-a.read.json']);
     const io = testIo(root, { kind: 'owner' });
     expect(await runDrops(['archive'], io, { home })).toBe(0);
@@ -361,6 +363,19 @@ describe('the older messages store archive', () => {
     const pass = await inboxArchivePass({ root, home, team, now: NOW, deps: { loadPerCore: () => 0.5, notify: async () => ({ ok: true, text: '' }) } });
     expect(pass).toMatchObject({ kind: 'ran', moved: 1 });
     expect(archived('lead')).toEqual(['evt-work-a.json', 'evt-work-a.read.json']);
+  });
+
+  test('a manual run with no daemon moves nothing either, and says how to start one', async () => {
+    notice('lead', 'evt-work-a', OLD_ISO);
+    read('lead', 'evt-work-a', OLD_ISO);
+    const report = runInboxRetention(root, { now: NOW, home, seats: ['lead'], session: 'acme' });
+    expect(report.move).toEqual([]);
+    expect(report.daemon).toEqual({ running: false, due: ['evt-work-a'], stay: 0 });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runDrops(['archive'], io, { home })).toBe(0);
+    expect(io.out).toContain('daemon will move evt-work-a');
+    expect(io.out).toContain('no daemon running: start it with team daemon start');
+    expect(live('lead')).toEqual(['evt-work-a.json', 'evt-work-a.read.json']);
   });
 
   test('a lock is broken only when its pid is dead on this host or the boot differs, never on age', () => {
@@ -470,7 +485,9 @@ describe('the older messages store archive', () => {
     rmSync(join(root, '.agents', 'send-drops'), { recursive: true, force: true });
     notice('lead', 'evt-work-a', OLD_ISO);
     read('lead', 'evt-work-a', new Date(Date.now() - 9 * DAY_MS).toISOString());
-    expect(runInboxRetention(root, { now: new Date(), home, dryRun: true, seats: ['lead'], session: 'acme' }).move).toEqual(['evt-work-a']);
+    const report = runInboxRetention(root, { now: new Date(), home, dryRun: true, seats: ['lead'], session: 'acme' });
+    expect(report.move).toEqual([]);
+    expect(report.daemon).toEqual({ running: false, due: ['evt-work-a'], stay: 0 });
   });
 
   test('team drops archive reaches the store for the team session', () => {
@@ -480,10 +497,13 @@ describe('the older messages store archive', () => {
     letter('resting', 'mail-old', new Date(Date.now() - 30 * DAY_MS).toISOString());
     const dry = runInboxRetention(root, { now: new Date(), home, dryRun: true, seats: ['lead', 'resting'], session: 'acme' });
     // The runtime notice ages out; the real sender's unread letter stays (a manual run knows no rest).
-    expect(dry.move).toEqual(['evt-work-a', 'unread-old']);
+    // Listed for the daemon, never moved by this run.
+    expect(dry.move).toEqual([]);
+    expect(dry.daemon?.due).toEqual(['evt-work-a', 'unread-old']);
     expect(live('lead')).toContain('evt-work-a.json');
     const withoutSession = runInboxRetention(root, { now: new Date(), home, dryRun: true, seats: ['lead'] });
     expect(withoutSession.move).toEqual([]);
+    expect(withoutSession.daemon).toBeUndefined();
   });
 
   test('the daily pass moves the store after the drop folders, inside the pass limit', async () => {

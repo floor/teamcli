@@ -771,8 +771,9 @@ export function runInboxRetention(
   partial: string[];
   refused: string | null;
   busy?: string[];
-  /** The older store while the daemon serves the root: due ids it moves at its nightly pass. */
-  daemon?: { due: string[]; stay: number };
+  /** The older store, listed only: the daemon's nightly pass is its one mover. `running` says
+   *  whether a daemon serves this root now. */
+  daemon?: { running: boolean; due: string[]; stay: number };
 } {
   const key = messageKeyState(options.home);
   if (key.kind !== 'key') return { move: [], markRead: [], partial: [], refused: null };
@@ -826,10 +827,10 @@ export function runInboxRetention(
   // rest, so unread mail from a real sender stays; unread runtime notices past fourteen days move.
   // A mailbox another archiver holds (the daemon's daily pass) is skipped and named, not refused.
   const busy: string[] = [];
-  // While the daemon serves this root its chores child is the store's one archiver: this run only
-  // lists what is due, as a dry run would, and moves nothing.
-  const deferred = options.session !== undefined && daemonServesRoot(options.home, root);
-  const daemon = { due: [] as string[], stay: 0 };
+  // The daemon's chores child is the store's one archiver: this run only lists what is due, as a
+  // dry run would, and moves nothing, whether or not a daemon runs now.
+  const deferred = options.session !== undefined;
+  const daemon = { running: deferred && daemonServesRoot(options.home, root), due: [] as string[], stay: 0 };
   if (options.session !== undefined) {
     for (const folder of legacySeatFolders(root)) {
       if (options.seats !== undefined && !options.seats.includes(folder.seat)) continue;

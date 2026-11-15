@@ -580,7 +580,7 @@ async function runArchive(
       mark_read: report.markRead,
       partial: report.partial,
       ...(report.busy === undefined ? {} : { busy: report.busy }),
-      ...(report.daemon === undefined ? {} : { messages_store: { by: 'daemon', due: report.daemon.due, stay: report.daemon.stay } }),
+      ...(report.daemon === undefined ? {} : { messages_store: { by: 'daemon', daemon_running: report.daemon.running, due: report.daemon.due, stay: report.daemon.stay } }),
     });
   } else {
     const verbWord = dryRun ? 'would move' : 'moved';
@@ -592,7 +592,7 @@ async function runArchive(
     if (report.daemon !== undefined) {
       for (const id of report.daemon.due) io.stdout(`daemon will move ${id}\n`);
       io.stdout(
-        `older messages store: ${String(report.daemon.due.length)} due, ${String(report.daemon.stay)} stay; the daemon serves this checkout and moves them at its nightly pass (03:00-06:00)\n`,
+        `older messages store: ${String(report.daemon.due.length)} due, ${String(report.daemon.stay)} stay; the daemon's nightly pass (03:00-06:00) moves them${report.daemon.running ? '' : '; no daemon running: start it with team daemon start'}\n`,
       );
     }
   }

@@ -25,10 +25,9 @@
 // claim names are ever unlinked, and only once the same file is in its place.
 //
 // Only one archiver works a mailbox, by design rather than by a lock protocol. The real move runs
-// in the daemon's chores child for that root (one process per root), and inside it an in-process
-// mutex keeps two calls off one mailbox. A manual `team drops archive` moves nothing here while
-// the daemon serves the root (`daemonServesRoot`): it lists what is due and leaves it to the
-// nightly pass. Only with no daemon may the manual run move, and then it is the one contender.
+// only in the daemon's chores child for that root (one process per root), and inside it an
+// in-process mutex keeps two calls off one mailbox. A manual `team drops archive` never moves
+// here, with or without a daemon: it lists what is due and leaves it to the nightly pass.
 //
 // The lock file `<seat>/.archiver.lock` (O_EXCL; pid, host, start time, boot) stays as the guard
 // for the one remaining overlap: a chores child that died across a daemon restart. It is broken
