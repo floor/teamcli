@@ -30,6 +30,9 @@ const SAID_DROP_REFUSALS = new Set<string>();
 
 /** The notes a host's log should carry for one finished root, in the daemon's own words. A
  *  skipped root names why and stops there; counts appear only when a pass has some. */
+/** The most distinct drop notes one process remembers having said. */
+const SAID_DROP_LIMIT = 500;
+
 function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): string[] {
   const notes: string[] = [];
   if (entry.note !== null) notes.push(`fallback sweep: ${entry.note}`);
@@ -58,12 +61,24 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
     }
   }
   if (drops !== null) {
+    // An entry the pass left alone is said once per process and entry, like a refusal.
+    for (const why of drops.skipped ?? []) {
+      const said = `drop store: left an entry it does not know where it is (${why}); the rest is archived`;
+      if (!SAID_DROP_REFUSALS.has(said)) {
+        // The set is bounded: past its size it starts over, so a long-lived child cannot grow it
+        // without end (an entry said again after that is one line more, not a stream).
+        if (SAID_DROP_REFUSALS.size >= SAID_DROP_LIMIT) SAID_DROP_REFUSALS.clear();
+        SAID_DROP_REFUSALS.add(said);
+        notes.push(said);
+      }
+    }
     if (drops.refused !== null) {
       // The same refusal every pass is one fact, not a stream: said once per process and reason
       // (2026-11-13: one line every 30 s for a runtime that cannot archive). Archiving only moves
       // mail already read; delivery and the inbox are unaffected.
       const said = `drop store: archiving read mail is off (${drops.refused}); delivery and the inbox are unaffected`;
       if (!SAID_DROP_REFUSALS.has(said)) {
+        if (SAID_DROP_REFUSALS.size >= SAID_DROP_LIMIT) SAID_DROP_REFUSALS.clear();
         SAID_DROP_REFUSALS.add(said);
         notes.push(said);
       }
