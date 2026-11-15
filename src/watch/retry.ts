@@ -19,6 +19,7 @@
 // sees idle offers nothing. A receipt from the seat's own watcher — the turn-start hook's read
 // (`team drops --read`), or its inbox client's `inbox_read` — promotes it the same way. A drop no
 // watcher read is given up on with the file's path once the age bound ends, and is never called lost.
+import type { StatusClimb } from './status-events.ts';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChildOptions } from '../child.ts';
@@ -84,6 +85,9 @@ export type RetrySources = {
 };
 
 export type RetryScene = {
+  /** A hosted watch's climb sink: a climb it takes goes out as the daemon's notice to the
+   *  target's real inbox (src/commands/watch.ts `sendHostedClimbs`). Absent: the runtime record. */
+  deliverClimb?: (climb: StatusClimb) => boolean;
   dir: string;
   session: string;
   root: string;

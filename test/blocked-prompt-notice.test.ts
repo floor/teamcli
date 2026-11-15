@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { daemonLockPath } from '../src/daemon/paths.ts';
 import { writeDaemonState } from '../src/daemon/state.ts';
-import { hostedClimbTakes, runWatch, screenExcerpt } from '../src/commands/watch.ts';
+import { holdClimb, hostedClimbTakes, loadHeldClimbs, releaseHeldClimb, runWatch, screenExcerpt } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -87,13 +87,16 @@ test('the excerpt is the last rows the pane shows, without the frame marks, and 
   expect(screenExcerpt({ ...live, screens: {} }, 'worker-1')).toBeNull();
 });
 
-test('a hosted climb is taken only when it climbs to this team\'s own lead', () => {
+test('a hosted climb is taken to this team\'s own lead, or across teams to the entity\'s orchestrator', () => {
   const crew = team();
   const climb = (seat: string, root: string, session: string): StatusClimb => ({
     seat: 'worker-1', id: 'evt-prompt-climb-x', text: 'crew: x', target: { seat, root, session },
   });
   expect(hostedClimbTakes(climb('lead', '/r/crew', 'crew'), '/r/crew', 'crew', crew)).toBe(true);
-  expect(hostedClimbTakes(climb('lead', '/r/other', 'crew'), '/r/crew', 'crew', crew)).toBe(false);
+  // 2026-11-15: a climb to the entity's orchestrator in another checkout went to a runtime record
+  // nobody reads. It now goes out as the daemon's notice to that seat's real inbox.
+  expect(hostedClimbTakes(climb('orchestrator', '/r/other', 'other'), '/r/crew', 'crew', crew)).toBe(true);
+  expect(hostedClimbTakes(climb('', '/r/other', 'other'), '/r/crew', 'crew', crew)).toBe(false);
   expect(hostedClimbTakes(climb('lead', '/r/crew', 'other'), '/r/crew', 'crew', crew)).toBe(false);
   expect(hostedClimbTakes(climb('worker-1', '/r/crew', 'crew'), '/r/crew', 'crew', crew)).toBe(false);
 });
@@ -294,4 +297,26 @@ test('a hosted watch tells the lead a grok seat waits at its command approval, w
   expect(body).toContain('gravel waits at a permission prompt');
   expect(body).toContain('On its screen:');
   expect(body).toContain('Yes, proceed');
+});
+
+test('a taken climb is held on disk until it is sent, so a restarted daemon still sends it', () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'climbs-held-')));
+  try {
+    const climb: StatusClimb = { seat: 'worker-1', id: 'evt-prompt-lead-worker-1-abc', text: 'crew: x', target: { seat: 'orchestrator', root: '/r/main', session: 'main' } };
+    const first: { climb: StatusClimb; tries: number }[] = [];
+    holdClimb(dir, first, climb);
+    holdClimb(dir, first, climb);
+    expect(first).toHaveLength(1);
+    // A new process: its queue starts empty and reads the held climb back, once.
+    const after: { climb: StatusClimb; tries: number }[] = [];
+    loadHeldClimbs(dir, after);
+    loadHeldClimbs(dir, after);
+    expect(after.map((held) => held.climb)).toEqual([climb]);
+    releaseHeldClimb(dir, climb.id);
+    const released: { climb: StatusClimb; tries: number }[] = [];
+    loadHeldClimbs(dir, released);
+    expect(released).toEqual([]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
