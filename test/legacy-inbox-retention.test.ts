@@ -86,7 +86,7 @@ beforeEach(() => {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-legacy-archive-')));
   root = join(base, 'acme');
   home = join(base, 'home');
-  mkdirSync(join(root, '.agents'), { recursive: true });
+  mkdirSync(join(root, '.agents', 'send-drops'), { recursive: true });
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM_YAML);
@@ -161,6 +161,13 @@ describe('the older messages store archive', () => {
     const again = writeRuntimeMailboxRecord({ root, home, to: 'lead', id: 'evt-fallback-x', text: 'again', session: 'acme', once: true });
     expect(again).toMatchObject({ ok: true, existing: true });
     expect(live('lead')).toEqual([]);
+  });
+
+  test('team drops archive reaches the store with no drop tree at all', () => {
+    rmSync(join(root, '.agents', 'send-drops'), { recursive: true, force: true });
+    notice('lead', 'evt-work-a', OLD_ISO);
+    read('lead', 'evt-work-a', new Date(Date.now() - 9 * DAY_MS).toISOString());
+    expect(runInboxRetention(root, { now: new Date(), home, dryRun: true, seats: ['lead'], session: 'acme' }).move).toEqual(['evt-work-a']);
   });
 
   test('team drops archive reaches the store for the team session, read records only', () => {

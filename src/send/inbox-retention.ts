@@ -769,12 +769,14 @@ export function runInboxRetention(
   const key = messageKeyState(options.home);
   if (key.kind !== 'key') return { move: [], markRead: [], partial: [], refused: null };
   const base = join(root, '.agents', 'send-drops');
-  if (heldAt(base).kind !== 'folder') return { move: [], markRead: [], partial: [], refused: null };
-  let sessions: string[];
-  try {
-    sessions = readdirSync(base);
-  } catch {
-    return { move: [], markRead: [], partial: [], refused: null };
+  // No drop tree, or one that cannot be read: no drop moves, the older store is still looked at.
+  let sessions: string[] = [];
+  if (heldAt(base).kind === 'folder') {
+    try {
+      sessions = readdirSync(base);
+    } catch {
+      sessions = [];
+    }
   }
   const move: string[] = [];
   const markRead: string[] = [];
