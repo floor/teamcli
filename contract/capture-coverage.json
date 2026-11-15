@@ -435,7 +435,7 @@
         "undocumented": 0
       },
       "permission": {
-        "real": 1,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
@@ -2485,7 +2485,7 @@
             "undocumented": 0
           },
           "permission": {
-            "real": 1,
+            "real": 2,
             "constructed": 0,
             "undocumented": 0
           },
@@ -4876,6 +4876,12 @@
       "file": "grok/1.0.70/idle.txt",
       "cli": "grok",
       "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.77/permission-narrow.txt",
+      "cli": "grok",
+      "kind": "permission",
       "provenance": "capture"
     },
     {
