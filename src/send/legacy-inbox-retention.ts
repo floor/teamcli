@@ -5,9 +5,11 @@
 // - a record that verifies with this checkout's message key, for this session, whose signed read
 //   receipt is older than seven days, moves to `<seat>/archive/<YYYY-MM>/`, the month of the
 //   record's own `at`;
-// - an unread record moves to `<seat>/archive/<YYYY-MM>/unread/` only when the caller says the
-//   seat is at rest (stopped or retired) and the record is older than the caller's window;
-// - a running seat's unread mail, a general brief, a client record, a record that does not verify
+// - an unread runtime notice (sender `runtime`) moves to `<seat>/archive/<YYYY-MM>/unread/` once
+//   it is older than fourteen days, for any seat: push already delivered it;
+// - an unread record from a real sender moves there only when the caller says the seat is at
+//   rest (stopped or retired) and the record is older than the caller's window;
+// - a running seat's unread mail from a real sender, a general brief, a client record, a record that does not verify
 //   and anything that is not a record stay;
 // - the owner's mailbox (`owner`) is never touched: its records are the watch's memory of what it
 //   already told the owner, and a watch re-read from cursor 0 must still find them.
@@ -30,6 +32,12 @@ import { sameFolder } from './record.ts';
 
 /** The mailbox the owner's notices are kept in; never archived (see the header). */
 export const LEGACY_OWNER_MAILBOX = 'owner';
+
+/** The sender the runtime's own notices carry (`OWNER_RECORD_FROM` in src/bus/owner.ts). */
+export const RUNTIME_SENDER = 'runtime';
+
+/** An unread runtime notice moves to `unread/` after this, whatever the seat's state. */
+export const RUNTIME_UNREAD_KEEP_MS = 14 * 86_400_000;
 
 const ID_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 const READ_SUFFIX = '.read.json';
@@ -214,7 +222,10 @@ export function planLegacySeatArchive(input: {
       continue;
     }
     const sentMs = Date.parse(payload.at);
-    if (options.unreadKeepMs !== null && Number.isFinite(sentMs) && nowMs - sentMs > options.unreadKeepMs) {
+    // A runtime notice was already delivered by push; it ages out after fourteen days even for a
+    // running seat. Mail from a real sender keeps the caller's rule.
+    const keepMs = payload.from === RUNTIME_SENDER ? RUNTIME_UNREAD_KEEP_MS : options.unreadKeepMs;
+    if (keepMs !== null && Number.isFinite(sentMs) && nowMs - sentMs > keepMs) {
       plan.move.push({ seat, id, month, unread: true });
     } else {
       plan.stays.unread += 1;

@@ -1,6 +1,7 @@
 // The older `.agents/messages/<seat>` store's archive (src/send/legacy-inbox-retention.ts): a
-// runtime notice with a signed read receipt older than seven days moves to archive/<YYYY-MM>/,
-// unread notices move only for a seat at rest, the owner's mailbox is never touched, nothing is
+// record with a signed read receipt older than seven days moves to archive/<YYYY-MM>/, an unread
+// runtime notice moves to unread/ after fourteen days for any seat, unread mail from a real
+// sender moves only for a seat at rest, the owner's mailbox is never touched, nothing is
 // deleted, a once-written notice is not written again once archived, and the daily pass and
 // `team drops archive` both reach the store.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -8,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeRuntimeMailboxRecord } from '../src/bus/owner.ts';
+import { OWNER_RECORD_FROM, writeRuntimeMailboxRecord } from '../src/bus/owner.ts';
 import { inboxArchivePass } from '../src/daemon/chores/inbox-archive.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -18,8 +19,9 @@ import {
   legacyArchivedRecordExists,
   legacySeatDir,
   planLegacySeatArchive,
+  RUNTIME_SENDER,
 } from '../src/send/legacy-inbox-retention.ts';
-import { RECEIPT_DOMAIN, messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
+import { MESSAGE_DOMAIN, RECEIPT_DOMAIN, messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
 
 const TEAM_YAML = `format: 1
 entity: floor
@@ -66,6 +68,14 @@ function notice(seat: string, id: string, at: string, session = 'acme'): void {
   if (!wrote.ok) throw new Error(wrote.error);
 }
 
+/** A record from a real sender, signed as the older store's writer signs it. */
+function letter(seat: string, id: string, at: string): void {
+  const payload = { kind: 'message', id, to: seat, root, session: 'acme', at, body: `letter ${id}`, from: 'lead' };
+  const signature = signDomain(MESSAGE_DOMAIN, payload as Json, messageKeyOf(home));
+  mkdirSync(legacySeatDir(root, seat), { recursive: true });
+  writeFileSync(join(legacySeatDir(root, seat), `${id}.json`), `${JSON.stringify({ payload, signature })}\n`);
+}
+
 function read(seat: string, id: string, at: string): void {
   const payload = { kind: 'receipt', id, to: seat, root, session: 'acme', at };
   const signature = signDomain(RECEIPT_DOMAIN, payload as Json, messageKeyOf(home));
@@ -110,14 +120,16 @@ describe('the older messages store archive', () => {
     writeFileSync(join(legacySeatDir(root, 'lead'), 'junk.json'), '{}\n');
     const key = messageKeyOf(home);
     const dry = archiveLegacySeat({ root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: true, options: { unreadKeepMs: null } });
-    expect(dry.plan.move.map((item) => item.id)).toEqual(['evt-work-a']);
-    expect(dry.plan.stays).toMatchObject({ unread: 1, 'too-recent': 1, 'other-session': 1, 'record-does-not-verify': 1 });
+    expect(dry.plan.move.map((item) => item.id)).toEqual(['evt-fallback-c', 'evt-work-a']);
+    expect(dry.plan.move[0]?.unread).toBe(true);
+    expect(dry.plan.stays).toMatchObject({ unread: 0, 'too-recent': 1, 'other-session': 1, 'record-does-not-verify': 1 });
     expect(live('lead')).toContain('evt-work-a.json');
 
     const real = archiveLegacySeat({ root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: false, options: { unreadKeepMs: null } });
     expect(real.refused).toBeNull();
     expect(archived('lead')).toEqual(['evt-work-a.json', 'evt-work-a.read.json']);
-    expect(live('lead')).toEqual(['evt-fallback-c.json', 'evt-other.json', 'evt-work-b.json', 'evt-work-b.read.json', 'junk.json']);
+    expect(archived('lead', 'unread')).toEqual(['evt-fallback-c.json']);
+    expect(live('lead')).toEqual(['evt-other.json', 'evt-work-b.json', 'evt-work-b.read.json', 'junk.json']);
     expect(legacyArchivedRecordExists(root, 'lead', 'evt-work-a')).toBe(true);
   });
 
@@ -129,6 +141,22 @@ describe('the older messages store archive', () => {
     expect(report.moved).toEqual([{ seat: 'resting', id: 'unread-old', month: OLD_MONTH, unread: true }]);
     expect(archived('resting', 'unread')).toEqual(['unread-old.json']);
     expect(live('resting')).toEqual(['unread-new.json']);
+  });
+
+  test('an unread runtime notice ages out after 14 days for a running seat; a real sender keeps the rule', () => {
+    expect(RUNTIME_SENDER).toBe(OWNER_RECORD_FROM);
+    notice('lead', 'evt-fallback-old', OLD_ISO);
+    notice('lead', 'evt-fallback-new', RECENT_ISO);
+    letter('lead', 'mail-old', OLD_ISO);
+    const report = archiveLegacySeat({ root, session: 'acme', seat: 'lead', key: messageKeyOf(home), now: NOW, dryRun: false, options: { unreadKeepMs: null } });
+    expect(report.moved).toEqual([{ seat: 'lead', id: 'evt-fallback-old', month: OLD_MONTH, unread: true }]);
+    expect(report.plan.stays.unread).toBe(2);
+    expect(archived('lead', 'unread')).toEqual(['evt-fallback-old.json']);
+    expect(live('lead')).toEqual(['evt-fallback-new.json', 'mail-old.json']);
+    // The same real letter to a seat at rest moves by the caller's window.
+    letter('resting', 'mail-old', OLD_ISO);
+    const resting = archiveLegacySeat({ root, session: 'acme', seat: 'resting', key: messageKeyOf(home), now: NOW, dryRun: false, options: { unreadKeepMs: 14 * DAY_MS } });
+    expect(resting.moved.map((item) => item.id)).toEqual(['mail-old']);
   });
 
   test("the owner's mailbox is never planned", () => {
@@ -170,12 +198,14 @@ describe('the older messages store archive', () => {
     expect(runInboxRetention(root, { now: new Date(), home, dryRun: true, seats: ['lead'], session: 'acme' }).move).toEqual(['evt-work-a']);
   });
 
-  test('team drops archive reaches the store for the team session, read records only', () => {
+  test('team drops archive reaches the store for the team session', () => {
     notice('lead', 'evt-work-a', OLD_ISO);
     read('lead', 'evt-work-a', new Date(Date.now() - 9 * DAY_MS).toISOString());
     notice('resting', 'unread-old', new Date(Date.now() - 30 * DAY_MS).toISOString());
+    letter('resting', 'mail-old', new Date(Date.now() - 30 * DAY_MS).toISOString());
     const dry = runInboxRetention(root, { now: new Date(), home, dryRun: true, seats: ['lead', 'resting'], session: 'acme' });
-    expect(dry.move).toEqual(['evt-work-a']);
+    // The runtime notice ages out; the real sender's unread letter stays (a manual run knows no rest).
+    expect(dry.move).toEqual(['evt-work-a', 'unread-old']);
     expect(live('lead')).toContain('evt-work-a.json');
     const withoutSession = runInboxRetention(root, { now: new Date(), home, dryRun: true, seats: ['lead'] });
     expect(withoutSession.move).toEqual([]);

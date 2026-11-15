@@ -814,8 +814,8 @@ export function runInboxRetention(
       if (report.refused !== null) refusals.push(report.refused);
     }
   }
-  // The older `.agents/messages` store, for this session: read records only (a manual run never
-  // knows a seat is at rest, so no unread record moves here; the daily pass moves those).
+  // The older `.agents/messages` store, for this session. A manual run never knows a seat is at
+  // rest, so unread mail from a real sender stays; unread runtime notices past fourteen days move.
   if (options.session !== undefined) {
     for (const folder of legacySeatFolders(root)) {
       if (options.seats !== undefined && !options.seats.includes(folder.seat)) continue;
