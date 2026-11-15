@@ -230,8 +230,9 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
       continue;
     }
     const nowMs = sources.now().getTime();
-    sweepResults(folder, names, nowMs);
+    // Unanswered takes are answered first: the sweep only removes what has its result.
     recoverTaken(folder, names, nowMs, sources);
+    sweepResults(folder, readdirSafe(folder), nowMs);
     for (const name of names) {
       if (ran >= RELAY_PER_PASS) return ran;
       const match = REQUEST_NAME.exec(name);
@@ -255,8 +256,11 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
         sources.log(`${seat}: the outbox changed while request ${id} ran; its result was not written`);
         return ran + 1;
       }
-      publishResult(folder, id, result, seat, sources);
-      try { unlinkSync(taking); } catch { /* removed with the results */ }
+      // The take is released only once its result stands: a failed publication leaves the
+      // marker, and a later pass answers it as cut off.
+      if (publishResult(folder, id, result, seat, sources)) {
+        try { unlinkSync(taking); } catch { /* removed with the results */ }
+      }
       ran += 1;
     }
   }
@@ -270,13 +274,25 @@ function refusal(id: string, seat: string, sources: Pick<RelaySources, 'log' | '
 
 /** Writes a result beside its request: a new temporary file (never one already there, never
  *  through a link), then a rename into place. */
-function publishResult(folder: string, id: string, result: OutboxResult, seat: string, sources: Pick<RelaySources, 'log'>): void {
-  const temp = join(folder, `.${id}.result.tmp`);
+function publishResult(folder: string, id: string, result: OutboxResult, seat: string, sources: Pick<RelaySources, 'log'>): boolean {
+  // A fresh temporary name per attempt: one a crashed attempt left behind never blocks this one.
+  const temp = join(folder, `.${id}.result.${randomUUID()}.tmp`);
   try {
     writeFileSync(temp, `${JSON.stringify(result)}\n`, { mode: 0o600, flag: 'wx' });
     renameSync(temp, join(folder, `${id}${RESULT_SUFFIX}`));
+    return true;
   } catch (error) {
     sources.log(`${seat}: the result of outbox request ${id} could not be written (${(error as Error).message})`);
+    try { unlinkSync(temp); } catch { /* not created */ }
+    return false;
+  }
+}
+
+function readdirSafe(folder: string): string[] {
+  try {
+    return readdirSync(folder);
+  } catch {
+    return [];
   }
 }
 
@@ -285,21 +301,26 @@ function recoverTaken(folder: string, names: readonly string[], nowMs: number, s
   for (const name of names) {
     if (!name.endsWith('.taking')) continue;
     const id = name.slice(0, -'.taking'.length);
-    if (!/^[0-9a-f-]{36}$/.test(id) || names.includes(`${id}${RESULT_SUFFIX}`)) continue;
+    if (!/^[0-9a-f-]{36}$/.test(id)) continue;
     const path = join(folder, name);
+    // A take whose result already stands is finished: only its marker is left to remove.
+    if (names.includes(`${id}${RESULT_SUFFIX}`)) {
+      try { unlinkSync(path); } catch { /* gone already */ }
+      continue;
+    }
     try {
       if (nowMs - lstatSync(path).mtimeMs < TAKEN_STALE_MS) continue;
     } catch {
       continue;
     }
     sources.log(`outbox request ${id} was cut off while it ran; its outcome is unknown`);
-    publishResult(folder, id, {
+    if (publishResult(folder, id, {
       id,
       code: 1,
       out: '',
       err: 'team: the relay stopped while running this request; whether it was sent is unknown — check before sending again\n',
       at: new Date(nowMs).toISOString(),
-    }, id, sources);
+    }, id, sources) === false) continue;
     try { unlinkSync(path); } catch { /* the sweep removes it */ }
   }
 }
@@ -383,7 +404,8 @@ function realFolderOf(folder: string): string | null {
 
 function sweepResults(folder: string, names: readonly string[], nowMs: number): void {
   for (const name of names) {
-    if (!name.endsWith(RESULT_SUFFIX) && !name.endsWith('.taking')) continue;
+    const tempFile = name.startsWith('.') && name.endsWith('.tmp');
+    if (!name.endsWith(RESULT_SUFFIX) && !tempFile) continue;
     const path = join(folder, name);
     try {
       if (nowMs - lstatSync(path).mtimeMs > RESULT_KEEP_MS) unlinkSync(path);

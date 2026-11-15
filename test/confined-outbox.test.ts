@@ -176,6 +176,20 @@ describe('the confined seat outbox', () => {
     expect(readFileSync(join(folder, `${id}.result.json`), 'utf8')).toContain('whether it was sent is unknown');
   });
 
+  test('a take older than a day is still answered, and a temporary file a crash left does not block it', async () => {
+    const { dir } = team();
+    const folder = outboxFolder(dir, 's', 'keeper')!;
+    mkdirSync(folder, { recursive: true });
+    const id = '00000000-0000-4000-8000-00000000000e';
+    writeFileSync(join(folder, `${id}.taking`), '{}');
+    writeFileSync(join(folder, `.${id}.result.tmp`), 'partial');
+    const muchLater = new Date(Date.now() + 2 * 24 * 60 * 60_000);
+    const { sources } = relay({ now: () => muchLater });
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(readFileSync(join(folder, `${id}.result.json`), 'utf8')).toContain('whether it was sent is unknown');
+    expect(existsSync(join(folder, `${id}.taking`))).toBe(false);
+  });
+
   test('one pass runs at most three requests; the rest wait for the next', async () => {
     const { root, dir } = team();
     const folder = outboxFolder(dir, 's', 'keeper')!;
