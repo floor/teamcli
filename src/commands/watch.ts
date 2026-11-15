@@ -1422,6 +1422,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
                 continue;
               }
               if (told.has(key)) continue;
+              // A check the stop aborted is not unreadable: nothing is said during a shutdown.
+              if (stopped()) continue;
               told.add(key);
               say(outcome.state === 'unreadable'
                 ? `${outcome.account}: its check is unreadable`
