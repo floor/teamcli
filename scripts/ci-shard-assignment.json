@@ -294,6 +294,7 @@
     "test/config-root.test.ts": 2,
     "test/config-sources.test.ts": 2,
     "test/config.test.ts": 5,
+    "test/confined-placement.test.ts": 3,
     "test/conformance.test.ts": 2,
     "test/conversation-follows-same-process.test.ts": 2,
     "test/coverage-0510-address-choice.test.ts": 4,
