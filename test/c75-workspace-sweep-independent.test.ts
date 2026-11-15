@@ -614,6 +614,54 @@ test('team remove sweeps the workspace of a seat the host no longer lists', asyn
   expect(seatState()).toBeUndefined();
 });
 
+test('team remove --keep does not mark a seat stopped while its unnamed pane still runs a process', async () => {
+  // jedi, 2026-11-15 10:47Z: the host named no agent, the sweep found a process beside the shell
+  // and left the workspace, and the seat was still marked stopped while its CLI ran.
+  setup('declared');
+  seedWatch();
+  recordReady();
+  const closed: string[] = [];
+  const panes = new Map<string, PaneSeed>([
+    [PANE, { workspace: SPACE, process: { shell: RECORDED.shell, foreground: [RECORDED.shell + 1] } }],
+  ]);
+  const sources: RemoveSources = {
+    ...downSources,
+    home,
+    sessionRunning: () => true,
+    agents: () => [],
+    screen: () => ({ kind: 'idle' }),
+    screenText: () => undefined,
+    status: () => 'idle',
+    foreground: () => ['claude'],
+    foregroundCwd: () => null,
+    processes: (_session, pane) => panes.get(pane)?.process ?? null,
+    workspacePanes: (_session, workspace) =>
+      [...panes.entries()].filter(([, held]) => held.workspace === workspace).map(([id]) => id),
+    now: () => NOW,
+    sleep: async () => {},
+    launch: {
+      typeText: () => true,
+      sendKey: () => true,
+      pressEnter: () => true,
+      agentPanes: () => [...panes.keys()],
+      closeWorkspace: (_session, workspace) => {
+        closed.push(workspace);
+        return true;
+      },
+      stopSession: () => true,
+      deleteSession: () => true,
+      kill: () => true,
+      sleep: async () => {},
+      now: () => NOW,
+    },
+  };
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runRemove([WORKER, '--keep'], io, sources)).toBe(1);
+  expect(closed).toEqual([]);
+  expect(said(io)).toContain('was not stopped and is left running');
+  expect(seatState()).toBeDefined();
+});
+
 test('team remove leaves a human owner pane unswept', async () => {
   setup('absent');
   seedWatch();
