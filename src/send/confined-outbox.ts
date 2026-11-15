@@ -59,8 +59,9 @@ export function outboxFolder(dir: string, session: string, seat: string): string
 
 /** Options a relayed run never carries: they name another principal's authority (a client grant,
  *  a key, an owner approval or request, a handoff record) or a file the relay would read with
- *  more reach than the seat's own sandbox. A seat passes its text on the command line instead. */
-const RELAY_REFUSED_OPTIONS = ['--file', '--brief', '--client', '--key', '--approval', '--request', '--request-id', '--record', '--confirm', '--general'];
+ *  more reach than the seat's own sandbox, or a wait that would hold the watch's pass. A seat
+ *  passes its text on the command line instead. */
+const RELAY_REFUSED_OPTIONS = ['--wait', '--file', '--brief', '--client', '--key', '--approval', '--request', '--request-id', '--record', '--confirm', '--general'];
 
 /** Why a relayed command may not run, or null. */
 export function relayRefusal(command: OutboxCommand, argv: readonly string[]): string | null {
