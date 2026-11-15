@@ -133,6 +133,7 @@ export function compactRule(rule: string): string {
       return 'reminder';
     case "the daemon's stuck-child notice":
     case "the daemon's blocked-episode notice":
+    case "the daemon's drops-archive notice":
       return 'daemon';
     default: {
       const grantMatch = /^an owner-signed grant naming send \((.+)\)$/.exec(trimmed);
@@ -145,9 +146,14 @@ export function compactRule(rule: string): string {
 
 /** The reader label shared by the daemon's notices. The record keeps the reserved word
  *  `daemon`; the line a person reads is `from the daemon (daemon):`, for the stuck-child
- *  notice and the blocked-episode notice. A seat admission rule never reaches this. */
+ *  notice, the blocked-episode notice and the drops-archive notice. A seat admission rule never
+ *  reaches this. */
 function daemonNoticeDisplay(rule: string, claimed: string): string | null {
-  if (rule !== "the daemon's stuck-child notice" && rule !== "the daemon's blocked-episode notice") return null;
+  if (
+    rule !== "the daemon's stuck-child notice"
+    && rule !== "the daemon's blocked-episode notice"
+    && rule !== "the daemon's drops-archive notice"
+  ) return null;
   if (claimed !== 'daemon' && claimed !== 'the daemon') return null;
   return 'the daemon';
 }

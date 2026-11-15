@@ -7,12 +7,16 @@
 // `<root>/.agents/send-drops/<session>/<seat>/archive/<YYYY-MM>/` first and the record last,
 // by a link that does not replace a file already there. A lookup by id still reads them there.
 //
+// The daemon's daily run (src/daemon/chores/inbox-archive.ts) uses the same moves, bounded per
+// pass, and one more: mail still unread after fourteen days to a seat that is stopped or retired
+// moves to `archive/<YYYY-MM>/unread/`. A running seat's unread mail is never moved.
+//
 // The one-time pass marks unread drops whose delivery receipt (or, failing that, read receipt)
 // is older than the seat's channel start. The record's own sent time is not that proof. A dry
 // run lists both sets and writes nothing. A real run writes one audit line, including a move
 // that stopped part way.
 import { linkSync, lstatSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import { readListener } from '../mcp/inbox.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
@@ -20,7 +24,7 @@ import { heldAt } from '../launch/rules-file.ts';
 import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { logLine } from '../log.ts';
 import { messageKeyState } from '../store/keys.ts';
-import { DROP_MONTH_ARCHIVE, folderOfDrop } from './drop-folder.ts';
+import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE, folderOfDrop } from './drop-folder.ts';
 import { publishRecordRead } from './read-receipt.ts';
 import {
   isLeadAckReadBy,
@@ -47,7 +51,31 @@ export const INBOX_READ_KEEP_MS = 7 * 86_400_000;
 const MONTH = /^(\d{4})-(\d{2})$/;
 const ID_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
-export type InboxArchiveMove = { seat: string; id: string; month: string; files: string[] };
+/** One family to move. `unread` marks mail moved before it was read, from a seat at rest; it
+ *  lands in `archive/<YYYY-MM>/unread/`. */
+export type InboxArchiveMove = { seat: string; id: string; month: string; files: string[]; unread?: true };
+
+/** What a plan may take beyond the settled mail. */
+export type InboxArchivePlanOptions = {
+  /** Mark unread drops delivered before the channel started as read. The command does; the
+   *  daemon's run does not, since that would speak for a seat's reading. Default true. */
+  markPreChannel?: boolean;
+  /** Move mail still unread when its signed `at` is older than this. Only for a seat the caller
+   *  proved is stopped or retired; null or absent moves no unread mail. */
+  unreadKeepMs?: number | null;
+  /** The most families one plan takes (moves and marks together), orphans finished first
+   *  included. Absent: no bound. */
+  limit?: number;
+  /** The most families one plan looks at. With it, families are taken in id order. */
+  scanLimit?: number;
+  /** Look only at families whose id sorts after this one (a cursor from an earlier call). */
+  after?: string;
+  /** Finish orphaned sidecars and crash temps before planning. Default true. */
+  orphans?: boolean;
+  /** The folder's families as `listSeatFamilies` read them once, so a caller that plans in
+   *  chunks lists the folder once rather than every chunk. A family gone since is skipped. */
+  families?: readonly SeatFamily[];
+};
 export type InboxArchiveMark = { seat: string; id: string };
 
 export type InboxArchiveReport = {
@@ -57,6 +85,11 @@ export type InboxArchiveReport = {
   /** Ids whose move or mark stopped before it finished. The files already placed stay. */
   partial: string[];
   refused: string | null;
+  /** The plan stopped at a limit with families still to look at. */
+  more?: boolean;
+  /** How many families the plan looked at, and the id of the last one (null: none). */
+  scanned?: number;
+  last?: string | null;
 };
 
 /** The month folder a record's signed `at` belongs in, or null when `at` is not an instant. */
@@ -68,6 +101,47 @@ export function archiveMonth(at: string): string | null {
 }
 
 type Family = { id: string; files: string[] };
+export type SeatFamily = Family;
+
+/** The folder's names as they stand now, by family id: one listing, no file read. A chunk that
+ *  plans from an earlier listing checks each family against this, so a sidecar that joined since
+ *  (a fallback note, a pending mark) is seen, and a name that left is not moved. */
+export function currentNames(dropDir: string): Map<string, string[]> | null {
+  let names: string[];
+  try {
+    names = readdirSync(dropDir);
+  } catch {
+    return null;
+  }
+  const byId = new Map<string, string[]>();
+  for (const name of names) {
+    if (name === DROP_MONTH_ARCHIVE || name.startsWith('.')) continue;
+    const dot = name.indexOf('.');
+    const id = dot < 0 ? name : name.slice(0, dot);
+    const list = byId.get(id);
+    if (list === undefined) byId.set(id, [name]);
+    else list.push(name);
+  }
+  return byId;
+}
+
+/** The index of the first family whose id sorts after `after`. */
+function firstAfter(families: readonly Family[], after: string): number {
+  let lo = 0;
+  let hi = families.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((families[mid] as Family).id <= after) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** One seat folder's message families, in id order, or null when the folder cannot be read. */
+export function listSeatFamilies(dropDir: string): SeatFamily[] | null {
+  const families = familiesOf(dropDir);
+  return families === null ? null : families.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
 
 function familiesOf(dropDir: string): Family[] | null {
   let names: string[];
@@ -111,12 +185,48 @@ export function planSeatArchive(
   key: KeyObject,
   nowMs: number,
   channelStartMs: number | null,
-): { move: InboxArchiveMove[]; markRead: InboxArchiveMark[] } | { refused: string } {
-  const families = familiesOf(dropDir);
-  if (families === null) return { refused: `${seat}: the drop folder cannot be read` };
+  options: InboxArchivePlanOptions = {},
+): { move: InboxArchiveMove[]; markRead: InboxArchiveMark[]; more: boolean; scanned: number; last: string | null } | { refused: string } {
+  const after = options.after;
+  let families: readonly Family[];
+  let from = 0;
+  let fresh: Map<string, string[]> | null = null;
+  if (options.families !== undefined) {
+    // Sorted by `listSeatFamilies`: the cursor's place is found by a binary search, and the names
+    // as they stand now are listed once for this call.
+    fresh = currentNames(dropDir);
+    if (fresh === null) return { refused: `${seat}: the drop folder cannot be read` };
+    // Walked by index from the cursor's place: nothing past the chunk is copied.
+    families = options.families;
+    from = after === undefined ? 0 : firstAfter(options.families, after);
+  } else {
+    const listed = familiesOf(dropDir);
+    if (listed === null) return { refused: `${seat}: the drop folder cannot be read` };
+    const ordered = options.scanLimit !== undefined || after !== undefined;
+    families = ordered
+      ? listed.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).filter((family) => after === undefined || family.id > after)
+      : listed;
+  }
+  const scanLimit = options.scanLimit ?? Number.POSITIVE_INFINITY;
+  let scanned = 0;
+  let last: string | null = null;
   const move: InboxArchiveMove[] = [];
   const markRead: InboxArchiveMark[] = [];
-  for (const family of families) {
+  const limit = options.limit ?? Number.POSITIVE_INFINITY;
+  const unreadKeepMs = options.unreadKeepMs ?? null;
+  const markPreChannel = options.markPreChannel !== false;
+  let more = false;
+  for (let index = from; index < families.length; index += 1) {
+    const listedFamily = families[index] as Family;
+    if (move.length + markRead.length >= limit || scanned >= scanLimit) {
+      more = true;
+      break;
+    }
+    scanned += 1;
+    last = listedFamily.id;
+    const nowFiles = fresh === null ? listedFamily.files : fresh.get(listedFamily.id);
+    if (nowFiles === undefined) continue;
+    const family: Family = { id: listedFamily.id, files: nowFiles.slice().sort() };
     if (!family.files.includes(family.id)) continue;
     if (blocked(family.id, family.files)) continue;
     const looked = readRecord(join(dropDir, family.id), family.id);
@@ -143,7 +253,17 @@ export function planSeatArchive(
       continue;
     }
     if (read !== null || replied !== null) continue;
-    if (channelStartMs === null) continue;
+    if (unreadKeepMs !== null && note === null) {
+      // Unread mail to a seat at rest. The signed sent time is the age; a record whose `at` is not
+      // an instant stays.
+      const sentMs = Date.parse(payload.at);
+      const month = archiveMonth(payload.at);
+      if (month !== null && Number.isFinite(sentMs) && nowMs - sentMs > unreadKeepMs) {
+        move.push({ seat, id: family.id, month, files: family.files, unread: true });
+        continue;
+      }
+    }
+    if (!markPreChannel || channelStartMs === null) continue;
     // A read receipt already settled the message above. What is still unread was delivered only
     // when its delivered receipt says so. The record's sent time is not that proof.
     const proofAt = delivered?.payload.at ?? null;
@@ -151,7 +271,7 @@ export function planSeatArchive(
     if (!Number.isFinite(proofMs) || proofMs >= channelStartMs) continue;
     markRead.push({ seat, id: family.id });
   }
-  return { move, markRead };
+  return { move, markRead, more, scanned, last };
 }
 
 function channelStartMs(dropDir: string, context: StatusContext): number | null {
@@ -205,14 +325,17 @@ function releaseLive(from: string, to: string): string | null {
 }
 
 function moveFamily(dropDir: string, planned: InboxArchiveMove): string | null {
-  const destDir = join(dropDir, DROP_MONTH_ARCHIVE, planned.month);
+  const monthDir = join(dropDir, DROP_MONTH_ARCHIVE, planned.month);
+  const destDir = planned.unread === true ? join(monthDir, DROP_ARCHIVE_UNREAD) : monthDir;
   if (heldAt(join(dropDir, DROP_MONTH_ARCHIVE)).kind === 'link') return `${planned.id}: archive is a link`;
+  if (heldAt(monthDir).kind === 'link') return `${planned.id}: the archive month is a link`;
   try {
     mkdirSync(destDir, { recursive: true, mode: 0o700 });
   } catch {
     return `${planned.id}: the archive folder could not be created`;
   }
-  if (heldAt(destDir).kind !== 'folder') return `${planned.id}: the archive month is not a folder`;
+  if (heldAt(monthDir).kind !== 'folder') return `${planned.id}: the archive month is not a folder`;
+  if (heldAt(destDir).kind !== 'folder') return `${planned.id}: the archive folder is not a folder`;
   const arriving = join(destDir, `.${planned.id}.arriving`);
   const finalName = join(destDir, planned.id);
   // A crash may have left the record under its temp name. Publish that name before anything else.
@@ -254,7 +377,7 @@ function moveFamily(dropDir: string, planned: InboxArchiveMove): string | null {
 }
 
 /** A temp name left from a crash, published onto the record's final name when that name is free. */
-function retireTemps(dropDir: string): void {
+function retireTemps(dropDir: string, budget: { left: number; more: boolean }): void {
   const root = join(dropDir, DROP_MONTH_ARCHIVE);
   if (heldAt(root).kind !== 'folder') return;
   let months: string[];
@@ -263,9 +386,16 @@ function retireTemps(dropDir: string): void {
   } catch {
     return;
   }
+  const dirs: string[] = [];
   for (const month of months) {
     if (!/^\d{4}-\d{2}$/.test(month)) continue;
     const dir = join(root, month);
+    if (heldAt(dir).kind !== 'folder') continue;
+    dirs.push(dir);
+    const unread = join(dir, DROP_ARCHIVE_UNREAD);
+    if (heldAt(unread).kind === 'folder') dirs.push(unread);
+  }
+  for (const dir of dirs) {
     let names: string[];
     try {
       names = readdirSync(dir);
@@ -274,6 +404,11 @@ function retireTemps(dropDir: string): void {
     }
     for (const name of names) {
       if (!name.startsWith('.') || !name.endsWith('.arriving')) continue;
+      if (budget.left <= 0) {
+        budget.more = true;
+        return;
+      }
+      budget.left -= 1;
       const id = name.slice(1, -'.arriving'.length);
       const tmp = join(dir, name);
       const finalName = join(dir, id);
@@ -291,15 +426,129 @@ function retireTemps(dropDir: string): void {
   }
 }
 
+/** Publishes one crash temp onto its record's final name, when that name is free. */
+function retireTemp(dir: string, name: string): void {
+  const id = name.slice(1, -'.arriving'.length);
+  const tmp = join(dir, name);
+  const finalName = join(dir, id);
+  if (heldAt(finalName).kind === 'missing') {
+    if (placeFile(tmp, finalName) !== null) return;
+  }
+  if (heldAt(finalName).kind === 'file' && sameInode(tmp, finalName)) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // The final name is in place. The next pass removes the temp name.
+    }
+  }
+}
+
+/** Places one live sidecar whose record already left beside that record, and drops the live
+ *  name. Returns the id when it finished, null otherwise (the record is live, or nowhere). */
+function finishSidecar(dropDir: string, name: string): string | null {
+  if (name === DROP_MONTH_ARCHIVE || name.startsWith('.')) return null;
+  const dot = name.indexOf('.');
+  if (dot <= 0) return null;
+  const id = name.slice(0, dot);
+  if (!ID_NAME.test(id) || heldAt(join(dropDir, id)).kind === 'file') return null;
+  const monthDir = folderOfDrop(dropDir, id);
+  if (monthDir === dropDir) return null;
+  const from = join(dropDir, name);
+  const to = join(monthDir, name);
+  if (placeFile(from, to) !== null) return null;
+  if (releaseLive(from, to) !== null) return null;
+  clearUnread(dropDir, id);
+  return id;
+}
+
+/** One unit of recovery work: a crash temp in an archive folder, or a live name with a dot that
+ *  may be a sidecar left behind. `key` orders the list and is the cursor a caller keeps. */
+export type RecoveryItem = { key: string; kind: 'temp'; dir: string; name: string } | { key: string; kind: 'sidecar'; name: string };
+
+/** Every unit of recovery work in one seat folder, in key order: one listing of the live folder
+ *  and of each archive month, nothing else read. Null when the live folder cannot be read. */
+export function listRecoveryWork(dropDir: string): RecoveryItem[] | null {
+  let live: string[];
+  try {
+    live = readdirSync(dropDir);
+  } catch {
+    return null;
+  }
+  const items: RecoveryItem[] = [];
+  const root = join(dropDir, DROP_MONTH_ARCHIVE);
+  if (heldAt(root).kind === 'folder') {
+    let months: string[] = [];
+    try {
+      months = readdirSync(root);
+    } catch {
+      months = [];
+    }
+    for (const month of months) {
+      if (!MONTH.test(month)) continue;
+      const dir = join(root, month);
+      if (heldAt(dir).kind !== 'folder') continue;
+      const dirs: Array<[string, string]> = [[dir, month]];
+      const unread = join(dir, DROP_ARCHIVE_UNREAD);
+      if (heldAt(unread).kind === 'folder') dirs.push([unread, `${month}/${DROP_ARCHIVE_UNREAD}`]);
+      for (const [at, label] of dirs) {
+        let names: string[];
+        try {
+          names = readdirSync(at);
+        } catch {
+          continue;
+        }
+        for (const name of names) {
+          if (name.startsWith('.') && name.endsWith('.arriving')) items.push({ key: `0:${label}/${name}`, kind: 'temp', dir: at, name });
+        }
+      }
+    }
+  }
+  for (const name of live) {
+    if (name === DROP_MONTH_ARCHIVE || name.startsWith('.') || name.indexOf('.') <= 0) continue;
+    items.push({ key: `1:${name}`, kind: 'sidecar', name });
+  }
+  return items.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+/** Whether every folder from `dropDir`'s archive down to `dir` is a plain folder now. */
+function archiveChainOk(dropDir: string, dir: string): boolean {
+  const root = join(dropDir, DROP_MONTH_ARCHIVE);
+  if (dir !== root && !dir.startsWith(`${root}/`)) return false;
+  let at = dir;
+  for (;;) {
+    if (heldAt(at).kind !== 'folder') return false;
+    if (at === root) return true;
+    at = dirname(at);
+  }
+}
+
+/** Does the given units of recovery work, each looked at once whatever it finds. Returns the
+ *  ids whose sidecars it finished. */
+export function recoverItems(dropDir: string, items: readonly RecoveryItem[]): string[] {
+  const done = new Set<string>();
+  for (const item of items) {
+    if (item.kind === 'temp') {
+      // The folders on the way from the seat folder to the temp are checked now, each one, so an
+      // archive, month or unread folder replaced by a link since the listing is not followed.
+      if (archiveChainOk(dropDir, item.dir)) retireTemp(item.dir, item.name);
+      continue;
+    }
+    const id = finishSidecar(dropDir, item.name);
+    if (id !== null) done.add(id);
+  }
+  return [...done];
+}
+
 /** Sidecars left in the live folder after their record reached the archive. Place any the
  *  archive does not have, then drop the live name. Returns the ids this pass finished. */
-function finishOrphans(dropDir: string): string[] {
-  retireTemps(dropDir);
+function finishOrphans(dropDir: string, limit = Number.POSITIVE_INFINITY): SeatRecovery {
+  const budget = { left: limit, more: false };
+  retireTemps(dropDir, budget);
   let names: string[];
   try {
     names = readdirSync(dropDir);
   } catch {
-    return [];
+    return { finished: [], used: limit - budget.left, more: budget.more };
   }
   const done = new Set<string>();
   for (const name of names) {
@@ -308,6 +557,12 @@ function finishOrphans(dropDir: string): string[] {
     if (dot <= 0) continue;
     const id = name.slice(0, dot);
     if (!ID_NAME.test(id) || heldAt(join(dropDir, id)).kind === 'file') continue;
+    // Every sidecar looked at here is work, finished or not: it is charged to the budget.
+    if (budget.left <= 0) {
+      budget.more = true;
+      break;
+    }
+    budget.left -= 1;
     const monthDir = folderOfDrop(dropDir, id);
     if (monthDir === dropDir) continue;
     const from = join(dropDir, name);
@@ -317,8 +572,12 @@ function finishOrphans(dropDir: string): string[] {
     clearUnread(dropDir, id);
     done.add(id);
   }
-  return [...done];
+  return { finished: [...done], used: limit - budget.left, more: budget.more };
 }
+
+/** What one recovery call did: the ids it finished, the work it used, and whether it stopped
+ *  at its limit with more to look at. */
+export type SeatRecovery = { finished: string[]; used: number; more: boolean };
 
 /**
  * Archives one seat's settled mail and marks its pre-channel unread drops read.
@@ -332,8 +591,14 @@ export function archiveSeatInbox(input: {
   home: string;
   now: Date;
   dryRun: boolean;
+  options?: InboxArchivePlanOptions;
 }): InboxArchiveReport {
   const nowMs = input.now.getTime();
+  const options = input.options ?? {};
+  // Orphans first, inside the same budget: a family finished here counts against the limit.
+  const orphans: InboxArchiveMove[] = input.dryRun || options.orphans === false
+    ? []
+    : finishOrphans(input.dropDir, options.limit).finished.map((id) => ({ seat: input.seat, id, month: '', files: [] }));
   const planned = planSeatArchive(
     input.dropDir,
     input.seat,
@@ -341,25 +606,22 @@ export function archiveSeatInbox(input: {
     input.key,
     nowMs,
     channelStartMs(input.dropDir, input.context),
+    options.limit === undefined ? options : { ...options, limit: Math.max(0, options.limit - orphans.length) },
   );
   if ('refused' in planned) {
-    return { dryRun: input.dryRun, move: [], markRead: [], partial: [], refused: planned.refused };
+    return { dryRun: input.dryRun, move: orphans, markRead: [], partial: [], refused: planned.refused };
   }
+  const seen = { more: planned.more, scanned: planned.scanned, last: planned.last };
   if (input.dryRun) {
-    return { dryRun: true, move: planned.move, markRead: planned.markRead, partial: [], refused: null };
+    return { dryRun: true, move: planned.move, markRead: planned.markRead, partial: [], refused: null, ...seen };
   }
-  const moved: InboxArchiveMove[] = finishOrphans(input.dropDir).map((id) => ({
-    seat: input.seat,
-    id,
-    month: '',
-    files: [],
-  }));
+  const moved: InboxArchiveMove[] = orphans;
   const partial: string[] = [];
   for (const family of planned.move) {
     const problem = moveFamily(input.dropDir, family);
     if (problem !== null) {
       partial.push(family.id);
-      return { dryRun: false, move: moved, markRead: [], partial, refused: problem };
+      return { dryRun: false, move: moved, markRead: [], partial, refused: problem, ...seen };
     }
     moved.push(family);
   }
@@ -388,7 +650,7 @@ export function archiveSeatInbox(input: {
     }
     marked.push(item);
   }
-  return { dryRun: false, move: moved, markRead: marked, partial, refused: null };
+  return { dryRun: false, move: moved, markRead: marked, partial, refused: null, ...seen };
 }
 
 /** Writes the acknowledgement note beside the record. A read receipt already there is left as
@@ -423,6 +685,75 @@ export function writeExplicitAck(input: {
   if (published === 'written' && !flushReceipt(path, input.folder)) return false;
   const noted = readVerifiedReceipt(path, input.id, 'read', context, input.key);
   return noted !== null && noted.payload.read_by === EXPLICIT_ACK_READ_BY;
+}
+
+/** One message moved while unread: its id, the archive month and the record's path. */
+export type ArchivedUnread = { id: string; month: string; path: string };
+
+/** The messages in `dropDir`'s `archive/<YYYY-MM>/unread/` folders, oldest month first. Nothing
+ *  is read but the folder names; a lookup by id reads the record. */
+export function listArchivedUnread(dropDir: string): ArchivedUnread[] {
+  const root = join(dropDir, DROP_MONTH_ARCHIVE);
+  if (heldAt(root).kind !== 'folder') return [];
+  let months: string[];
+  try {
+    months = readdirSync(root).filter((name) => MONTH.test(name)).sort();
+  } catch {
+    return [];
+  }
+  const out: ArchivedUnread[] = [];
+  for (const month of months) {
+    if (heldAt(join(root, month)).kind !== 'folder') continue;
+    const dir = join(root, month, DROP_ARCHIVE_UNREAD);
+    if (heldAt(dir).kind !== 'folder') continue;
+    let names: string[];
+    try {
+      names = readdirSync(dir).sort();
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (name.startsWith('.') || name.includes('.') || !ID_NAME.test(name)) continue;
+      if (heldAt(join(dir, name)).kind !== 'file') continue;
+      out.push({ id: name, month, path: join(dir, name) });
+    }
+  }
+  return out;
+}
+
+/** One seat drop folder under a root: its session, its seat and its path. */
+export type SeatDropFolder = { session: string; seat: string; dropDir: string };
+
+/** Every seat drop folder under `root`, in session then seat order as the folder lists them. A
+ *  folder that is not a plain folder, or whose name is not an id, is not listed. */
+export function seatDropFolders(root: string): SeatDropFolder[] {
+  const base = join(root, '.agents', 'send-drops');
+  if (heldAt(base).kind !== 'folder') return [];
+  let sessions: string[];
+  try {
+    sessions = readdirSync(base);
+  } catch {
+    return [];
+  }
+  const out: SeatDropFolder[] = [];
+  for (const session of sessions) {
+    if (session.startsWith('.') || !ID_NAME.test(session)) continue;
+    const sessionDir = join(base, session);
+    if (heldAt(sessionDir).kind !== 'folder') continue;
+    let seats: string[];
+    try {
+      seats = readdirSync(sessionDir);
+    } catch {
+      continue;
+    }
+    for (const seat of seats) {
+      if (seat.startsWith('.') || seat === DROP_MONTH_ARCHIVE || !ID_NAME.test(seat)) continue;
+      const dropDir = join(sessionDir, seat);
+      if (heldAt(dropDir).kind !== 'folder') continue;
+      out.push({ session, seat, dropDir });
+    }
+  }
+  return out;
 }
 
 /**

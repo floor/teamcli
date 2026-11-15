@@ -25,7 +25,7 @@ export type DaemonDirectContext = {
   due: string;
   recipients: readonly DaemonRecipient[];
   /** Set for a daemon notice. Admission then admits the loaded team's lead alone. */
-  notice?: 'stuck-child' | 'seat-blocked';
+  notice?: 'stuck-child' | 'seat-blocked' | 'drops-archived';
 };
 
 /** One reminder delivery: the recipient's checkout, the declared seat, and the body the reminder

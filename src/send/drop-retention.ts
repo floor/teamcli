@@ -68,6 +68,10 @@ import {
 export const DROP_ARCHIVE_DOMAIN = 'teamcli-drop-archive-v1\0';
 export const DROP_ARCHIVE_DIR = '.archive';
 
+/** The daily inbox-archive run's file at the top of send-drops. Named here, not imported, so the
+ *  store module does not load the daemon's chores; inbox-archive.ts uses this one name. */
+export const INBOX_ARCHIVE_RUN_FILE = '.drops-archive-run.json';
+
 /** Default steady-state limit per pass, matching `FALLBACK_STORE_PASS_LIMIT`. */
 export const DROP_ARCHIVE_PASS_LIMIT = 256;
 
@@ -1471,6 +1475,8 @@ export function* dropRetirementSteps(
       if (session === DROP_ARCHIVE_DIR) continue;
       // Finder's folder file is no team entry: it never stops the archive (teamcli, 2026-11-15).
       if (session === '.DS_Store') continue;
+      // The daemon's daily inbox-archive run keeps its day and totals here (src/daemon/chores/inbox-archive.ts).
+      if (session === INBOX_ARCHIVE_RUN_FILE) continue;
       const sessionDir = join(sendDropsDir, session);
       if (!insideSendDrops(sendDropsDir, sessionDir)) {
         return fail(`${sessionDir}: path escapes send-drops`);

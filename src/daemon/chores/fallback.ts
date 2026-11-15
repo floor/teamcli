@@ -22,6 +22,7 @@ import {
   type SweepRootResult,
 } from '../fallback-sweep.ts';
 import type { ChoresPass } from './child.ts';
+import { inboxArchivePass, type InboxArchiveDeps, type InboxArchivePass } from './inbox-archive.ts';
 
 import type { ChoresChildConfig } from './protocol.ts';
 
@@ -99,7 +100,57 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
  * one; a hand-built token without it names the root and the sweep reads that root's team file,
  * refusing it by name when it no longer validates, exactly as a bare root does.
  */
-export function createFallbackPass(config: ChoresChildConfig): ChoresPass {
+/** The notes one daily inbox-archive pass adds, or none. */
+function inboxArchiveNotes(pass: InboxArchivePass): string[] {
+  if (pass.kind === 'load') {
+    return pass.first
+      ? [`drops archive: the daily run waits, load ${pass.perCore.toFixed(1)} per core is above the limit`]
+      : [];
+  }
+  if (pass.kind !== 'ran') return [];
+  const notes: string[] = [];
+  if (pass.moved > 0 || pass.unread > 0) {
+    notes.push(`drops archive: moved ${String(pass.moved)} read, ${String(pass.unread)} unread to seats at rest${pass.done ? '' : '; more next pass'}`);
+  }
+  for (const why of pass.refused) notes.push(`drops archive: ${why}`);
+  if (pass.notice === 'failed') notes.push("drops archive: the lead's line was not sent; it is tried again");
+  return notes;
+}
+
+/** Hands the child's loop a turn once the slice is spent; false when the child is stopping. */
+function yieldWhenDue(slices: Parameters<ChoresPass>[0]['slices']): () => Promise<boolean> {
+  let sliceStart = Date.now();
+  return async () => {
+    if (slices.stopping()) return false;
+    if (Date.now() - sliceStart < slices.sliceMs) return true;
+    const more = await slices.yield();
+    sliceStart = Date.now();
+    return more && !slices.stopping();
+  };
+}
+
+/** The daily run's line to the lead, through the daemon's own send and its notice admission. */
+function leadNotice(home: string): NonNullable<InboxArchiveDeps['notify']> {
+  return async ({ root, session, lead, body, id }) => {
+    const [{ realHost }, { sendDaemonDirect }] = await Promise.all([
+      import('../../commands/send.ts'),
+      import('../../reminder/direct-send.ts'),
+    ]);
+    const said: string[] = [];
+    const sent = await sendDaemonDirect(
+      { reminder: 'drops-archived', due: id, recipients: [{ root, session, seat: lead }], notice: 'drops-archived' },
+      { root, seat: lead, body, id },
+      { ...realHost, home },
+      { stdout: (text) => said.push(text), stderr: (text) => said.push(text) },
+    );
+    return { ok: sent.ok, text: sent.text };
+  };
+}
+
+export function createFallbackPass(
+  config: ChoresChildConfig,
+  inboxDeps: InboxArchiveDeps = {},
+): ChoresPass {
   /** The instant of each root's last pass, so retirement keeps its slower cadence per root. */
   const lastStorePass = new Map<string, number>();
   return async ({ route, at, slices }) => {
@@ -174,6 +225,25 @@ export function createFallbackPass(config: ChoresChildConfig): ChoresPass {
         }
       }
     }
-    return passNotes(entry, drops);
+    const notes = passNotes(entry, drops);
+    if (housekeeping && entry.why === null && route.teamFile !== undefined && !slices.stopping()) {
+      try {
+        const pass = await inboxArchivePass({
+          root: entry.root,
+          home: config.home,
+          team: route.teamFile,
+          now: at,
+          deps: {
+            notify: inboxDeps.notify ?? leadNotice(config.home),
+            yieldTurn: inboxDeps.yieldTurn ?? yieldWhenDue(slices),
+            ...(inboxDeps.loadPerCore !== undefined ? { loadPerCore: inboxDeps.loadPerCore } : {}),
+          },
+        });
+        notes.push(...inboxArchiveNotes(pass));
+      } catch (error) {
+        notes.push(`drops archive: the daily run stopped (${error instanceof Error ? error.message : String(error)})`);
+      }
+    }
+    return notes;
   };
 }

@@ -1482,6 +1482,7 @@ Usage:
     team drops [--follow] [--json]
     team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
     team drops archive [--dry-run] [--json]
+    team drops archive --unread [--seat <seat>] [--json]
 
 ### Who may run it
 
@@ -1514,6 +1515,7 @@ Hidden: no
 Usage:
 
     team drops archive [--dry-run] [--json]
+    team drops archive --unread [--seat <seat>] [--json]
 
 #### Who may run it
 
@@ -1528,6 +1530,8 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--seat` | yes | no | no |
+| `--unread` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals

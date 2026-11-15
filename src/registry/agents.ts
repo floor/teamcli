@@ -206,6 +206,41 @@ function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Ag
   return agents;
 }
 
+/**
+ * Every agent record, or null when any part of the registry could not be read: the folder (other
+ * than absent), a file, or a file that does not parse. For a caller that must not mistake a
+ * record it could not read for a record that is not there. No cache and no memo are used.
+ */
+export function readAgentsComplete(home: string): Agent[] | null {
+  let names: string[];
+  try {
+    names = readdirSync(agentsDir(home));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
+  }
+  const agents: Agent[] = [];
+  for (const name of names.sort()) {
+    if (!name.endsWith('.yaml')) continue;
+    const id = name.slice(0, -'.yaml'.length);
+    if (!isAgentId(id)) return null;
+    let text: string;
+    try {
+      text = readFileSync(join(agentsDir(home), name), 'utf8');
+    } catch {
+      return null;
+    }
+    let agent: Agent | null;
+    try {
+      agent = parseAgentText(text, join(agentsDir(home), name), id);
+    } catch {
+      return null;
+    }
+    if (agent === null) return null;
+    agents.push(agent);
+  }
+  return agents;
+}
+
 /** Each agent file's last parse, by path, with the exact text it was parsed from. A long-lived
  *  process (the daemon's chores workers read the registry dozens of times a pass) still reads
  *  every file each time, but parses one again only when its text changed; every caller gets its
