@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { callerOf } from '../caller.ts';
+import { callerAncestors, callerOf } from '../caller.ts';
 import type { Io } from '../io.ts';
 import { cliHookStatePath } from '../launch/cli-hook.ts';
 import { confinedSeatAt } from '../placement/confined.ts';
@@ -80,6 +80,10 @@ export function relayRefusal(command: OutboxCommand, argv: readonly string[]): s
  *  A caller a test or a relay hands in (`io.caller`) is never relayed. */
 export async function relayIfConfined(command: OutboxCommand, argv: string[], io: Io): Promise<number | null> {
   if (io.caller !== undefined) return null;
+  // Only a caller whose parent walk cannot be read can be confined: every other caller keeps the
+  // placement its command makes, read once, by the command itself.
+  const ancestors = callerAncestors(io);
+  if (ancestors !== null && ancestors.length > 0) return null;
   const caller = callerOf(io);
   if (caller.kind !== 'seat' || caller.confined !== true) return null;
   const seat = confinedSeatAt(io.cwd, caller.pane, caller.session);
