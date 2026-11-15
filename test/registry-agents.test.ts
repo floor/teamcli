@@ -367,3 +367,29 @@ describe('findAgent', () => {
     expect(findAgent(home, { team: 'teamcli', seat: 'builder-1' })?.id).toBe(first.id);
   });
 });
+
+describe('the long-lived reader', () => {
+  // The daemon's chores workers read the registry dozens of times a pass; a file is parsed again
+  // only when it changed, and every read still sees every change, addition and removal.
+  test('a changed, added or removed record is seen on the next read, and callers get their own copies', () => {
+    const first = registerAgent(home, init());
+    expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w36:p1']);
+    updateAgent(home, first.id, { reach: { ...first.reach, pane: 'w99:p1' } });
+    expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w99:p1']);
+    // An edit in place, same size, by hand: the stamp still changes.
+    const path = join(agentsDir(home), `${first.id}.yaml`);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('w99:p1', 'w98:p1'));
+    expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w98:p1']);
+    const second = registerAgent(home, init({ reach: { team: 'teamcli', seat: 'builder-2', session: 'teamcli', pane: 'w37:p1', address: null } }));
+    expect(readAgents(home)).toHaveLength(2);
+    rmSync(join(agentsDir(home), `${second.id}.yaml`));
+    expect(readAgents(home)).toHaveLength(1);
+    // A caller that changes its copy changes nothing another caller reads.
+    const copy = readAgents(home)[0]!;
+    copy.reach.pane = 'mutated';
+    copy.skills.push('mutated');
+    expect(readAgents(home)[0]?.reach.pane).toBe('w98:p1');
+    expect(readAgents(home)[0]?.skills).toEqual([]);
+    expect(readAgents(home, { fresh: true })[0]?.skills).toEqual([]);
+  });
+});

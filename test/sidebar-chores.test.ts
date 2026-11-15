@@ -794,7 +794,34 @@ describe('bounded sidebar after the first watch cycle', () => {
     });
     const notes = await pass({ route, at: new Date(NOW), slices });
     expect(signal?.aborted).toBe(true); expect(reports).toBe(0);
-    expect(notes).toEqual(['sidebar refresh: skipped; the terminal host did not answer within the display slice']);
+    expect(notes).toEqual(['sidebar refresh: skipped; the terminal host did not answer within the display slice (next try in 30 s, backing off)']);
+  });
+
+  test('backs off while the terminal host does not answer, quietly, and resumes once it does', async () => {
+    const { home, root } = makeWorld();
+    const route: ChoresChildRoute = { root, team: 'acme-app', session: 'acme-dev', teamFile: makeTeam() };
+    let answering = false;
+    let asked = 0;
+    const config = makeConfig(home, route);
+    const slices = { ...openSlices, sliceMs: config.beatMs };
+    const pass = createSidebarPass(config, {
+      readSeats: () => ({ lead: { stage: 'ready', pane: 'p1', workspace: 'w1' } }),
+      sessionPanes: async () => { asked++; return answering ? [] : null; },
+      reportDisplayAsync: async () => true,
+    });
+    const at = (ms: number) => ({ route, at: new Date(NOW + ms), slices });
+    expect((await pass(at(0)))[0]).toContain('backing off');
+    // Inside the 30 s wait nothing is asked; the second miss doubles the wait and says nothing.
+    expect(await pass(at(10_000))).toEqual([]);
+    expect(asked).toBe(1);
+    expect(await pass(at(31_000))).toEqual([]);
+    expect(asked).toBe(2);
+    expect(await pass(at(60_000))).toEqual([]);
+    expect(asked).toBe(2);
+    // The host answers after the 60 s wait: the refresh runs again and the backoff is cleared.
+    answering = true;
+    await pass(at(92_000));
+    expect(asked).toBe(3);
   });
 
   test('skips remaining reports when the existing display slice is spent', async () => {

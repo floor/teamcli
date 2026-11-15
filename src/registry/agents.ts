@@ -182,19 +182,74 @@ function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Ag
   try {
     names = readdirSync(agentsDir(home));
   } catch {
+    forgetCachedHome(home);
     memo?.agents.set(home, []);
     return [];
   }
+  touchCachedHome(home);
   const agents: Agent[] = [];
+  const seen = new Set<string>();
   for (const name of names.sort()) {
     if (!name.endsWith('.yaml')) continue;
     const id = name.slice(0, -'.yaml'.length);
     if (!isAgentId(id)) continue;
-    const agent = readAgentFile(join(agentsDir(home), name), id);
+    const path = join(agentsDir(home), name);
+    seen.add(path);
+    const agent = readAgentFileCached(path, id);
     if (agent) agents.push(agent);
+  }
+  // A file gone from the folder leaves the cache with it.
+  for (const path of parsedAgentFiles.keys()) {
+    if (path.startsWith(`${agentsDir(home)}/`) && !seen.has(path)) parsedAgentFiles.delete(path);
   }
   memo?.agents.set(home, cloneAgents(agents));
   return agents;
+}
+
+/** Each agent file's last parse, by path, with the exact text it was parsed from. A long-lived
+ *  process (the daemon's chores workers read the registry dozens of times a pass) still reads
+ *  every file each time, but parses one again only when its text changed; every caller gets its
+ *  own copy. */
+const parsedAgentFiles = new Map<string, { text: string; agent: Agent | null }>();
+
+/** The homes whose files the cache holds, most recently read last; at most `CACHED_HOMES`. */
+const cachedHomes: string[] = [];
+const CACHED_HOMES = 4;
+
+/** Drops every cached file of a home. */
+function forgetCachedHome(home: string): void {
+  const prefix = `${agentsDir(home)}/`;
+  for (const path of [...parsedAgentFiles.keys()]) if (path.startsWith(prefix)) parsedAgentFiles.delete(path);
+  const at = cachedHomes.indexOf(home);
+  if (at !== -1) cachedHomes.splice(at, 1);
+}
+
+/** Marks a home as just read, and lets the least recently read go past the bound. */
+function touchCachedHome(home: string): void {
+  const at = cachedHomes.indexOf(home);
+  if (at !== -1) cachedHomes.splice(at, 1);
+  cachedHomes.push(home);
+  while (cachedHomes.length > CACHED_HOMES) forgetCachedHome(cachedHomes[0]!);
+}
+
+/** A deep copy: the cache's own record is never reachable by a caller. */
+function cachedCopy(agent: Agent): Agent {
+  return structuredClone(agent);
+}
+
+function readAgentFileCached(path: string, id: string): Agent | null {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    parsedAgentFiles.delete(path);
+    return null;
+  }
+  const cached = parsedAgentFiles.get(path);
+  if (cached !== undefined && cached.text === text) return cached.agent === null ? null : cachedCopy(cached.agent);
+  const agent = parseAgentText(text, path, id);
+  parsedAgentFiles.set(path, { text, agent: agent === null ? null : cachedCopy(agent) });
+  return agent;
 }
 
 export function getAgent(home: string, id: string): Agent | null {
@@ -508,6 +563,11 @@ function readAgentFile(path: string, id: string): Agent | null {
   } catch {
     return null;
   }
+  return parseAgentText(text, path, id);
+}
+
+/** One agent file's text as the record it names, or null; a numeric reach id throws. */
+function parseAgentText(text: string, path: string, id: string): Agent | null {
   let value: YamlValue;
   try {
     value = toValue(parseYaml(text));

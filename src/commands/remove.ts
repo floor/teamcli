@@ -1,3 +1,4 @@
+import { paneHoldsOnlyShell } from '../launch/identity.ts';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -802,6 +803,22 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       if (stood !== null) {
         auditClientRefusal('remove', clientRun.grant, stood, sources.now());
         return clientRefused(plainLine(stood));
+      }
+    }
+    // A seat herdr names no agent for whose own recorded pane still runs a process beside its
+    // shell has a CLI nobody stopped: it is not marked stopped or removed while it runs (jedi,
+    // 2026-11-15 10:47Z). The reading comes first, before any endpoint, file, state or registry
+    // change; `--abandon` keeps its admitted path, and a pane the host no longer lists, or one
+    // that cannot be read, keeps today's behaviour.
+    if (live && !agent && !human && !abandon && recorded?.pane !== undefined && sources.processes !== undefined) {
+      const paneNow = sources.processes(session, recorded.pane);
+      if (paneNow !== null && !paneHoldsOnlyShell(paneNow)) {
+        const why = `${name}: its pane ${recorded.pane} still runs a process beside its shell that the terminal host does not name; the seat was not stopped and is left running. Stop its CLI, or run \`team remove ${name} --abandon\`, then remove it again`;
+        if (json) refuse(io, json, 'remove', { id: 'remove.still-running', message: why, repair: null });
+        else io.stderr(`team remove: ${why}\n`);
+        logLine(dir, 'remove', whoText, why, sources.now());
+        // exit: remove.still-running
+        return 1;
       }
     }
     // A seat herdr no longer lists has no CLI left to stop, but the endpoint its launch started
