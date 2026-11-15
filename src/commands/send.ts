@@ -1403,15 +1403,21 @@ export async function retryDaemonHandoff(
   request: Parameters<typeof requestDaemon>[1],
   host: Pick<SendHost, 'handoffRetryMs'>,
 ): Promise<DaemonResponse | null> {
-  // One deadline on the monotonic clock covers the pings and the one replay.
+  // One deadline on the monotonic clock covers the pings and the one replay: the pings stop
+  // early enough to leave the replay its share, and nothing runs past the deadline.
   const window = host.handoffRetryMs ?? HANDOFF_RETRY_WAIT_MS;
   const deadline = performance.now() + window;
-  const left = () => Math.max(0, deadline - performance.now());
+  const reserve = Math.min(HANDOFF_REPLAY_MS, Math.max(0, window / 2));
+  const left = () => deadline - performance.now();
   for (;;) {
-    if (await probeDaemonSocket(socketPath, Math.min(400, Math.max(50, left())))) {
-      return requestDaemon(socketPath, request, Math.max(1_000, Math.min(HANDOFF_REPLAY_MS, left())));
+    const pingBudget = left() - reserve;
+    if (pingBudget < 50) return null;
+    if (await probeDaemonSocket(socketPath, Math.min(400, pingBudget))) {
+      const replayBudget = Math.floor(left());
+      if (replayBudget < 50) return null;
+      return requestDaemon(socketPath, request, Math.min(HANDOFF_REPLAY_MS, replayBudget));
     }
-    if (left() < HANDOFF_RETRY_POLL_MS) return null;
+    if (left() - reserve < HANDOFF_RETRY_POLL_MS) return null;
     await new Promise<void>((resolve) => setTimeout(resolve, HANDOFF_RETRY_POLL_MS));
   }
 }

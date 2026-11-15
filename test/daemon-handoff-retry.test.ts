@@ -72,9 +72,33 @@ test('a send-endpoint probe held by the shared event loop is not counted as the 
   expect(sendProbeReading(false, 6_000, 30_000)).toBe('held');
 });
 
-test('the retry window is one deadline: a silent endpoint gives up within it', async () => {
-  const gone = join(mkdtempSync(join(tmpdir(), 'hr-')), 'none.sock');
+test('the retry window is one deadline: an endpoint that holds connections silently gives up within it', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'hr-')), 'silent.sock');
+  const held: import('node:net').Socket[] = [];
+  const silent = createServer((socket) => { held.push(socket); });
+  servers.push(silent);
+  await new Promise<void>((resolve) => silent.listen(path, () => resolve()));
   const began = performance.now();
-  expect(await retryDaemonHandoff(gone, request as never, { handoffRetryMs: 1_200 })).toBeNull();
-  expect(performance.now() - began).toBeLessThan(2_500);
+  expect(await retryDaemonHandoff(path, request as never, { handoffRetryMs: 1_200 })).toBeNull();
+  expect(performance.now() - began).toBeLessThanOrEqual(1_300);
+  for (const socket of held) socket.destroy();
+});
+
+test('a pong near the deadline gets a replay bounded by the time left', async () => {
+  // An endpoint that answers pings but holds every send unanswered: the replay ends at the deadline.
+  const path = join(mkdtempSync(join(tmpdir(), 'hr-')), 'slow.sock');
+  const held: import('node:net').Socket[] = [];
+  const slow = createServer((socket) => {
+    socket.on('data', (chunk) => {
+      const line = chunk.toString('utf8');
+      if (line.includes('"ping"')) socket.end(`${JSON.stringify({ v: 1, ok: true, pong: true, pid: 1 })}\n`);
+      else held.push(socket);
+    });
+  });
+  servers.push(slow);
+  await new Promise<void>((resolve) => slow.listen(path, () => resolve()));
+  const began = performance.now();
+  expect(await retryDaemonHandoff(path, request as never, { handoffRetryMs: 1_200 })).toBeNull();
+  expect(performance.now() - began).toBeLessThanOrEqual(1_300);
+  for (const socket of held) socket.destroy();
 });
