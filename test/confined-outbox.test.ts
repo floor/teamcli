@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { outboxFolder, relayOutboxes, relayThroughOutbox, type OutboxCommand, type RelayCaller, type RelaySources } from '../src/send/confined-outbox.ts';
+import { outboxFolder, relayOutboxes, relayRefusal, relayThroughOutbox, type OutboxCommand, type RelayCaller, type RelaySources } from '../src/send/confined-outbox.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
 
@@ -129,6 +129,19 @@ describe('the confined seat outbox', () => {
     await relayOutboxes(dir, 's', ['keeper'], sources);
     expect(ran).toEqual([]);
     expect(existsSync(join(folder, `${id}.result.json`))).toBe(true);
+  });
+
+  test('options that name another authority or a file are refused on both sides', async () => {
+    expect(relayRefusal('send', ['lead', 'hi', '--file', '/etc/hosts'])).toContain('--file');
+    expect(relayRefusal('send', ['lead', 'hi', '--key=/x'])).toContain('--key');
+    expect(relayRefusal('send', ['lead', '--', '--file'])).toBeNull();
+    expect(relayRefusal('reply', ['abc', 'thanks'])).toBeNull();
+    const { root, dir } = team();
+    const { sources, ran } = relay();
+    const { code, err } = await sendThroughOutbox(root, dir, sources, ['lead', 'hi', '--approval', 'x']);
+    expect(code).toBe(1);
+    expect(err).toContain('--approval');
+    expect(ran).toEqual([]);
   });
 
   test('a seat whose result does not come in time is told its request is queued', async () => {

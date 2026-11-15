@@ -57,6 +57,23 @@ export function outboxFolder(dir: string, session: string, seat: string): string
   return state === null ? null : join(dirname(state), 'outbox');
 }
 
+/** Options a relayed run never carries: they name another principal's authority (a client grant,
+ *  a key, an owner approval or request, a handoff record) or a file the relay would read with
+ *  more reach than the seat's own sandbox. A seat passes its text on the command line instead. */
+const RELAY_REFUSED_OPTIONS = ['--file', '--brief', '--client', '--key', '--approval', '--request', '--request-id', '--record', '--confirm', '--general'];
+
+/** Why a relayed command may not run, or null. */
+export function relayRefusal(command: OutboxCommand, argv: readonly string[]): string | null {
+  for (const word of argv) {
+    if (word === '--') break;
+    const name = word.includes('=') ? word.slice(0, word.indexOf('=')) : word;
+    if (RELAY_REFUSED_OPTIONS.includes(name)) {
+      return `${name} is not taken from a sandboxed seat's ${command}; put the text on the command line`;
+    }
+  }
+  return null;
+}
+
 /** A command's first step: a caller its sandbox confines hands the command to its outbox and
  *  answers with the relayed result; null for every other caller, which runs the command itself.
  *  A caller a test or a relay hands in (`io.caller`) is never relayed. */
@@ -66,6 +83,11 @@ export async function relayIfConfined(command: OutboxCommand, argv: string[], io
   if (caller.kind !== 'seat' || caller.confined !== true) return null;
   const seat = confinedSeatAt(io.cwd, caller.pane, caller.session);
   if (seat === null) return null;
+  const refused = relayRefusal(command, argv);
+  if (refused !== null) {
+    io.stderr(`team ${command}: ${refused}; nothing was sent\n`);
+    return 2;
+  }
   return relayThroughOutbox({
     command,
     argv,
@@ -223,6 +245,8 @@ async function runRequest(path: string, id: string, seat: string, session: strin
   if (request.v !== 1 || request.id !== id) return refuse('it is not a request this build reads');
   if (request.command !== 'send' && request.command !== 'reply') return refuse('it names no send or reply');
   if (!Array.isArray(request.argv) || !request.argv.every((word) => typeof word === 'string')) return refuse('its words are not text');
+  const optionRefusal = relayRefusal(request.command, request.argv);
+  if (optionRefusal !== null) return refuse(optionRefusal);
   if (request.seat !== seat || request.session !== session) return refuse('it names another seat or session than its outbox');
   const written = Date.parse(request.at);
   if (!Number.isFinite(written) || at.getTime() - written > REQUEST_MAX_AGE_MS || written - at.getTime() > 60_000) {
