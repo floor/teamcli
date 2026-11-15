@@ -13,7 +13,7 @@ import { traceChildStep } from '../diagnostics/child-steps.ts';
 // (src/send/admit.ts).
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isSeatId, updateState, withLock, type SeatState } from '../state.ts';
 import { currentRunMemo } from '../run-memo.ts';
@@ -186,15 +186,43 @@ function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Ag
     return [];
   }
   const agents: Agent[] = [];
+  const seen = new Set<string>();
   for (const name of names.sort()) {
     if (!name.endsWith('.yaml')) continue;
     const id = name.slice(0, -'.yaml'.length);
     if (!isAgentId(id)) continue;
-    const agent = readAgentFile(join(agentsDir(home), name), id);
+    const path = join(agentsDir(home), name);
+    seen.add(path);
+    const agent = readAgentFileCached(path, id);
     if (agent) agents.push(agent);
+  }
+  // A file gone from the folder leaves the cache with it.
+  for (const path of parsedAgentFiles.keys()) {
+    if (path.startsWith(`${agentsDir(home)}/`) && !seen.has(path)) parsedAgentFiles.delete(path);
   }
   memo?.agents.set(home, cloneAgents(agents));
   return agents;
+}
+
+/** Each agent file's last parse, by path, with the stat it was parsed at. A long-lived process
+ *  (the daemon's chores workers read the registry dozens of times a pass) parses a file again
+ *  only when its size, modification time or inode changed; every caller gets its own copy. */
+const parsedAgentFiles = new Map<string, { stamp: string; agent: Agent | null }>();
+
+function readAgentFileCached(path: string, id: string): Agent | null {
+  let stamp: string;
+  try {
+    const stat = statSync(path, { bigint: true });
+    stamp = `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeNs)}:${String(stat.ctimeNs)}`;
+  } catch {
+    parsedAgentFiles.delete(path);
+    return null;
+  }
+  const cached = parsedAgentFiles.get(path);
+  if (cached !== undefined && cached.stamp === stamp) return cached.agent === null ? null : cloneAgent(cached.agent);
+  const agent = readAgentFile(path, id);
+  parsedAgentFiles.set(path, { stamp, agent: agent === null ? null : cloneAgent(agent) });
+  return agent;
 }
 
 export function getAgent(home: string, id: string): Agent | null {

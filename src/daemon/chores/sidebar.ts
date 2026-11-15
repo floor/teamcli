@@ -75,11 +75,18 @@ function defaultReadTeam(
  * recorded pane is refreshed at `daemon.sidebar-refresh-ms` cadence; a seat whose host call
  * refuses is noted and left due so the next pass retries it.
  */
+/** The sidebar refresh's first wait after the terminal host did not answer, and its ceiling. */
+export const SIDEBAR_BACKOFF_FIRST_MS = 30_000;
+export const SIDEBAR_BACKOFF_MAX_MS = 10 * 60_000;
+
 export function createSidebarPass(
   config: ChoresChildConfig,
   sources: SidebarPassSources = {},
 ): ChoresPass {
   const lastRefreshedAt = new Map<string, number>();
+  /** Per root: while the terminal host does not answer the display read, the refresh backs off
+   *  (30 s, doubling to 10 min) instead of asking again every beat; an answer clears it. */
+  const hostBackoff = new Map<string, { until: number; waitMs: number }>();
   const readWorkspacePanes = sources.workspacePanes ?? workspacePaneDisplays;
   const readWorkspaces = sources.workspaces ?? workspaceList;
   const report = sources.reportDisplayAsync ?? sources.reportDisplay ?? reportDisplayAgentAsync;
@@ -153,11 +160,21 @@ export function createSidebarPass(
       return [{ seat, pane, workspace: recorded?.workspace, key }];
     });
     if (due.length === 0) return [];
+    const backoff = hostBackoff.get(route.root);
+    if (backoff !== undefined && nowMs < backoff.until) return [];
 
     const allPanes = injectedWorkspaceReader ? undefined : await traceChildStep(
       'sidebar session pane-list', () => bounded((options) => sessionPanes(route.session, options)),
     );
-    if (allPanes === null) return ['sidebar refresh: skipped; the terminal host did not answer within the display slice'];
+    if (allPanes === null) {
+      const waitMs = Math.min(SIDEBAR_BACKOFF_MAX_MS, backoff === undefined ? SIDEBAR_BACKOFF_FIRST_MS : backoff.waitMs * 2);
+      hostBackoff.set(route.root, { until: nowMs + waitMs, waitMs });
+      // Said once per stretch: a backing-off refresh is quiet until the host answers again.
+      return backoff === undefined
+        ? [`sidebar refresh: skipped; the terminal host did not answer within the display slice (next try in ${String(Math.round(waitMs / 1000))} s, backing off)`]
+        : [];
+    }
+    hostBackoff.delete(route.root);
 
     const workspaceCache = new Map<string, WorkspacePaneDisplay[] | null>();
     let listedWorkspaces: readonly { id: string }[] | null | undefined;
