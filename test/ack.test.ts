@@ -198,7 +198,7 @@ describe('team ack marks one message read without printing it', () => {
     const result = await run([SENT], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' });
 
     expect(result.code).toBe(1);
-    expect(result.err).toBe(`team ack: record ${SENT} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged\n`);
+    expect(result.err).toBe(`team ack: record ${SENT} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged: the seat marks it read with \`team drops --read --seat worker\`\n`);
     expect(existsSync(receiptFile(recordDir(root, 'acme', 'worker'), SENT, 'read'))).toBe(false);
   });
 
