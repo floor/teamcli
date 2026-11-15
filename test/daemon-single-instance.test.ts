@@ -90,6 +90,33 @@ describe('one machine daemon per home', () => {
     await Promise.all(racers.map((one) => exited(one.child)));
   }, 30_000);
 
+  test('a lock file naming a dead pid is not taken while another process holds its flock', async () => {
+    const { home, barrier } = scratch();
+    // The window the old by-name lock lost: a holder that has the lock and whose file still
+    // names a pid that is gone. Reading the pid as dead and unlinking the file let a second
+    // start take it.
+    const lockPath = daemonLockPath(home);
+    const holder = spawn(process.execPath, [join(import.meta.dir, 'helpers', 'flock-holder-child.ts'), lockPath], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+    children.push(holder);
+    await new Promise<void>((resolve, reject) => {
+      holder.stdout!.once('data', (chunk: Buffer) => (chunk.toString('utf8').startsWith('held') ? resolve() : reject(new Error('the holder found the lock busy'))));
+    });
+    writeFileSync(lockPath, '999999\n');
+    writeFileSync(barrier, '');
+    const blocked = startChild(home, barrier);
+    expect((await blocked.outcome).kind).not.toBe('serving');
+    await exited(blocked.child);
+    // The holder gone, the same file is free to the next start.
+    holder.stdin!.end();
+    await exited(holder);
+    const next = startChild(home, barrier);
+    expect((await next.outcome).kind).toBe('serving');
+    next.child.stdin!.end();
+    await exited(next.child);
+  }, 30_000);
+
   test('a daemon killed outright frees the lock for the next start', async () => {
     const { home, barrier } = scratch();
     writeFileSync(barrier, '');
