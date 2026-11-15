@@ -42,7 +42,7 @@ import { MailPass } from '../src/watch/mail-pass.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
 import { defaultWatch } from '../src/file/sections/watch.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_PULL_SECONDS, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds } from '../src/watch/rhythm.ts';
-import { reportStuckSeats, reportUnreadDrops, reportedPath, wakeBackoffMs, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
+import { reportStuckSeats, reportUnreadDrops, reportedPath, wakeBackoffMs, WAKE_SLOW_MAX_AGE_MS, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
@@ -957,7 +957,7 @@ describe("the watch's typed wake retry", () => {
     expect(mailboxBody(made.root, 'owner', `unread-${UNREAD_B}`).body).toContain('a typed wake was tried 1 time and none was confirmed');
   });
 
-  test('the profile bound ends a wake that never lands, and a newer message still wakes', async () => {
+  test('the profile bound ends the fast retries of a wake that never lands, and a newer message still wakes', async () => {
     const { made, team } = typedWorld('muse');
     const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nstuck', new Date(NOW.getTime() - 11 * MIN));
     // Past the window only after the three attempts below: it must not be due alongside them.
@@ -971,10 +971,11 @@ describe("the watch's typed wake retry", () => {
       await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + at) }), { unreadAfter: N });
     }
     expect(calls).toHaveLength(3);
-    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 3, typed: true, next_at: '2026-10-17T04:00:35.000Z' });
+    // The third failure spends the fast bound: the next attempt is a slow one, five minutes on.
+    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 3, typed: true, next_at: '2026-10-17T04:05:15.000Z' });
 
-    // The bound is reached: the fourth pass never asks the seam for the stuck message. The newer
-    // one is past its window by then, and the same line wakes it.
+    // The fast bound is reached: the fourth pass never asks the seam for the stuck message. The
+    // newer one is past its window by then, and the same line wakes it.
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 35_000) }), { unreadAfter: N });
     expect(calls).toHaveLength(4);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
@@ -982,6 +983,46 @@ describe("the watch's typed wake retry", () => {
     expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok && history.entries.some((entry) => entry.id === UNREAD_B && entry.outcome === 'delivered (typed wake)')).toBe(true);
+  });
+
+  test('past the fast bound a message still unread is retried slowly, after its report, until it lands', async () => {
+    // 2026-11-14: a seat busy through the three fast attempts and then idle was never woken again;
+    // its messages sat unread for days. The slow retries wait 5, 10, 20, then 30 minutes.
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nstill waiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_FAILED, TYPED_FAILED, TYPED_FAILED, TYPED_FAILED, TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+    const at = (ms: number) => sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + ms) });
+
+    for (const ms of [0, 5_000, 15_000]) await wakeUnreadDrops(at(ms), { unreadAfter: N });
+    expect(calls).toHaveLength(3);
+    // The report speaks once at twice the window; it does not end the slow retries.
+    reportUnreadDrops(at(MIN), { unreadAfter: N });
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+
+    // Inside the first slow wait nothing is typed; at its end the seam is asked again.
+    await wakeUnreadDrops(at(4 * MIN), { unreadAfter: N });
+    expect(calls).toHaveLength(3);
+    await wakeUnreadDrops(at(15_000 + 5 * MIN), { unreadAfter: N });
+    expect(calls).toHaveLength(4);
+    expect(ledgerOf(dropDir, UNREAD_A)?.next_at).toBe(new Date(NOW.getTime() + 15_000 + 15 * MIN).toISOString());
+    // The next slow wait is ten minutes; the attempt after it lands.
+    await wakeUnreadDrops(at(15_000 + 15 * MIN), { unreadAfter: N });
+    expect(calls).toHaveLength(5);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
+  test('a message older than the slow retries\' age bound is not retried again', async () => {
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nancient', new Date(NOW.getTime() - WAKE_SLOW_MAX_AGE_MS - MIN));
+    dropMessage(dropDir, `${UNREAD_A}.wake-try`, `${JSON.stringify({ id: UNREAD_A, tries: 9, typed: true, next_at: NOW.toISOString() })}\n`);
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane') }), { unreadAfter: N });
+    expect(calls).toEqual([]);
   });
 
   test('a seat file that turns watch_wake off keeps the drop-file leg, and the seam is never asked', async () => {
