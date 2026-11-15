@@ -336,4 +336,11 @@ test('only the newest climb per seat and prompt is sent, and none a run held mor
   ], now, (one) => dropped.push(one.id));
   expect(kept.map((one) => one.climb.id)).toEqual(['evt-prompt-climb-worker-1-b', 'evt-prompt-remind-worker-1-c']);
   expect(dropped).toEqual(['evt-prompt-climb-worker-1-a', 'evt-prompt-climb-worker-2-d']);
+  // A lead's unread climb is raised once per episode: it never expires.
+  const lead = supersededClimbs([climb('evt-prompt-lead-worker-3-e', '2026-11-15T09:00:00.000Z')], now, () => {});
+  expect(lead).toHaveLength(1);
+  // An undated climb reads its id's stamp, and never outranks a newer dated one.
+  const undated = { climb: { seat: 'worker-1', id: 'evt-prompt-climb-worker-1-20261115T113000000Z', text: 'x', target }, tries: 2 };
+  const order = supersededClimbs([undated, climb('evt-prompt-climb-worker-1-f', '2026-11-15T11:39:00.000Z')], now, () => {});
+  expect(order.map((one) => one.climb.id)).toEqual(['evt-prompt-climb-worker-1-f']);
 });

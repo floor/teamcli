@@ -2943,25 +2943,38 @@ export function supersededClimbs(
     const match = /^evt-prompt-([a-z]+)-/.exec(climb.id);
     return `${match?.[1] ?? climb.id}\0${climb.seat}\0${climb.target.root}\0${climb.target.seat}`;
   };
-  const instant = (climb: StatusClimb): number => {
+  // The climb's instant: its `at`, else the stamp its id carries; null when neither reads, and
+  // such a climb never outranks a dated one and is never dropped as stale.
+  const instant = (climb: StatusClimb): number | null => {
     const parsed = Date.parse(climb.at ?? '');
-    return Number.isFinite(parsed) ? parsed : at.getTime();
+    if (Number.isFinite(parsed)) return parsed;
+    const stamp = /-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z$/.exec(climb.id);
+    if (stamp === null) return null;
+    const fromId = Date.parse(`${stamp[1]}-${stamp[2]}-${stamp[3]}T${stamp[4]}:${stamp[5]}:${stamp[6]}.${stamp[7]}Z`);
+    return Number.isFinite(fromId) ? fromId : null;
   };
+  // Only the prompt rungs the engine raises again while the prompt stands may expire; a lead's
+  // unread climb (`evt-prompt-lead-`) is raised once per episode and is kept until it is sent.
+  const expires = (climb: StatusClimb): boolean => /^evt-prompt-(climb|remind)-/.test(climb.id);
   const newest = new Map<string, number>();
   for (const held of queue) {
+    const when = instant(held.climb);
+    if (when === null) continue;
     const key = keyOf(held.climb);
-    newest.set(key, Math.max(newest.get(key) ?? -Infinity, instant(held.climb)));
+    newest.set(key, Math.max(newest.get(key) ?? -Infinity, when));
   }
   const kept: { climb: StatusClimb; tries: number }[] = [];
   const seen = new Set<string>();
   for (const held of queue) {
     const key = keyOf(held.climb);
     const when = instant(held.climb);
-    if (at.getTime() - when > HELD_CLIMB_STALE_MS) {
+    if (when !== null && expires(held.climb) && at.getTime() - when > HELD_CLIMB_STALE_MS) {
       drop(held.climb, 'it is older than 30 minutes; this run reads the seat again');
       continue;
     }
-    if (when < (newest.get(key) ?? when) || seen.has(key)) {
+    const best = newest.get(key);
+    // An undated climb stands only when no dated one exists for the same seat and prompt.
+    if ((when === null && best !== undefined) || (when !== null && best !== undefined && when < best) || seen.has(key)) {
       drop(held.climb, 'a newer climb for the same seat and prompt stands');
       continue;
     }
