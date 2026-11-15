@@ -1054,17 +1054,27 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // minutes under load must not make a seat's send wait that long (2026-11-15: the floor pass ran
   // every 240 s and Iris's send outlived her command's 45 s wait). Until a pass has read the team,
   // the relay reads the team file the watch started with and no live panes.
-  let relayContext: { team: TeamFile; agents: { name: string | null; pane: string }[] | null } = { team: first.team, agents: null };
+  let relayContext: { team: TeamFile; agents: { name: string | null; pane: string }[] | null } | null = first.team.session === session
+    ? { team: first.team, agents: null }
+    : null;
+  let relayStopped = false;
   const relayTimer = hosted === undefined ? undefined : setInterval(() => {
-    if (hosted?.signal.aborted === true || relayRunning.has(dir)) return;
-    relayRunning.add(dir);
     const context = relayContext;
+    if (relayStopped || hosted?.signal.aborted === true || context === null || relayRunning.has(dir)) return;
+    relayRunning.add(dir);
     void relayConfinedOutboxes(dir, session, context.team, context.agents, sources.now)
       .catch((error: unknown) => logLine(dir, 'watch', 'watch', `the outbox relay failed: ${(error as Error).message}`, sources.now()))
       .finally(() => relayRunning.delete(dir));
   }, RELAY_EVERY_MS);
   relayTimer?.unref?.();
-  hosted?.signal.addEventListener('abort', () => { if (relayTimer !== undefined) clearInterval(relayTimer); }, { once: true });
+  const stopRelay = (): void => {
+    relayStopped = true;
+    if (relayTimer !== undefined) clearInterval(relayTimer);
+  };
+  hosted?.signal.addEventListener('abort', stopRelay, { once: true });
+  // The host's own stop: `wait` answers false once the host stops (a daemon shutdown), which the
+  // signal above may not carry; no tick ever reaches this bound, so only a stop answers it.
+  if (hosted !== undefined) void hosted.wait(Number.MAX_SAFE_INTEGER).then((due) => { if (!due) stopRelay(); });
   try {
     for (;;) {
       // A hosted pass starts only while the host still wants one.
@@ -1140,6 +1150,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // not the project's cache that `up` and `add` count (§ 4.4): it says so once and writes
       // none, budget or spend.
       const foreign = session !== team.session;
+      // A pass that finds the team file naming another session stops this watch's relay: the
+      // queued sends belong to the watch of the session the file names now.
+      if (foreign) relayContext = null;
       if (foreign && !told.has('foreign-session')) {
         told.add('foreign-session');
         say(`the session "${session}" is not this file's "${team.session}": its readings are not saved`, false);
@@ -2049,7 +2062,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       if (!(await sources.wait(waitSeconds, sweep))) break;
     }
   } finally {
-    if (relayTimer !== undefined) clearInterval(relayTimer);
+    stopRelay();
     finishWatchPass();
     statusWaiters?.stop();
     await statusWaiters?.done;
