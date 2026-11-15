@@ -3003,9 +3003,14 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       mkdirSync(join(fixture.root, 'web'), { recursive: true });
       updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = join(fixture.root, 'web'); });
       run.sources.upLaunch.processInfo = (_session, pane) => (pane === 'pane-old' && run.did.runs.length === 0 ? { shell: 100, foreground: [100] } : { shell: 100, foreground: [201] });
+      // The kept pane draws the CLI's own idle prompt once the relaunch runs in it.
+      const paneText = run.sources.upLaunch.paneText;
+      run.sources.upLaunch.paneText = (session, pane) => (pane === 'pane-old' && run.did.runs.length > 0 ? screen() : paneText(session, pane));
       const io = testIo(fixture.root, { kind: 'owner' });
       expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
       expect(io.err).not.toContain('no recorded start folder');
+      expect(run.did.closed).toEqual([]);
+      expect(run.did.created).toBe(0);
       expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
       expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
     });
