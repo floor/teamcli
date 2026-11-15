@@ -1142,6 +1142,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // The home and the team let the plan read the seat's codex-daemon policy, as `team up` does.
     home,
     team,
+    // The same secret store the launch below reads, so the preview refuses exactly what it would.
+    ...(sources.upLaunch.secretStore === undefined ? {} : { secretStore: sources.upLaunch.secretStore }),
     ...(resolveLaunch ? { resolveLaunch: true as const, launcherDiscovery } : {}),
   });
   // A launch the plan refuses is refused here, before the seat is stopped: a restart never stops
