@@ -236,10 +236,13 @@ function confinedCaller(sources: CallerSources, session?: string): Caller | null
   if (hint === undefined || hint === '' || sources.confinedSeat === undefined) return null;
   const seat = sources.confinedSeat(hint, session);
   if (seat === null) return null;
+  // When the terminal host answers, it must not contradict the record: the pane listed under
+  // another seat's name, or this seat listed on another pane, refuses the reading.
   const agents = sources.agents();
   if (agents !== null) {
     const listed = agents.find((agent) => agent.pane === hint);
     if (listed !== undefined && listed.name && listed.name !== seat.name) return null;
+    if (agents.some((agent) => agent.name === seat.name && agent.pane !== hint)) return null;
   }
   return session === undefined
     ? { kind: 'seat', name: seat.name, pane: hint }
@@ -854,7 +857,7 @@ export function callerOf(
     cachedCallerSourcesRef = sources;
     cachedCurrentCallers.clear();
   }
-  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}`;
+  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}\0${(io as { cwd?: string }).cwd ?? ''}`;
   if (snapId !== null) {
     const hit = cachedCurrentCallers.get(key);
     if (hit !== undefined) return hit;
@@ -891,7 +894,7 @@ export function currentCaller(
     cachedCallerSnapshotId = snapId;
     cachedCurrentCallers.clear();
   }
-  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}`;
+  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}\0${(io as { cwd?: string }).cwd ?? ''}`;
   if (snapId !== null) {
     const hit = cachedCurrentCallers.get(key);
     if (hit !== undefined) return hit;
