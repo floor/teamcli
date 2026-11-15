@@ -3014,7 +3014,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       const paneText = run.sources.upLaunch.paneText;
       run.sources.upLaunch.paneText = (session, pane) => (pane === 'pane-old' && run.did.runs.length > 0 ? screen() : paneText(session, pane));
       const io = testIo(fixture.root, { kind: 'owner' });
-      expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+      expect(await runRestart(['worker', '--fresh'], io, run.sources), io.err).toBe(0);
       expect(io.err).not.toContain('no recorded start folder');
       expect(run.did.closed).toEqual([]);
       expect(run.did.created).toBe(0);
