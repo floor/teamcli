@@ -16,9 +16,9 @@
 import { randomBytes } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { cliWordListOf, provenScriptWord, shellScriptWordOf } from '../launch/cli-scope.ts';
+import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { shellWords } from '../launch/shell-words.ts';
 
 /** The launch flag that loads a development channel, and the value that names this server. */
@@ -471,43 +471,8 @@ function takeChannelCommit(dropDir: string, id: string, hooks?: ChannelCommitHoo
   }
 }
 
-const LOCK_EX = 2;
-const LOCK_NB = 4;
-
-type Flock = (fd: number, operation: number) => number;
-
-let flockImpl: Flock | null | undefined;
-
-/** Exclusive non-blocking flock. A live holder's claim stays at its public name, so recovery
- *  never renames it aside and never has a name to restore over a successor. */
-function flockExclusive(fd: number): boolean {
-  if (flockImpl === undefined) flockImpl = bindFlock();
-  if (flockImpl === null) return false;
-  return flockImpl(fd, LOCK_EX | LOCK_NB) === 0;
-}
-
-function bindFlock(): Flock | null {
-  try {
-    const req = createRequire(import.meta.url);
-    if (process.versions.bun !== undefined) {
-      const ffi = req('bun:ffi') as {
-        dlopen: (
-          library: string,
-          symbols: Record<string, { args: unknown[]; returns: unknown }>,
-        ) => { symbols: { flock: Flock } };
-        FFIType: { i32: unknown };
-      };
-      const library = process.platform === 'linux' ? 'libc.so.6' : 'libSystem.B.dylib';
-      const lib = ffi.dlopen(library, {
-        flock: { args: [ffi.FFIType.i32, ffi.FFIType.i32], returns: ffi.FFIType.i32 },
-      });
-      return (fd, operation) => lib.symbols.flock(fd, operation);
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
+// Exclusive non-blocking flock (src/lock/flock.ts). A live holder's claim stays at its public
+// name, so recovery never renames it aside and never has a name to restore over a successor.
 
 /** Claims this process already holds. A second attempt in the same process cannot wait on its
  *  own flock, so the set keeps that attempt from publishing another claim or renaming the lock. */
@@ -589,8 +554,7 @@ function adoptHeldClaim(dropDir: string, id: string): number | 'busy' {
 
 function flockWorks(hooks?: ChannelCommitHooks): boolean {
   if (hooks?.skipFlock === true) return false;
-  if (flockImpl === undefined) flockImpl = bindFlock();
-  return flockImpl !== null;
+  return flockBound();
 }
 
 const FLOCK_HELPER = `import errno, fcntl, os, select, sys

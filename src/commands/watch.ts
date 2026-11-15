@@ -100,6 +100,7 @@ import { queueRuleBreaches } from '../swap/auto.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { runDueSwaps, type SwapRunResult } from '../swap/run.ts';
 import { realSources as restartSources, type RestartSources } from './restart.ts';
+import { legacyArchivedRecordExists } from '../send/legacy-inbox-retention.ts';
 import {
   classifyPromptKind,
   createSeatStatusEngine,
@@ -3039,7 +3040,7 @@ async function sendHostedClimbs(
     // The climb's own target: this team's lead, or the entity's orchestrator in its own checkout.
     const target = held.climb.target;
     // A fallback record a stopped run already left settles the climb: no second copy anywhere.
-    if (existsSync(messageFile(target.root, target.seat, held.climb.id))) {
+    if (existsSync(messageFile(target.root, target.seat, held.climb.id)) || legacyArchivedRecordExists(target.root, target.seat, held.climb.id)) {
       releaseHeldClimb(dir, held.climb.id);
       continue;
     }

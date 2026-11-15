@@ -36,6 +36,7 @@ import {
   type StatusContext,
 } from './record.ts';
 import { clearUnread } from './unread-hint.ts';
+import { archiveLegacySeat, daemonServesRoot, legacySeatFolders } from './legacy-inbox-retention.ts';
 
 /** `read_by` on the note `team ack` writes. A plain read receipt does not carry it. */
 export const EXPLICIT_ACK_READ_BY = 'ack';
@@ -763,17 +764,28 @@ export function seatDropFolders(root: string): SeatDropFolder[] {
  */
 export function runInboxRetention(
   root: string,
-  options: { now: Date; home: string; dryRun?: boolean; seats?: readonly string[] },
-): { move: string[]; markRead: string[]; partial: string[]; refused: string | null } {
+  options: { now: Date; home: string; dryRun?: boolean; seats?: readonly string[]; session?: string },
+): {
+  move: string[];
+  markRead: string[];
+  partial: string[];
+  refused: string | null;
+  busy?: string[];
+  /** The older store, listed only: the daemon's nightly pass is its one mover. `running` says
+   *  whether a daemon serves this root now. */
+  daemon?: { running: boolean; due: string[]; stay: number };
+} {
   const key = messageKeyState(options.home);
   if (key.kind !== 'key') return { move: [], markRead: [], partial: [], refused: null };
   const base = join(root, '.agents', 'send-drops');
-  if (heldAt(base).kind !== 'folder') return { move: [], markRead: [], partial: [], refused: null };
-  let sessions: string[];
-  try {
-    sessions = readdirSync(base);
-  } catch {
-    return { move: [], markRead: [], partial: [], refused: null };
+  // No drop tree, or one that cannot be read: no drop moves, the older store is still looked at.
+  let sessions: string[] = [];
+  if (heldAt(base).kind === 'folder') {
+    try {
+      sessions = readdirSync(base);
+    } catch {
+      sessions = [];
+    }
   }
   const move: string[] = [];
   const markRead: string[] = [];
@@ -811,16 +823,54 @@ export function runInboxRetention(
       if (report.refused !== null) refusals.push(report.refused);
     }
   }
+  // The older `.agents/messages` store, for this session. A manual run never knows a seat is at
+  // rest, so unread mail from a real sender stays; unread runtime notices past fourteen days move.
+  // A mailbox another archiver holds (the daemon's daily pass) is skipped and named, not refused.
+  const busy: string[] = [];
+  // The daemon's chores child is the store's one archiver: this run only lists what is due, as a
+  // dry run would, and moves nothing, whether or not a daemon runs now.
+  const deferred = options.session !== undefined;
+  const daemon = { running: deferred && daemonServesRoot(options.home, root), due: [] as string[], stay: 0 };
+  if (options.session !== undefined) {
+    for (const folder of legacySeatFolders(root)) {
+      if (options.seats !== undefined && !options.seats.includes(folder.seat)) continue;
+      const report = archiveLegacySeat({
+        root,
+        session: options.session,
+        seat: folder.seat,
+        key: key.key,
+        now: options.now,
+        dryRun: dryRun || deferred,
+        options: { unreadKeepMs: null },
+      });
+      if (deferred) {
+        daemon.due.push(...report.plan.move.map((item) => item.id));
+        daemon.stay += Object.values(report.plan.stays).reduce((total, count) => total + count, 0);
+        continue;
+      }
+      move.push(...(dryRun ? report.plan.move : report.moved).map((item) => item.id));
+      if (report.busy !== null) busy.push(folder.seat);
+      if (report.refused !== null) refusals.push(report.refused);
+    }
+  }
   if (!dryRun) {
     const line = [
       `moved ${move.join(' ')}`,
       `marked ${markRead.join(' ')} read`,
       ...(partial.length === 0 ? [] : [`partial ${partial.join(' ')}`]),
+      ...(busy.length === 0 ? [] : [`busy ${busy.join(' ')}`]),
       ...refusals,
     ].join('; ');
     logLine(join(root, '.agents'), 'drops archive', 'retention', line, options.now);
   }
-  return { move, markRead, partial, refused: refusals.length === 0 ? null : refusals.join('; ') };
+  return {
+    move,
+    markRead,
+    partial,
+    refused: refusals.length === 0 ? null : refusals.join('; '),
+    ...(busy.length === 0 ? {} : { busy }),
+    ...(deferred ? { daemon } : {}),
+  };
 }
 
 /** One audit line for a real archive run. A dry run does not call this. */
