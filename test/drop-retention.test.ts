@@ -587,6 +587,21 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
     expect(existsSync(livePath('worker', join('archive', '2026-11', 'kept')))).toBe(true);
   });
 
+  test('a daemon notice record and an earlier build\'s quarantine folder are left, silently', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+    const notice = `blocked-episode-worker-${'x'.repeat(90)}`;
+    writeFileSync(livePath('worker', notice), '{}');
+    writeFileSync(livePath('worker', `${notice}.channel-push.json`), '{}');
+    mkdirSync(livePath('worker', 'legacy-unsigned-2026-10-19'), { recursive: true });
+    const report = await retireDropsSliced({ root, home, team, at: NOW, slices: defaultSlices() });
+    expect(report.refused).toBeNull();
+    expect(report.skipped).toEqual([]);
+    expect(existsSync(livePath('worker', notice))).toBe(true);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(false);
+  });
+
   test('the known names are the ones their writers use', async () => {
     const { SEAT_DROP_FIXED_FILES, SEAT_DROP_KNOWN_FOLDERS, SESSION_DROP_KNOWN_ENTRIES } = await import('../src/send/drop-retention.ts');
     const { LISTENER_FILE } = await import('../src/mcp/inbox.ts');
