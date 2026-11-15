@@ -50,7 +50,7 @@ const request = { v: 1 as const, op: 'send' as const, id: 'msg-1', from: 'lead',
 test('a dropped handoff is asked again under the same id once the endpoint answers', async () => {
   const { path, sends } = await endpoint(1);
   expect(await requestDaemon(path, request as never)).toBeNull();
-  const again = await retryDaemonHandoff(path, request as never, { handoffRetryMs: 0 });
+  const again = await retryDaemonHandoff(path, request as never, { handoffRetryMs: 2_000 });
   expect(again).toMatchObject({ outcome: 'handed', id: 'msg-1' });
   expect(sends).toEqual(['msg-1', 'msg-1']);
 });

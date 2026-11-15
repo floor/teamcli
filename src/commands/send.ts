@@ -483,7 +483,7 @@ export type SendHost = {
   waitMs?: number;
   /** How long a typed handoff the daemon's endpoint dropped waits for the endpoint to answer
    *  again before it is asked once more, in milliseconds. The real host leaves it out
-   *  (`HANDOFF_RETRY_WAIT_MS`); 0 asks only if the endpoint answers at once. */
+   *  (`HANDOFF_RETRY_WAIT_MS`); 0 does not ask again. */
   handoffRetryMs?: number;
   /** How long a send handed to the daemon's typed wake waits for the child's outcome, in
    *  milliseconds. The real host waits `HANDED_WAIT_MS`; a test's host leaves it out (0) and
