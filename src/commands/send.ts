@@ -1370,15 +1370,16 @@ function snapshotSendIo(io: Io): Io {
 }
 
 export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Promise<number> {
-  // A seat its sandbox confines cannot write the recipient's drop or lock: its outbox carries the
-  // send to the team's watch, which runs this same command as that seat.
-  const relayed = await relayIfConfined('send', argv, rawIo);
-  if (relayed !== null) return relayed;
   const snapshotId = beginHerdrSnapshot();
   const io = snapshotSendIo(rawIo);
   const host = snapshotSendHost(rawHost);
   enterRunMemo();
   try {
+    // A seat its sandbox confines cannot write the recipient's drop or lock: its outbox carries
+    // the send to the team's watch, which runs this same command as that seat. The placement is
+    // the snapshot's own, so the send's gate reads the same one.
+    const relayed = await relayIfConfined('send', argv, io);
+    if (relayed !== null) return relayed;
     return await runSendWithSnapshot(argv, io, host);
   } finally {
     leaveRunMemo();
