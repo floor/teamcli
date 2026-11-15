@@ -407,7 +407,9 @@ export async function inboxArchivePass(input: {
         moved += report.moved.length - unreadHere + report.finished;
         unread += unreadHere;
         if (unreadHere > 0) run.unread[folder.seat] = (run.unread[folder.seat] ?? 0) + unreadHere;
-        budget -= report.moved.length + report.finished;
+        // Every planned unit is charged, recovery included, whether it moved or was kept on a
+        // second look: the plan was bounded by the budget, so the work done is.
+        budget -= report.plan.move.length + report.plan.recovery.length;
         scanBudget -= Math.max(1, report.plan.scanned);
         if (report.refused !== null) {
           refused.push(report.refused);
@@ -415,8 +417,9 @@ export async function inboxArchivePass(input: {
           run.completed.push(key2);
           break;
         }
-        if (report.plan.more && report.plan.last !== null) {
-          run.cursor[key2] = report.plan.last;
+        if (report.plan.more) {
+          // Recovery that filled the chunk leaves the cursor where it was: the records wait.
+          if (report.plan.last !== null) run.cursor[key2] = report.plan.last;
         } else {
           delete run.cursor[key2];
           run.completed.push(key2);

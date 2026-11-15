@@ -62,6 +62,7 @@ import {
   writeJsonError,
 } from '../output/index.ts';
 import { listArchivedUnread, runInboxRetention, seatDropFolders } from '../send/inbox-retention.ts';
+import { legacySeatFolders, listLegacyArchivedUnread } from '../send/legacy-inbox-retention.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, settledReadOf, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -547,7 +548,7 @@ async function runArchive(
     return 1;
   }
   const seats = lead ? names : [caller.kind === 'seat' ? caller.name : ''];
-  if (listing) return listUnreadArchive(io, json, loaded.root, lead ? null : seats[0] ?? '', args.values.seat);
+  if (listing) return listUnreadArchive(io, json, loaded.root, session, lead ? null : seats[0] ?? '', args.values.seat);
   const key = messageKeyState(sources.home);
   if (key.kind !== 'key') {
     const why = key.kind === 'unreadable' ? key.why : 'no message key; nothing was archived';
@@ -592,18 +593,26 @@ async function runArchive(
 
 /** `team drops archive --unread`: the messages moved while unread, from the folder names alone.
  *  `own` is the one seat a seat caller may list; null lists every seat folder under the root. */
-function listUnreadArchive(io: Io, json: boolean, root: string, own: string | null, wanted: string | undefined): number {
+function listUnreadArchive(io: Io, json: boolean, root: string, session: string, own: string | null, wanted: string | undefined): number {
   if (own !== null && wanted !== undefined && wanted !== own) {
     refuse(io, json, `a seat lists only its own archive; ${wanted} is not this seat`);
     // exit: drops.archive.unread-refused
     return 1;
   }
-  const rows: Array<{ session: string; seat: string; month: string; id: string; path: string }> = [];
+  const rows: Array<{ store: 'send-drops' | 'messages'; session: string; seat: string; month: string; id: string; path: string }> = [];
   for (const folder of seatDropFolders(root)) {
     if (own !== null && folder.seat !== own) continue;
     if (wanted !== undefined && folder.seat !== wanted) continue;
     for (const item of listArchivedUnread(folder.dropDir)) {
-      rows.push({ session: folder.session, seat: folder.seat, month: item.month, id: item.id, path: item.path });
+      rows.push({ store: 'send-drops', session: folder.session, seat: folder.seat, month: item.month, id: item.id, path: item.path });
+    }
+  }
+  // The older `.agents/messages/<seat>` store: its archive holds only this session's records.
+  for (const folder of legacySeatFolders(root)) {
+    if (own !== null && folder.seat !== own) continue;
+    if (wanted !== undefined && folder.seat !== wanted) continue;
+    for (const item of listLegacyArchivedUnread(root, folder.seat)) {
+      rows.push({ store: 'messages', session, seat: folder.seat, month: item.month, id: item.id, path: item.path });
     }
   }
   if (json) {

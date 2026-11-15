@@ -9,18 +9,27 @@
 //   it is older than fourteen days, for any seat: push already delivered it;
 // - an unread record from a real sender moves there only when the caller says the seat is at
 //   rest (stopped or retired) and the record is older than the caller's window;
-// - a running seat's unread mail from a real sender, a general brief, a client record, a record that does not verify
-//   and anything that is not a record stay;
+// - a running seat's unread mail from a real sender, a general brief, a client record, a record
+//   that does not verify and anything that is not a record stay;
 // - the owner's mailbox (`owner`) is never touched: its records are the watch's memory of what it
 //   already told the owner, and a watch re-read from cursor 0 must still find them.
 //
-// Nothing is deleted. Each file is linked into the archive under a free name, then the live name
-// is released only when it is the same file; the record leaves first, its receipt after, so a
-// stopped move leaves either the whole family live, or the record archived with a stray receipt
-// that the next pass finishes. A runtime writer that writes a record once per id asks
-// `legacyArchivedRecordExists` too, so an archived notice is not written again.
+// The writers of this store take no lock: a record is written to a temporary name and renamed
+// onto the live name, and a reader writes its receipt the same way. So the archive never unlinks
+// a live name. It claims a family first: the live record, then the live receipt, are renamed to
+// `.<name>.claim`, a name no writer uses. A rename takes exactly the file that is there at that
+// instant; a writer that renames a newer record onto the live name afterwards is left alone. The
+// decision is then made again on the claimed files, so what moves is what was judged. A family
+// judged to stay is linked back to its live names; when a writer has meanwhile put a newer file
+// there, the older claimed one was replaced and goes to `archive/<YYYY-MM>/superseded/`. Only the
+// claim names are ever unlinked, and only once the same file is in its place.
+//
+// Recovery (a claim a stopped pass left, a live receipt whose record is already archived) is
+// bounded by the same limits as the moves, before them, and leaves `more` set while any is left.
+// Nothing is deleted. A runtime writer that writes a record once per id asks
+// `legacyArchivedRecordExists`, which also sees a claimed record, so a notice is not written twice.
 import type { KeyObject } from 'node:crypto';
-import { linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
+import { linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { heldAt } from '../held.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
@@ -39,37 +48,72 @@ export const RUNTIME_SENDER = 'runtime';
 /** An unread runtime notice moves to `unread/` after this, whatever the seat's state. */
 export const RUNTIME_UNREAD_KEEP_MS = 14 * 86_400_000;
 
+/** Where a claimed file that a writer replaced meanwhile goes, under `archive/<YYYY-MM>/`. */
+export const LEGACY_SUPERSEDED = 'superseded';
+
 const ID_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+const MONTH = /^\d{4}-\d{2}$/;
+const RECORD_SUFFIX = '.json';
 const READ_SUFFIX = '.read.json';
+const CLAIM_SUFFIX = '.claim';
 
 export type LegacyMove = { seat: string; id: string; month: string; unread?: true };
 
 export type LegacyStayReason = 'unread' | 'too-recent' | 'record-does-not-verify' | 'other-session' | 'general-brief' | 'client-record';
 
+/** Work a stopped pass left: a claimed record (with or without its claimed receipt), a claimed
+ *  receipt alone, or a live receipt whose record is already in the archive. */
+export type LegacyRecovery =
+  | { kind: 'claim'; id: string }
+  | { kind: 'receipt-claim'; id: string }
+  | { kind: 'stray'; id: string; month: string; unread: boolean };
+
 export type LegacyPlan = {
   move: LegacyMove[];
-  /** Live receipts whose record is already in the archive: a move a stopped pass left. */
-  strays: { id: string; month: string; unread: boolean }[];
+  recovery: LegacyRecovery[];
   stays: Record<LegacyStayReason, number>;
+  /** Records looked at plus recovery units looked at. */
   scanned: number;
   more: boolean;
   last: string | null;
 };
 
 export type LegacyPlanOptions = {
-  /** Unread records older than this move to `unread/`; null (a running seat) moves none. */
+  /** Unread mail from a real sender older than this moves to `unread/`; null (a running seat)
+   *  moves none. Runtime notices follow `RUNTIME_UNREAD_KEEP_MS` whatever this says. */
   unreadKeepMs: number | null;
-  /** At most this many families move. */
+  /** At most this many families move, recovery units counted first. */
   limit?: number;
-  /** At most this many records are looked at. */
+  /** At most this many records and recovery units are looked at. */
   scanLimit?: number;
   /** Look only at ids after this one (the daily pass's cursor). */
   after?: string;
 };
 
+/** Points a test can act at, between the steps of one move. */
+export type LegacyMoveHooks = {
+  beforeClaim?: (id: string) => void;
+  afterClaim?: (id: string) => void;
+};
+
+type Judge = {
+  root: string;
+  session: string;
+  seat: string;
+  key: KeyObject;
+  nowMs: number;
+  unreadKeepMs: number | null;
+};
+
+type Verdict = { kind: 'move'; month: string; unread: boolean } | { kind: 'stay'; reason: LegacyStayReason; month: string | null };
+
 /** `<root>/.agents/messages/<seat>`. */
 export function legacySeatDir(root: string, seat: string): string {
   return join(root, '.agents', 'messages', seat);
+}
+
+function claimName(name: string): string {
+  return `.${name}${CLAIM_SUFFIX}`;
 }
 
 /** The seat folders of the older store, `owner` left out, plain folders only. */
@@ -93,7 +137,7 @@ function archiveMonths(dir: string): string[] {
   const archive = join(dir, DROP_MONTH_ARCHIVE);
   if (heldAt(archive).kind !== 'folder') return [];
   try {
-    return readdirSync(archive).filter((name) => /^\d{4}-\d{2}$/.test(name)).sort();
+    return readdirSync(archive).filter((name) => MONTH.test(name)).sort();
   } catch {
     return [];
   }
@@ -103,16 +147,45 @@ function archiveMonths(dir: string): string[] {
 function archivedAt(dir: string, id: string, months: readonly string[]): { month: string; unread: boolean } | null {
   for (const month of months) {
     const monthDir = join(dir, DROP_MONTH_ARCHIVE, month);
-    if (heldAt(join(monthDir, `${id}.json`)).kind === 'file') return { month, unread: false };
-    if (heldAt(join(monthDir, DROP_ARCHIVE_UNREAD, `${id}.json`)).kind === 'file') return { month, unread: true };
+    if (heldAt(join(monthDir, `${id}${RECORD_SUFFIX}`)).kind === 'file') return { month, unread: false };
+    if (heldAt(join(monthDir, DROP_ARCHIVE_UNREAD, `${id}${RECORD_SUFFIX}`)).kind === 'file') return { month, unread: true };
   }
   return null;
 }
 
-/** Whether a record of `id` for `seat` is already in that seat's archive, read or unread. */
+/** Whether a record of `id` for `seat` is archived, read or unread, or claimed by a move now. */
 export function legacyArchivedRecordExists(root: string, seat: string, id: string): boolean {
   const dir = legacySeatDir(root, seat);
+  if (heldAt(join(dir, claimName(`${id}${RECORD_SUFFIX}`))).kind === 'file') return true;
   return archivedAt(dir, id, archiveMonths(dir)) !== null;
+}
+
+export type LegacyArchivedUnread = { seat: string; id: string; month: string; path: string };
+
+/** The records in `<seat>/archive/<YYYY-MM>/unread/`, oldest month first, by folder names only.
+ *  An id may hold dots; the `.json` suffix is what names the record, `.read.json` is a receipt. */
+export function listLegacyArchivedUnread(root: string, seat: string): LegacyArchivedUnread[] {
+  const dir = legacySeatDir(root, seat);
+  const out: LegacyArchivedUnread[] = [];
+  for (const month of archiveMonths(dir)) {
+    const monthDir = join(dir, DROP_MONTH_ARCHIVE, month);
+    if (heldAt(monthDir).kind !== 'folder') continue;
+    const unreadDir = join(monthDir, DROP_ARCHIVE_UNREAD);
+    if (heldAt(unreadDir).kind !== 'folder') continue;
+    let names: string[];
+    try {
+      names = readdirSync(unreadDir).sort();
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (name.startsWith('.') || !name.endsWith(RECORD_SUFFIX) || name.endsWith(READ_SUFFIX)) continue;
+      const id = name.slice(0, -RECORD_SUFFIX.length);
+      if (!ID_NAME.test(id) || heldAt(join(unreadDir, name)).kind !== 'file') continue;
+      out.push({ seat, id, month, path: join(unreadDir, name) });
+    }
+  }
+  return out;
 }
 
 function readJsonNoLink(path: string): unknown {
@@ -130,6 +203,42 @@ function receiptAt(path: string): number {
   return typeof at === 'string' ? Date.parse(at) : Number.NaN;
 }
 
+/** The rules of the header, on one record file and its receipt file (null: none). */
+function judge(j: Judge, id: string, recordPath: string, receiptPath: string | null): Verdict {
+  const parsed = readJsonNoLink(recordPath);
+  const payload = messagePayload(parsed);
+  if (
+    payload === null ||
+    payload.id !== id ||
+    payload.to !== j.seat ||
+    !sameFolder(payload.root, j.root) ||
+    !verifyDomain(MESSAGE_DOMAIN, payload as unknown as Json, (parsed as { signature: string }).signature, j.key)
+  ) {
+    return { kind: 'stay', reason: 'record-does-not-verify', month: null };
+  }
+  const month = archiveMonth(payload.at);
+  if (payload.session !== j.session) return { kind: 'stay', reason: 'other-session', month };
+  if ((payload as { from_client?: unknown }).from_client !== undefined) return { kind: 'stay', reason: 'client-record', month };
+  if (payload.from === GENERAL_BRIEF_FROM && (payload as { rule?: string }).rule === GENERAL_BRIEF_RULE) {
+    return { kind: 'stay', reason: 'general-brief', month };
+  }
+  if (month === null) return { kind: 'stay', reason: 'record-does-not-verify', month };
+  if (receiptPath !== null) {
+    // A receipt that is not this record's proof: neither read nor plainly unread; it stays.
+    if (!legacyReceiptMatches(receiptPath, j.seat, id, j.root, j.session, j.key)) return { kind: 'stay', reason: 'record-does-not-verify', month };
+    const readMs = receiptAt(receiptPath);
+    return Number.isFinite(readMs) && j.nowMs - readMs > INBOX_READ_KEEP_MS
+      ? { kind: 'move', month, unread: false }
+      : { kind: 'stay', reason: 'too-recent', month };
+  }
+  const sentMs = Date.parse(payload.at);
+  // A runtime notice was already delivered by push; it ages out after fourteen days even for a
+  // running seat. Mail from a real sender keeps the caller's rule.
+  const keepMs = payload.from === RUNTIME_SENDER ? RUNTIME_UNREAD_KEEP_MS : j.unreadKeepMs;
+  if (keepMs !== null && Number.isFinite(sentMs) && j.nowMs - sentMs > keepMs) return { kind: 'move', month, unread: true };
+  return { kind: 'stay', reason: 'unread', month };
+}
+
 /** What of one seat's older-store mail is due, by the rules in the header. Reads only. */
 export function planLegacySeatArchive(input: {
   root: string;
@@ -143,7 +252,7 @@ export function planLegacySeatArchive(input: {
   const dir = legacySeatDir(root, seat);
   const plan: LegacyPlan = {
     move: [],
-    strays: [],
+    recovery: [],
     stays: { unread: 0, 'too-recent': 0, 'record-does-not-verify': 0, 'other-session': 0, 'general-brief': 0, 'client-record': 0 },
     scanned: 0,
     more: false,
@@ -160,76 +269,56 @@ export function planLegacySeatArchive(input: {
   const months = archiveMonths(dir);
   const limit = options.limit ?? Number.POSITIVE_INFINITY;
   const scanLimit = options.scanLimit ?? Number.POSITIVE_INFINITY;
+  const full = (): boolean => plan.move.length + plan.recovery.length >= limit || plan.scanned >= scanLimit;
+
+  // 1. Recovery first, inside the same limits.
+  const recovery: LegacyRecovery[] = [];
+  for (const name of [...names].sort()) {
+    if (name.startsWith('.') && name.endsWith(CLAIM_SUFFIX)) {
+      const inner = name.slice(1, -CLAIM_SUFFIX.length);
+      if (inner.endsWith(READ_SUFFIX)) {
+        const id = inner.slice(0, -READ_SUFFIX.length);
+        // A claimed receipt beside its claimed record is recovered with the record.
+        if (ID_NAME.test(id) && !present.has(claimName(`${id}${RECORD_SUFFIX}`))) recovery.push({ kind: 'receipt-claim', id });
+      } else if (inner.endsWith(RECORD_SUFFIX)) {
+        const id = inner.slice(0, -RECORD_SUFFIX.length);
+        if (ID_NAME.test(id)) recovery.push({ kind: 'claim', id });
+      }
+      continue;
+    }
+    if (name.startsWith('.') || !name.endsWith(READ_SUFFIX)) continue;
+    const id = name.slice(0, -READ_SUFFIX.length);
+    if (!ID_NAME.test(id) || present.has(`${id}${RECORD_SUFFIX}`) || present.has(claimName(`${id}${RECORD_SUFFIX}`))) continue;
+    const where = archivedAt(dir, id, months);
+    if (where !== null) recovery.push({ kind: 'stray', id, ...where });
+  }
+  for (const item of recovery) {
+    if (full()) {
+      plan.more = true;
+      return plan;
+    }
+    plan.recovery.push(item);
+    plan.scanned += 1;
+  }
+
+  // 2. The live records, from the cursor.
+  const j: Judge = { root, session, seat, key, nowMs, unreadKeepMs: options.unreadKeepMs };
   const ids = names
-    .filter((name) => name.endsWith('.json') && !name.endsWith(READ_SUFFIX) && !name.startsWith('.'))
-    .map((name) => name.slice(0, -'.json'.length))
+    .filter((name) => name.endsWith(RECORD_SUFFIX) && !name.endsWith(READ_SUFFIX) && !name.startsWith('.'))
+    .map((name) => name.slice(0, -RECORD_SUFFIX.length))
     .filter((id) => ID_NAME.test(id) && (options.after === undefined || id > options.after))
     .sort();
-  // A receipt whose record already left: finish that move before anything new.
-  for (const name of names) {
-    if (!name.endsWith(READ_SUFFIX) || name.startsWith('.')) continue;
-    const id = name.slice(0, -READ_SUFFIX.length);
-    if (!ID_NAME.test(id) || present.has(`${id}.json`)) continue;
-    const where = archivedAt(dir, id, months);
-    if (where !== null) plan.strays.push({ id, ...where });
-  }
   for (const id of ids) {
-    if (plan.move.length >= limit || plan.scanned >= scanLimit) {
+    if (full()) {
       plan.more = true;
       break;
     }
     plan.scanned += 1;
     plan.last = id;
-    const parsed = readJsonNoLink(join(dir, `${id}.json`));
-    const payload = messagePayload(parsed);
-    if (
-      payload === null ||
-      payload.id !== id ||
-      payload.to !== seat ||
-      !sameFolder(payload.root, root) ||
-      !verifyDomain(MESSAGE_DOMAIN, payload as unknown as Json, (parsed as { signature: string }).signature, key)
-    ) {
-      plan.stays['record-does-not-verify'] += 1;
-      continue;
-    }
-    if (payload.session !== session) {
-      plan.stays['other-session'] += 1;
-      continue;
-    }
-    if ((payload as { from_client?: unknown }).from_client !== undefined) {
-      plan.stays['client-record'] += 1;
-      continue;
-    }
-    if (payload.from === GENERAL_BRIEF_FROM && (payload as { rule?: string }).rule === GENERAL_BRIEF_RULE) {
-      plan.stays['general-brief'] += 1;
-      continue;
-    }
-    const month = archiveMonth(payload.at);
-    if (month === null) {
-      plan.stays['record-does-not-verify'] += 1;
-      continue;
-    }
-    const receipt = join(dir, `${id}${READ_SUFFIX}`);
-    if (present.has(`${id}${READ_SUFFIX}`)) {
-      if (!legacyReceiptMatches(receipt, seat, id, root, session, key)) {
-        // A receipt that is not this record's proof: neither read nor plainly unread; it stays.
-        plan.stays['record-does-not-verify'] += 1;
-        continue;
-      }
-      const readMs = receiptAt(receipt);
-      if (Number.isFinite(readMs) && nowMs - readMs > INBOX_READ_KEEP_MS) plan.move.push({ seat, id, month });
-      else plan.stays['too-recent'] += 1;
-      continue;
-    }
-    const sentMs = Date.parse(payload.at);
-    // A runtime notice was already delivered by push; it ages out after fourteen days even for a
-    // running seat. Mail from a real sender keeps the caller's rule.
-    const keepMs = payload.from === RUNTIME_SENDER ? RUNTIME_UNREAD_KEEP_MS : options.unreadKeepMs;
-    if (keepMs !== null && Number.isFinite(sentMs) && nowMs - sentMs > keepMs) {
-      plan.move.push({ seat, id, month, unread: true });
-    } else {
-      plan.stays.unread += 1;
-    }
+    const receipt = present.has(`${id}${READ_SUFFIX}`) ? join(dir, `${id}${READ_SUFFIX}`) : null;
+    const verdict = judge(j, id, join(dir, `${id}${RECORD_SUFFIX}`), receipt);
+    if (verdict.kind === 'move') plan.move.push({ seat, id, month: verdict.month, ...(verdict.unread ? { unread: true as const } : {}) });
+    else plan.stays[verdict.reason] += 1;
   }
   return plan;
 }
@@ -244,40 +333,62 @@ function sameInode(left: string, right: string): boolean {
   }
 }
 
-/** Links `from` to the free name `to`; already there as the same file counts as done. */
-function place(from: string, to: string): string | null {
-  const src = heldAt(from).kind;
-  const dest = heldAt(to).kind;
-  if (src === 'link' || dest === 'link') return 'a link was not followed';
-  if (src === 'missing') return dest === 'file' ? null : 'is missing';
-  if (src !== 'file') return 'is not a file';
-  if (dest === 'file') return sameInode(from, to) ? null : 'is already in the archive';
-  if (dest !== 'missing') return 'is not a free name in the archive';
+/** Renames the live file to its claim name. 'none': nothing plain was there to claim. */
+function claim(dir: string, name: string): 'claimed' | 'none' | string {
+  const live = join(dir, name);
+  const claimed = join(dir, claimName(name));
+  if (heldAt(claimed).kind !== 'missing') return `${name}: a claim is already there`;
+  if (heldAt(live).kind !== 'file') return 'none';
   try {
-    linkSync(from, to);
+    renameSync(live, claimed);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return sameInode(from, to) ? null : 'is already in the archive';
-    return 'could not be placed';
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'none' : `${name}: could not be claimed`;
   }
-  return null;
+  // A rename takes whatever is at the name; a link swapped in between the look and the rename is
+  // put back where it was found.
+  if (heldAt(claimed).kind !== 'file') {
+    try {
+      renameSync(claimed, live);
+    } catch {
+      // Left under the claim name; the next pass's recovery reports it.
+    }
+    return 'none';
+  }
+  return 'claimed';
 }
 
-/** Releases the live name only when the archive holds the same file. */
-function release(from: string, to: string): string | null {
-  if (heldAt(from).kind === 'missing') return null;
-  if (!sameInode(from, to)) return 'the archive copy is not this file';
+/** Links the claimed file to `to` (a free name, or the same file already) and drops the claim
+ *  name. Only the claim name is ever unlinked. */
+function settle(claimed: string, to: string): 'placed' | 'taken' | string {
+  if (heldAt(claimed).kind !== 'file') return heldAt(to).kind === 'file' ? 'placed' : 'the claimed file is missing';
+  const dest = heldAt(to).kind;
+  if (dest === 'link') return 'a link was not followed';
+  if (dest === 'file' && !sameInode(claimed, to)) return 'taken';
+  if (dest === 'missing') {
+    try {
+      linkSync(claimed, to);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        if (!sameInode(claimed, to)) return 'taken';
+      } else {
+        return 'could not be placed';
+      }
+    }
+  } else if (dest !== 'file') {
+    return 'is not a free name';
+  }
   try {
-    unlinkSync(from);
+    unlinkSync(claimed);
   } catch {
-    return 'could not leave the live folder';
+    return 'the claim name could not be dropped';
   }
-  return null;
+  return 'placed';
 }
 
-function destOf(dir: string, month: string, unread: boolean): string | null {
+function folderBelow(dir: string, month: string, leaf: string | null): string | null {
   const archive = join(dir, DROP_MONTH_ARCHIVE);
   const monthDir = join(archive, month);
-  const dest = unread ? join(monthDir, DROP_ARCHIVE_UNREAD) : monthDir;
+  const dest = leaf === null ? monthDir : join(monthDir, leaf);
   if (heldAt(archive).kind === 'link' || heldAt(monthDir).kind === 'link') return null;
   try {
     mkdirSync(dest, { recursive: true, mode: 0o700 });
@@ -287,27 +398,101 @@ function destOf(dir: string, month: string, unread: boolean): string | null {
   return heldAt(monthDir).kind === 'folder' && heldAt(dest).kind === 'folder' ? dest : null;
 }
 
-/** Moves one family: record first, its receipt after. Returns the problem, or null. */
-function moveLegacyFamily(dir: string, move: LegacyMove): string | null {
-  const dest = destOf(dir, move.month, move.unread === true);
-  if (dest === null) return `${move.id}: the archive folder is not a plain folder`;
-  const files = [`${move.id}.json`, ...(move.unread === true ? [] : [`${move.id}${READ_SUFFIX}`])];
-  for (const name of files) {
-    const problem = place(join(dir, name), join(dest, name));
-    if (problem !== null) return `${move.id}: ${name} ${problem}`;
+function nowMonth(nowMs: number): string {
+  return new Date(nowMs).toISOString().slice(0, 7);
+}
+
+/** Puts a claimed file back on its live name; a newer file there means ours was replaced, and it
+ *  goes to `superseded/` under a free name. */
+function putBack(dir: string, name: string, month: string): string | null {
+  const claimed = join(dir, claimName(name));
+  if (heldAt(claimed).kind === 'missing') return null;
+  const back = settle(claimed, join(dir, name));
+  if (back === 'placed') return null;
+  if (back !== 'taken') return `${name}: ${back}`;
+  const superseded = folderBelow(dir, month, LEGACY_SUPERSEDED);
+  if (superseded === null) return `${name}: the superseded folder is not a plain folder`;
+  for (let n = 0; n < 10; n += 1) {
+    const out = settle(claimed, join(superseded, n === 0 ? name : `${name}.${String(n)}`));
+    if (out === 'placed') return null;
+    if (out !== 'taken') return `${name}: ${out}`;
   }
-  for (const name of files) {
-    const problem = release(join(dir, name), join(dest, name));
-    if (problem !== null) return `${move.id}: ${name} ${problem}`;
+  return `${name}: no free name in superseded/`;
+}
+
+type MoveOutcome = { kind: 'moved'; move: LegacyMove } | { kind: 'stayed' } | { kind: 'gone' } | { kind: 'refused'; why: string };
+
+/** Claims one family, judges the claimed files again, and moves or puts back what it holds. */
+function moveClaimed(dir: string, j: Judge, id: string, hooks: LegacyMoveHooks | undefined, alreadyClaimed: boolean): MoveOutcome {
+  const recordName = `${id}${RECORD_SUFFIX}`;
+  const receiptName = `${id}${READ_SUFFIX}`;
+  if (!alreadyClaimed) {
+    hooks?.beforeClaim?.(id);
+    const took = claim(dir, recordName);
+    if (took === 'none') return { kind: 'gone' };
+    if (took !== 'claimed') return { kind: 'refused', why: took };
   }
-  return null;
+  hooks?.afterClaim?.(id);
+  // The receipt is claimed after the record: a reader no longer finds the live record, so no new
+  // receipt is written for it while it is claimed. A receipt claimed by a stopped pass is kept.
+  if (heldAt(join(dir, claimName(receiptName))).kind === 'missing') {
+    const tookReceipt = claim(dir, receiptName);
+    if (tookReceipt !== 'claimed' && tookReceipt !== 'none') return { kind: 'refused', why: tookReceipt };
+  }
+  const recordClaim = join(dir, claimName(recordName));
+  const receiptClaim = join(dir, claimName(receiptName));
+  const hasReceipt = heldAt(receiptClaim).kind === 'file';
+  const verdict = judge(j, id, recordClaim, hasReceipt ? receiptClaim : null);
+  const month = verdict.month ?? nowMonth(j.nowMs);
+  if (verdict.kind === 'stay') {
+    const problem = putBack(dir, recordName, month) ?? putBack(dir, receiptName, month);
+    return problem === null ? { kind: 'stayed' } : { kind: 'refused', why: `${id}: ${problem}` };
+  }
+  const dest = folderBelow(dir, verdict.month, verdict.unread ? DROP_ARCHIVE_UNREAD : null);
+  if (dest === null) {
+    const problem = putBack(dir, recordName, month) ?? putBack(dir, receiptName, month);
+    return { kind: 'refused', why: `${id}: the archive folder is not a plain folder${problem === null ? '' : `; ${problem}`}` };
+  }
+  for (const name of [recordName, ...(hasReceipt ? [receiptName] : [])]) {
+    const out = settle(join(dir, claimName(name)), join(dest, name));
+    if (out === 'taken') {
+      const problem = putBack(dir, recordName, month) ?? putBack(dir, receiptName, month);
+      return { kind: 'refused', why: `${id}: ${name} is already in the archive${problem === null ? '' : `; ${problem}`}` };
+    }
+    if (out !== 'placed') return { kind: 'refused', why: `${id}: ${name} ${out}` };
+  }
+  return { kind: 'moved', move: { seat: j.seat, id, month: verdict.month, ...(verdict.unread ? { unread: true as const } : {}) } };
+}
+
+/** Finishes one unit of recovery. */
+function recover(dir: string, j: Judge, item: LegacyRecovery): string | null {
+  const receiptName = `${item.id}${READ_SUFFIX}`;
+  if (item.kind === 'claim') {
+    const out = moveClaimed(dir, j, item.id, undefined, true);
+    return out.kind === 'refused' ? out.why : null;
+  }
+  if (item.kind === 'receipt-claim') {
+    // Its record is gone from both live and claim names: the receipt goes back to where it was.
+    return putBack(dir, receiptName, nowMonth(j.nowMs));
+  }
+  const dest = join(dir, DROP_MONTH_ARCHIVE, item.month, ...(item.unread ? [DROP_ARCHIVE_UNREAD] : []));
+  const took = claim(dir, receiptName);
+  if (took === 'none') return null;
+  if (took !== 'claimed') return took;
+  const out = settle(join(dir, claimName(receiptName)), join(dest, receiptName));
+  if (out === 'placed') return null;
+  if (out === 'taken') return putBack(dir, receiptName, item.month);
+  return `${item.id}: ${receiptName} ${out}`;
 }
 
 export type LegacyArchiveReport = {
   dryRun: boolean;
   plan: LegacyPlan;
   moved: LegacyMove[];
+  /** Recovery units finished. */
   finished: number;
+  /** Planned families that, judged again on the claimed files, stayed or were already gone. */
+  kept: number;
   refused: string | null;
 };
 
@@ -320,28 +505,30 @@ export function archiveLegacySeat(input: {
   now: Date;
   dryRun: boolean;
   options: LegacyPlanOptions;
+  hooks?: LegacyMoveHooks;
 }): LegacyArchiveReport {
-  const plan = planLegacySeatArchive({ ...input, nowMs: input.now.getTime() });
-  const report: LegacyArchiveReport = { dryRun: input.dryRun, plan, moved: [], finished: 0, refused: null };
+  const nowMs = input.now.getTime();
+  const plan = planLegacySeatArchive({ ...input, nowMs });
+  const report: LegacyArchiveReport = { dryRun: input.dryRun, plan, moved: [], finished: 0, kept: 0, refused: null };
   if (input.dryRun) return report;
   const dir = legacySeatDir(input.root, input.seat);
-  for (const stray of plan.strays) {
-    const dest = join(dir, DROP_MONTH_ARCHIVE, stray.month, ...(stray.unread ? [DROP_ARCHIVE_UNREAD] : []));
-    const name = `${stray.id}${READ_SUFFIX}`;
-    const problem = place(join(dir, name), join(dest, name)) ?? release(join(dir, name), join(dest, name));
+  const j: Judge = { root: input.root, session: input.session, seat: input.seat, key: input.key, nowMs, unreadKeepMs: input.options.unreadKeepMs };
+  for (const item of plan.recovery) {
+    const problem = recover(dir, j, item);
     if (problem !== null) {
-      report.refused = `${stray.id}: ${name} ${problem}`;
+      report.refused = problem;
       return report;
     }
     report.finished += 1;
   }
   for (const move of plan.move) {
-    const problem = moveLegacyFamily(dir, move);
-    if (problem !== null) {
-      report.refused = problem;
+    const out = moveClaimed(dir, j, move.id, input.hooks, false);
+    if (out.kind === 'refused') {
+      report.refused = out.why;
       return report;
     }
-    report.moved.push(move);
+    if (out.kind === 'moved') report.moved.push(out.move);
+    else report.kept += 1;
   }
   return report;
 }

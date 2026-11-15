@@ -6,10 +6,11 @@
 // `team drops archive` both reach the store.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OWNER_RECORD_FROM, writeRuntimeMailboxRecord } from '../src/bus/owner.ts';
+import { runDrops } from '../src/commands/drops.ts';
 import { inboxArchivePass } from '../src/daemon/chores/inbox-archive.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -22,6 +23,7 @@ import {
   RUNTIME_SENDER,
 } from '../src/send/legacy-inbox-retention.ts';
 import { MESSAGE_DOMAIN, RECEIPT_DOMAIN, messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
+import { testIo } from './helpers.ts';
 
 const TEAM_YAML = `format: 1
 entity: floor
@@ -165,6 +167,135 @@ describe('the older messages store archive', () => {
     const plan = planLegacySeatArchive({ root, session: 'acme', seat: 'owner', key: messageKeyOf(home), nowMs: NOW.getTime(), options: { unreadKeepMs: 1 } });
     expect(plan.move).toEqual([]);
     expect(plan.scanned).toBe(0);
+  });
+
+  test('a writer that replaces the live record after the claim keeps its record live; the claimed one moves', () => {
+    notice('lead', 'evt-fallback-r', OLD_ISO);
+    const dir = legacySeatDir(root, 'lead');
+    const report = archiveLegacySeat({
+      root, session: 'acme', seat: 'lead', key: messageKeyOf(home), now: NOW, dryRun: false, options: { unreadKeepMs: null },
+      hooks: { afterClaim: () => notice('lead', 'evt-fallback-r', RECENT_ISO) },
+    });
+    expect(report.refused).toBeNull();
+    expect(report.moved.map((item) => item.id)).toEqual(['evt-fallback-r']);
+    // The replacement is live, untouched; the judged record is in the archive. Nothing was lost.
+    expect(JSON.parse(readFileSync(join(dir, 'evt-fallback-r.json'), 'utf8')).payload.at).toBe(RECENT_ISO);
+    expect(JSON.parse(readFileSync(join(dir, 'archive', OLD_MONTH, 'unread', 'evt-fallback-r.json'), 'utf8')).payload.at).toBe(OLD_ISO);
+    expect(live('lead')).toEqual(['evt-fallback-r.json']);
+  });
+
+  test('a replacement that lands before the claim is judged itself, and stays', () => {
+    notice('lead', 'evt-fallback-r', OLD_ISO);
+    const dir = legacySeatDir(root, 'lead');
+    const report = archiveLegacySeat({
+      root, session: 'acme', seat: 'lead', key: messageKeyOf(home), now: NOW, dryRun: false, options: { unreadKeepMs: null },
+      hooks: { beforeClaim: () => notice('lead', 'evt-fallback-r', RECENT_ISO) },
+    });
+    expect(report.plan.move.map((item) => item.id)).toEqual(['evt-fallback-r']);
+    expect(report.moved).toEqual([]);
+    expect(report.kept).toBe(1);
+    expect(JSON.parse(readFileSync(join(dir, 'evt-fallback-r.json'), 'utf8')).payload.at).toBe(RECENT_ISO);
+    expect(existsSync(join(dir, 'archive'))).toBe(false);
+  });
+
+  test('a claimed record judged to stay, replaced meanwhile, goes to superseded/; the newest stays live', () => {
+    notice('lead', 'evt-fallback-r', OLD_ISO);
+    const dir = legacySeatDir(root, 'lead');
+    const newest = new Date(NOW.getTime() - DAY_MS).toISOString();
+    const report = archiveLegacySeat({
+      root, session: 'acme', seat: 'lead', key: messageKeyOf(home), now: NOW, dryRun: false, options: { unreadKeepMs: null },
+      hooks: {
+        beforeClaim: () => notice('lead', 'evt-fallback-r', RECENT_ISO),
+        afterClaim: () => notice('lead', 'evt-fallback-r', newest),
+      },
+    });
+    expect(report.refused).toBeNull();
+    expect(report.kept).toBe(1);
+    expect(JSON.parse(readFileSync(join(dir, 'evt-fallback-r.json'), 'utf8')).payload.at).toBe(newest);
+    const superseded = join(dir, 'archive', RECENT_ISO.slice(0, 7), 'superseded');
+    expect(readdirSync(superseded)).toEqual(['evt-fallback-r.json']);
+    expect(JSON.parse(readFileSync(join(superseded, 'evt-fallback-r.json'), 'utf8')).payload.at).toBe(RECENT_ISO);
+    expect(live('lead')).toEqual(['evt-fallback-r.json']);
+  });
+
+  test('a once-writer that looks while the record is claimed finds it and writes nothing', () => {
+    notice('lead', 'evt-fallback-o', OLD_ISO);
+    let seen: unknown;
+    archiveLegacySeat({
+      root, session: 'acme', seat: 'lead', key: messageKeyOf(home), now: NOW, dryRun: false, options: { unreadKeepMs: null },
+      hooks: {
+        afterClaim: () => {
+          seen = writeRuntimeMailboxRecord({ root, home, to: 'lead', id: 'evt-fallback-o', text: 'again', session: 'acme', once: true });
+        },
+      },
+    });
+    expect(seen).toMatchObject({ ok: true, existing: true });
+    expect(live('lead')).toEqual([]);
+    expect(archived('lead', 'unread')).toEqual(['evt-fallback-o.json']);
+  });
+
+  test('stray receipts are recovered inside the limit, and more is left set while some remain', () => {
+    const dir = legacySeatDir(root, 'lead');
+    const dest = join(dir, 'archive', OLD_MONTH);
+    mkdirSync(dest, { recursive: true });
+    for (let n = 0; n < 5; n += 1) {
+      const id = `evt-work-s${String(n)}`;
+      notice('lead', id, OLD_ISO);
+      read('lead', id, OLD_ISO);
+      linkSync(join(dir, `${id}.json`), join(dest, `${id}.json`));
+      unlinkSync(join(dir, `${id}.json`));
+    }
+    const key = messageKeyOf(home);
+    const first = archiveLegacySeat({ root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: false, options: { unreadKeepMs: null, limit: 3 } });
+    expect(first.finished).toBe(3);
+    expect(first.plan.more).toBe(true);
+    expect(first.plan.scanned).toBe(3);
+    expect(live('lead')).toHaveLength(2);
+    const second = archiveLegacySeat({ root, session: 'acme', seat: 'lead', key, now: NOW, dryRun: false, options: { unreadKeepMs: null, limit: 3 } });
+    expect(second.finished).toBe(2);
+    expect(second.plan.more).toBe(false);
+    expect(live('lead')).toEqual([]);
+    expect(archived('lead')).toHaveLength(10);
+  });
+
+  test('the daily pass charges recovery to its budget and keeps the day open while some is left', async () => {
+    const dir = legacySeatDir(root, 'lead');
+    const dest = join(dir, 'archive', OLD_MONTH);
+    mkdirSync(dest, { recursive: true });
+    for (let n = 0; n < 5; n += 1) {
+      const id = `evt-work-s${String(n)}`;
+      notice('lead', id, OLD_ISO);
+      read('lead', id, OLD_ISO);
+      linkSync(join(dir, `${id}.json`), join(dest, `${id}.json`));
+      unlinkSync(join(dir, `${id}.json`));
+    }
+    const deps = { loadPerCore: () => 0.5, notify: async () => ({ ok: true, text: '' }) };
+    const first = await inboxArchivePass({ root, home, team, now: NOW, limit: 3, deps });
+    expect(first).toMatchObject({ kind: 'ran', moved: 3, done: false });
+    expect(live('lead')).toHaveLength(2);
+    const second = await inboxArchivePass({ root, home, team, now: localAt(5), deps });
+    expect(second).toMatchObject({ kind: 'ran', moved: 2, done: true });
+    expect(live('lead')).toEqual([]);
+  });
+
+  test('`team drops archive --unread` lists the older store unread archive, dotted ids included', async () => {
+    letter('resting', 'mail.with.dots', OLD_ISO);
+    notice('lead', 'evt-fallback.v2', OLD_ISO);
+    await inboxArchivePass({ root, home, team, now: NOW, deps: { loadPerCore: () => 0.5, notify: async () => ({ ok: true, text: '' }) } });
+    expect(archived('resting', 'unread')).toEqual(['mail.with.dots.json']);
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runDrops(['archive', '--unread'], io, { home });
+    expect(io.err).toBe('');
+    expect(code).toBe(0);
+    expect(io.out.split('\n').filter(Boolean).sort()).toEqual([`lead ${OLD_MONTH} evt-fallback.v2`, `resting ${OLD_MONTH} mail.with.dots`]);
+    const jsonIo = testIo(root, { kind: 'owner' });
+    expect(await runDrops(['archive', '--unread', '--json'], jsonIo, { home })).toBe(0);
+    const rows = (JSON.parse(jsonIo.out) as { data?: { unread: unknown[] }; unread?: unknown[] });
+    const unread = (rows.data?.unread ?? rows.unread ?? []) as Array<{ store: string; session: string; seat: string; id: string }>;
+    expect(unread.map((row) => [row.store, row.session, row.seat, row.id]).sort()).toEqual([
+      ['messages', 'acme', 'lead', 'evt-fallback.v2'],
+      ['messages', 'acme', 'resting', 'mail.with.dots'],
+    ]);
   });
 
   test('a move stopped after the record left is finished by the next pass', () => {
