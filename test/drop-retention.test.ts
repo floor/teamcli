@@ -568,6 +568,25 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
     expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
   });
 
+  test('a seat\'s month archive folder is never a candidate, and an acknowledged message is left whole for inbox retention', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+    plant('worker', READ_ID_2, OLD_ISO);
+    markRead('worker', READ_ID_2, OLD_ISO);
+    ageFamily('worker', READ_ID_2, OLD);
+    writeFileSync(livePath('worker', `${READ_ID_2}.ack.json`), '{}');
+    mkdirSync(livePath('worker', join('archive', '2026-11')), { recursive: true });
+    writeFileSync(livePath('worker', join('archive', '2026-11', 'kept')), 'x');
+    const report = await retireDropsSliced({ root, home, team, at: NOW, slices: defaultSlices() });
+    expect(report.refused).toBeNull();
+    expect(report.skipped).toEqual([]);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(false);
+    expect(existsSync(livePath('worker', READ_ID_2))).toBe(true);
+    expect(existsSync(livePath('worker', `${READ_ID_2}.ack.json`))).toBe(true);
+    expect(existsSync(livePath('worker', join('archive', '2026-11', 'kept')))).toBe(true);
+  });
+
   test('the known names are the ones their writers use', async () => {
     const { SEAT_DROP_FIXED_FILES, SEAT_DROP_KNOWN_FOLDERS, SESSION_DROP_KNOWN_ENTRIES } = await import('../src/send/drop-retention.ts');
     const { LISTENER_FILE } = await import('../src/mcp/inbox.ts');
@@ -575,11 +594,12 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
     const { wakeLinesPath } = await import('../src/watch/unread.ts');
     const { DROP_MONTH_ARCHIVE } = await import('../src/send/drop-folder.ts');
     const { ackNotePath } = await import('../src/send/inbox-retention.ts');
+    const { SEAT_DROP_LEFT_SUFFIXES } = await import('../src/send/drop-retention.ts');
     expect(SEAT_DROP_FIXED_FILES).toContain(LISTENER_FILE);
     expect(SEAT_DROP_FIXED_FILES).toContain(STUCK_MARKER);
     expect(SEAT_DROP_FIXED_FILES).toContain(wakeLinesPath('/x').slice('/x/'.length));
     expect(SEAT_DROP_KNOWN_FOLDERS).toContain(DROP_MONTH_ARCHIVE);
-    expect(ackNotePath('/x', 'id')).toBe('/x/id.ack.json');
+    expect(SEAT_DROP_LEFT_SUFFIXES).toContain(ackNotePath('/x', 'id').slice('/x/id'.length));
     expect(SESSION_DROP_KNOWN_ENTRIES).toContain('.clients');
   });
 

@@ -89,15 +89,11 @@ const AT_REMOVEDIR = process.platform === 'linux' ? 0x200 : 0x0080;
 const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 const WORK_PREFIX = 'work-';
 
+/** How many skipped entries one pass names before it only counts them. */
+const SKIP_DETAILS = 20;
+
 /** Sidecars moved after the message record and before the read/replied receipts. */
 const PRE_RECEIPT_SUFFIXES: readonly string[] = [
-  // `team ack`'s note (src/send/inbox-retention.ts `ackNotePath`).
-  '.ack.json',
-  // A webhook post in flight and done (src/bus/webhook.ts).
-  '.posting',
-  '.posted',
-  // The unread wake's lead episode (src/watch/unread.ts).
-  '.lead-episode',
   '.wake',
   '.wake-try',
   '.reported',
@@ -936,6 +932,13 @@ export function verifyDropArchive(raw: unknown, key: KeyObject): DropArchivePayl
  *  Finder's folder file. test/drop-retention.test.ts holds this list to the writers. */
 export const SEAT_DROP_FIXED_FILES: readonly string[] = ['.inbox-listener', '.unread.json', '.wake-lines.json', '.stuck', '.DS_Store'];
 
+/** Sidecars other movers own: a message carrying one is left whole for them, silently. `team
+ *  ack`'s note (src/send/inbox-retention.ts `ackNotePath`, moved by inbox retention into the
+ *  seat's month archive), a webhook post in flight and done (src/bus/webhook.ts), and the unread
+ *  wake's lead episode (src/watch/unread.ts). They are never taken as this pass's sidecars: a
+ *  record whose own name ends so would otherwise be moved as another's. */
+export const SEAT_DROP_LEFT_SUFFIXES: readonly string[] = ['.ack.json', '.posting', '.posted', '.lead-episode'];
+
 /** Folders TeamCLI keeps in a seat's drop folder: the month archive inbox retention writes
  *  (src/send/drop-folder.ts DROP_MONTH_ARCHIVE). Never walked or moved here. */
 export const SEAT_DROP_KNOWN_FOLDERS: readonly string[] = ['archive'];
@@ -1267,9 +1270,18 @@ export function* dropRetirementSteps(
 
   const atFfi = input.atFfi !== undefined ? input.atFfi : getRelativeDirOps();
 
+  // At most `SKIP_DETAILS` entries are named; the rest are counted.
   const skipped: string[] = [];
+  const skippedSet = new Set<string>();
+  let skippedMore = 0;
   const skip = (why: string): void => {
-    if (!skipped.includes(why)) skipped.push(why);
+    if (skippedSet.has(why)) return;
+    if (skipped.length >= SKIP_DETAILS) {
+      skippedMore += 1;
+      return;
+    }
+    skippedSet.add(why);
+    skipped.push(why);
   };
   const snapshot = (): DropRetirementReport => {
     const report: DropRetirementReport = {
@@ -1280,7 +1292,7 @@ export function* dropRetirementSteps(
       scanned,
       stayed,
       refused,
-      skipped: [...skipped],
+      skipped: skippedMore === 0 ? [...skipped] : [...skipped, `and ${String(skippedMore)} more`],
     };
     if (stateSink !== undefined) stateSink.report = report;
     return report;
@@ -1544,6 +1556,12 @@ export function* dropRetirementSteps(
             holdBack(name, "another user's file");
             continue;
           }
+          const leftFor = SEAT_DROP_LEFT_SUFFIXES.find((suffix) => name.endsWith(suffix) && name.length > suffix.length);
+          if (leftFor !== undefined) {
+            // Known, and another mover's: the message stays whole, and nothing is said.
+            heldBack.add(name.slice(0, name.length - leftFor.length));
+            continue;
+          }
           if (!isExpectedSeatDropFile(name)) {
             holdBack(name, 'unexpected file in seat drop folder');
             continue;
@@ -1562,7 +1580,10 @@ export function* dropRetirementSteps(
           candidateCheckCount += 1;
           if (candidateCheckCount % DIR_SCAN_CHUNK === 0) yield;
           if (name.includes('.') || name.startsWith(WORK_PREFIX) || !RECORD_NAME.test(name)) continue;
-          // A message with an entry the pass does not know beside it stays whole.
+          // Only an accepted regular file is a candidate: a skipped entry (a folder such as the
+          // month archive, a link, another user's file) never is.
+          if (!fileSet.has(name)) continue;
+          // A message with an entry the pass does not know, or another mover's sidecar, stays whole.
           if (heldBack.has(name)) continue;
           yield;
           scanned += 1;
