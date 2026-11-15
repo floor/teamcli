@@ -66,7 +66,7 @@ import { realRepoRead, type RepoRead } from '../send/repo-visibility.ts';
 import { createSession, originRepoOf, type SessionCliSpec } from '../send/session-cli.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
-import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
+import { daemonSocketPath, isBareShellPane, probeDaemonSocket, requestDaemon, type DaemonResponse, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf, deliveryInboxLed, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import { messagingStoreChainOf, StoreChainUnreadable } from '../send/store.ts';
 import { cascadeOrder, cascadeWalk, legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
@@ -481,6 +481,10 @@ export type SendHost = {
    *  real host so `--timeout <s>` (default 120s) sets the window; a test sets a small number or 0
    *  to exercise the thread wait without sleeping. */
   waitMs?: number;
+  /** How long a typed handoff the daemon's endpoint dropped waits for the endpoint to answer
+   *  again before it is asked once more, in milliseconds. The real host leaves it out
+   *  (`HANDOFF_RETRY_WAIT_MS`); 0 asks only if the endpoint answers at once. */
+  handoffRetryMs?: number;
   /** How long a send handed to the daemon's typed wake waits for the child's outcome, in
    *  milliseconds. The real host waits `HANDED_WAIT_MS`; a test's host leaves it out (0) and
    *  sees the handoff line. */
@@ -1384,6 +1388,26 @@ export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Pro
   } finally {
     leaveRunMemo();
     endHerdrSnapshot(snapshotId);
+  }
+}
+
+/** How long a dropped typed handoff waits for its endpoint to answer again, and how often it looks. */
+export const HANDOFF_RETRY_WAIT_MS = 15_000;
+const HANDOFF_RETRY_POLL_MS = 500;
+
+/** Asks the daemon again for a typed handoff its endpoint dropped: once the endpoint answers a
+ *  ping within `HANDOFF_RETRY_WAIT_MS`, the same request goes once more. Null when the endpoint
+ *  never came back or did not answer the second time either. */
+export async function retryDaemonHandoff(
+  socketPath: string,
+  request: Parameters<typeof requestDaemon>[1],
+  host: Pick<SendHost, 'handoffRetryMs'>,
+): Promise<DaemonResponse | null> {
+  const window = host.handoffRetryMs ?? HANDOFF_RETRY_WAIT_MS;
+  for (let waited = 0; ; waited += HANDOFF_RETRY_POLL_MS) {
+    if (await probeDaemonSocket(socketPath)) return requestDaemon(socketPath, request);
+    if (waited + HANDOFF_RETRY_POLL_MS > window) return null;
+    await new Promise<void>((resolve) => setTimeout(resolve, HANDOFF_RETRY_POLL_MS));
   }
 }
 
@@ -3208,9 +3232,16 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     const dialled = existsSync(daemonSock)
       && (handoff || (!to.cross && compose === null && typedWake === null && !wait));
     if (dialled) await ensureEpisode();
-    const viaDaemon = dialled
-      ? await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) })
-      : null;
+    const daemonRequest = { v: 1 as const, op: 'send' as const, id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) };
+    let viaDaemon = dialled ? await requestDaemon(daemonSock, daemonRequest) : null;
+    // A typed handoff the endpoint dropped without answering (the daemon restarts an endpoint
+    // that missed its probes, and a restart closes the connection) is asked again once the
+    // endpoint answers a ping, under the same id: the daemon reserves the wake by id, so a
+    // request it had already taken is coalesced, never typed twice (2026-11-15, vlist: two
+    // messages to an idle Antigravity seat were kept unwoken this way).
+    if (viaDaemon === null && handoff && dialled) {
+      viaDaemon = await retryDaemonHandoff(daemonSock, daemonRequest, host);
+    }
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
       // A daemon that found no live agent typed nothing: when a leg still stands behind the
       // typed one, the failure joins the walk and the send goes on to it. The daemon wrote no
