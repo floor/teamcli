@@ -1126,11 +1126,13 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     launchRefusal({ name: declared.name, role: declared.role, cli: next.cli, launch }, launchRule);
   const policyProblem = refusalOf(next.launch) ?? (resumed === undefined ? null : refusalOf(planSeat.launch));
   if (policyProblem !== null) return { kind: 'not-ready', message: `${name}: ${policyProblem}` };
+  // The plan writes its launch words onto the seat it is handed: the preview reads a copy, so the
+  // seat this run prints and launches is the one it planned before.
   const preview = upPlan({
     root,
     session,
     sessionRunning: true,
-    seats: [planSeat],
+    seats: [dry ? planSeat : { ...planSeat }],
     startFolders: placedStartFolders(team.seats, recordedSession),
     watchAlive: true,
     teamFile: launchFile,
