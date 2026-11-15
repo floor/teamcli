@@ -2933,8 +2933,13 @@ async function sendHostedClimbs(
       ...(held.climb.at === undefined ? {} : { at: held.climb.at }),
     });
     logLine(dir, 'watch', 'watch', `${held.climb.seat}: the prompt climb to ${target.seat} was not sent — ${text}${outcome.ok ? '; it was left in the runtime mailbox' : '; it stays held and is tried again'}`, now());
-    // Only a climb stored somewhere is let go: one that reached neither store stays held.
+    // Only a climb stored somewhere is let go. One that reached neither store stays held: its
+    // file is written again (a write that failed at the take may work now) and it stays queued,
+    // so a climb never rests in memory alone once its tries are spent.
     if (outcome.ok) releaseHeldClimb(dir, held.climb.id);
+    else {
+      holdClimb(dir, kept, held.climb);
+    }
   }
   queue.push(...kept);
 }
