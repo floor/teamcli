@@ -1,3 +1,4 @@
+import { GENERAL_BRIEF_FROM } from '../launch/general-brief.ts';
 import { messageFile } from './messages.ts';
 import { traceChildStep } from '../diagnostics/child-steps.ts';
 import { captureModelDriftFences, clearRepairedModelDrifts } from '../send/model-drift.ts';
@@ -2180,7 +2181,10 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
   const waitingIds = (seat: string): Set<string> => {
     let ids = servedByDrops.get(seat);
     if (ids === undefined) {
-      ids = new Set(scan.unread(seat).map((one) => one.id));
+      // The seat's launch brief waits on the seat's own turn-start read, not on a wake: an
+      // unread brief alone never makes a seat unable to work (2026-11-15: an idle Claude seat's
+      // eleven-day-old launch brief raised "wake not taken").
+      ids = new Set(scan.unread(seat).filter((one) => one.from !== GENERAL_BRIEF_FROM).map((one) => one.id));
       servedByDrops.set(seat, ids);
     }
     return ids;

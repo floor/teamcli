@@ -266,7 +266,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   // receipt against that binding: a plain receipt here would hold the receipt name the seat's own
   // turn-start reader needs, so the brief would never be served. Read it there, not here.
   if (isGeneralBriefRecord(acknowledged)) {
-    return refused(io, json, `record ${resolvedId} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged`);
+    return refused(io, json, `record ${resolvedId} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged: the seat marks it read with \`team drops --read --seat ${found.seat}\``);
   }
   if (acknowledged.session !== session) {
     return refused(io, json, `record ${resolvedId} is bound to session "${acknowledged.session}", not to "${session}"`);
