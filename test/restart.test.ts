@@ -2989,21 +2989,16 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
   });
 
-  test('a Grok pane kept at its shell in the planned folder is relaunched there, not stopped and refused', async () => {
-    // 2026-11-14: a restart stopped a Grok seat, kept its pane at the shell, and then refused the
-    // in-place launch ("its reused pane has no recorded start folder"), leaving the seat stopped.
-    const yaml = GROK_TEAM_YAML
-      .replace('    launch: grok', '    launch: grok\n    cwd: web')
-      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
-    const { fixture, run } = seeded({
+  /** The Grok seat at pane-old, its CLI (200) in front until /exit is typed; then the pane stands
+   *  at its shell (100) until a relaunch runs there and draws Grok's idle prompt. */
+  function grokKeptPane(yaml: string, startCwd: (fixture: Fixture) => string) {
+    const scene = seeded({
       registry: GROK_SESSION, cli: 'grok', model: 'Grok', version: '4.7', yaml, launch: 'grok',
       workerSession: GROK_SESSION, launched: true, foregroundArgv0: 'grok', newPaneScreen: GROK_IDLE,
     });
-    mkdirSync(join(fixture.root, 'web'), { recursive: true });
-    updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = join(fixture.root, 'web'); });
+    const { fixture, run } = scene;
+    updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = startCwd(fixture); });
     run.sources.doctor = { ...run.sources.doctor, version: () => '1.0.52' };
-    // The launched CLI (200) is in front until /exit is typed; the pane then stands at its shell
-    // (100) until the relaunch runs there, and draws Grok's idle prompt after it.
     const exited = () => run.did.typed.length > 0;
     run.sources.screenText = (_session, pane) =>
       pane === 'pane-old' ? (exited() && run.did.runs.length === 0 ? GROK_EXIT_TYPED : GROK_IDLE) : GROK_IDLE;
@@ -3011,11 +3006,36 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       (pane === 'pane-old' && exited() && run.did.runs.length === 0 ? { shell: 100, foreground: [100] } : { shell: 100, foreground: [200] });
     const paneText = run.sources.upLaunch.paneText;
     run.sources.upLaunch.paneText = (session, pane) => (pane === 'pane-old' && run.did.runs.length > 0 ? GROK_IDLE : paneText(session, pane));
+    return scene;
+  }
+
+  test('a Grok pane kept at its shell in its own folder is relaunched there, not stopped and refused', async () => {
+    // 2026-11-14: a restart stopped a Grok seat, kept its pane at the shell, and then refused the
+    // in-place launch ("its reused pane has no recorded start folder"), leaving the seat stopped.
+    const { fixture, run } = grokKeptPane(GROK_TEAM_YAML, (f) => join(f.base, 'worker-tree'));
     const io = testIo(fixture.root, { kind: 'owner' });
     const code = await runRestart(['worker'], io, run.sources);
     expect(io.err).not.toContain('no recorded start folder');
     expect(code, io.err).toBe(0);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
     expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
+  });
+
+  test('a launch the plan refuses is refused before the seat is stopped: the running seat keeps running', async () => {
+    // The seat's folder is outside its Grok sandbox grants: the relaunch would be refused, so the
+    // restart refuses first, and nothing is typed or closed.
+    const yaml = GROK_TEAM_YAML
+      .replace('    launch: grok', '    launch: grok\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = grokKeptPane(yaml, (f) => join(f.root, 'web'));
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toContain('left as it is');
+    expect(run.did.typed).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
   });
 
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {

@@ -1126,7 +1126,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     launchRefusal({ name: declared.name, role: declared.role, cli: next.cli, launch }, launchRule);
   const policyProblem = refusalOf(next.launch) ?? (resumed === undefined ? null : refusalOf(planSeat.launch));
   if (policyProblem !== null) return { kind: 'not-ready', message: `${name}: ${policyProblem}` };
-  const preview = dry || next.cli === 'codex' ? upPlan({
+  const preview = upPlan({
     root,
     session,
     sessionRunning: true,
@@ -1141,11 +1141,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     home,
     team,
     ...(resolveLaunch ? { resolveLaunch: true as const, launcherDiscovery } : {}),
-  }) : [];
-  if (next.cli === 'codex') {
-    const held = preview.find((step) => step.do?.do === 'refuse' && step.do.why.includes('obsolete Codex feature override'));
-    if (held?.do?.do === 'refuse') return { kind: 'not-ready', message: `${name}: ${held.do.why}` };
-  }
+  });
+  // A launch the plan refuses is refused here, before the seat is stopped: a restart never stops
+  // a seat it then cannot start (iris, 2026-11-14). The running seat keeps running.
+  const held = preview.find((step) => step.do?.do === 'refuse' && step.do.seat === name);
+  if (!dry && held?.do?.do === 'refuse') return { kind: 'not-ready', message: `${name}: ${held.do.why}; left as it is` };
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
