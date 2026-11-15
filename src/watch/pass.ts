@@ -164,6 +164,9 @@ export type MailboxWaiting = {
    *  is there has been settled by its drop receipt; one that is not there waits in the older
    *  mailbox store for `team messages`. Absent reads as in the drop folder. */
   inDrops?: boolean;
+  /** The seat's current launch brief: it waits on the seat's own turn-start read, so it is rung
+   *  like any served record but never makes the seat "unable to work". Absent reads as false. */
+  brief?: boolean;
   /** The line the ring types: the record's message-display header, then the fixed read hint.
    *  Absent, the shipped nameless ring. */
   text?: string;
@@ -811,7 +814,9 @@ function seatWorkPlans(
   // A seat waits on a wake only for mail its own drop read would serve: a record in the older
   // mailbox store, or one a drop receipt already settled, waits on nothing this seat's wake could
   // take, and counting it flagged seats with an empty inbox as unable to work.
-  const waiting = new Set(mailbox.filter((record) => record.served).map((record) => record.to));
+  // The seat's current launch brief alone never makes it unable to work (2026-11-15: an idle
+  // Claude seat's eleven-day-old launch brief raised "wake not taken").
+  const waiting = new Set(mailbox.filter((record) => record.served && record.brief !== true).map((record) => record.to));
   // Mail in the older store is not lost either: the lead is told once per seat how many records
   // wait there and which reader serves them, and the seat is not called unable to work.
   const olderStore = new Map<string, number>();

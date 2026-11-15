@@ -97,3 +97,8 @@ test('the older-store report is said once while the count stands, and again when
   expect(run([one], 120_000)).toHaveLength(0);
   expect(run([one, { ...one, id: 'aaaaaaaa-0000-4000-8000-000000000002' }], 180_000)).toHaveLength(1);
 });
+
+test('the seat\'s current launch brief alone raises no "wake not taken", and is still rung', () => {
+  const result = passWith({ ...waiting(true), brief: true });
+  expect((result.cantWork ?? []).find((plan) => plan.seat === SEAT)).toBeUndefined();
+});

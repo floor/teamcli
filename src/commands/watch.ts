@@ -1,4 +1,4 @@
-import { GENERAL_BRIEF_FROM } from '../launch/general-brief.ts';
+import { currentClaimIn } from '../mcp/inbox.ts';
 import { messageFile } from './messages.ts';
 import { traceChildStep } from '../diagnostics/child-steps.ts';
 import { captureModelDriftFences, clearRepairedModelDrifts } from '../send/model-drift.ts';
@@ -2181,10 +2181,7 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
   const waitingIds = (seat: string): Set<string> => {
     let ids = servedByDrops.get(seat);
     if (ids === undefined) {
-      // The seat's launch brief waits on the seat's own turn-start read, not on a wake: an
-      // unread brief alone never makes a seat unable to work (2026-11-15: an idle Claude seat's
-      // eleven-day-old launch brief raised "wake not taken").
-      ids = new Set(scan.unread(seat).filter((one) => one.from !== GENERAL_BRIEF_FROM).map((one) => one.id));
+      ids = new Set(scan.unread(seat).map((one) => one.id));
       servedByDrops.set(seat, ids);
     }
     return ids;
@@ -2213,6 +2210,9 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
       cli: seat?.cli ?? '',
       screen: agent ? live.screens[agent.pane] : undefined,
       served: waitingIds(record.to).has(record.id),
+      // The seat's current launch brief, by the claim its state holds (never by the sender's
+      // word): it waits on the seat's own turn-start read, not on a wake.
+      brief: currentClaimIn(root, team.session, record.to)?.id === record.id,
       inDrops: existsSync(join(scan.dropDir(record.to), record.id)),
       text,
     };
