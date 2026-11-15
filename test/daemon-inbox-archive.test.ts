@@ -391,4 +391,70 @@ describe('the daily inbox archive', () => {
     expect(liveNames('busy')).toEqual([]);
     for (let n = 1; n <= 3; n += 1) expect(existsSync(join(dir, 'archive', month, `${id(n)}.read.json`))).toBe(true);
   });
+
+  test('sidecars that can never be finished do not starve the rest', async () => {
+    const dir = recordDir(root, 'acme', 'busy');
+    mkdirSync(dir, { recursive: true });
+    // 70 stray sidecars whose record is nowhere: looked at once each, never finished.
+    for (let n = 1; n <= 70; n += 1) writeFileSync(join(dir, `${id(500 + n)}.wake`), '{}\n');
+    plant('busy', id(1), OLD_ISO);
+    markRead('busy', id(1), OLD_ISO);
+    let pass = await inboxArchivePass({ root, home, team, now: NOW, scanLimit: 64, deps: { loadPerCore: calm } });
+    for (let n = 0; n < 5 && pass.kind === 'ran' && !pass.done; n += 1) {
+      pass = await inboxArchivePass({ root, home, team, now: NOW, scanLimit: 64, deps: { loadPerCore: calm } });
+    }
+    expect(pass).toMatchObject({ kind: 'ran', done: true });
+    expect(liveNames('busy')).not.toContain(id(1));
+    expect(liveNames('busy').filter((name) => name.endsWith('.wake'))).toHaveLength(70);
+  });
+
+  test('a fallback note that joins a family between chunks holds it back', async () => {
+    for (let n = 1; n <= 70; n += 1) plant('resting', id(n), OLD_ISO);
+    const dir = recordDir(root, 'acme', 'resting');
+    let turns = 0;
+    await inboxArchivePass({
+      root,
+      home,
+      team,
+      now: NOW,
+      deps: {
+        loadPerCore: calm,
+        yieldTurn: async () => {
+          turns += 1;
+          if (turns === 2) writeFileSync(join(dir, `${id(70)}.fallback-note-1`), '{}\n');
+          return true;
+        },
+      },
+    });
+    expect(liveNames('resting')).toContain(id(70));
+    expect(liveNames('resting')).toContain(`${id(70)}.fallback-note-1`);
+  });
+
+  test('a seat folder replaced by a link during a turn is left alone', async () => {
+    for (let n = 1; n <= 70; n += 1) plant('resting', id(n), OLD_ISO);
+    const dir = recordDir(root, 'acme', 'resting');
+    const moved = join(base, 'moved-away');
+    const target = join(base, 'target');
+    mkdirSync(target, { recursive: true });
+    let turns = 0;
+    const pass = await inboxArchivePass({
+      root,
+      home,
+      team,
+      now: NOW,
+      deps: {
+        loadPerCore: calm,
+        yieldTurn: async () => {
+          turns += 1;
+          if (turns === 2) {
+            renameSync(dir, moved);
+            symlinkSync(target, dir);
+          }
+          return true;
+        },
+      },
+    });
+    expect(pass.kind === 'ran' && pass.refused.join(' ')).toContain('not a plain folder');
+    expect(readdirSync(target)).toEqual([]);
+  });
 });

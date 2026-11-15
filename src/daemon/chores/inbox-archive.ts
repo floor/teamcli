@@ -22,7 +22,8 @@ import { logLine } from '../../log.ts';
 import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
 import { teamIdOf } from '../../registry/teams.ts';
 import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
-import { archiveSeatInbox, listSeatFamilies, recoverSeatArchive, seatDropFolders } from '../../send/inbox-retention.ts';
+import { archiveSeatInbox, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
+import { heldAt } from '../../held.ts';
 import type { StatusContext } from '../../send/record.ts';
 import { readParsed, writeAtomic } from '../../state.ts';
 import { messageKeyState } from '../../store/keys.ts';
@@ -58,6 +59,8 @@ export type InboxArchiveRun = {
   cursor: Record<string, string>;
   /** The seat folders (`<session>/<seat>`) whose part-way moves were finished today. */
   recovered: string[];
+  /** Where each seat folder's recovery stopped: the key of the last unit looked at. */
+  recoverCursor: Record<string, string>;
   /** The lead's line: its one id, whether it went, and how often it was tried. */
   notice?: { id: string; sent: boolean; tries: number };
 };
@@ -105,6 +108,7 @@ function readRun(root: string): InboxArchiveRun | null {
         unread: value.unread !== null && typeof value.unread === 'object' ? value.unread : {},
         loadSkips: typeof value.loadSkips === 'number' ? value.loadSkips : 0,
         cursor: value.cursor !== null && typeof value.cursor === 'object' ? value.cursor : {},
+        recoverCursor: value.recoverCursor !== null && typeof value.recoverCursor === 'object' ? value.recoverCursor : {},
         recovered: Array.isArray(value.recovered) ? value.recovered.filter((entry): entry is string => typeof entry === 'string') : [],
         ...(value.notice !== undefined ? { notice: value.notice } : {}),
       };
@@ -148,6 +152,16 @@ export function seatAtRest(agents: readonly Agent[], teamId: string, team: TeamF
     || records.some((agent) => agent.reach.session.toLowerCase() === session.toLowerCase() && agent.lifecycle === 'stopped');
 }
 
+/** Whether send-drops, the session folder and the seat folder are each a plain folder, not a
+ *  link: checked before the folder is used and again after every turn the loop gave away. */
+function folderChainOk(root: string, session: string, seat: string): boolean {
+  const base = join(root, '.agents', 'send-drops');
+  for (const path of [join(root, '.agents'), base, join(base, session), join(base, session, seat)]) {
+    if (heldAt(path).kind !== 'folder') return false;
+  }
+  return true;
+}
+
 function noticeBody(run: InboxArchiveRun): string {
   const unreadSeats = Object.entries(run.unread).filter(([, count]) => count > 0).sort(([a], [b]) => a.localeCompare(b));
   const unreadTotal = unreadSeats.reduce((sum, [, count]) => sum + count, 0);
@@ -179,7 +193,7 @@ export async function inboxArchivePass(input: {
   const held = readRun(root);
   let run: InboxArchiveRun = held !== null && held.day === day
     ? held
-    : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0, cursor: {}, recovered: [] };
+    : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0, cursor: {}, recovered: [], recoverCursor: {} };
   if (run.done) {
     // The day's work is over. A line that did not go is tried again, a bounded number of times.
     const notice = run.notice;
@@ -210,22 +224,52 @@ export async function inboxArchivePass(input: {
   seats: for (const folder of seatDropFolders(root)) {
     const context: StatusContext = { to: folder.seat, root, session: folder.session };
     const key2 = `${folder.session}/${folder.seat}`;
-    // 1. What an earlier move left part way, within the pass budget, until nothing is left.
-    while (!run.recovered.includes(key2)) {
-      if (budget <= 0) {
-        more = true;
-        break seats;
+    const chainOk = (): boolean => folderChainOk(root, folder.session, folder.seat);
+    // 1. What an earlier move left part way: listed once a pass, worked through from a cursor
+    //    that moves past every unit looked at, whatever it found, so nothing starves the rest.
+    if (!run.recovered.includes(key2)) {
+      if (!chainOk()) {
+        refused.push(`${folder.seat}: the drop folder is not a plain folder; left alone`);
+        continue;
       }
-      const recovery = recoverSeatArchive(folder.dropDir, Math.min(budget, INBOX_ARCHIVE_SCAN_CHUNK));
-      budget -= recovery.used;
-      moved += recovery.finished.length;
-      if (!recovery.more) run.recovered.push(key2);
-      if (await stop()) {
-        more = true;
-        break seats;
+      const work = listRecoveryWork(folder.dropDir);
+      if (work === null) {
+        refused.push(`${folder.seat}: the drop folder cannot be read`);
+        continue;
       }
+      const from = run.recoverCursor[key2];
+      let at = from === undefined ? 0 : work.findIndex((item) => item.key > from);
+      if (at < 0) at = work.length;
+      while (at < work.length) {
+        if (budget <= 0 || scanBudget <= 0) {
+          more = true;
+          break seats;
+        }
+        if (!chainOk()) {
+          refused.push(`${folder.seat}: the drop folder changed into something that is not a plain folder; left alone`);
+          continue seats;
+        }
+        // Every unit looked at is charged to the scan budget; a family it finishes, to the moves.
+        const chunk = work.slice(at, at + Math.min(budget, scanBudget, INBOX_ARCHIVE_SCAN_CHUNK));
+        const finished = recoverItems(folder.dropDir, chunk).length;
+        moved += finished;
+        budget -= finished;
+        scanBudget -= chunk.length;
+        at += chunk.length;
+        run.recoverCursor[key2] = (chunk[chunk.length - 1] as { key: string }).key;
+        if (await stop()) {
+          more = true;
+          break seats;
+        }
+      }
+      delete run.recoverCursor[key2];
+      run.recovered.push(key2);
     }
     // 2. The folder is listed once this pass; its families are looked at a chunk a call.
+    if (!chainOk()) {
+      refused.push(`${folder.seat}: the drop folder changed into something that is not a plain folder; left alone`);
+      continue;
+    }
     const families = listSeatFamilies(folder.dropDir);
     if (families === null) {
       refused.push(`${folder.seat}: the drop folder cannot be read`);
@@ -235,6 +279,12 @@ export async function inboxArchivePass(input: {
       if (budget <= 0 || scanBudget <= 0) {
         more = true;
         break seats;
+      }
+      // The folder is checked again after every turn the loop gave away: a folder replaced by a
+      // link meanwhile is left alone.
+      if (!chainOk()) {
+        refused.push(`${folder.seat}: the drop folder changed into something that is not a plain folder; left alone`);
+        break;
       }
       // The registry is read whole before every chunk, after the loop's last turn: a seat that
       // started meanwhile keeps its unread mail. When any of it cannot be read, no unread mail
