@@ -1402,7 +1402,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               await statusEngine.observe(seat.name, agent.status, now, agent.pane, verifyScreen);
             }
           }
-          await statusEngine.tick(now);
+          // A stop during the seats' reads observes and escalates nothing more this pass.
+          if (hosted?.signal.aborted !== true) await statusEngine.tick(now);
           if (hosted !== undefined && sources.home !== undefined) {
             loadHeldClimbs(dir, hostedClimbs);
             if (hostedClimbs.length > 0) await sendHostedClimbs(sources.home, root, team, session, hostedClimbs, dir, sources.now);
