@@ -162,12 +162,70 @@ function realOrResolved(path: string): string {
   }
 }
 
+/** A long-lived process's own memory of the roots git named: the machine daemon and its children
+ *  read the same dozen checkouts on every beat, and each read was a synchronous `git` child on
+ *  the one event loop (2026-11-15: 14 reads, up to 12.9 s, inside one endpoint refresh under
+ *  load). Only a found root is kept, and a hit stands only while the folder asked about and the
+ *  common directory git named both still exist; a folder git did not place is asked again every
+ *  time, as before. A CLI run never holds one: its per-run memo covers it. */
+type HeldGitRoot = { root: string; common: string; at: number };
+type GitRootHold = { entries: Map<string, HeldGitRoot>; ttlMs: number; now: () => number; holders: number };
+let gitRootHold: GitRootHold | null = null;
+
+/** How long a held root stands before git is asked again, and how many folders are held. */
+export const HELD_GIT_ROOT_MS = 10 * 60_000;
+export const HELD_GIT_ROOT_LIMIT = 512;
+
+/** Keeps the roots git names for this process until the returned release runs. Nested holds share
+ *  one memory; the last release drops it. */
+export function holdGitRoots(options: { ttlMs?: number; now?: () => number } = {}): () => void {
+  if (gitRootHold === null) {
+    gitRootHold = { entries: new Map(), ttlMs: options.ttlMs ?? HELD_GIT_ROOT_MS, now: options.now ?? Date.now, holders: 0 };
+  }
+  const hold = gitRootHold;
+  hold.holders += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    hold.holders -= 1;
+    if (hold.holders <= 0 && gitRootHold === hold) gitRootHold = null;
+  };
+}
+
+function heldGitRoot(key: string): string | undefined {
+  const hold = gitRootHold;
+  if (hold === null) return undefined;
+  const held = hold.entries.get(key);
+  if (held === undefined) return undefined;
+  if (hold.now() - held.at >= hold.ttlMs || !existsSync(key) || !existsSync(held.common)) {
+    hold.entries.delete(key);
+    return undefined;
+  }
+  return held.root;
+}
+
+function keepGitRoot(key: string, root: string, common: string): void {
+  const hold = gitRootHold;
+  if (hold === null) return;
+  if (!hold.entries.has(key) && hold.entries.size >= HELD_GIT_ROOT_LIMIT) {
+    const oldest = hold.entries.keys().next();
+    if (oldest.done !== true) hold.entries.delete(oldest.value);
+  }
+  hold.entries.set(key, { root, common, at: hold.now() });
+}
+
 export function findRoot(cwd: string): string | null {
   const memo = currentRunMemo();
   const key = resolve(cwd);
   if (memo !== null) {
     const cached = memo.gitRoots.get(key);
     if (cached !== undefined) return cached === '' ? null : cached;
+  }
+  const held = heldGitRoot(key);
+  if (held !== undefined) {
+    memo?.gitRoots.set(key, held);
+    return held;
   }
   try {
     const common = traceBeatWork('git root read (sync)', () => execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
@@ -177,6 +235,7 @@ export function findRoot(cwd: string): string | null {
       timeout: syncChildTimeout(5_000),
     })).trim();
     const root = common ? dirname(common) : null;
+    if (root !== null) keepGitRoot(key, root, common);
     if (memo !== null) {
       memo.gitRoots.set(key, root ?? '');
       if (root !== null) {

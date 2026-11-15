@@ -24,6 +24,7 @@ import { createFallbackPass } from './fallback.ts';
 import { createPresencePass, type ChoresPresencePass } from './presence.ts';
 import { createSidebarPass } from './sidebar.ts';
 import type { ChoresWatch, ChoresWatchInput } from './watch.ts';
+import { holdGitRoots } from '../../file/load.ts';
 import type { WatchSources } from '../../commands/watch.ts';
 import { runWatchdogSlice, watchdogState, type WatchdogSeat, type WatchdogState } from '../../seat-health/pass.ts';
 import type { RestartReady } from '../../seat-health/restart.ts';
@@ -172,6 +173,8 @@ export function choresConfigProblem(raw: unknown): string | null {
 export async function serveChoresChild(input: ServeChoresChildInput): Promise<number> {
   const { config } = input;
   const now = input.now ?? (() => new Date());
+  // This child reads the same roots every beat: git names each once, not once per read.
+  const releaseGitRoots = holdGitRoots();
   const pass = input.pass ?? createFallbackPass(config);
   const sidebar = input.sidebar ?? (input.pass === undefined ? createSidebarPass(config) : null);
   const presence = input.presence ?? createPresencePass(config);
@@ -585,6 +588,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
   if (inFlight.length > 0) await Promise.allSettled(inFlight);
   await stoppingWatch;
   write({ type: 'stopped', why: 'the daemon asked this child to stop' });
+  releaseGitRoots();
   // exit: daemon.chores-ended
   return 0;
 }
