@@ -20,6 +20,7 @@ const SEAT_TO_OWN_ORCHESTRATOR = "a seat to its own team's orchestrator";
 describe('the stuck-child notice sender claim', () => {
   test("the daemon notice's short label belongs to its rule alone", () => {
     expect(compactRule(NOTICE_RULE)).toBe('daemon');
+    expect(compactRule("the daemon's drops-archive notice")).toBe('daemon');
   });
 
   test('no seat admission rule renders the daemon label', () => {

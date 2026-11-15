@@ -407,7 +407,7 @@ export type DaemonSendPrincipal = {
   roots: readonly string[];
   recheck(): { ok: true } | { ok: false; why: string };
   /** A daemon notice addresses the loaded team's lead and nobody else. Absent on a reminder. */
-  notice?: 'stuck-child' | 'seat-blocked';
+  notice?: 'stuck-child' | 'seat-blocked' | 'drops-archived';
 };
 
 export type SendHost = {
@@ -7440,8 +7440,10 @@ function daemonAdmissionOf(
   // to name that lead, so the principal cannot be reused for any other seat. The lead is who the
   // notice is for, including when that seat is a person's: the seat's own delivery order decides
   // the transport, and no other seat is admitted by this notice.
-  if (daemon.principal.notice === 'stuck-child' || daemon.principal.notice === 'seat-blocked') {
-    const notice = daemon.principal.notice === 'stuck-child' ? 'a stuck-child notice' : 'a blocked-episode notice';
+  if (daemon.principal.notice === 'stuck-child' || daemon.principal.notice === 'seat-blocked' || daemon.principal.notice === 'drops-archived') {
+    const notice = daemon.principal.notice === 'stuck-child'
+      ? 'a stuck-child notice'
+      : daemon.principal.notice === 'seat-blocked' ? 'a blocked-episode notice' : 'a drops-archive notice';
     if (team.orchestrator === '' || seat !== team.orchestrator) {
       return { ok: false, why: `${seat}: ${notice} goes to this team's lead and to nobody else` };
     }
@@ -7455,7 +7457,9 @@ function daemonAdmissionOf(
     }
     return {
       ok: true,
-      rule: daemon.principal.notice === 'stuck-child' ? "the daemon's stuck-child notice" : "the daemon's blocked-episode notice",
+      rule: daemon.principal.notice === 'stuck-child'
+        ? "the daemon's stuck-child notice"
+        : daemon.principal.notice === 'seat-blocked' ? "the daemon's blocked-episode notice" : "the daemon's drops-archive notice",
       sender: 'daemon',
     };
   }

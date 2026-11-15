@@ -61,7 +61,7 @@ import {
   writeJson,
   writeJsonError,
 } from '../output/index.ts';
-import { runInboxRetention } from '../send/inbox-retention.ts';
+import { listArchivedUnread, runInboxRetention, seatDropFolders } from '../send/inbox-retention.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, settledReadOf, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -69,6 +69,7 @@ import { messageKeyState } from '../store/keys.ts';
 export const USAGE = `Usage: team drops [--follow] [--json]
        team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
        team drops archive [--dry-run] [--json]
+       team drops archive --unread [--seat <seat>] [--json]
 
 Lists the drop files waiting in the calling seat's own drop folder,
 .agents/send-drops/<session>/<seat>: one row each, with the sender the message
@@ -113,6 +114,16 @@ Options:
              the marks are done and one audit line is written. The owner, the
              orchestrator or the operator archives every seat; a seat archives
              only its own folder.
+             The daemon runs the same moves once a day, off-peak (03:00-06:00
+             machine time), at most 256 a pass and not while the load per core
+             is above 3; it does not mark anything read. It also moves mail
+             still unread 14 days after it was sent, to a seat that is stopped
+             or retired, into archive/<YYYY-MM>/unread/, and tells the lead in
+             one line. A running seat's unread mail is never moved.
+  --unread   with archive, list the messages moved unread: one line each, the
+             seat, the month and the id. --read --seat <seat> --id <id> still
+             reads one. The owner and a lead list every seat folder, including
+             a retired seat's; a seat lists its own. --seat narrows the list.
   --dry-run  with archive, list the moves and the marks and write nothing
   --id       read this one id. An id a receipt already settled prints
              \`<id>: already read at <time> (<reader>)\` and no body. The time
@@ -492,10 +503,12 @@ async function runArchive(
   sources: DropsSources,
   json: boolean,
 ): Promise<number> {
+  const listing = args.flags.has('unread');
   const extra = args.rest.length > 1
     || args.flags.has('follow')
     || args.flags.has('read')
-    || args.values.seat !== undefined
+    || (listing && args.flags.has('dry-run'))
+    || (!listing && args.values.seat !== undefined)
     || args.values.session !== undefined
     || args.values.epoch !== undefined
     || args.values.id !== undefined;
@@ -534,6 +547,7 @@ async function runArchive(
     return 1;
   }
   const seats = lead ? names : [caller.kind === 'seat' ? caller.name : ''];
+  if (listing) return listUnreadArchive(io, json, loaded.root, lead ? null : seats[0] ?? '', args.values.seat);
   const key = messageKeyState(sources.home);
   if (key.kind !== 'key') {
     const why = key.kind === 'unreadable' ? key.why : 'no message key; nothing was archived';
@@ -576,8 +590,35 @@ async function runArchive(
   return 0;
 }
 
+/** `team drops archive --unread`: the messages moved while unread, from the folder names alone.
+ *  `own` is the one seat a seat caller may list; null lists every seat folder under the root. */
+function listUnreadArchive(io: Io, json: boolean, root: string, own: string | null, wanted: string | undefined): number {
+  if (own !== null && wanted !== undefined && wanted !== own) {
+    refuse(io, json, `a seat lists only its own archive; ${wanted} is not this seat`);
+    // exit: drops.archive.unread-refused
+    return 1;
+  }
+  const rows: Array<{ session: string; seat: string; month: string; id: string; path: string }> = [];
+  for (const folder of seatDropFolders(root)) {
+    if (own !== null && folder.seat !== own) continue;
+    if (wanted !== undefined && folder.seat !== wanted) continue;
+    for (const item of listArchivedUnread(folder.dropDir)) {
+      rows.push({ session: folder.session, seat: folder.seat, month: item.month, id: item.id, path: item.path });
+    }
+  }
+  if (json) {
+    writeJson(io, 'team.drops.archive.unread', { format: 1 as const, unread: rows });
+  } else if (rows.length === 0) {
+    io.stdout('no messages were moved unread\n');
+  } else {
+    for (const row of rows) io.stdout(`${row.seat} ${row.month} ${row.id}\n`);
+  }
+  // exit: drops.archive.unread-ok
+  return 0;
+}
+
 export async function runDrops(argv: string[], io: Io, sources: DropsSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read', 'dry-run']);
+  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read', 'dry-run', 'unread']);
   const verb = args.rest[0];
   if (verb === 'archive') return runArchive(args, io, sources, hasJsonFlag(argv) || args.flags.has('json'));
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
@@ -596,9 +637,10 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         : !read && args.values.id !== undefined ? 'id' : null;
   const epoch = args.values.epoch;
   const badEpoch = read && epoch !== undefined && !isBriefEpoch(epoch);
-  if (args.flags.has('dry-run') || args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
+  if (args.flags.has('dry-run') || args.flags.has('unread') || args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
     const problem = args.error
       ?? (args.flags.has('dry-run') ? 'unknown option --dry-run'
+        : args.flags.has('unread') ? 'unknown option --unread'
         : args.rest.length ? `unexpected "${args.rest[0] ?? ''}"`
         : stray !== null ? `unknown option --${stray}`
           : badEpoch ? `--epoch ${JSON.stringify(epoch)} is not a runtime epoch`

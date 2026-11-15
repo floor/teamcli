@@ -1,12 +1,16 @@
 // Where one drop's files live. The live seat folder is the hot path. A message that has
-// left it sits in `<seat>/archive/<YYYY-MM>/` under the same name, and a lookup by id
-// reads that copy. Nothing here creates, moves, or deletes a file.
+// left it sits in `<seat>/archive/<YYYY-MM>/` under the same name, or, when it was moved
+// unread from a seat that was stopped or retired, in `<seat>/archive/<YYYY-MM>/unread/`.
+// A lookup by id reads that copy. Nothing here creates, moves, or deletes a file.
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 
 /** The folder under a seat's drop directory that holds archived months. */
 export const DROP_MONTH_ARCHIVE = 'archive';
+
+/** The folder inside an archive month that holds mail moved while still unread. */
+export const DROP_ARCHIVE_UNREAD = 'unread';
 
 const MONTH = /^\d{4}-\d{2}$/;
 
@@ -30,6 +34,8 @@ export function folderOfDrop(dropDir: string, id: string): string {
     if (!MONTH.test(month)) continue;
     const dir = join(root, month);
     if (heldAt(join(dir, id)).kind === 'file') return dir;
+    const unread = join(dir, DROP_ARCHIVE_UNREAD);
+    if (heldAt(join(unread, id)).kind === 'file') return unread;
   }
   return dropDir;
 }
