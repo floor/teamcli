@@ -6,16 +6,19 @@ Captured from the installed Grok Build CLI on 2026-11-11 with `herdr pane read`.
   `--trust` (the folder path is replaced by a synthetic one). The dialog takes one key: `y`
   proceeds, `n` quits. With `--trust` on the line the same fresh folder opened straight on the
   prompt.
+- `permission.txt`: the command approval a seat drew on 2026-11-14 for a compound shell command
+  its allow rules did not cover (a `cd … && for … do team drops …; done` loop). Paths, ids and
+  names are replaced by synthetic ones. Three numbered choices under the command, and the
+  footer `1/3:select │ Tab:next option │ … │ Ctrl+c:cancel`. Nothing was answered.
 
 ## Not produced
 
-This folder holds the one screen the shipped launcher needed measured on 1.0.77: the trust
-dialog. The other screens of the profile stay measured on the earlier version folders.
+This folder holds the screens measured on 1.0.77: the trust dialog and the command approval.
+The other screens of the profile stay measured on the earlier version folders.
 
 - `idle`: not produced in this folder; the idle prompt is measured in the earlier version folders.
 - `unsent`: not produced in this folder; the box with typed text is measured in the earlier
   version folders (and its wrapped rows live on 1.0.77, 2026-11-12, by the typed-wake probe).
 - `working`: not produced in this folder; measured in the earlier version folders.
 - `question`: not produced in this folder; measured in the earlier version folders.
-- `permission`: not produced in this folder; measured in the earlier version folders.
 - `unknown`: not produced in this folder; the exit screen is measured in the earlier version folders.

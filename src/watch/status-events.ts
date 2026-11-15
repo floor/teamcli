@@ -402,8 +402,18 @@ type PromptSpell = {
   prompt: PromptKind;
   since: number;
   escalated: boolean;
+  /** Set once the long-stretch reminder went out: one per spell, never repeated. */
+  reminded?: boolean;
   clearedAt?: number;
 };
+
+/** How long a seat may stay at one prompt before its lead is reminded once (the escalation at
+ *  `prompt_escalation_seconds` is the first climb; this is the one reminder after it). */
+export const PROMPT_REMINDER_MS = 60 * 60 * 1000;
+
+/** One climb the engine would write into the entity lead's mailbox. A caller that delivers it
+ *  another way answers true, and the engine then writes no runtime record for it. */
+export type StatusClimb = { seat: string; id: string; text: string; at?: string; target: { seat: string; root: string; session: string } };
 
 type IdleStretch = {
   since: number;
@@ -438,6 +448,12 @@ export type SeatStatusEngineInput = {
   publish?: (root: string, event: EventAppendInput) => Promise<BusPublishOutcome>;
   /** Optional log callback for `unknown` statuses or waiter errors. */
   onLog?: (seat: string, message: string) => void;
+  /** A hosted watch delivers the climb as the daemon's own notice when the entity's lead is this
+   *  team's lead: the runtime mailbox record is a store that seat's turn read does not serve.
+   *  Answers true when it took the climb. */
+  deliverClimb?: (climb: StatusClimb) => boolean;
+  /** Overrides `PROMPT_REMINDER_MS` (tests). */
+  promptReminderMs?: number;
   /** Optional callback invoked when a worker seat's idle window elapses and a nudge is due. */
   onNudge?: (seatName: string, pane: string) => void;
   /** The watch's current native hold by seat. A held seat must not publish the legacy,
@@ -688,6 +704,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
     ? Math.max(0, Math.min(input.promptEscalationSeconds, EVENT_THRESHOLDS.prompt_escalation_seconds))
     : EVENT_THRESHOLDS.prompt_escalation_seconds;
   const escalationWindowMs = promptEscalationSeconds * 1000;
+  const reminderWindowMs = Math.max(escalationWindowMs, input.promptReminderMs ?? PROMPT_REMINDER_MS);
 
   const states = new Map<string, SeatTrackerState>();
   const pendingNudges = new Set<string>();
@@ -805,16 +822,30 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       if (target !== null && target.seat !== eventInput.seat) {
         const stamp = (eventInput.ts ?? new Date(now()).toISOString()).replace(/[^0-9A-Za-z]/g, '');
         const climbed = eventInput.kind === 'seat.prompt-escalated';
-        const outcome = writeRuntimeMailboxRecord({
-          root: target.root,
-          home: input.home,
-          to: target.seat,
-          id: `evt-prompt-${climbed ? 'climb' : 'lead'}-${eventInput.seat}-${stamp}`,
-          text: `${team.project}: ${options.climbMailboxWhy}`,
-          session: target.session,
-          at: eventInput.ts,
-        });
-        if (outcome.ok) escalatedMailboxPaths.push(outcome.path);
+        // The reminder is its own record: an overdue tick can raise it in the same instant as the
+        // escalation, and the two must not share one mailbox identity.
+        const rung = eventInput.record_id.startsWith('status:prompt-reminder:') ? 'remind' : climbed ? 'climb' : 'lead';
+        const id = `evt-prompt-${rung}-${eventInput.seat}-${stamp}`;
+        const text = `${team.project}: ${options.climbMailboxWhy}`;
+        const taken = input.deliverClimb?.({
+          seat: eventInput.seat,
+          id,
+          text,
+          ...(eventInput.ts !== undefined ? { at: eventInput.ts } : {}),
+          target,
+        }) === true;
+        if (!taken) {
+          const outcome = writeRuntimeMailboxRecord({
+            root: target.root,
+            home: input.home,
+            to: target.seat,
+            id,
+            text,
+            session: target.session,
+            at: eventInput.ts,
+          });
+          if (outcome.ok) escalatedMailboxPaths.push(outcome.path);
+        }
       }
     }
 
@@ -1181,6 +1212,36 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
               kind: 'seat.prompt-escalated',
               session,
               record_id: `status:prompt-escalated:${seatName}:${new Date(state.promptSpell.since).toISOString()}`,
+              seat: seatName,
+              subject: seatName,
+              ...(state.promptSpell.prompt !== 'unknown' ? { prompt: state.promptSpell.prompt } : {}),
+              to: 'owner',
+              reason,
+            },
+            { notifyOwner: true, climbMailboxWhy: reason },
+          ),
+        );
+      }
+
+      if (
+        state.status === 'blocked'
+        && state.promptSpell !== undefined
+        && state.promptSpell.clearedAt === undefined
+        && state.promptSpell.escalated
+        && state.promptSpell.reminded !== true
+        && !isLead
+        && atMs - state.promptSpell.since >= reminderWindowMs
+      ) {
+        state.promptSpell.reminded = true;
+        const promptLabel = state.promptSpell.prompt === 'unknown' ? 'blocked' : state.promptSpell.prompt;
+        const reason = `${seatName} is still at a ${promptLabel} prompt after ${minutes(atMs - state.promptSpell.since)} minutes: a reminder, the only one for this prompt`;
+        emitted.push(
+          recordEvent(
+            {
+              ts,
+              kind: 'seat.prompt-escalated',
+              session,
+              record_id: `status:prompt-reminder:${seatName}:${new Date(state.promptSpell.since).toISOString()}`,
               seat: seatName,
               subject: seatName,
               ...(state.promptSpell.prompt !== 'unknown' ? { prompt: state.promptSpell.prompt } : {}),

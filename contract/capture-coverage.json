@@ -435,7 +435,7 @@
         "undocumented": 0
       },
       "permission": {
-        "real": 0,
+        "real": 1,
         "constructed": 0,
         "undocumented": 0
       },
@@ -2485,7 +2485,7 @@
             "undocumented": 0
           },
           "permission": {
-            "real": 0,
+            "real": 1,
             "constructed": 0,
             "undocumented": 0
           },
@@ -2979,7 +2979,7 @@
       "idle": "in this folder",
       "working": "in this folder",
       "unsent": "the installed binary 1.0.60 is newer than this folder's 1.0.52",
-      "permission": "in this folder",
+      "permission": "no permission dialog was drawn in this folder",
       "question": "in this folder",
       "trust": "a fresh directory showed no trust dialog on this CLI",
       "unknown": "in this folder"
@@ -4876,6 +4876,12 @@
       "file": "grok/1.0.70/idle.txt",
       "cli": "grok",
       "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.77/permission.txt",
+      "cli": "grok",
+      "kind": "permission",
       "provenance": "capture"
     },
     {

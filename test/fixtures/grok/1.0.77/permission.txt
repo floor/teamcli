@@ -1,0 +1,49 @@
+
+  ~/s/project                                                                                                      45K / 256K │ [Dashboard]
+
+
+     ❯ Read your inbox; the lead asked you to triage your unread drops and reply with counts.                                                  7:14 PM
+
+
+     ◆ Thought for 1.8s
+
+     I'll read the inbox and count the unread drops the lead asked about.                                                                      7:14 PM
+
+     ◈ Explored 1 search, ran 5 commands
+
+     Two drops are already open. I'll read the rest of the unread drops, then ack anything finished and reply with the counts.              7:15 PM
+
+     ◈ Ran check ack/reply usage and remaining drops
+     ◆ Running read the four remaining earlier drops
+
+
+
+
+
+
+
+
+                                                                                                                                                                  █
+                                                                                                                                                                  █
+                                                                                                                                                                  █
+                                                                                                                                                                  █
+                                                                                                                                                                  █
+                                                                                                                                                                  █
+                                                                                                                                                                  █
+                                                                                                                                                                  █
+
+   ◆ Read the four remaining earlier drop… 5m                                                                                     5m ⇣45.5k [↓][stop]
+
+  ┃
+  ┃  ›  Read the four remaining earlier drops
+  ┃  │ cd /home/seat/project &&·
+  ┃  ┆ for id in 00000000-0000-4000-8000-000000000001 00000000-0000-4000-8000-000000000002 00000000-0000-4000-8000-000000000003·
+  ┃  ┆ 00000000-0000-4000-8000-000000000004;·
+  ┃  ┆ do echo "===== $id ====="; team drops --read --seat seat-a --id "$id"; done
+  ┃
+  ┃  1 (○) Yes, and don't ask again for anything (always-approve mode)
+  ┃  2 (●) Yes, proceed
+  ┃  3 (○) No, reject (type to add feedback)
+  ┃
+
+  1/3:select  │  Tab:next option  │  Ctrl+o:always-approve  │  Ctrl+c:cancel  │  Esc:scrollback

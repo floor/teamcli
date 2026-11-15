@@ -181,6 +181,17 @@ screen:
         - 'Do you trust the contents of this directory\?'
         - '^\s*Yes, proceed\s+y\s*$'
         - '^\s*No, quit\s+n\s*$'
+  # The command approval, from the 1.0.77 capture (`grok/1.0.77/permission.txt`): a shell
+  # command the seat's allow rules do not cover draws the `┃` frame with the command under a
+  # `›` title, three numbered choices, and a footer whose first cell counts them
+  # (`1/3:select`). It waits for a person. The rows are pinned by their fixed words only: the
+  # command above them wraps with the pane.
+  permission:
+    - all:
+        - '^\s*┃\s*1 \(.\) Yes, and don''t ask again'
+        - '^\s*┃\s*2 \(.\) Yes, proceed\s*$'
+        - '^\s*┃\s*3 \(.\) No, reject'
+        - '^\s*[0-9]+/[0-9]+:select\s*│\s*Tab:next option'
   # The answer widget, from the 1.0.52 capture. A choice and a write approval draw the same
   # chrome: `Waiting on answers`, the ┃ frame, `↑/↓ navigate`, `Enter:submit`, and
   # `Tab:next answer`. A fresh directory drew no trust dialog, and a shell command in the
