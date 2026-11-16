@@ -216,10 +216,10 @@ describe('a Jules pane herdr does not list is declared an agent, then named', ()
       log: (_who, what) => { logs.push(what); },
     };
     const steps: Step[] = [{
-      kind: 'rename',
+      kind: 'wait',
       text: 'name tester-1',
       do: { do: 'rename', seat: 'tester-1', label: 'Lynceus · tester 1', cli: 'jules', seconds: 10, rules: 'option', pane: 'w4B:p1' },
-    } as Step];
+    }];
     const report = await executePlan(steps, 'teamcli', host);
     return { reports, renames, logs, records, report };
   }
