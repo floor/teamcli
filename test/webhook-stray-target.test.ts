@@ -5,7 +5,9 @@ import { afterEach, expect, test } from 'bun:test';
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { webhookRoutesOf } from '../src/bus/webhook.ts';
+import { makeWebhookDelivery, postArrivalWebhook, webhookRoutesOf, type WebhookFacts } from '../src/bus/webhook.ts';
+import type { SignedEventRecord } from '../src/bus/log.ts';
+import type { SignedRecord } from '../src/send/record.ts';
 import type { SeatWebhook, TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { strayWebhookOf, webhookHostTarget, webhookRefusal, webhookRouteOf } from '../src/send/webhook.ts';
@@ -101,4 +103,40 @@ seats:
   if (good.ok) expect(good.team.seats.find((seat) => seat.name === 'routine')?.webhook?.target).toBe('cursor');
   const bad = validateTeamFile(text('"Not A CLI"'));
   expect(bad.ok).toBe(false);
+});
+
+test('the bus rechecks the target on the POST\'s own reading: a URL changed after the map was built posts nothing', async () => {
+  const hook = row('https://hooks.example.test/x');
+  const team = { seats: [{ name: 'iris', cli: 'grok', webhook: hook }] } as unknown as TeamFile;
+  const posts: string[] = [];
+  const results: WebhookFacts[] = [];
+  let settle: () => void = () => {};
+  const done = new Promise<void>((resolve) => { settle = resolve; });
+  const deliver = makeWebhookDelivery({
+    team,
+    fetch: (async (url: string) => { posts.push(String(url)); return new Response('ok', { status: 200 }); }) as unknown as typeof fetch,
+    onResult: (_seat, _record, facts) => { results.push(facts); settle(); },
+  });
+  // The row was the seat's when the map was built; the routine behind it changes afterwards.
+  writeFileSync(hook.urlFile, 'https://api2.cursor.sh/automations/webhook/synthetic\n');
+  const record = {
+    payload: { kind: 'message.arrived', to: 'iris', session: 'hooks', record_id: 'aaaaaaaa-0000-4000-8000-000000000001' },
+  } as unknown as SignedEventRecord;
+  deliver(record);
+  await done;
+  expect(posts).toEqual([]);
+  expect(results[0]).toMatchObject({ outcome: 'refused', attempts: 0 });
+  expect(results[0]?.reason).toContain('the webhook runs as cursor');
+});
+
+test('the sender\'s own post rechecks the target against the seat\'s CLI from the team file', async () => {
+  const hook = row('https://api2.cursor.sh/automations/webhook/synthetic');
+  const team = { seats: [{ name: 'iris', cli: 'grok', webhook: hook }] } as unknown as TeamFile;
+  const base = mkdtempSync(join(tmpdir(), 'stray-post-'));
+  bases.push(base);
+  const out = await postArrivalWebhook({
+    seat: 'iris', webhook: hook, team, root: base, session: 'hooks', id: 'aaaaaaaa-0000-4000-8000-000000000002',
+    from: 'lead', message: {} as unknown as SignedRecord, dropDir: base,
+  } as Parameters<typeof postArrivalWebhook>[0]);
+  expect(out).toEqual({ kind: 'none', why: 'no-route' });
 });

@@ -392,6 +392,7 @@ async function wakeByWebhook(
   const posted = await postArrivalWebhook({
     seat: seat.name,
     webhook,
+    cli: seat.cli,
     team: scene.team,
     root: scene.root,
     session: scene.session,

@@ -170,10 +170,10 @@ export type MailboxWaiting = {
   /** The line the ring types: the record's message-display header, then the fixed read hint.
    *  Absent, the shipped nameless ring. */
   text?: string;
-  /** Whether a wake was tried for this record: its wake marker exists beside the drop, so a line
-   *  was typed, a webhook posted, or a dialog blocked the attempt. The watch's reader always
-   *  sets it; absent reads as tried, the reading callers before this field had. */
-  wakeTried?: boolean;
+  /** The wake this record has had (src/watch/wake-attempt.ts): none at all, one refused before
+   *  any key reached the pane, or one actually submitted. The watch's reader always sets it;
+   *  absent reads as submitted, the reading callers before this field had. */
+  wake?: 'none' | 'refused' | 'submitted';
   /** The route the seat's wake takes, in plain words (`typed wake`, `webhook`, `pull on turn`),
    *  for the line that says no wake was tried yet. */
   route?: string;
@@ -859,12 +859,17 @@ function seatWorkPlans(
     // this seat still has not read. A record with no attempt yet is queued, and the lead is told
     // that instead, with the route its wake will take.
     const mine = mailbox.filter((record) => record.to === obs.name && record.served && record.brief !== true);
-    const tried = mine.some((record) => record.wakeTried !== false);
+    const tried = mine.some((record) => (record.wake ?? 'submitted') === 'submitted');
     if (unread && !tried) {
       const route = mine.find((record) => record.route !== undefined)?.route ?? 'unknown';
-      const queued = once(`queued:${obs.name}`, `${obs.name}: queued, no wake tried (route: ${route})`, 'orchestrator');
+      const refused = mine.some((record) => record.wake === 'refused');
+      const key = `queued:${obs.name}`;
+      const text = refused
+        ? `${obs.name}: queued, the wake was refused before any key reached the pane (route: ${route})`
+        : `${obs.name}: queued, no wake tried (route: ${route})`;
+      const queued = once(key, text, 'orchestrator');
       if (queued) reports.push(queued);
-      else keep(`queued:${obs.name}`);
+      else keep(key);
     }
     const found = seatCanWork({
       seat: obs.name,
