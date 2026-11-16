@@ -376,6 +376,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       return configuration(out, json, `${plainLine(spec)}: "${plainLine(address.scope)}" names ${String(found.length)} teams (${found.map((one) => one.id ?? teamIdOf(one.root)).join(', ')}); say which by its id`);
     }
     addressed = found[0]!;
+    if (addressed.session === undefined || addressed.session === '') {
+      return configuration(out, json, `${plainLine(spec)}: team "${plainLine(address.scope)}" records no session; nothing was restarted`);
+    }
   }
   // The pane is asked before the folder. One team whose state records this caller on its pane
   // is the team, and the launched pointer is not read. None leaves the folder binding. A `--file`
@@ -396,6 +399,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
     ...(args.values.session !== undefined ? { session: args.values.session } : {}),
+    // An address runs in the session its registry record names, never one the folder implies.
+    ...(addressed !== null ? { session: addressed.session } : {}),
   };
   // A launched pointer names where this session was launched from, not a copy to read: a team
   // the registry holds is read there, so a sign-off an edit wrote is never missed over the file
@@ -462,10 +467,25 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // speak: owner or `leads` for this team, decided from records.
   const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, home, 'restart', at, sources.now);
-  const judged = args.values.session !== undefined
-    ? { ...judgeCallerOf(io, args.values.session === 'default' ? undefined : args.values.session), session: args.values.session }
+  // An address is judged in the addressed record's own session only: the search across the
+  // root's other sessions is for a bare name, and an address never falls back to one of them.
+  const fixedSession = addressed !== null ? addressed.session : args.values.session;
+  const judged = fixedSession !== undefined
+    ? { ...judgeCallerOf(io, fixedSession === 'default' ? undefined : fixedSession), session: fixedSession }
     : judgeCallerIn(io, dir, team, verdictOf);
   const { caller, shown, session } = judged;
+  // The who-may-run-it verdict and the entity's main orchestrator are read before dev mode:
+  // an address is admitted on proof alone, ahead of any dev-mode read, log or fold, so a refused
+  // address leaves nothing in the target team's log. The entity's main orchestrator stands as,
+  // and reaches as, each team lead: proven by its own head team's record, live file and recorded
+  // pane, never by its seat name. A run that proves it passes the gate the way a lead of this
+  // team would, and the guard below decides the rest.
+  const mayChange = verdictOf(caller, standingOf(dir, session, caller));
+  const mainOrchestrator = entityMainOrchestrator(io, { home, root, entity: team.entity });
+  if (addressed !== null && mainOrchestrator === null && mayChange.kind !== 'ok') {
+    const why = `${plainLine(spec)}: only that team's owner or \`leads\`, or the entity's main orchestrator, restarts a seat by address; this call is ${plainLine(describeCaller(shown))}`;
+    return callerRefused(out, json, why, undefined, 'owner-or-leads', unblockingRestartRun(argv));
+  }
   // Dev mode, from the file this run restarts against: a `dev-mode` value anywhere in the
   // caller's chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the
   // variable set to exactly `1` keeps its behaviour. The caller line below is folded, and so is
@@ -495,25 +515,14 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // file that changed since the last approval is not a refusal.
   const ceilings = ceilingsOf(team);
 
-  const mayChange = verdictOf(caller, standingOf(dir, session, caller));
-  // The entity's main orchestrator stands as, and reaches as, each team lead: proven by its own
-  // head team's record, live file and recorded pane, never by its seat name. A run that proves it
-  // passes the gate the way a lead of this team would, and the guard below decides the rest.
-  const mainOrchestrator = entityMainOrchestrator(io, { home, root, entity: team.entity });
   // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
   // `1`, dev mode says this gate once, as a warning, and the restart continues — exactly as
   // `up` does. A stored approval that does not verify was already said above. Every other
   // refusal stays a refusal: the target placement, the CLI, the records, and trust. The
   // warning is logged where this call runs; a dry run says it beside the dry answer and
   // decides nothing.
-  if (addressed !== null && mainOrchestrator === null && mayChange.kind !== 'ok') {
-    // An address reaches another team only on proof: this team's owner or `leads`, or the
-    // entity's main orchestrator. Dev mode does not fold this gate for an address.
-    const why = `${plainLine(spec)}: only that team's owner or \`leads\`, or the entity's main orchestrator, restarts a seat by address; this call is ${plainLine(describeCaller(shown))}`;
-    return callerRefused(out, json, why, undefined, 'owner-or-leads', unblockingRestartRun(argv));
-  }
   if (addressed !== null && dry) {
-    const line = `addressed: ${name} of team ${team.project} (${addressed.id ?? teamIdOf(addressed.root)}) at ${root}`;
+    const line = `addressed: ${name} of team ${team.project} in session ${session} (${addressed.id ?? teamIdOf(addressed.root)}) at ${root}`;
     if (json) notes.push(line);
     else out.stdout(`! ${plainText(line)}\n`);
   }

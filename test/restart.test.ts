@@ -34,6 +34,7 @@ import { recordedGeneration } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
 import { intoRegistry, storedTeam, underRegistry, unreadableRegistryFolder } from './helpers/registry-team.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -1906,7 +1907,7 @@ describe('team restart <seat>', () => {
       const dryIo = testIo(fixture.root);
       dryIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
       expect(await runRestart(['orchestrator@acme', '--dry-run'], dryIo, dryRun.sources), dryIo.err).toBe(0);
-      expect(dryIo.out).toContain(`! addressed: orchestrator of team acme (${teamIdOf(fixture.root)}) at ${fixture.root}\n`);
+      expect(dryIo.out).toContain(`! addressed: orchestrator of team acme in session acme (${teamIdOf(fixture.root)}) at ${fixture.root}\n`);
       expect(dryIo.out).toMatch(/! orchestrator: would (resume conversation|start a fresh conversation)/);
       expect(dryRun.did.closed).toEqual([]);
       expect(dryRun.did.created).toBe(0);
@@ -1955,6 +1956,64 @@ describe('team restart <seat>', () => {
       io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
       expect(await runRestart([`orchestrator@${teamIdOf(head.root)}`], io, sources)).toBe(1);
       expect(io.err).toBe('team restart: the orchestrator cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+
+    // The registry record names session `acme-b`; the file's default is `acme`, and the state also
+    // holds an older `acme` session where the lead is placed and the worker runs. The address is
+    // judged in `acme-b` only: the lead is not placed there, so it is refused, and nothing in
+    // `acme` is stopped or launched — the bare name's search across sessions is never used.
+    test("an address is judged in its record's session only, never another session of the root", async () => {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        const older = (state.sessions.acme ??= emptySession());
+        older.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+        older.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+        (state.sessions['acme-b'] ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-b', workspace: 'ws-b' };
+      });
+      upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', session: 'acme-b', root: fixture.root, at: NOW.toISOString() });
+      setRoster(fixture.home, teamIdOf(fixture.root), [
+        { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+        { agent: 'agt_111111111111', seat: 'worker', role: 'implementer' },
+      ]);
+      const { sources, did } = makeHarness(fixture);
+
+      // The bare name keeps its search: the lead is admitted in `acme`, where it stands.
+      const bareDry = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker', '--dry-run'], bareDry, sources), bareDry.err).toBe(0);
+
+      const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker@acme', '--dry-run'], io, sources)).toBe(1);
+      expect(io.out).not.toContain('! addressed:');
+      const real = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker@acme'], real, sources)).toBe(1);
+      expect(real.err).toContain('restarts a seat by address');
+      expect(did.typed).toEqual([]);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+      expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+    });
+
+    // A refused address leaves no dev-mode trace in the target team: a governing team policy turns
+    // dev mode off, so a run with the variable set would log that it was ignored, but the
+    // address is refused before dev mode is read at all — dry and real.
+    test('a refused address writes no dev-mode line to the target team log', async () => {
+      const { fixture } = addressWorld();
+      const written = writePolicySet(fixture.home, { level: 'team', target: fixture.root, teamRoot: fixture.root, name: 'dev-mode', value: 'off' }, { now: NOW });
+      if (!written.ok) throw new Error(written.why);
+      const logPath = join(fixture.dir, LOG_FILE);
+      const before = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      for (const extra of [['--dry-run'], []]) {
+        const io = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-hops', session: 'floor' });
+        io.env = { TEAMCLI_DEV_MODE: '1' };
+        expect(await runRestart(['orchestrator@acme', ...extra], io, sources)).toBe(1);
+        expect(io.err).toContain('restarts a seat by address');
+        expect(`${io.out}${io.err}`).not.toContain('dev mode');
+      }
+      const after = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+      expect(after).toBe(before);
       expect(did.closed).toEqual([]);
       expect(did.created).toBe(0);
     });
