@@ -1482,6 +1482,21 @@ export function applySidebarLayout(
 // (`AgentRenameError::NotAgent`) and on one whose managed launch is pending; an unparseable
 // answer or an envelope without a result is a failure, never a success. The pane's label is
 // never read as its name: `pane rename` sets a sidebar label, not `AgentInfo.name`.
+/**
+ * Declares the pane an agent of `agent` to herdr, idle, under the `team` source. herdr 0.7.x no
+ * longer detects some CLIs on its own (the jules TUI: `agent rename` answered `agent_not_found`
+ * on a pane whose foreground process was `jules`, 2026-11-16); after this report the same pane
+ * was listed as `jules`, `idle`, and `agent rename` named it. Display and naming only: nothing
+ * is typed into the pane.
+ */
+export function reportAgentPresent(pane: string, agent: string, session?: string): boolean {
+  const out = capture(['pane', 'report-agent', '--source', 'team', '--agent', agent, '--state', 'idle', pane], session);
+  if (out === null) return false;
+  const body = parsed(out);
+  if (body !== null && typeof body === 'object' && !Array.isArray(body) && isHerdrError(body)) return false;
+  return true;
+}
+
 export function agentRename(pane: string, name: string, session?: string): boolean {
   const named = (listed: HerdrAgent[] | null): boolean =>
     listed?.some((agent) => agent.pane === pane && agent.name === name) === true;

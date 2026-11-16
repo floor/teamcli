@@ -43,6 +43,7 @@ import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import {
   agentList,
   agentRename,
+  reportAgentPresent,
   agentStatus,
   paneForeground,
   paneForegroundCwd,
@@ -52,6 +53,8 @@ import {
   paneShellBack,
   pressEnter,
   reportDisplayAgent,
+  sendKey,
+  sessionList,
   sessionRunning,
   sessionState,
   SIDEBAR_TTL_CAP_MS,
@@ -64,6 +67,7 @@ import {
   type HerdrAgent,
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { conversationHolders } from '../launch/another-app.ts';
 import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, launchKind, type Host } from '../launch/execute.ts';
@@ -166,12 +170,16 @@ const realUpLaunch: Launch = {
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
     reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
+  reportAgent: (session, pane, agent) => reportAgentPresent(pane, agent, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
     const agents = agentList(aim(session));
     return agents === null ? null : agents.map((agent) => agent.pane);
   },
   agents: (session) => agentList(aim(session)),
+  hostSessions: () => sessionList(),
+  // Only the Codex "press R to continue here" take-over uses it (`hostOf`, `another-app.ts`).
+  sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
   workspacePanes: (session, workspace) => workspacePanes(workspace, aim(session)),
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
@@ -2170,6 +2178,7 @@ function hostOf(input: {
       return delivered === false && stopped.why !== null ? stopped.why : delivered;
     },
     renameAgent: launch.renameAgent,
+    ...(launch.reportAgent === undefined ? {} : { reportAgent: launch.reportAgent }),
     closeWorkspace: launch.closeWorkspace,
     stopSession: () => false,
     dialog: { mode: 'keep' },
@@ -2196,6 +2205,10 @@ function hostOf(input: {
     kill: () => false,
     agentPanes: launch.agentPanes,
     agentList: launch.agents,
+    ...(launch.hostSessions === undefined
+      ? {}
+      : { conversationHolders: (id: string) => conversationHolders({ sessions: () => launch.hostSessions!(), agents: (name) => launch.agents(name) }, id) }),
+    ...(launch.sendKey === undefined ? {} : { takeOverConversation: (s: string, pane: string) => launch.sendKey!(s, pane, 'R') }),
     workspacePanes: launch.workspacePanes ? (s, workspace) => launch.workspacePanes!(s, workspace) : undefined,
     classify: (_name, pane, cli) => launchKind(readScreen(cli, launch.paneText(session, pane) ?? undefined).kind),
     // The one dialog a launch answers itself (src/launch/channel-dialog.ts).

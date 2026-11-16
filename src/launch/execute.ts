@@ -13,7 +13,7 @@ function saveTextFile(path: string, text: string): boolean {
 }
 import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { boxHoldsText, refusalReport, type Refusal } from './deliver.ts';
-import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, directConversationLaunch, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
+import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, directConversationLaunch, withoutResume, conversationMissingOnScreen, herdrUnreliable } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { ownStartFolderProblem } from '../worktree/place.ts';
 import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
@@ -49,6 +49,7 @@ import { processStartOf } from '../watch/pane.ts';
 import { readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
+import { anotherAppDecision } from './another-app.ts';
 
 export type ScreenKind =
   | 'idle'
@@ -166,6 +167,13 @@ export type Host = {
   pressKeys?(session: string, pane: string, cli: string, keys: readonly string[]): ExitKeys | Promise<ExitKeys>;
   /** One raw key into a pane, for `--abandon`'s prompt answers. Absent: the answer is skipped. */
   sendKey?(session: string, pane: string, key: string): boolean;
+  /** The panes of every running herdr session that report this conversation id, or null when
+   *  any list cannot be read (`another-app.ts`). Absent: Codex's "open in another app" notice is
+   *  always left to the owner. */
+  conversationHolders?(id: string): { session: string; pane: string }[] | null;
+  /** Presses Codex's `R` ("press R to continue here") in the pane. Kept apart from `sendKey` so a
+   *  host that offers no other key can still offer this one, decided by `another-app.ts`. */
+  takeOverConversation?(session: string, pane: string): boolean;
   /** Writes the unsent text `--abandon` saves; absent, it is written with node:fs. */
   saveText?(path: string, text: string): boolean;
   /** `false` is a delivery that stopped without a reading worth reporting (no host, or no live
@@ -181,6 +189,9 @@ export type Host = {
     seconds: number,
   ): Promise<boolean | 'no-agent' | Refusal>;
   renameAgent(session: string, pane: string, name: string): boolean;
+  /** Declares the pane an agent of the seat's CLI to herdr (`herdr pane report-agent`), for a
+   *  CLI herdr does not detect on its own. Absent: the rename waits on herdr alone. */
+  reportAgent?(session: string, pane: string, agent: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
   /** A host may offer a team-file stop. A sandbox warning does not call it: that stop is
    *  `sandbox_unapplied` on the seat's state, and the approved team file stays byte for byte. */
@@ -1883,6 +1894,7 @@ export async function executePlan(
         const startedAt = host.now();
         let deadline = startedAt + op.seconds * 1000;
         let freshAfterMissing = false;
+        let anotherAppPressed = false;
         let herdrIdleBefore = false;
         const pollMs = IDLE_POLL_MS;
         let outcome: 'idle' | 'permission' | 'plan approval' | 'confirmation' | 'login' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' | 'sandbox unapplied' = 'timeout';
@@ -2108,6 +2120,35 @@ export async function executePlan(
             outcome = 'idle';
             break;
           }
+          // Codex's "open in another app" notice on a resume of the seat's own conversation: its
+          // old task, detached by `/exit`, still holds it. `R` takes it over here, once, and only
+          // when no other live pane reports that conversation (`another-app.ts`). Every other
+          // reading stops at the dialog below, as before.
+          if (kind === 'provider error' && op.cli === 'codex' && !anotherAppPressed && host.takeOverConversation && host.conversationHolders) {
+            const resumes = namedResumeTarget('codex', launchedCommands.get(op.seat) ?? op.command);
+            const decision = anotherAppDecision({
+              cli: op.cli,
+              text: host.paneText?.(session, here.pane) ?? null,
+              resumes,
+              holders: resumes ? host.conversationHolders(resumes) : null,
+              here: { session, pane: here.pane },
+            });
+            if (decision.press) {
+              anotherAppPressed = true;
+              if (host.takeOverConversation(session, here.pane)) {
+                host.log(op.seat, `its conversation ${resumes} was held by its own detached Codex task; pressed R to continue here`);
+                deadline = Math.max(deadline, host.now() + op.seconds * 1000);
+                const before = host.now();
+                await sharedSleep(pollMs);
+                if (stopped || closing()) break;
+                if (host.now() <= before) break;
+                continue;
+              }
+            } else if (!anotherAppPressed) {
+              anotherAppPressed = true;
+              host.log(op.seat, `Codex says its conversation is open in another app; left to the owner: ${decision.why}`);
+            }
+          }
           if (kind === 'permission' || kind === 'plan approval' || kind === 'confirmation' || kind === 'login' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
             outcome = kind;
             break;
@@ -2320,6 +2361,15 @@ export async function executePlan(
           host.agentList?.(session)?.some((agent) => agent.pane === here.pane && agent.name === op.seat) === true;
         const verify = (ms: number): Promise<boolean> =>
           verifiedName(host, session, here.pane, op.seat, ms, sharedSleep, cancelled);
+        // A CLI herdr does not detect (`herdr_status: unreliable`, the jules TUI on herdr 0.7.x)
+        // is never listed, so no rename of its pane can be verified. When the pane's own
+        // foreground process is the seat's CLI, it is declared an agent to herdr first, and the
+        // rename below is verified against the list as for any other seat.
+        if (!listed() && op.cli && herdrUnreliable(op.cli) && host.reportAgent && runsCli()) {
+          if (host.reportAgent(session, here.pane, op.cli)) {
+            host.log(op.seat, `herdr did not detect its ${op.cli} pane; declared it an agent so it can be named`);
+          }
+        }
         let outcome: RenameOutcome;
         if (namedForAnotherSeat(host, session, here.pane, op.seat)) {
           outcome = 'other seat';

@@ -118,6 +118,12 @@ export type Difference = {
 
 export type Comparison = { rows: Row[]; differences: Difference[]; notes: string[] };
 
+/** A wait whose cause passes with the screen: nothing is owed to the dialog once the pane reads a
+ *  free prompt. Every other classification keeps its waiting row. */
+function passingWait(classification: string | undefined): boolean {
+  return classification === 'provider error' || classification === 'rate limit';
+}
+
 /** The one row a seat shows while it waits, ahead of the ordinary launch-stopped and unnamed rows. */
 function waitingView(
   name: string,
@@ -424,13 +430,25 @@ export function compare(
           repair: isLeadSeat(team, seat.name) ? relaunchRepair(team, seat.name, 'plain') : `team restart ${seat.name}` });
         continue;
       }
-      const held = waitingView(
+      const waitedOn = waitingView(
         seat.name,
         recorded,
         trust,
         (team.orchestrator !== '' && seat.name === team.orchestrator)
           || (team.operator !== '' && seat.name === team.operator),
       );
+      // A wait recorded at a provider error or a usage wall owes no answer: the screen that
+      // caused it is gone once the pane draws a free prompt again. Seen 2026-11-16: an operator
+      // read "waiting for owner (provider error)" for as long as the record stood, while its
+      // pane sat at a ready prompt. The live reading wins there, and a note names the stale
+      // record; a dialog that owes an answer (trust, permission, a question) keeps its row.
+      const held = waitedOn !== null && !shell && passingWait(recorded?.waiting?.classification)
+        && readScreen(seat.cli, live.screens[agent.pane]).kind === 'idle'
+        ? null
+        : waitedOn;
+      if (waitedOn !== null && held === null) {
+        notes.push(`${seat.name}: the recorded wait (${recorded?.waiting?.classification}) is over: its pane reads a ready prompt`);
+      }
       if (held) {
         rows.push({
           name: seat.name,

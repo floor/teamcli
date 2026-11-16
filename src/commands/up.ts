@@ -32,6 +32,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, type DeliveryClass } from '../launch/delivery-class.ts';
 import {
   agentList,
+  reportAgentPresent,
   agentStatus,
   agentRename,
   applySidebarLayout,
@@ -144,6 +145,7 @@ import { busAnswers } from '../bus/follow.ts';
 import { readScreen, statusRow } from '../watch/screen.ts';
 import { placedStartFolders, seatCwdRefusal, seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
+import { conversationHolders } from '../launch/another-app.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
 // What `up` reads from outside the file, so tests can stand in for it.
@@ -260,10 +262,16 @@ export type Launch = {
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
   renameWorkspace?(session: string, workspace: string, label: string): boolean;
   renameAgent(session: string, pane: string, name: string): boolean;
+  /** Declares a pane running the seat's CLI an agent to herdr, for a CLI herdr does not detect
+   *  (`herdr_status: unreliable`). Absent: such a pane is never named. */
+  reportAgent?(session: string, pane: string, agent: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
   agentPanes(session: string): string[] | null;
   /** The session's agents as herdr lists them now; null when the list can't be read. */
   agents(session: string): HerdrAgent[] | null;
+  /** Every herdr session, running or not; null when herdr can't list them. Absent: a launch never
+   *  answers Codex's "open in another app" notice (`src/launch/another-app.ts`). */
+  hostSessions?(): readonly { name: string; running: boolean }[] | null;
   /** Pane ids in a workspace as herdr lists them now; null when the list can't be read. */
   workspacePanes?(session: string, workspace: string): string[] | null;
   paneText(session: string, pane: string): string | null;
@@ -383,12 +391,14 @@ const realLaunch: Launch = {
     reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
+  reportAgent: (session, pane, agent) => reportAgentPresent(pane, agent, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
     const agents = agentList(aim(session));
     return agents === null ? null : agents.map((agent) => agent.pane);
   },
   agents: (session) => agentList(aim(session)),
+  hostSessions: () => sessionList(),
   workspacePanes: (session, workspace) => workspacePanes(workspace, aim(session)),
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
@@ -4233,6 +4243,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         return delivered === false && stopped.why !== null ? stopped.why : delivered;
       },
       renameAgent: launch.renameAgent,
+      ...(launch.reportAgent === undefined ? {} : { reportAgent: launch.reportAgent }),
       closeWorkspace: launch.closeWorkspace,
       stopSession: (session) => launch.stopSession?.(session) ?? false,
       kill: (pid) => launch.kill?.(pid) ?? false,
@@ -4240,6 +4251,10 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid),
       agentPanes: launch.agentPanes,
       agentList: launch.agents,
+      ...(launch.hostSessions === undefined
+        ? {}
+        : { conversationHolders: (id: string) => conversationHolders({ sessions: () => launch.hostSessions!(), agents: (name) => launch.agents(name) }, id) }),
+      ...(launch.sendKey === undefined ? {} : { takeOverConversation: (s: string, pane: string) => launch.sendKey!(s, pane, 'R') }),
       ...(callerPane === undefined ? {} : { callerPane }),
       // The session's workspaces with their labels now; the pause compares the label of the pane's
       // live workspace with the one this seat's launch gives (`pause.ts`, `waitingProblem`).
