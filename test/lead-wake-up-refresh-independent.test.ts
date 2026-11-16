@@ -955,9 +955,14 @@ describe('a waiting record whose pane the host restored with its own conversatio
       file.sessions[SESSION]!.seats[WORKER]!.waiting = { state: 'waiting-owner', classification: 'question' };
     });
     registerSeat(WORKER, { pane: PANE, address: null });
-    return makeWorld({
+    // The host names the pane once a rename reaches it, as herdr does.
+    const world = makeWorld({
       agents: (_session, worlds) => [
-        { ...liveAgent(WORKER, PANE, SPACE), name: null, session: SES },
+        {
+          ...liveAgent(WORKER, PANE, SPACE),
+          name: world.trace.renamed.some((one) => one.pane === PANE && one.name === WORKER) ? WORKER : null,
+          session: SES,
+        },
         ...worlds.map((one) => liveAgent(one.label, one.pane, one.workspace)),
       ],
       processInfo: (_session, pane, worlds) => {
@@ -968,6 +973,7 @@ describe('a waiting record whose pane the host restored with its own conversatio
       workspaces: () => [{ id: SPACE, label: WORKER }],
       workspacePanes: (_session, workspace) => (workspace === SPACE ? [PANE] : null),
     });
+    return world;
   }
 
   test('team up adopts the pane where it stands and never launches a second copy', async () => {
