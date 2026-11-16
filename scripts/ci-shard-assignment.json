@@ -895,6 +895,7 @@
     "test/restart-rebind-gpt.test.ts": 5,
     "test/restart-resume-pin.test.ts": 2,
     "test/restart.test.ts": 5,
+    "test/restore-adopt.test.ts": 5,
     "test/restore-after-reboot-independent.test.ts": 4,
     "test/restore-fresh-start-independent.test.ts": 5,
     "test/restore-load-retry.test.ts": 2,

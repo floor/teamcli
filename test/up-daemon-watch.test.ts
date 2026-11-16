@@ -336,3 +336,20 @@ describe('a hosted watch closes the legacy watch workspace it replaced', () => {
     );
   });
 });
+
+// `team up --retie` starts and closes nothing, legacy watch workspaces included.
+describe('--retie closes no legacy watch workspace', () => {
+  test('a closable legacy workspace under a hosted watch is left, on a dry and a real run', async () => {
+    const made = await baseline();
+    const place = plantLegacy(made);
+    made.processes.set(place.pane, { shell: 900, foreground: [900] });
+    const dry = await second(made, { daemonHealth: hostedDaemon() }, [...FILE, '--retie', '--dry-run']);
+    expect(made.closes).toEqual([]);
+    expect(`${dry.io.out}${dry.io.err}`).not.toContain('legacy watch workspace');
+    const real = await second(made, { daemonHealth: hostedDaemon() }, [...FILE, '--retie']);
+    expect(made.closes).toEqual([]);
+    expect(made.kills).toEqual([]);
+    expect(made.creates).toEqual([]);
+    expect(`${real.io.out}${real.io.err}`).not.toContain('legacy watch workspace');
+  });
+});

@@ -308,6 +308,11 @@ export type Op =
       session?: string;
       /** Sidebar line 2, painted by the rename's own step (`also`). */
       displayAgent?: string;
+      /** The record never reached ready (stopped at `launched`, or waiting at a dialog). The
+       *  identity is re-tied; the seat is recorded ready, and a wait cleared, only when the pane
+       *  is read at its idle prompt immediately before the write. The value is the stage the
+       *  record holds, kept as it is when the prompt is not proven. */
+      unready?: 'launched' | 'named' | 'ready';
     }
   | { do: 'watch'; label: string; command: string; file?: string }
   /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. A reused
@@ -561,6 +566,8 @@ export interface UpSeat {
     session?: string;
     via: 'session' | 'cli';
     sentence: string;
+    /** The record never reached ready: see the adopt op's `unready`. */
+    unready?: 'launched' | 'named' | 'ready';
   };
   /** A bound registry policy. Its launch/model are authoritative over the team file. */
   registry?: { launch: string; model: string; version: string; sessionId?: string };
@@ -628,6 +635,9 @@ export interface UpSeat {
   grantKeep?: string;
   /** Automatic restore keeps a live or unmeasured original pane and its record untouched. */
   restoreKeep?: { reason: string; uncertain: boolean };
+  /** `team up --retie` left this seat out: the plan would have launched, closed or relaunched
+   *  it. The seat is carried as `stopped` so no step reaches it; this is the line said for it. */
+  retieSkip?: string;
 }
 
 /**
@@ -1096,6 +1106,10 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
+    if (seat.retieSkip !== undefined) {
+      steps.push({ kind: 'skip', text: `${seat.name}: ${seat.retieSkip}` });
+      continue;
+    }
     if (seat.stopped) {
       steps.push({ kind: 'skip', text: `${seat.name}: stopped in the file; start it with \`team add ${seat.name}\`` });
       continue;
@@ -1191,6 +1205,7 @@ export function upPlan(input: UpInput): Step[] {
           recordedLaunched: seat.adopted.recordedLaunched,
           ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
           ...(seat.adopted.session === undefined ? {} : { session: seat.adopted.session }),
+          ...(seat.adopted.unready === undefined ? {} : { unready: seat.adopted.unready }),
         },
       });
       // The plan's own line. It carries no `do`: the re-tie is the run step above, so a walk

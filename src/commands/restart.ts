@@ -2684,7 +2684,10 @@ function replacedRefused(out: Io, json: boolean, name: string, takeable = false)
     id: 'restart.replaced',
     message: `${name} has a process in its old pane that is not the signed seat; left as it is`,
     // herdr names the seat on that pane: the caller's own `--abandon` replaces it, without a key.
-    repair: takeable ? `team restart ${name} --abandon` : null,
+    // Otherwise the pane may be the seat the host restored after a machine restart, its name and
+    // pids gone: the rebind proves it (recorded conversation, pre-boot launch, declared CLI) or
+    // refuses, and a re-tied seat restarts normally.
+    repair: takeable ? `team restart ${name} --abandon` : `team up --rebind ${name}`,
   });
   // exit: restart.replaced
   return 1;

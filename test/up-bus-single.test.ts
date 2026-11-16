@@ -340,3 +340,37 @@ test('with no readable pane in the Bus workspace, no second one is made', () => 
   expect(plan.some((step) => step.do?.do === 'create' || step.do?.do === 'bus')).toBe(false);
   expect(plan.some((step) => step.kind === 'skip' && step.text.includes('no second one made'))).toBe(true);
 });
+
+// `team up --retie` starts and closes nothing, the Bus included.
+test('--retie starts no dead Bus and makes no Bus workspace, on a dry and a real run', async () => {
+  seedWatch();
+  const made = makeWorld({}, { busAlive: false });
+  const dry = testIo(root, { kind: 'owner' });
+  await runUp(['--retie', '--dry-run'], dry, made.sources);
+  expect(dry.out).not.toContain('team bus');
+  const io = testIo(root, { kind: 'owner' });
+  await runUp(['--retie'], io, made.sources);
+  expect(made.trace.created).toEqual([]);
+  expect(made.trace.runs).toEqual([]);
+  expect(made.trace.closed).toEqual([]);
+  expect(`${io.out}${io.err}`).not.toContain('bus: started');
+});
+
+test('--retie leaves a bare stray Bus workspace beside an answering Bus', async () => {
+  seedWatch();
+  updateState(dir, (file) => {
+    const session = (file.sessions[SESSION] ??= emptySession());
+    session.bus = { pane: BUS_PANE_ONE, workspace: BUS_ONE, started: NOW.toISOString() };
+  });
+  const made = makeWorld({
+    [BUS_PANE_ONE]: { workspace: BUS_ONE, process: bare(60) },
+    [BUS_PANE_TWO]: { workspace: BUS_TWO, process: { shell: 70, foreground: [70, 71] } },
+  }, { busAlive: true });
+  const dry = testIo(root, { kind: 'owner' });
+  await runUp(['--retie', '--dry-run'], dry, made.sources);
+  expect(dry.out).not.toContain(BUS_ONE);
+  const io = testIo(root, { kind: 'owner' });
+  await runUp(['--retie'], io, made.sources);
+  expect(made.trace.closed).toEqual([]);
+  expect(made.trace.runs).toEqual([]);
+});
