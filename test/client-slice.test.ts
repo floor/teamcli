@@ -1199,7 +1199,8 @@ function walkHost(
     frames,
     dials: () => dials,
     delivery: options.delivery,
-    agents: () => [{ name: 'orchestrator', pane: 'pane-orchestrator' }],
+    // herdr names the CLI it detected: the live placement a socket dial proves reads it.
+    agents: () => [{ name: 'orchestrator', pane: 'pane-orchestrator', cli: 'claude' }],
     processInfo: () => ({ shell: 111, foreground: [222] }),
     socketsDir: w.sockets,
     deliver: async (socketPath: string, frame: string): Promise<SendOutcome> => {
