@@ -41,6 +41,7 @@ import { beatWatch, ownWatchPane, placedWatch, watchRunning } from '../watch/pan
 import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand } from './up.ts';
 import { realHost, redeliverChannelOnSocket, runSend } from './send.ts';
+import type { PendingDrop } from '../send/pending.ts';
 import { realHost as realReplyHost, runReply } from './reply.ts';
 import { relayOutboxes } from '../send/confined-outbox.ts';
 import { sendDaemonDirect } from '../reminder/direct-send.ts';
@@ -1867,29 +1868,30 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // A send held while a pane was busy leaves its drop and a record beside it: the pass
         // delivers one per seat once the box is free, bounded, and says the drop's path when it
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.
+        // The one socket redelivery a stored signed record gets: the channel's redelivery in the
+        // held-drop retry, and the unread pass's slow event ladder for a Claude seat. A seat whose
+        // launch the socket gate refuses falls through to whatever the caller walks next.
+        const socketRedeliver = (dropDir: string, drop: PendingDrop) => {
+          const seat = team.seats.find((one) => one.name === drop.to);
+          return redeliverChannelOnSocket({
+            host: { ...realHost, home: sources.home ?? realHost.home, now: sources.now },
+            dir,
+            root,
+            project: team.project,
+            session,
+            seat: drop.to,
+            cli: seat?.cli ?? '',
+            dropDir,
+            drop,
+            team,
+            ...(seat === undefined ? {} : { launch: seat.launch }),
+          });
+        };
         if (!foreign && !quiet && hosted === undefined && paceVerified) {
           await retryHeldDrops({
             dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say,
             nativeHeld: nativeHeldNow,
-            // The channel's one redelivery dials the receiving session's socket with the stored
-            // signed record; a seat whose launch the socket gate refuses falls through to the
-            // typed leg the retry already walks.
-            socketRedeliver: (dropDir, drop) => {
-              const seat = team.seats.find((one) => one.name === drop.to);
-              return redeliverChannelOnSocket({
-                host: { ...realHost, home: sources.home ?? realHost.home, now: sources.now },
-                dir,
-                root,
-                project: team.project,
-                session,
-                seat: drop.to,
-                cli: seat?.cli ?? '',
-                dropDir,
-                drop,
-                team,
-                ...(seat === undefined ? {} : { launch: seat.launch }),
-              });
-            },
+            socketRedeliver,
           });
         }
         // A delivered send whose seat was not seen acting on the line yet leaves a record of its
@@ -1956,6 +1958,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             {
               dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow,
               ...(mail === undefined ? {} : { mail }),
+              socketRedeliver,
               // A hosted watch sends the unread-lead climb as the daemon's notice, like a prompt's.
               ...(hosted === undefined ? {} : {
                 deliverClimb: (climb: StatusClimb): boolean => {

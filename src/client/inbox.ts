@@ -54,6 +54,7 @@ import {
 } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readHistory } from '../send/history.ts';
+import { readTeams, type TeamRecord } from '../registry/teams.ts';
 import { claimClientRequest } from './replay.ts';
 import {
   KEY_ISOLATION_LINE,
@@ -462,40 +463,47 @@ type AckOutcome = NonNullable<ClientReading['ack']>;
  *  receipt says so, or a reply on its thread is in this inbox. */
 export type SentStatus = 'queued' | 'delivered' | 'read' | 'replied';
 
-export type SentRow = { id: string; to: string; at: string; status: SentStatus };
+export type SentRow = { id: string; to: string; team: string; at: string; status: SentStatus };
 
 /** The history outcomes that mean a leg took the message. */
 const DELIVERED_OUTCOMES = new Set(['delivered', 'delivered (read)', 'delivered (late)', 'delivered (typed wake)', 'sent (channel)', 'answered']);
 
+/** One team a client's sends can land in: its history store and its drop tree. */
+export type SentTeam = { project: string; root: string; session: string };
+
 /**
- * The status events of the messages this client sent to the coordinator's team, newest last: the
- * read side of the sender-bound `message.delivered`, `message.read` and `message.replied` events
- * a seat's own send gets on the bus. A client has no bus subscription; it reads its inbox, so the
- * same events reach it here, on the route it already uses for replies. Every status is derived
- * from what is signed: the team's history line for the delivery, the seat's signed receipt for a
- * read or a reply (`statusOf`), and a verified reply on the message's own thread in this inbox.
- * Nothing here is written, and a line or receipt that does not verify proves nothing.
+ * The status events of the messages this client sent, across every team its grants reach (the
+ * teams of its entity, the coordinator's first), newest last: the read side of the sender-bound
+ * `message.delivered`, `message.read` and `message.replied` events a seat's own send gets on the
+ * bus. A client has no bus subscription; it reads its inbox, so the same events reach it here, on
+ * the route it already uses for replies. Every status is derived from what is signed: each team's
+ * history line for the delivery, the seat's signed receipt for a read or a reply (`statusOf`), and
+ * a verified reply on the message's own thread in this inbox. Only this client's own sends are
+ * read (`from: client:<id>`). Nothing here is written, and a line or receipt that does not verify
+ * proves nothing.
  */
 export function clientSentStatuses(
-  input: { home: string; coordinator: EntityCoordinator; clientId: string; key: KeyObject; replies: readonly ShownReply[]; limit: number },
+  input: { home: string; teams: readonly SentTeam[]; clientId: string; key: KeyObject; replies: readonly ShownReply[]; limit: number },
 ): SentRow[] {
-  const read = readHistory(input.coordinator.entity, input.coordinator.teamRoot, input.home);
-  if (!read.ok) return [];
   const from = `client:${input.clientId}`;
-  const first = new Map<string, { to: string; at: string }>();
+  const first = new Map<string, { to: string; at: string; team: SentTeam }>();
   const delivered = new Set<string>();
-  for (const entry of read.entries) {
-    if (entry.from !== from) continue;
-    if (!first.has(entry.id)) first.set(entry.id, { to: entry.to, at: entry.ts });
-    if (DELIVERED_OUTCOMES.has(entry.outcome)) delivered.add(entry.id);
+  for (const team of input.teams) {
+    const read = readHistory(team.project, team.root, input.home);
+    if (!read.ok) continue;
+    for (const entry of read.entries) {
+      if (entry.from !== from) continue;
+      if (!first.has(entry.id)) first.set(entry.id, { to: entry.to, at: entry.ts, team });
+      if (DELIVERED_OUTCOMES.has(entry.outcome)) delivered.add(entry.id);
+    }
   }
   const answered = new Set(input.replies.map((reply) => reply.thread));
   const rows = [...first.entries()]
     .sort((left, right) => (left[1].at < right[1].at ? -1 : left[1].at > right[1].at ? 1 : 0))
     .slice(-input.limit);
   return rows.map(([id, sent]) => {
-    const dropDir = join(input.coordinator.teamRoot, '.agents', 'send-drops', input.coordinator.session, sent.to);
-    const signed = statusOf(dropDir, id, { to: sent.to, root: input.coordinator.teamRoot, session: input.coordinator.session }, input.key);
+    const dropDir = join(sent.team.root, '.agents', 'send-drops', sent.team.session, sent.to);
+    const signed = statusOf(dropDir, id, { to: sent.to, root: sent.team.root, session: sent.team.session }, input.key);
     const status: SentStatus = answered.has(id) || signed === 'replied'
       ? 'replied'
       : signed === 'read'
@@ -503,8 +511,25 @@ export function clientSentStatuses(
         : signed === 'delivered' || delivered.has(id)
           ? 'delivered'
           : 'queued';
-    return { id, to: sent.to, at: sent.at, status };
+    return { id, to: sent.to, team: sent.team.project, at: sent.at, status };
   });
+}
+
+/** The teams a client's grants reach: the coordinator's, then every registry team of the same
+ *  entity, each once. A registry that cannot be read leaves the coordinator's alone. */
+export function sentTeamsOf(home: string, coordinator: EntityCoordinator): SentTeam[] {
+  const teams: SentTeam[] = [{ project: coordinator.entity, root: coordinator.teamRoot, session: coordinator.session }];
+  let records: Record<string, TeamRecord>;
+  try {
+    records = readTeams(home);
+  } catch {
+    return teams;
+  }
+  for (const record of Object.values(records)) {
+    if (record.entity !== coordinator.entity || record.root === coordinator.teamRoot) continue;
+    teams.push({ project: record.project, root: record.root, session: record.session });
+  }
+  return teams;
 }
 
 type ClientReadOutcome =
@@ -795,7 +820,7 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
     differences,
     sent: clientSentStatuses({
       home: sources.home,
-      coordinator: outcome.coordinator,
+      teams: sentTeamsOf(sources.home, outcome.coordinator),
       clientId: outcome.grant.clientId,
       key: outcome.key,
       replies: ordered,
@@ -884,8 +909,8 @@ function printReading(io: Io, reading: ClientReading, json: boolean, now: Date):
       '',
       'Sent by this client:',
       ...renderTable({
-        headers: ['ID', 'TO', 'SENT', 'STATUS'],
-        rows: reading.sent.map((row) => [row.id, row.to, formatRelativeTime(row.at, now), row.status]),
+        headers: ['ID', 'TO', 'TEAM', 'SENT', 'STATUS'],
+        rows: reading.sent.map((row) => [row.id, row.to, row.team, formatRelativeTime(row.at, now), row.status]),
         indent: '  ',
         style,
       }),

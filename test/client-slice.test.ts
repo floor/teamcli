@@ -37,7 +37,7 @@ import { claimClientRequest } from '../src/client/replay.ts';
 import { resolveClientTarget, runClientSend } from '../src/client/send.ts';
 import { insideTeamPane } from '../src/client/pane-guard.ts';
 import { runClient } from '../src/commands/client.ts';
-import { clientSentStatuses, runClientMessages } from '../src/client/inbox.ts';
+import { clientSentStatuses, runClientMessages, sentTeamsOf } from '../src/client/inbox.ts';
 import { clientRequestBody, signClientRequest, type ClientRequest } from '../src/client/verify.ts';
 import { CLIENT_REQUEST_DOMAIN } from '../src/client/verify.ts';
 import type { Caller } from '../src/caller.ts';
@@ -1324,6 +1324,18 @@ describe('the client send walk', () => {
     expect(log).not.toContain('queued, no event adapter');
   });
 
+  test('the socket is dialed only while the registry still records the grant\'s recipient on that seat and CLI', async () => {
+    const w = walkFixture('walk-socket-retired');
+    acceptInbound(w);
+    // The record now says another CLI holds the seat: the dial's record check refuses it.
+    updateAgent(w.home, w.grant.recipientId, { cli: 'codex' });
+    const host = walkHost(w);
+    expect(await runSend(clientArgs(w), capture(w, { caller: owner }).io, host)).toBe(0);
+    expect(host.dials()).toBe(0);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('socket: the addressed seat record changed');
+  });
+
   test('a team that declares the retired typed word still reaches a socket-accepting Claude seat (the 2026-11-16 case)', async () => {
     const w = walkFixture('walk-socket-declared');
     acceptInbound(w);
@@ -1388,10 +1400,13 @@ describe('the client send walk', () => {
     acceptInbound(w);
     const host = walkHost(w);
     expect(await runSend(clientArgs(w), capture(w, { caller: owner }).io, host)).toBe(0);
-    const coordinator = { entity: 'floor', teamId: teamIdOf(w.teamRoot), teamRoot: w.teamRoot, session: 'floor', recipientId: w.grant.recipientId, recipientSeat: 'orchestrator' };
+    const coordinator = { entity: 'floor', teamId: TEAM_ID, teamRoot: w.teamRoot, session: 'floor', recipientId: w.grant.recipientId, recipientSeat: 'orchestrator' };
+    const teams = sentTeamsOf(w.home, coordinator);
+    // Every team of the grant's entity is read: the coordinator's first, then the fixture's second.
+    expect(teams.map((one) => one.project)).toEqual(['floor', 'teamcli']);
     const key = messageKeyOf(w.home);
-    const statusNow = () => clientSentStatuses({ home: w.home, coordinator, clientId: w.grant.clientId, key, replies: [], limit: 20 });
-    expect(statusNow()).toEqual([{ id: 'drop-1', to: 'orchestrator', at: NOW.toISOString(), status: 'delivered' }]);
+    const statusNow = () => clientSentStatuses({ home: w.home, teams, clientId: w.grant.clientId, key, replies: [], limit: 20 });
+    expect(statusNow()).toEqual([{ id: 'drop-1', to: 'orchestrator', team: 'floor', at: NOW.toISOString(), status: 'delivered' }]);
     // The seat's own signed read receipt is what makes it read; a planted file proves nothing.
     writeFileSync(join(w.dropDir, 'drop-1.read.json'), '{"not":"signed"}\n');
     expect(statusNow()[0]?.status).toBe('delivered');
@@ -1399,7 +1414,7 @@ describe('the client send walk', () => {
     writeFileSync(join(w.dropDir, 'drop-1.read.json'), `${JSON.stringify(receipt)}\n`);
     expect(statusNow()[0]?.status).toBe('read');
     // A verified reply on the message's own thread in the client's inbox is the replied event.
-    const replied = clientSentStatuses({ home: w.home, coordinator, clientId: w.grant.clientId, key, replies: [{ id: 'r-1', at: NOW.toISOString(), from: 'orchestrator', from_id: '', to: `client:${w.grant.clientId}`, body: 'ok', thread: 'drop-1', grantId: w.grant.grantId }], limit: 20 });
+    const replied = clientSentStatuses({ home: w.home, teams, clientId: w.grant.clientId, key, replies: [{ id: 'r-1', at: NOW.toISOString(), from: 'orchestrator', from_id: '', to: `client:${w.grant.clientId}`, body: 'ok', thread: 'drop-1', grantId: w.grant.grantId }], limit: 20 });
     expect(replied[0]?.status).toBe('replied');
   });
 

@@ -823,6 +823,10 @@ type Aim = {
   root: string;
   /** True when the target's team is not the caller's. */
   cross: boolean;
+  /** The registry key the recipient's record is filed under, when the caller resolved it from
+   *  a signed binding (a client grant's team): the socket's record check reads it in place of
+   *  the root's own id, which a registry may key differently. */
+  teamId?: string;
 };
 
 type TeamLoad = ReturnType<typeof readTeamConfig>;
@@ -5715,6 +5719,9 @@ async function deliverClientRecord(
     address: agentRecord?.reach.address ?? null,
     who: from,
     identityHeader: CLIENT_FRAME_HEADER,
+    // The grant's bound recipient: the socket is dialed only while the registry still records
+    // that agent running on this seat, CLI, session and team, as a seat send's dial requires.
+    recipient: { agentId: target.recipientId, teamId: target.teamId },
   });
   const failures = [...walk.failures];
   if (!walk.walked) {
@@ -5848,6 +5855,10 @@ export async function walkReplyDelivery(input: {
   /** The socket frame's identity line, when the carrier names its sender itself: a client send
    *  names the person's client. Absent, the line is the sending seat's, read from `naming`. */
   identityHeader?: string;
+  /** The receiving seat's registry id and the team key its record is filed under, when the caller
+   *  resolved them from a signed binding: the socket leg then makes the same record check a
+   *  send's own walk makes before it dials (running, same CLI, team, session and seat). */
+  recipient?: { agentId: string; teamId: string };
 }): Promise<ReplyWalkResult> {
   const seatName = input.seat;
   const from = input.payload.from;
@@ -5977,7 +5988,7 @@ export async function walkReplyDelivery(input: {
   const stagedRecordOf = (): RecordWritten | null => stagedWalk;
   const aim: Aim = {
     seat: seatName,
-    agentId: null,
+    agentId: input.recipient?.agentId ?? null,
     session: input.session,
     cli,
     address: input.address,
@@ -5986,6 +5997,7 @@ export async function walkReplyDelivery(input: {
     project: input.project,
     root: input.root,
     cross: false,
+    ...(input.recipient === undefined ? {} : { teamId: input.recipient.teamId }),
   };
   if (!human) {
     const blocked = workBlock(input.host, input.dir, input.session, seatName, cli);
@@ -6671,7 +6683,7 @@ async function deliverSocketFrame(
   const message = { id: msgId, record: recordText, frame };
   const expectedAddressRecord = to.agentId === null ? null : getAgent(host.home, to.agentId);
   if (to.agentId !== null && (expectedAddressRecord === null || expectedAddressRecord.lifecycle !== 'running'
-    || expectedAddressRecord.cli !== to.cli || expectedAddressRecord.reach.team !== teamIdOf(to.root)
+    || expectedAddressRecord.cli !== to.cli || expectedAddressRecord.reach.team !== (to.teamId ?? teamIdOf(to.root))
     || expectedAddressRecord.reach.session !== to.session || expectedAddressRecord.reach.seat !== to.seat)) {
     return { kind: 'fallback', reason: 'the addressed seat record changed', socketUnusable: true };
   }
