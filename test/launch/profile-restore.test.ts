@@ -1,20 +1,19 @@
-// Three restart paths seen on 2026-11-16, after the machine restarted. Synthetic frames and
-// readings only: no CLI is started, no herdr session is touched.
-//   1. Codex's "open in another app" notice on a resume of the seat's own conversation
-//      (src/launch/another-app.ts, the idle wait in src/launch/execute.ts).
-//   2. A Jules pane herdr does not list as an agent, named after the pane is declared one
-//      (the rename step in src/launch/execute.ts).
-//   3. A wait recorded at a provider error that the pane has since left (src/status/compare.ts).
+// Restart paths seen on 2026-11-16, after the machine restarted. Synthetic frames and readings
+// only: no CLI is started, no herdr session is touched.
+//   1. Codex's "open in another app" notice stays the owner's: no key is sent for it, whatever
+//      herdr lists (the idle wait in src/launch/execute.ts).
+//   2. A Jules pane herdr does not list as an agent is declared one, then named, only when the
+//      pane is proven this seat's (the naming step in src/launch/execute.ts).
+//   3. A wait recorded at a provider error that the pane has since left: see
+//      test/check-stuck-prompts.test.ts.
 import { describe, expect, test } from 'bun:test';
-import { anotherAppDecision, codexOpenElsewhere, conversationHolders } from '../../src/launch/another-app.ts';
 import { executePlan, type Host } from '../../src/launch/execute.ts';
 import type { Step } from '../../src/launch/plan.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
+import type { SeatState } from '../../src/state.ts';
 
 // The notice as codex-cli 0.167.0 draws it (the layout test/provider-error-gaps.test.ts keeps).
 const LOCKED = [
-  '• done-stop — typecheck passed; worktree left as-is.',
-  '',
   '■ This conversation is read-only or unavailable; no operation was sent.',
   '',
   '  🔒 This conversation is open in another app                                  r to retry',
@@ -23,223 +22,175 @@ const LOCKED = [
   '  r retry   f fork   ←/esc command center   ^c/q exit   ^t transcript',
 ].join('\n');
 
-const CONVERSATION = '01a1c017-0000-7000-8000-000000000001';
-const HERE = { session: 'acme', pane: 'w27:p1' };
-
-function agent(pane: string, session?: string, name: string | null = null): HerdrAgent {
-  return { name, agent: 'codex', pane, workspace: pane.split(':')[0]!, status: 'idle', cwd: null, ...(session ? { session } : {}) };
-}
-
-describe('the notice is read only when both of its rows are drawn', () => {
-  test('the captured frame', () => {
-    expect(codexOpenElsewhere(LOCKED)).toBe(true);
-  });
-  test('one row alone, or a transcript line quoting half of it, is not the notice', () => {
-    expect(codexOpenElsewhere('This conversation is open in another app')).toBe(false);
-    expect(codexOpenElsewhere('Close it there and press R to continue here')).toBe(false);
-    expect(codexOpenElsewhere('› ')).toBe(false);
-  });
-});
-
-describe('who holds the conversation', () => {
-  test('panes of every running session that report the id; stopped sessions are not read', () => {
-    const read: string[] = [];
-    const holders = conversationHolders({
-      sessions: () => [{ name: 'acme', running: true }, { name: 'floor', running: true }, { name: 'old', running: false }],
-      agents: (name) => {
-        read.push(name);
-        if (name === 'acme') return [agent('w27:p1', CONVERSATION), agent('w3:p1', 'other')];
-        return [agent('w56:p1', CONVERSATION)];
+describe('Codex "open in another app" on a resume is left to the owner', () => {
+  test('no key is sent, and the wait stops at the dialog, even with no herdr holder', async () => {
+    const keys: string[] = [];
+    const said: string[] = [];
+    let clock = 0;
+    const host: Host = {
+      startServer: () => true,
+      sessionUp: () => true,
+      createWorkspace: () => ({ pane: 'w27:p1', workspace: 'w27' }),
+      paneRun: () => true,
+      typeLine: () => { throw new Error('unexpected typing'); },
+      renameAgent: () => true,
+      closeWorkspace: () => true,
+      stopSession: () => true,
+      kill: () => { throw new Error('unexpected process signal'); },
+      agentPanes: () => ['w27:p1'],
+      agentList: () => [],
+      classify: () => 'provider error',
+      paneText: () => LOCKED,
+      foreground: () => ['codex'],
+      sendKey: (_s, _p, key) => { keys.push(key); return true; },
+      sleep: async (ms) => { clock += ms; },
+      now: () => clock,
+      allow: () => null,
+      record: () => {},
+      running: () => {},
+      drop: () => {},
+      say: (text) => { said.push(text); },
+      log: () => {},
+    };
+    const steps: Step[] = [{
+      kind: 'wait',
+      text: 'until operator shows its idle prompt',
+      do: {
+        do: 'idle', seat: 'operator', label: 'operator', cli: 'codex', seconds: 5,
+        command: 'codex resume 01a1c017-0000-7000-8000-000000000001', pane: 'w27:p1', workspace: 'w27',
+        repairLine: 'synthetic repair',
       },
-    }, CONVERSATION);
-    expect(holders).toEqual([{ session: 'acme', pane: 'w27:p1' }, { session: 'floor', pane: 'w56:p1' }]);
-    expect(read).toEqual(['acme', 'floor']);
-  });
-  test('an unreadable session list or agent list is unknown, never "no holder"', () => {
-    expect(conversationHolders({ sessions: () => null, agents: () => [] }, CONVERSATION)).toBeNull();
-    expect(conversationHolders({ sessions: () => [{ name: 'acme', running: true }], agents: () => null }, CONVERSATION)).toBeNull();
+    }];
+    await executePlan(steps, 'acme', host);
+    expect(keys).toEqual([]);
+    expect(said.join('')).toContain('provider error');
   });
 });
 
-describe('R is pressed only for the seat\'s own detached task', () => {
-  const base = { cli: 'codex', text: LOCKED, resumes: CONVERSATION, here: HERE };
-  test('no other pane holds it, or only this launch\'s own pane: press', () => {
-    expect(anotherAppDecision({ ...base, holders: [] })).toEqual({ press: true });
-    expect(anotherAppDecision({ ...base, holders: [HERE] })).toEqual({ press: true });
-  });
-  test('another live pane holds it (a duplicate beside a live seat): left to the owner', () => {
-    const decision = anotherAppDecision({ ...base, holders: [{ session: 'floor', pane: 'w56:p1' }] });
-    expect(decision.press).toBe(false);
-    expect(decision).toEqual({ press: false, why: 'another live pane holds the conversation (w56:p1 in session floor)' });
-  });
-  test('any missing proof is left to the owner', () => {
-    expect(anotherAppDecision({ ...base, holders: null }).press).toBe(false);
-    expect(anotherAppDecision({ ...base, resumes: null, holders: [] }).press).toBe(false);
-    expect(anotherAppDecision({ ...base, resumes: '', holders: [] }).press).toBe(false);
-    expect(anotherAppDecision({ ...base, text: null, holders: [] }).press).toBe(false);
-    expect(anotherAppDecision({ ...base, text: '› ', holders: [] }).press).toBe(false);
-    expect(anotherAppDecision({ ...base, cli: 'claude-code', holders: [] }).press).toBe(false);
-  });
-});
-
-type IdleScene = {
-  holders: { session: string; pane: string }[] | null;
-  /** Whether the notice goes away after R (the take-over worked). */
-  clears: boolean;
-  command?: string;
-  takeOver?: boolean;
+type JulesScene = {
+  foreground: string[];
+  /** The agent list herdr gives the naming step; null: unreadable. Declared panes are added. */
+  agents: HerdrAgent[] | null;
+  /** The pane list the wait reads; null: unreadable. Defaults to the agent list's panes. */
+  panes?: string[] | null;
+  /** The session's seat records; null: unreadable; absent: a host with no record reading. */
+  records?: Record<string, SeatState> | null;
+  offerReport?: boolean;
 };
 
-async function idleWait(scene: IdleScene) {
-  let pressedR = 0;
+const PANE = 'w4B:p1';
+const SEAT = 'tester-1';
+
+async function nameJules(scene: JulesScene) {
+  let declared = false;
+  let named = false;
   let clock = 0;
-  const logs: string[] = [];
-  const said: string[] = [];
+  const reports: { pane: string; agent: string }[] = [];
+  const renames: string[] = [];
   const records: unknown[] = [];
-  const locked = () => pressedR === 0 || !scene.clears;
+  const listed = (): HerdrAgent[] | null => {
+    if (scene.agents === null) return null;
+    const ours: HerdrAgent[] = declared
+      ? [{ name: named ? SEAT : null, agent: 'jules', pane: PANE, workspace: 'w4B', status: 'idle', cwd: null }]
+      : [];
+    return [...scene.agents, ...ours];
+  };
   const host: Host = {
     startServer: () => true,
     sessionUp: () => true,
-    createWorkspace: () => ({ pane: HERE.pane, workspace: 'w27' }),
+    createWorkspace: () => ({ pane: PANE, workspace: 'w4B' }),
     paneRun: () => true,
     typeLine: () => { throw new Error('unexpected typing'); },
-    renameAgent: () => true,
+    renameAgent: (_s, pane, name) => {
+      renames.push(`${pane}=${name}`);
+      if (declared) named = true;
+      return declared;
+    },
+    ...(scene.offerReport === false
+      ? {}
+      : {
+          reportAgent: (_s: string, pane: string, agentName: string) => {
+            reports.push({ pane, agent: agentName });
+            declared = true;
+            return true;
+          },
+        }),
     closeWorkspace: () => true,
     stopSession: () => true,
     kill: () => { throw new Error('unexpected process signal'); },
-    agentPanes: () => [HERE.pane],
-    classify: () => (locked() ? 'provider error' : 'idle'),
-    paneText: () => (locked() ? LOCKED : '› '),
-    foreground: () => ['codex'],
+    agentPanes: () => (scene.panes !== undefined ? scene.panes : (listed()?.map((one) => one.pane) ?? null)),
+    agentList: () => listed(),
+    ...(scene.records === undefined ? {} : { seatStates: () => scene.records ?? null }),
+    classify: () => 'idle',
+    foreground: () => scene.foreground,
     sleep: async (ms) => { clock += ms; },
     now: () => clock,
     allow: () => null,
     record: (_seat, patch) => { records.push(patch); },
     running: () => {},
     drop: () => {},
-    say: (text) => { said.push(text); },
-    log: (_who, what) => { logs.push(what); },
-    conversationHolders: () => scene.holders,
-    ...(scene.takeOver === false ? {} : { takeOverConversation: () => { pressedR += 1; return true; } }),
+    say: () => {},
+    log: () => {},
   };
   const steps: Step[] = [{
     kind: 'wait',
-    text: 'until operator shows its idle prompt',
-    do: {
-      do: 'idle',
-      seat: 'operator',
-      label: 'operator',
-      cli: 'codex',
-      seconds: 5,
-      command: scene.command ?? `codex resume ${CONVERSATION}`,
-      pane: HERE.pane,
-      workspace: 'w27',
-      repairLine: 'synthetic repair',
-    },
+    text: `name ${SEAT}`,
+    do: { do: 'rename', seat: SEAT, label: 'Lynceus · tester 1', cli: 'jules', seconds: 10, rules: 'option', pane: PANE },
   }];
-  const report = await executePlan(steps, HERE.session, host);
-  return { pressedR, logs, said: said.join(''), records, report };
+  const report = await executePlan(steps, 'teamcli', host);
+  return { reports, renames, records, report };
 }
 
-describe('the idle wait answers the notice once, and only with proof', () => {
-  test('the seat\'s own detached task: R once, then the seat reaches its prompt', async () => {
-    const run = await idleWait({ holders: [], clears: true });
-    expect(run.pressedR).toBe(1);
-    expect(run.logs).toContain(`its conversation ${CONVERSATION} was held by its own detached Codex task; pressed R to continue here`);
-    expect(run.said).not.toContain('waiting for owner');
+const OWN_RECORD: Record<string, SeatState> = { [SEAT]: { stage: 'launched', pane: PANE, workspace: 'w4B' } };
+
+describe('a Jules pane herdr does not list is declared an agent only once proven this seat\'s', () => {
+  test('readable lists, no other seat names the pane, jules in front: declared once, then named', async () => {
+    const run = await nameJules({ foreground: ['bash', 'jules'], agents: [], records: OWN_RECORD });
+    expect(run.reports).toEqual([{ pane: PANE, agent: 'jules' }]);
+    expect(run.renames[0]).toBe(`${PANE}=${SEAT}`);
+    expect(run.records).toContainEqual({ stage: 'named', pane: PANE });
     expect(run.report.dropped).toEqual([]);
   });
-  test('another live pane holds it: no key, the wait stops at the dialog as before', async () => {
-    const run = await idleWait({ holders: [{ session: 'floor', pane: 'w56:p1' }], clears: true });
-    expect(run.pressedR).toBe(0);
-    expect(run.logs.some((line) => line.includes('left to the owner: another live pane holds the conversation'))).toBe(true);
-  });
-  test('R that does not clear the notice is not pressed again', async () => {
-    const run = await idleWait({ holders: [], clears: false });
-    expect(run.pressedR).toBe(1);
-  });
-  test('a launch line that names no conversation: no key', async () => {
-    const run = await idleWait({ holders: [], clears: true, command: 'codex' });
-    expect(run.pressedR).toBe(0);
-  });
-  test('a host that offers no take-over key: no key', async () => {
-    const run = await idleWait({ holders: [], clears: true, takeOver: false });
-    expect(run.pressedR).toBe(0);
-  });
-});
 
-describe('a Jules pane herdr does not list is declared an agent, then named', () => {
-  async function nameJules(input: { foreground: string[]; reportWorks: boolean; offerReport?: boolean }) {
-    let declared = false;
-    const reports: { pane: string; agent: string }[] = [];
-    const renames: string[] = [];
-    const logs: string[] = [];
-    const records: unknown[] = [];
-    let named = false;
-    let clock = 0;
-    const listedAgents = (): HerdrAgent[] =>
-      declared ? [{ name: named ? 'tester-1' : null, agent: 'jules', pane: 'w4B:p1', workspace: 'w4B', status: 'idle', cwd: null }] : [];
-    const host: Host = {
-      startServer: () => true,
-      sessionUp: () => true,
-      createWorkspace: () => ({ pane: 'w4B:p1', workspace: 'w4B' }),
-      paneRun: () => true,
-      typeLine: () => { throw new Error('unexpected typing'); },
-      renameAgent: (_s, pane, name) => {
-        renames.push(`${pane}=${name}`);
-        if (declared) named = true;
-        return declared;
-      },
-      ...(input.offerReport === false
-        ? {}
-        : {
-            reportAgent: (_s: string, pane: string, agentName: string) => {
-              reports.push({ pane, agent: agentName });
-              if (input.reportWorks) declared = true;
-              return input.reportWorks;
-            },
-          }),
-      closeWorkspace: () => true,
-      stopSession: () => true,
-      kill: () => { throw new Error('unexpected process signal'); },
-      agentPanes: () => listedAgents().map((one) => one.pane),
-      agentList: () => listedAgents(),
-      classify: () => 'idle',
-      foreground: () => input.foreground,
-      sleep: async (ms) => { clock += ms; },
-      now: () => clock,
-      allow: () => null,
-      record: (_seat, patch) => { records.push(patch); },
-      running: () => {},
-      drop: () => {},
-      say: () => {},
-      log: (_who, what) => { logs.push(what); },
-    };
-    const steps: Step[] = [{
-      kind: 'wait',
-      text: 'name tester-1',
-      do: { do: 'rename', seat: 'tester-1', label: 'Lynceus · tester 1', cli: 'jules', seconds: 10, rules: 'option', pane: 'w4B:p1' },
-    }];
-    const report = await executePlan(steps, 'teamcli', host);
-    return { reports, renames, logs, records, report };
-  }
-
-  test('the jules process in front: declared once, then named and recorded', async () => {
-    const run = await nameJules({ foreground: ['bash', 'jules'], reportWorks: true });
-    expect(run.reports).toEqual([{ pane: 'w4B:p1', agent: 'jules' }]);
-    expect(run.renames[0]).toBe('w4B:p1=tester-1');
-    expect(run.records).toContainEqual({ stage: 'named', pane: 'w4B:p1' });
-    expect(run.report.dropped).toEqual([]);
+  test('another seat\'s record names the pane: nothing is declared or named', async () => {
+    const run = await nameJules({
+      foreground: ['jules'],
+      agents: [],
+      records: { ...OWN_RECORD, 'tester-2': { stage: 'ready', pane: PANE, workspace: 'w4B' } },
+    });
+    expect(run.reports).toEqual([]);
+    expect(run.records).not.toContainEqual({ stage: 'named', pane: PANE });
+    expect(run.report.dropped).toEqual([SEAT]);
   });
-  test('a shell in front: nothing is declared and nothing is named', async () => {
-    const run = await nameJules({ foreground: ['zsh'], reportWorks: true });
+
+  test('the pane list is unreadable and the agent list names another seat there: no report, no rename', async () => {
+    const run = await nameJules({
+      foreground: ['jules'],
+      panes: null,
+      agents: [{ name: 'tester-2', agent: 'jules', pane: PANE, workspace: 'w4B', status: 'idle', cwd: null }],
+      records: OWN_RECORD,
+    });
     expect(run.reports).toEqual([]);
     expect(run.renames).toEqual([]);
-    expect(run.report.dropped).toEqual(['tester-1']);
+    expect(run.report.dropped).toEqual([SEAT]);
   });
-  test('a host with no report: the old refusal stands', async () => {
-    const run = await nameJules({ foreground: ['jules'], reportWorks: true, offerReport: false });
-    expect(run.reports).toEqual([]);
-    expect(run.report.dropped).toEqual(['tester-1']);
+
+  test('an unreadable agent list or seat record is never absence: nothing is declared', async () => {
+    const noList = await nameJules({ foreground: ['jules'], agents: null, panes: [], records: OWN_RECORD });
+    expect(noList.reports).toEqual([]);
+    const noRecords = await nameJules({ foreground: ['jules'], agents: [], records: null });
+    expect(noRecords.reports).toEqual([]);
+    const noReader = await nameJules({ foreground: ['jules'], agents: [] });
+    expect(noReader.reports).toEqual([]);
+  });
+
+  test('a shell in front, or a host with no report: the old refusal stands', async () => {
+    const shell = await nameJules({ foreground: ['zsh'], agents: [], records: OWN_RECORD });
+    expect(shell.reports).toEqual([]);
+    expect(shell.renames).toEqual([]);
+    expect(shell.report.dropped).toEqual([SEAT]);
+    const noReport = await nameJules({ foreground: ['jules'], agents: [], records: OWN_RECORD, offerReport: false });
+    expect(noReport.reports).toEqual([]);
+    expect(noReport.report.dropped).toEqual([SEAT]);
   });
 });
