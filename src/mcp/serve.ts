@@ -1168,7 +1168,34 @@ export async function placementAtStart(
  *  owed to the serving loop, or the refusal the start answers with. */
 /** One reading of what the start may do: serve (with what it proved), wait and read again, or
  *  refuse for good. */
-export type StartReading<T = true> = { ok: true; value: T } | { ok: false; wait: boolean; why: string };
+export type StartReading<T = true> = { ok: true; value: T } | {
+  ok: false;
+  wait: boolean;
+  why: string;
+  /** A wait that ends with this refusal once the start has waited this long (from the first
+   *  reading). Absent: the wait lasts while the client stays connected. */
+  waitBoundMs?: number;
+};
+
+/** How long a server under herdr waits for a placement it cannot place yet when its process
+ *  carries no pane variable. After a machine restart
+ *  herdr restores a lead's Claude pane and resumes the conversation itself: the CLI starts its
+ *  MCP servers before herdr has detected an agent in the pane, the restored process can carry no
+ *  pane variable, and the record may still name the pane from before the restart until the
+ *  restore re-ties it. Claude Code never starts a stdio server again once it has closed, so a
+ *  refusal there left the seat's team-inbox failed until a manual /mcp reconnect (jedi, vlist and
+ *  material, 2026-11-16, both restarts; the agent was named about two minutes later). The wait
+ *  serves nothing meanwhile — every tool call refuses with the reason — and the proof is the same
+ *  placement as before: only the time it is waited for changes. */
+export const SERVE_RESTORED_PLACEMENT_WAIT_MS = 10 * 60_000;
+/** Past the first minute of a bounded wait, the placement is read at this pace. */
+export const SERVE_PLACEMENT_BACKOFF_POLL_MS = 5000;
+
+/** Whether this process runs under herdr: a herdr process is among its ancestors. */
+function underHerdr(io: Io): boolean {
+  const ancestors = callerAncestors(io);
+  return ancestors !== null && ancestors.some((one) => one.name === 'herdr');
+}
 
 /**
  * The placement alone, as a start reading. A state that cannot be read yet is waited for. A
@@ -1185,7 +1212,15 @@ export function placementReading(io: Io, stateDir: string, session: string, name
   const pane = io.env.HERDR_PANE_ID;
   const recorded = recordedPaneOf(stateDir, session, name);
   const wait = pane !== undefined && pane !== '' && (recorded === undefined || recorded === pane);
-  return { ok: false, wait, why: verdict.why };
+  if (wait) return { ok: false, wait, why: verdict.why };
+  // A caller herdr has not named, under herdr itself, with no pane variable: the restored-pane
+  // window (the state named the same pane both times, so only a missing variable explains the
+  // refusal there). It is waited for, bounded, and proven by the same placement. A variable that
+  // names another pane than the record's, and a caller outside herdr, are still refused at once.
+  if ((pane === undefined || pane === '') && underHerdr(io)) {
+    return { ok: false, wait: true, why: verdict.why, waitBoundMs: SERVE_RESTORED_PLACEMENT_WAIT_MS };
+  }
+  return { ok: false, wait: false, why: verdict.why };
 }
 
 type ServingProof<T = true> =
@@ -1333,7 +1368,11 @@ export async function proveWhileServing<T = true>(input: {
     // A client that has gone is waited for by no one: the last refusal is returned at once.
     if (ended) return { ok: false, why: verdict.why };
     const elapsed = now() - start;
-    await serveUntil(sleep(elapsed < SERVE_PLACEMENT_WAIT_MS ? SERVE_PLACEMENT_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS));
+    if (verdict.waitBoundMs !== undefined && elapsed >= verdict.waitBoundMs) return { ok: false, why: verdict.why };
+    const pace = elapsed < SERVE_PLACEMENT_WAIT_MS
+      ? SERVE_PLACEMENT_POLL_MS
+      : verdict.waitBoundMs !== undefined && elapsed >= 60_000 ? SERVE_PLACEMENT_BACKOFF_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS;
+    await serveUntil(sleep(pace));
   }
   }
 }

@@ -5,6 +5,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
+import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { featureDialog } from '../launch/reboot.ts';
 import { restoreProof, type RestoreProof } from '../launch/restore-proof.ts';
@@ -922,7 +923,34 @@ function restoreProofAt(
 
 /** A program is in front and the stored session does not tie it to the launch. The repair is to
  *  look. `up` does not close this pane. */
+/** A restored pane runs a process herdr resumed, not the seat's launch line: a Claude seat whose
+ *  line loads the team channel was resumed without the development-channel flag, so its inbox
+ *  serves at the next turn and nothing is pushed (Claude Code logs "not in --channels list").
+ *  The repair relaunches through the seat's own line, resuming its conversation; a lead's own
+ *  seat is relaunched by another lead or the owner, never by itself. */
+export function channelPushOffNote(seat: Seat, team: TeamFile): string | undefined {
+  if (seat.cli !== 'claude-code' || !channelLaunchEnabled(seat.launch)) return undefined;
+  const repair = isLeadSeat(team, seat.name)
+    ? `when it is idle, another lead or the owner runs team restart ${seat.name} --resume <its conversation id>`
+    : `when it is idle, team restart ${seat.name} --resume <its conversation id>`;
+  return `${seat.name}: channel push off: resumed without the channel flag (the terminal host resumed it, not its launch line), so messages reach it only at its next turn; ${repair}`;
+}
+
 function cannotTie(
+  seat: Seat,
+  pane: string,
+  screen: string | undefined,
+  team: TeamFile,
+  namedOnPane: boolean,
+  proof: RestoreProof | null = null,
+): { row: Row; difference?: Difference; note?: string } {
+  const found = cannotTieRow(seat, pane, screen, team, namedOnPane, proof);
+  const pushOff = channelPushOffNote(seat, team);
+  if (pushOff === undefined) return found;
+  return { ...found, note: found.note === undefined ? pushOff : `${found.note}; ${pushOff}` };
+}
+
+function cannotTieRow(
   seat: Seat,
   pane: string,
   screen: string | undefined,

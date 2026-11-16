@@ -19,7 +19,8 @@ import type { Io } from '../io.ts';
 import { CHANNEL_FLAG, CHANNEL_SERVER } from '../mcp/channel.ts';
 import { cliWordListOf } from './cli-scope.ts';
 import { channelPairPresent } from '../mcp/launch-config.ts';
-import { runMcpSetup } from '../mcp/setup.ts';
+import { CHANNEL_LOCAL_FILES, runMcpSetup } from '../mcp/setup.ts';
+import { excludeLocally } from '../mcp/local-exclude.ts';
 import { writeRuntimeNotice } from '../send/endpoint-notice.ts';
 
 export type ChannelRepair = { seat: string; outcome: 'recreated' | 'refused'; detail: string };
@@ -29,6 +30,8 @@ export type RestoreChannelDeps = {
   setup?: (seat: string, io: Io) => Promise<number>;
   notify?: (input: { lead: string; body: string; id: string }) => boolean;
   now?: () => Date;
+  /** Keeps a present pair out of the checkout's untracked files; production: `excludeLocally`. */
+  exclude?: (root: string, names: readonly string[]) => void;
 };
 
 // Claude Code's options that take the next word as their value (`claude --help`): a word after
@@ -135,6 +138,10 @@ export async function restoreLeadChannels(input: {
   const present = deps.present ?? channelPairPresent;
   const now = deps.now ?? (() => new Date());
   const repairs: ChannelRepair[] = [];
+  // A pair written before `team mcp setup` kept it out of the untracked files (material, set up
+  // on 2026-11-16 before that build) is still removed by a `git clean` or a `git stash -u`. The
+  // pass adds the local exclude lines for a lead whose pair is present; it writes nothing else.
+  excludePresentPairs(team, root, present, deps.exclude ?? ((at, names) => { excludeLocally(at, names); }));
   for (const seat of channelRepairCandidates(team, root, present)) {
     const said: string[] = [];
     // The owner's pane variable is left out: setup keeps the pane the seat's record holds and
@@ -162,6 +169,24 @@ export async function restoreLeadChannels(input: {
     repairs.push({ seat, outcome: 'recreated', detail: told ? 'the lead was told to reconnect /mcp' : 'the notice to the lead could not be written' });
   }
   return repairs;
+}
+
+/** The local exclude lines for each Claude lead whose channel pair is present in the project root.
+ *  A failure to write them is left for the next pass: the pair itself is untouched. */
+export function excludePresentPairs(
+  team: Pick<TeamFile, 'orchestrator' | 'operator' | 'seats'>,
+  root: string,
+  present: (dir: string, seat: string) => boolean,
+  exclude: (root: string, names: readonly string[]) => void,
+): boolean {
+  const leads = [...new Set([team.orchestrator, team.operator])];
+  const held = leads.some((name) => {
+    const seat = team.seats.find((one) => one.name === name);
+    return seat !== undefined && seat.cli === 'claude-code' && resolve(root, seat.cwd) === resolve(root) && present(root, name);
+  });
+  if (!held) return false;
+  try { exclude(root, CHANNEL_LOCAL_FILES); } catch { return false; }
+  return true;
 }
 
 /** A stable, UUID-shaped id per root, session, seat and day: a second pass the same day finds
