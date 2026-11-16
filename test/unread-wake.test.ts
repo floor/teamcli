@@ -12,7 +12,8 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { deliverTypedWake } from '../src/send/typed-wake.ts';
 import { listUnacked } from '../src/commands/messages.ts';
 import { listDrops } from '../src/commands/drops.ts';
@@ -3129,10 +3130,18 @@ describe('the event ladder for a Claude seat with no typed wake', () => {
   /** The send walk's own answer for the seat: the real producer, never a stand-in. */
   const legsOf = (made: World, team: ReturnType<typeof teamOf>) => (seat: string) =>
     permittedEventLegs({ dir: made.dir, root: made.root, home: made.home, session: 'acme', seat, team, now: () => NOW });
+  /** The seat's generated launch settings accept cross-session frames, as a launched seat's do. */
+  const acceptFrames = (made: World) => {
+    const path = cliHookSettingsPath(made.dir, 'acme', 'helper');
+    if (path === null) throw new Error('the fixture seat declares no settings path');
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ crossSessionInbound: 'accept' }));
+  };
   const liveChannel = (made: World, dropDir: string) => writeFileSync(join(dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'helper', session: 'acme', root: made.root, cli: 'claude-code', pid: process.pid, channel: true, ts: NOW.toISOString() })}\n`);
 
   test('an unread message is offered again on the socket, on the 5, 10, 20, 30 minute ladder, and nothing is typed', async () => {
     const made = world();
+    acceptFrames(made);
     const team = helperTeam(made, '    inbound: accept\n');
     expect(legsOf(made, team)('helper')).toMatchObject({ socket: true });
     const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
@@ -3166,6 +3175,7 @@ describe('the event ladder for a Claude seat with no typed wake', () => {
 
   test('a live channel that has not pushed the message is offered the push first, and the socket is not dialed', async () => {
     const made = world();
+    acceptFrames(made);
     const team = teamOf(`${teamText(made.root, lobbyDir(made.home)).replace(/launch: claude\n$/, `launch: ${CHANNEL_LAUNCH}\n`)}    inbound: accept\n`);
     const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
     liveChannel(made, dropDir);
@@ -3184,13 +3194,15 @@ describe('the event ladder for a Claude seat with no typed wake', () => {
     expect(one.typed).toEqual([]);
   });
 
-  test('a seat whose own order is drop-only is never offered on the channel or the socket', async () => {
+  test('a non-lead seat whose own order is drop-only, with no live channel, is never offered on the socket', async () => {
     const made = world();
-    // The seat's word in the chain keeps every pane and event leg out, even with the socket
-    // accepted and a live channel beside it: the send walk would leave it queued, so does this.
-    const team = teamOf(`${teamText(made.root, lobbyDir(made.home)).replace(/launch: claude\n$/, `launch: ${CHANNEL_LAUNCH}\n`)}    inbound: accept\n    delivery_order: [drop]\n`);
+    acceptFrames(made);
+    // The seat's word in the chain keeps the socket out, though its launch accepts frames, and
+    // no channel server is live: the send walk would leave it queued, and so does this.
+    const team = helperTeam(made, '    inbound: accept\n    delivery_order: [drop]\n');
+    // Without the seat's word the socket is the route a send would take; with it, nothing.
+    expect(legsOf(made, helperTeam(made, '    inbound: accept\n'))('helper')).toMatchObject({ socket: true });
     const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
-    liveChannel(made, dropDir);
     expect(legsOf(made, team)('helper')).toMatchObject({ channel: false, socket: false });
     const one = pane(claudeBox(''));
     const dials: string[] = [];
@@ -3208,6 +3220,7 @@ describe('the event ladder for a Claude seat with no typed wake', () => {
 
   test('a message read while an earlier offer was dialing is not offered: the receipt is read again before each offer', async () => {
     const made = world();
+    acceptFrames(made);
     const team = helperTeam(made, '    inbound: accept\n');
     seedMessage(made, 'acme', 'helper', HELPER_ID, 'first\n\nwaiting', new Date(NOW.getTime() - 12 * MIN));
     seedMessage(made, 'acme', 'helper', SECOND_ID, 'second\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
@@ -3230,6 +3243,7 @@ describe('the event ladder for a Claude seat with no typed wake', () => {
 
   test('with no route the attempt is still counted, with its reason, and the ladder spaces the next look', async () => {
     const made = world();
+    acceptFrames(made);
     const team = helperTeam(made, '    inbound: accept\n');
     const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
     const one = pane(claudeBox(''));
