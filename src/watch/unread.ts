@@ -56,7 +56,7 @@ import { postArrivalWebhook } from '../bus/webhook.ts';
 import type { Seat, SeatWebhook } from '../file/types.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
-import { claimBindingIn, inboxLive, listUnread, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, listUnread, receiptHeld } from '../mcp/inbox.ts';
 import { channelPushPath } from '../mcp/channel.ts';
 import { herdrUnreliable, profileFor } from '../profiles/profile.ts';
 import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
@@ -261,27 +261,37 @@ async function reofferOnEventLegs(
   unreadAfter: number,
   home: string,
 ): Promise<boolean> {
+  // The routes are the ones the seat's own resolved order permits, exclusions included: a seat
+  // whose order keeps the socket or the channel out (a drop-only word, a human) is never offered
+  // on it here either. A watch that cannot ask offers nothing.
+  const legs = scene.eventLegs?.(seat.name) ?? { channel: false, socket: false };
+  if (!legs.channel && !legs.socket) return false;
   const due = [...candidates]
     .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
     .filter((one) => eventLadderDue(dropDir, one, nowMs, unreadAfter))
     .slice(0, EVENT_REOFFER_PER_PASS);
+  const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
   let offered = false;
   for (const message of due) {
+    // The candidates are the pass's earlier reading, and an offer just made may have had the
+    // seat read the rest: the signed read, replied or clearance receipt is looked for again,
+    // under the seat's current claim binding, immediately before each offer.
+    if (receiptHeld(dropDir, message.id, context, home, claimBindingIn(scene.root, scene.session, seat.name, message.id))) continue;
     const payload = payloadOf(dropDir, message.id, home);
     if (payload === null) continue;
     const at = scene.now.toISOString();
     let route: 'channel' | 'socket' | null = null;
     let reason = '';
-    const inbox = inboxLive(dropDir, scene.root, scene.session, seat.name);
-    if (inbox.live && inbox.listener.channel === true && !existsSync(channelPushPath(dropDir, message.id))) {
+    const channelUnpushed = legs.channel && !existsSync(channelPushPath(dropDir, message.id));
+    if (channelUnpushed) {
       markPending(dropDir, { ts: at, from: payload.from, to: seat.name, body: payload.body, id: message.id, thread: payload.thread, leg: 'channel' });
       route = 'channel';
-    } else if (scene.socketRedeliver !== undefined) {
+    } else if (legs.socket && scene.socketRedeliver !== undefined) {
       const socket = await scene.socketRedeliver(dropDir, { id: message.id, from: payload.from, to: seat.name, body: payload.body, ts: at, tries: 0 });
       if (socket.ok) route = 'socket';
       else reason = socket.reason;
     } else {
-      reason = inbox.live ? 'its channel already pushed it, and this watch carries no socket redelivery' : 'its inbox server is not live, and this watch carries no socket redelivery';
+      reason = legs.socket ? 'this watch carries no socket redelivery' : 'its channel already pushed it, and its order permits no socket';
     }
     const tries = (wakeTryOf(dropDir, message.id)?.tries ?? 0) + 1;
     const nextAt = new Date(nowMs + wakeRetryDelayMs(tries - 1, 0)).toISOString();

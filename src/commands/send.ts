@@ -47,7 +47,7 @@ import { profileFor, type TypedWake } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
 import { getAgent, readAgents, updateAgent, recordAgentSessionWhen, recordProvenAgentAddress, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
-import { findTeams, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { findTeams, getTeam, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { crossTeamsFor } from '../send/cross-teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { livePlacement } from '../send/placement.ts';
@@ -5685,8 +5685,26 @@ async function deliverClientRecord(
     team = null;
   }
   const seat = team === null ? undefined : team.seats.find((one) => one.name === seatName);
+  // An accepted drop that no leg walked is still the client's message: one `queued, not woken`
+  // line in the receiving team's history keeps it in the sender's own status list
+  // (`team messages --client`), where a later signed receipt moves it on.
+  const queuedOnly = (project: string, why: string): void => {
+    logLine(dir, 'send', from, `${seatName}: the client drop was written; ${why}, so no delivery leg was walked`, host.now());
+    appendHistory(project, root, host.home, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      body: record.body,
+      id: record.id,
+      thread: record.thread,
+      via: 'drop',
+      outcome: 'queued, not woken',
+      ms: host.now().getTime() - startedAt,
+      failed: [why],
+    });
+  };
   if (team === null || seat === undefined) {
-    logLine(dir, 'send', from, `${seatName}: the client drop was written; the receiving team file names no such seat, so no delivery leg was walked`, host.now());
+    queuedOnly(team?.project ?? getTeam(host.home, target.teamId)?.project ?? target.entity, 'the receiving team file names no such seat');
     return;
   }
   const project = team.project;
@@ -5725,8 +5743,7 @@ async function deliverClientRecord(
   });
   const failures = [...walk.failures];
   if (!walk.walked) {
-    const why = failures.length === 0 ? 'no delivery leg could run' : failures.join('; ');
-    logLine(dir, 'send', from, `${seatName}: the client drop was written; ${why}, so no delivery leg was walked`, host.now());
+    queuedOnly(project, failures.length === 0 ? 'no delivery leg could run' : failures.join('; '));
     return;
   }
   if (walk.via !== 'drop' && walk.endpointBlocked === undefined) {
@@ -6751,6 +6768,62 @@ async function deliverSocketFrame(
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
   }
   return { kind: 'delivered' };
+}
+
+/** The event legs a seat's own resolved order lets a watch re-offer a stored message on. */
+export type PermittedEventLegs = { channel: boolean; socket: boolean; why?: string };
+
+/**
+ * The event legs a send to this seat would walk right now, read by the send's own order
+ * resolution (`resolveWalkOrder`): the seat's signed settings, its team file, its project's word
+ * and the whole delivery chain, with every exclusion they declare, a human's drop-only walk, the
+ * held-box gate and the live channel probe. A watch that re-offers an unread message asks this,
+ * so it never takes a route a send would not. A chain or settings record that cannot be read
+ * permits nothing.
+ */
+export function permittedEventLegs(input: {
+  dir: string;
+  root: string;
+  home: string;
+  session: string;
+  seat: string;
+  team: TeamFile;
+  now: () => Date;
+}): PermittedEventLegs {
+  const declared = input.team.seats.find((one) => one.name === input.seat);
+  if (declared === undefined) return { channel: false, socket: false, why: 'the team file names no such seat' };
+  const read = resolveSeatOverrides({ home: input.home, root: input.root, seat: input.seat });
+  if (!read.ok) return { channel: false, socket: false, why: `its settings record cannot be read (${read.why})` };
+  let rawChain: DeliveryChain;
+  try {
+    rawChain = deliveryChainOf({
+      root: input.root,
+      seat: input.seat,
+      home: input.home,
+      file: input.team,
+      projectOfTeam: (id) => projectRegistry.ofTeam(input.home, id),
+      overrides: read.overrides,
+      now: input.now(),
+    });
+  } catch (error) {
+    if (!(error instanceof DeliveryChainUnreadable)) throw error;
+    return { channel: false, socket: false, why: error.message };
+  }
+  const plan = resolveWalkOrder({
+    dir: input.dir,
+    root: input.root,
+    home: input.home,
+    session: input.session,
+    seat: input.seat,
+    cli: declared.cli,
+    declared,
+    team: input.team,
+    rawChain,
+    overrides: read.overrides,
+    now: input.now,
+  });
+  if (plan.human) return { channel: false, socket: false, why: 'its pane is a human\'s' };
+  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket') };
 }
 
 /** The result of the watch's one socket redelivery for a channel push no receipt confirmed. */

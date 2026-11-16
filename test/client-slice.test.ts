@@ -1418,6 +1418,25 @@ describe('the client send walk', () => {
     expect(replied[0]?.status).toBe('replied');
   });
 
+  test('an accepted send whose delivery walk cannot run is still in the client\'s status list, as queued, then read', async () => {
+    const w = walkFixture('walk-unwalked');
+    // The receiving file no longer names the grant's seat: the walk cannot run at all, yet the
+    // drop the grant wrote is the client's message.
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replaceAll('orchestrator', 'chief'));
+    const io = capture(w, { caller: owner });
+    expect(await runSend(clientArgs(w), io.io, walkHost(w))).toBe(0);
+    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+    expect(existsSync(join(w.dropDir, 'drop-1'))).toBe(true);
+    const coordinator = { entity: 'floor', teamId: TEAM_ID, teamRoot: w.teamRoot, session: 'floor', recipientId: w.grant.recipientId, recipientSeat: 'orchestrator' };
+    const key = messageKeyOf(w.home);
+    const statusNow = () => clientSentStatuses({ home: w.home, teams: sentTeamsOf(w.home, coordinator), clientId: w.grant.clientId, key, replies: [], limit: 20 });
+    expect(statusNow()).toEqual([{ id: 'drop-1', to: 'orchestrator', team: 'floor', at: NOW.toISOString(), status: 'queued' }]);
+    const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id: 'drop-1', to: 'orchestrator', root: w.teamRoot, session: 'floor', at: NOW.toISOString() }, w.home);
+    writeFileSync(join(w.dropDir, 'drop-1.read.json'), `${JSON.stringify(receipt)}\n`);
+    expect(statusNow()[0]?.status).toBe('read');
+  });
+
   test('a socket that refuses the frame leaves the client drop in the bus inbox, named', async () => {
     const w = walkFixture('walk-socket-refused');
     acceptInbound(w);

@@ -40,7 +40,7 @@ import { watchReadLimits, type ReadLimits } from '../watch/read-limits.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchRunning } from '../watch/pane.ts';
 import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand } from './up.ts';
-import { realHost, redeliverChannelOnSocket, runSend } from './send.ts';
+import { permittedEventLegs, realHost, redeliverChannelOnSocket, runSend } from './send.ts';
 import type { PendingDrop } from '../send/pending.ts';
 import { realHost as realReplyHost, runReply } from './reply.ts';
 import { relayOutboxes } from '../send/confined-outbox.ts';
@@ -1959,6 +1959,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow,
               ...(mail === undefined ? {} : { mail }),
               socketRedeliver,
+              eventLegs: (seat: string) => permittedEventLegs({ dir, root, home: sources.home ?? realHost.home, session, seat, team, now: sources.now }),
               // A hosted watch sends the unread-lead climb as the daemon's notice, like a prompt's.
               ...(hosted === undefined ? {} : {
                 deliverClimb: (climb: StatusClimb): boolean => {
