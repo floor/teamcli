@@ -898,6 +898,7 @@
     "test/restart.test.ts": 5,
     "test/restore-adopt.test.ts": 5,
     "test/restore-after-reboot-independent.test.ts": 4,
+    "test/restore-attach-watch.test.ts": 2,
     "test/restore-fresh-start-independent.test.ts": 5,
     "test/restore-load-retry.test.ts": 2,
     "test/restore-provider-relaunch.test.ts": 3,
