@@ -77,7 +77,7 @@ import {
   type WakeMark,
 } from '../send/wake-marker.ts';
 import { markPending, pendingDropPath } from '../send/pending.ts';
-import { isRead, readRecord, recordFile, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { isRead, isReadOrCleared, readRecord, recordFile, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
@@ -266,6 +266,8 @@ async function reofferOnEventLegs(
   // on it here either. A watch that cannot ask offers nothing.
   const legs = scene.eventLegs?.(seat.name) ?? { channel: false, socket: false };
   if (!legs.channel && !legs.socket) return false;
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return false;
   const due = [...candidates]
     .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
     .filter((one) => eventLadderDue(dropDir, one, nowMs, unreadAfter))
@@ -274,9 +276,10 @@ async function reofferOnEventLegs(
   let offered = false;
   for (const message of due) {
     // The candidates are the pass's earlier reading, and an offer just made may have had the
-    // seat read the rest: the signed read, replied or clearance receipt is looked for again,
-    // under the seat's current claim binding, immediately before each offer.
-    if (receiptHeld(dropDir, message.id, context, home, claimBindingIn(scene.root, scene.session, seat.name, message.id))) continue;
+    // seat read the rest: the signed read or replied receipt, or a lead's or the owner's signed
+    // clearance, is looked for again, under the seat's current claim binding, immediately before
+    // each offer (`isReadOrCleared`, the question the unread listing itself asks).
+    if (isReadOrCleared(dropDir, message.id, context, key.key, claimBindingIn(scene.root, scene.session, seat.name, message.id))) continue;
     const payload = payloadOf(dropDir, message.id, home);
     if (payload === null) continue;
     const at = scene.now.toISOString();

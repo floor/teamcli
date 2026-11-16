@@ -3257,4 +3257,39 @@ describe('the event ladder for a Claude seat with no typed wake', () => {
     expect(ledgerOf(dropDir, HELPER_ID)).toMatchObject({ tries: 1, reason: 'no socket was found for its pane' });
     expect(ledgerOf(dropDir, HELPER_ID).route).toBeUndefined();
   });
+  test('a lead\'s signed clearance written during an earlier offer stops the re-offer of that message', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = helperTeam(made, '    inbound: accept\n');
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'first\n\nwaiting', new Date(NOW.getTime() - 12 * MIN));
+    seedMessage(made, 'acme', 'helper', SECOND_ID, 'second\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      // While the first offer is dialing, the team's lead clears the second message: the receipt
+      // `team ack --seat helper --older-than` writes, signed, its `read_by` naming the lead.
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => {
+        dials.push(drop.id);
+        if (drop.id === HELPER_ID) {
+          const cleared = signReceiptPayload({
+            kind: 'receipt',
+            status: 'read',
+            id: SECOND_ID,
+            to: 'helper',
+            root: realpathSync(made.root),
+            session: 'acme',
+            at: NOW.toISOString(),
+            read_by: 'lead-ack:lead',
+          }, made.home);
+          writeFileSync(receiptPath(dropDir, SECOND_ID), `${JSON.stringify(cleared, null, 2)}\n`);
+        }
+        return { ok: true as const };
+      },
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(dials).toEqual([HELPER_ID]);
+    expect(existsSync(wakeTryPath(dropDir, SECOND_ID))).toBe(false);
+  });
 });
