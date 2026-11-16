@@ -1492,6 +1492,13 @@
       "provenance": "capture"
     },
     {
+      "file": "grok/1.0.77/welcome.txt",
+      "cli": "grok",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "grok/1.0.52/idle.txt",
       "cli": "grok",
       "classify": "idle",
