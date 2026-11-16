@@ -121,10 +121,9 @@ import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 
 export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
-       team restart <seat>@<team> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
-<seat>@<team> names another team's seat by its registry id, project or session: only that team's owner or `leads`, or the entity's main orchestrator, may restart it that way.
+A <seat> written as <seat>@<team> names another team's seat by its registry id, project or session: only that team's owner or leads, or the entity's main orchestrator, may restart it that way, and it takes no --file, --session or --client.
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --resume, --file and --session are the owner's and take no --client), and is never the owner.
 

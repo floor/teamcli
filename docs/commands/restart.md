@@ -60,7 +60,6 @@ and `--abandon` replaces what is in that pane only under the same name.
 ## Synopsis
 
     team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
-    team restart <seat>@<team> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ## Flags
