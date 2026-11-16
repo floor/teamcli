@@ -1413,7 +1413,7 @@ describe('the client send walk', () => {
     expect(host.typed).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1'))).toBe(true);
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
-    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('queued, no event adapter (socket:');
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('socket: connection refused); the client drop waits in its bus inbox');
   });
 });
 

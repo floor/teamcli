@@ -5724,28 +5724,26 @@ async function deliverClientRecord(
   }
   if (walk.via !== 'drop' && walk.endpointBlocked === undefined) {
     // The leg that took it, with the legs that did not before it: the same audit a send's walk
-    // leaves. The socket leg writes its own history line as it lands; the others are written here,
-    // in the words a reply's walk uses.
+    // leaves, and one history line in the words a reply's walk uses (the shared walk's legs write
+    // none of their own).
     const tail = failures.length === 0 ? '' : ` (after: ${failures.join('; ')})`;
     logLine(dir, 'send', from, `${walk.summary ?? `${seatName}: delivered (${walk.via})`} for client drop ${record.id}${tail}`, host.now());
-    if (walk.via !== 'socket') {
-      appendHistory(project, root, host.home, {
-        ts: host.now().toISOString(),
-        from,
-        to: seatName,
-        body: record.body,
-        id: record.id,
-        thread: record.thread,
-        outcome: walk.via === 'channel'
-          ? 'sent (channel)'
-          : walk.via === 'typed'
-            ? 'delivered (typed wake)'
-            : walk.unconfirmed ? 'sent (unconfirmed)' : 'delivered',
-        ms: host.now().getTime() - startedAt,
-        via: walk.via,
-        ...(failures.length > 0 ? { failed: [...failures] } : {}),
-      });
-    }
+    appendHistory(project, root, host.home, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      body: record.body,
+      id: record.id,
+      thread: record.thread,
+      outcome: walk.via === 'channel'
+        ? 'sent (channel)'
+        : walk.via === 'typed'
+          ? 'delivered (typed wake)'
+          : walk.unconfirmed ? 'sent (unconfirmed)' : 'delivered',
+      ms: host.now().getTime() - startedAt,
+      via: walk.via,
+      ...(failures.length > 0 ? { failed: [...failures] } : {}),
+    });
     return;
   }
   if (walk.endpointBlocked !== undefined && walk.summary !== null) logLine(dir, 'send', from, walk.summary, host.now());
