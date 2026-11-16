@@ -82,10 +82,18 @@ describe("setup keeps the pair in the checkout's local exclude", () => {
 });
 
 describe('an empty shell prompt, read from the screen', () => {
-  test('a lone glyph or a prompt ending in one is empty; typed text, no text or another shape is not', () => {
+  test('only the primary prompt alone under its folder line is empty; anything else is not proof', () => {
     expect(bareShellEmptyPrompt('~/Code/acme\n❯\n\n')).toBe(true);
-    expect(bareShellEmptyPrompt('jvial@mac acme %')).toBe(true);
-    expect(bareShellEmptyPrompt('\u001b[32m❯\u001b[0m')).toBe(true);
+    expect(bareShellEmptyPrompt('~/Code/floor/md3.io main *1 ?1\n❯   ')).toBe(true);
+    expect(bareShellEmptyPrompt('/tmp/x\n%')).toBe(true);
+    // A glyph closing typed text, a continuation prompt, a prompt with words before it.
+    expect(bareShellEmptyPrompt('~/Code/acme\n❯ echo #')).toBe(false);
+    expect(bareShellEmptyPrompt('~/Code/acme\n❯ cat >')).toBe(false);
+    expect(bareShellEmptyPrompt('~/Code/acme\n❯ cat <<EOF\n>')).toBe(false);
+    expect(bareShellEmptyPrompt('jvial@mac acme %')).toBe(false);
+    // No folder line above the prompt.
+    expect(bareShellEmptyPrompt('❯')).toBe(false);
+    expect(bareShellEmptyPrompt('some output\n❯')).toBe(false);
     expect(bareShellEmptyPrompt('❯ git status')).toBe(false);
     expect(bareShellEmptyPrompt('Resume this session with:\nclaude --resume x')).toBe(false);
     expect(bareShellEmptyPrompt('price$')).toBe(false);
@@ -169,6 +177,10 @@ describe('the restore recreates a missing lead pair through setup', () => {
       'claude --model opus -- --dangerously-load-development-channels server:team-inbox',
       'claude --some-new-option --dangerously-load-development-channels server:team-inbox',
       'echo claude --dangerously-load-development-channels server:team-inbox | sh',
+      'echo claude --dangerously-load-development-channels server:team-inbox',
+      'printf %s claude --dangerously-load-development-channels server:team-inbox',
+      'zsh ~/tools/other.sh claude --dangerously-load-development-channels server:team-inbox',
+      'nice claude --dangerously-load-development-channels server:team-inbox',
       'zsh ~/tools/launch.sh --dangerously-load-development-channels server:team-inbox',
       'claude --dangerously-load-development-channels server:other-server',
     ];

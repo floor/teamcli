@@ -50,6 +50,29 @@ const CLAUDE_BOOLEAN_OPTIONS = new Set([
   '--no-chrome', '--disable-slash-commands',
 ]);
 
+/** The forwarding wrapper the team's launch lines run Claude through (docs/guides/tools): it
+ *  runs its first argument as the program, with the rest as that program's argv. */
+const FORWARDING_WRAPPERS = new Set(['as-floor.sh']);
+const SHELLS = new Set(['zsh', 'bash', 'sh']);
+
+const baseName = (word: string): string => word.slice(word.lastIndexOf('/') + 1);
+const isClaude = (word: string | undefined): boolean => word !== undefined && baseName(word) === 'claude';
+
+/**
+ * The index of the `claude` word when it is the program the line executes, or null: argv[0]
+ * after leading environment assignments, or the program a known forwarding wrapper runs
+ * (`as-floor.sh claude …`, `zsh <path>/as-floor.sh claude …`). A `claude` anywhere else is an
+ * argument (`echo claude …`) and proves nothing.
+ */
+export function claudeArgvZero(words: readonly string[]): number | null {
+  let at = 0;
+  while (at < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[at]!)) at += 1;
+  if (isClaude(words[at])) return at;
+  if (SHELLS.has(baseName(words[at] ?? '')) && FORWARDING_WRAPPERS.has(baseName(words[at + 1] ?? ''))) at += 1;
+  if (FORWARDING_WRAPPERS.has(baseName(words[at] ?? '')) && isClaude(words[at + 1])) return at + 1;
+  return null;
+}
+
 /**
  * Whether the launch line passes the development-channel option naming the team server to the
  * Claude CLI itself, as its argv: the line's words decoded as the shell hands them over, read from
@@ -61,8 +84,8 @@ export function channelOptionProven(launch: string | undefined): boolean {
   if (typeof launch !== 'string' || launch.trim() === '') return false;
   const words = cliWordListOf('claude', launch);
   if (words === null) return false;
-  const start = words.findIndex((word) => word === 'claude' || word.endsWith('/claude'));
-  if (start === -1) return false;
+  const start = claudeArgvZero(words);
+  if (start === null) return false;
   const chosen = `server:${CHANNEL_SERVER}`;
   const names = (value: string | undefined) => value !== undefined && value.split(',').includes(chosen);
   let proven = false;

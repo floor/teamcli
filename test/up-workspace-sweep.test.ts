@@ -712,6 +712,20 @@ test('a labelled leftover holding typed input is left as it is', async () => {
   expect(`${io.out}${io.err}`).toContain(`not proven to be an empty shell prompt; left as it is`);
 });
 
+test('a labelled leftover whose prompt glyph closes typed text is left as it is', async () => {
+  for (const screen of ['~/Code/acme\n❯ echo #', '~/Code/acme\n❯ cat >']) {
+    const { made, io } = await restoreWithLeftover(screen);
+    expect(made.trace.closed, screen).toEqual([]);
+    expect(`${io.out}${io.err}`).toContain('not proven to be an empty shell prompt; left as it is');
+  }
+});
+
+test('a labelled leftover at a continuation prompt is left as it is', async () => {
+  const { made, io } = await restoreWithLeftover('~/Code/acme\n❯ cat <<EOF\n>');
+  expect(made.trace.closed).toEqual([]);
+  expect(`${io.out}${io.err}`).toContain('not proven to be an empty shell prompt; left as it is');
+});
+
 test('a labelled leftover holding another program is left as it is', async () => {
   setup(teamText({ worker: 'stopped' }));
   seedWatch();
