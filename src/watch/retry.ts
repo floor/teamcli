@@ -111,6 +111,9 @@ export type RetryScene = {
   /** The channel's one redelivery over the socket: a push no receipt confirmed is written as a
    *  frame to the receiving session. Absent, the redelivery goes straight to the typed leg. */
   socketRedeliver?(dropDir: string, drop: PendingDrop): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** The event legs the seat's own resolved order permits a re-offer on (`permittedEventLegs`):
+   *  the send walk's own answer, exclusions included. Absent, the unread pass re-offers nothing. */
+  eventLegs?(seat: string): { channel: boolean; socket: boolean; why?: string };
   /** The pass's shared mail reading: the folds' unread and unacked lists, already taken once.
    *  Absent, this pass takes its own — the same answer, read once more in the pass. */
   mail?: MailPass;

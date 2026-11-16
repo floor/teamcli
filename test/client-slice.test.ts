@@ -16,6 +16,7 @@ import type { SendHost } from '../src/commands/send.ts';
 import { runSend } from '../src/commands/send.ts';
 import {
   CLIENT_EXPIRY_MAX_MS,
+  CLIENT_SLICE_DISPLAY_NAME,
   KEY_ISOLATION_LINE,
   appendClientRevocation,
   clientGrantsFolder,
@@ -36,23 +37,24 @@ import { claimClientRequest } from '../src/client/replay.ts';
 import { resolveClientTarget, runClientSend } from '../src/client/send.ts';
 import { insideTeamPane } from '../src/client/pane-guard.ts';
 import { runClient } from '../src/commands/client.ts';
-import { runClientMessages } from '../src/client/inbox.ts';
+import { clientSentStatuses, runClientMessages, sentTeamsOf } from '../src/client/inbox.ts';
 import { clientRequestBody, signClientRequest, type ClientRequest } from '../src/client/verify.ts';
 import { CLIENT_REQUEST_DOMAIN } from '../src/client/verify.ts';
 import type { Caller } from '../src/caller.ts';
 import type { Io } from '../src/io.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
-import { carriedStartFolderProblem, emptySession, keptStartFolder, retireCarriedStartFolder, updateState, type SessionState } from '../src/state.ts';
+import { carriedStartFolderProblem, emptySession, keptStartFolder, LOG_FILE, retireCarriedStartFolder, updateState, type SessionState } from '../src/state.ts';
 import { CANONICAL_RECORD_VERSION } from '../src/file/canonical-record.ts';
 import { canonicalTeam } from '../src/file/team-config.ts';
 import { sha256, TEAM_CONFIG_RECORD_FORMAT, writeStoredTeamConfig } from '../src/registry/team-config-store.ts';
 import { registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { readHistory, type HistoryEntry } from '../src/send/history.ts';
-import { signedRecordOf, verifyRecord } from '../src/send/record.ts';
+import { signedRecordOf, signReceiptPayload, verifyRecord } from '../src/send/record.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
+import type { TypedWakeHost } from '../src/send/typed-wake.ts';
 import type { OrderWord } from '../src/settings/inherit.ts';
-import { keyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
+import { keyOf, messageKeyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
 import { fixtureBase, testIo } from './helpers.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
@@ -1197,7 +1199,8 @@ function walkHost(
     frames,
     dials: () => dials,
     delivery: options.delivery,
-    agents: () => [{ name: 'orchestrator', pane: 'pane-orchestrator' }],
+    // herdr names the CLI it detected: the live placement a socket dial proves reads it.
+    agents: () => [{ name: 'orchestrator', pane: 'pane-orchestrator', cli: 'claude' }],
     processInfo: () => ({ shell: 111, foreground: [222] }),
     socketsDir: w.sockets,
     deliver: async (socketPath: string, frame: string): Promise<SendOutcome> => {
@@ -1300,6 +1303,151 @@ describe('the client send walk', () => {
     expect(host.frames).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
+  });
+
+  test('a Claude seat whose launch accepts frames takes the client drop on its socket, as a seat send does', async () => {
+    const w = walkFixture('walk-socket');
+    acceptInbound(w);
+    const host = walkHost(w);
+    const io = capture(w, { caller: owner });
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    // The client contract is unchanged: one confirmation line, one key-isolation line.
+    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
+    expect(host.dials(), readFileSync(join(w.dir, LOG_FILE), 'utf8')).toBe(1);
+    expect(host.frames[0]).toContain(CLIENT_SLICE_DISPLAY_NAME);
+    expect(host.typed).toEqual([]);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
+    const log = readFileSync(join(w.dir, LOG_FILE), 'utf8');
+    expect(log).toContain('orchestrator: sent on the socket');
+    expect(log).toContain('orchestrator: delivered (socket) for client drop drop-1');
+    expect(log).not.toContain('queued, no event adapter');
+  });
+
+  test('the socket is dialed only while the registry still records the grant\'s recipient on that seat and CLI', async () => {
+    const w = walkFixture('walk-socket-retired');
+    acceptInbound(w);
+    // The record now says another CLI holds the seat: the dial's record check refuses it.
+    updateAgent(w.home, w.grant.recipientId, { cli: 'codex' });
+    const host = walkHost(w);
+    expect(await runSend(clientArgs(w), capture(w, { caller: owner }).io, host)).toBe(0);
+    expect(host.dials()).toBe(0);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('socket: the addressed seat record changed');
+  });
+
+  test('a team that declares the retired typed word still reaches a socket-accepting Claude seat (the 2026-11-16 case)', async () => {
+    const w = walkFixture('walk-socket-declared');
+    acceptInbound(w);
+    // The live floor team's word: typed was retired, so before this the client walk filtered the
+    // order to `typed` alone, refused it, and left the drop "queued, not woken" while every seat
+    // send reached the same seat on its socket.
+    const host = walkHost(w, { delivery: { team: ['typed'] } });
+    const io = capture(w, { caller: owner });
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    expect(host.dials()).toBe(1);
+    expect(host.typed).toEqual([]);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
+  });
+
+  for (const scene of [
+    { cli: 'codex', launch: 'codex', idle: 'codex/0.161.0/idle.txt', working: 'codex/0.161.0/working.txt', composer: '› Ask Codex to do anything' },
+    { cli: 'grok', launch: 'grok', idle: 'grok/1.0.70/idle.txt', working: 'grok/1.0.52/working.txt', composer: null },
+  ] as const) {
+    test(`a ${scene.cli} seat takes the client drop through its profile's typed wake, as a seat send does`, async () => {
+      const w = walkFixture(`walk-${scene.cli}`);
+      const file = join(w.dir, 'team.yaml');
+      writeFileSync(file, readFileSync(file, 'utf8').replace('cli: claude-code', `cli: ${scene.cli}`).replace('launch: claude', `launch: ${scene.launch}`).replace('vendor: anthropic', `vendor: ${scene.cli === 'codex' ? 'openai' : 'xai'}`));
+      const idle = readFileSync(join(import.meta.dir, 'fixtures', scene.idle), 'utf8');
+      const working = readFileSync(join(import.meta.dir, 'fixtures', scene.working), 'utf8');
+      const typed: string[] = [];
+      const prompted: string[] = [];
+      let enters = 0;
+      let reads = 0;
+      const pane: TypedWakeHost = {
+        read: () => {
+          reads += 1;
+          if (enters > 0 || prompted.length > 0) return working;
+          if (typed.length > 0 && scene.composer !== null) return idle.replace(scene.composer, `› ${(typed[typed.length - 1] ?? '').replaceAll('\n', '\n  ')}`);
+          return idle;
+        },
+        type: (_pane, text) => { typed.push(text); return true; },
+        enter: () => { enters += 1; return true; },
+        prompt: (_pane, line) => { prompted.push(line); return true; },
+        wait: async () => {},
+      };
+      const host = { ...walkHost(w), typedWake: () => pane, wakeVerifyMs: 50, wakePollMs: 1 } as unknown as WalkHost;
+      const io = capture(w, { caller: owner });
+      expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+      expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+      // Codex types its one line and presses Enter; Grok's profile submits by agent prompt.
+      if (scene.cli === 'codex') {
+        expect(typed, readFileSync(join(w.dir, LOG_FILE), 'utf8')).toHaveLength(1);
+        expect(enters).toBe(1);
+      } else {
+        expect(prompted).toHaveLength(1);
+        expect(typed).toEqual([]);
+      }
+      expect(reads).toBeGreaterThan(0);
+      expect(host.frames).toEqual([]);
+      expect(walkHistory(w).at(-1)).toMatchObject({ via: 'typed', outcome: 'delivered (typed wake)' });
+      expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('orchestrator: delivered (typed wake) for client drop drop-1');
+    });
+  }
+
+  test('the client reads its own message status events: delivered, then read, then replied', async () => {
+    const w = walkFixture('walk-status');
+    acceptInbound(w);
+    const host = walkHost(w);
+    expect(await runSend(clientArgs(w), capture(w, { caller: owner }).io, host)).toBe(0);
+    const coordinator = { entity: 'floor', teamId: TEAM_ID, teamRoot: w.teamRoot, session: 'floor', recipientId: w.grant.recipientId, recipientSeat: 'orchestrator' };
+    const teams = sentTeamsOf(w.home, coordinator);
+    // Every team of the grant's entity is read: the coordinator's first, then the fixture's second.
+    expect(teams.map((one) => one.project)).toEqual(['floor', 'teamcli']);
+    const key = messageKeyOf(w.home);
+    const statusNow = () => clientSentStatuses({ home: w.home, teams, clientId: w.grant.clientId, key, replies: [], limit: 20 });
+    expect(statusNow()).toEqual([{ id: 'drop-1', to: 'orchestrator', team: 'floor', at: NOW.toISOString(), status: 'delivered' }]);
+    // The seat's own signed read receipt is what makes it read; a planted file proves nothing.
+    writeFileSync(join(w.dropDir, 'drop-1.read.json'), '{"not":"signed"}\n');
+    expect(statusNow()[0]?.status).toBe('delivered');
+    const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id: 'drop-1', to: 'orchestrator', root: w.teamRoot, session: 'floor', at: NOW.toISOString() }, w.home);
+    writeFileSync(join(w.dropDir, 'drop-1.read.json'), `${JSON.stringify(receipt)}\n`);
+    expect(statusNow()[0]?.status).toBe('read');
+    // A verified reply on the message's own thread in the client's inbox is the replied event.
+    const replied = clientSentStatuses({ home: w.home, teams, clientId: w.grant.clientId, key, replies: [{ id: 'r-1', at: NOW.toISOString(), from: 'orchestrator', from_id: '', to: `client:${w.grant.clientId}`, body: 'ok', thread: 'drop-1', grantId: w.grant.grantId }], limit: 20 });
+    expect(replied[0]?.status).toBe('replied');
+  });
+
+  test('an accepted send whose delivery walk cannot run is still in the client\'s status list, as queued, then read', async () => {
+    const w = walkFixture('walk-unwalked');
+    // The receiving file no longer names the grant's seat: the walk cannot run at all, yet the
+    // drop the grant wrote is the client's message.
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replaceAll('orchestrator', 'chief'));
+    const io = capture(w, { caller: owner });
+    expect(await runSend(clientArgs(w), io.io, walkHost(w))).toBe(0);
+    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+    expect(existsSync(join(w.dropDir, 'drop-1'))).toBe(true);
+    const coordinator = { entity: 'floor', teamId: TEAM_ID, teamRoot: w.teamRoot, session: 'floor', recipientId: w.grant.recipientId, recipientSeat: 'orchestrator' };
+    const key = messageKeyOf(w.home);
+    const statusNow = () => clientSentStatuses({ home: w.home, teams: sentTeamsOf(w.home, coordinator), clientId: w.grant.clientId, key, replies: [], limit: 20 });
+    expect(statusNow()).toEqual([{ id: 'drop-1', to: 'orchestrator', team: 'floor', at: NOW.toISOString(), status: 'queued' }]);
+    const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id: 'drop-1', to: 'orchestrator', root: w.teamRoot, session: 'floor', at: NOW.toISOString() }, w.home);
+    writeFileSync(join(w.dropDir, 'drop-1.read.json'), `${JSON.stringify(receipt)}\n`);
+    expect(statusNow()[0]?.status).toBe('read');
+  });
+
+  test('a socket that refuses the frame leaves the client drop in the bus inbox, named', async () => {
+    const w = walkFixture('walk-socket-refused');
+    acceptInbound(w);
+    const host = walkHost(w, { dial: async () => ({ ok: false, reason: 'connection refused' } as unknown as SendOutcome) });
+    const io = capture(w, { caller: owner });
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    expect(host.dials()).toBeGreaterThanOrEqual(1);
+    expect(host.typed).toEqual([]);
+    expect(existsSync(join(w.dropDir, 'drop-1'))).toBe(true);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('socket: connection refused); the client drop waits in its bus inbox');
   });
 });
 

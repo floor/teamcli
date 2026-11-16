@@ -12,12 +12,14 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { deliverTypedWake } from '../src/send/typed-wake.ts';
 import { listUnacked } from '../src/commands/messages.ts';
 import { listDrops } from '../src/commands/drops.ts';
 import { runAck } from '../src/commands/ack.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { permittedEventLegs } from '../src/commands/send.ts';
 import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { CLIENT_RULE } from '../src/client/send.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -3132,5 +3134,179 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
         { id: UNREAD_B, outcome: 'delivered-but-blocked' },
       ]);
     }
+  });
+});
+
+describe('the event ladder for a Claude seat with no typed wake', () => {
+  const HELPER_ID = 'cccccccc-0000-4000-8000-000000000103';
+  const SECOND_ID = 'dddddddd-0000-4000-8000-000000000104';
+  const ledgerOf = (dropDir: string, id: string) => JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { tries: number; next_at: string; route?: string; reason?: string };
+  const CHANNEL_LAUNCH = 'claude --dangerously-load-development-channels server:team-inbox';
+  /** The fixture team with keys added to its last seat, `helper`. */
+  const helperTeam = (made: World, extra: string) => teamOf(`${teamText(made.root, lobbyDir(made.home))}${extra}`);
+  /** The send walk's own answer for the seat: the real producer, never a stand-in. */
+  const legsOf = (made: World, team: ReturnType<typeof teamOf>) => (seat: string) =>
+    permittedEventLegs({ dir: made.dir, root: made.root, home: made.home, session: 'acme', seat, team, now: () => NOW });
+  /** The seat's generated launch settings accept cross-session frames, as a launched seat's do. */
+  const acceptFrames = (made: World) => {
+    const path = cliHookSettingsPath(made.dir, 'acme', 'helper');
+    if (path === null) throw new Error('the fixture seat declares no settings path');
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ crossSessionInbound: 'accept' }));
+  };
+  const liveChannel = (made: World, dropDir: string) => writeFileSync(join(dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'helper', session: 'acme', root: made.root, cli: 'claude-code', pid: process.pid, channel: true, ts: NOW.toISOString() })}\n`);
+
+  test('an unread message is offered again on the socket, on the 5, 10, 20, 30 minute ladder, and nothing is typed', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = helperTeam(made, '    inbound: accept\n');
+    expect(legsOf(made, team)('helper')).toMatchObject({ socket: true });
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const at = (offset: number) => ({
+      ...sceneOf(made, team, one, [], { now: new Date(NOW.getTime() + offset), live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => { dials.push(drop.id); return { ok: true as const }; },
+    });
+
+    await wakeUnreadDrops(at(0), { unreadAfter: N });
+    expect(dials).toEqual([HELPER_ID]);
+    expect(one.typed).toEqual([]);
+    expect(ledgerOf(dropDir, HELPER_ID)).toMatchObject({ tries: 1, route: 'socket', next_at: new Date(NOW.getTime() + 5 * MIN).toISOString() });
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok && history.entries.at(-1)).toMatchObject({ id: HELPER_ID, via: 'socket', outcome: 'awaiting receipt' });
+
+    // Inside the step nothing is offered; past it the second offer waits ten minutes.
+    await wakeUnreadDrops(at(4 * MIN), { unreadAfter: N });
+    expect(dials).toHaveLength(1);
+    await wakeUnreadDrops(at(6 * MIN), { unreadAfter: N });
+    expect(dials).toHaveLength(2);
+    expect(ledgerOf(dropDir, HELPER_ID)).toMatchObject({ tries: 2, next_at: new Date(NOW.getTime() + 16 * MIN).toISOString() });
+
+    // A read message leaves the listing: no further offer.
+    readInbox(made, HELPER_ID, 'helper', 'acme');
+    await wakeUnreadDrops(at(40 * MIN), { unreadAfter: N });
+    expect(dials).toHaveLength(2);
+  });
+
+  test('a live channel that has not pushed the message is offered the push first, and the socket is not dialed', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = teamOf(`${teamText(made.root, lobbyDir(made.home)).replace(/launch: claude\n$/, `launch: ${CHANNEL_LAUNCH}\n`)}    inbound: accept\n`);
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    liveChannel(made, dropDir);
+    expect(legsOf(made, team)('helper')).toMatchObject({ channel: true });
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => { dials.push(drop.id); return { ok: true as const }; },
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(dials).toEqual([]);
+    expect(JSON.parse(readFileSync(pendingDropPath(dropDir, HELPER_ID), 'utf8'))).toMatchObject({ id: HELPER_ID, leg: 'channel' });
+    expect(ledgerOf(dropDir, HELPER_ID)).toMatchObject({ tries: 1, route: 'channel' });
+    expect(one.typed).toEqual([]);
+  });
+
+  test('a non-lead seat whose own order is drop-only, with no live channel, is never offered on the socket', async () => {
+    const made = world();
+    acceptFrames(made);
+    // The seat's word in the chain keeps the socket out, though its launch accepts frames, and
+    // no channel server is live: the send walk would leave it queued, and so does this.
+    const team = helperTeam(made, '    inbound: accept\n    delivery_order: [drop]\n');
+    // Without the seat's word the socket is the route a send would take; with it, nothing.
+    expect(legsOf(made, helperTeam(made, '    inbound: accept\n'))('helper')).toMatchObject({ socket: true });
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    expect(legsOf(made, team)('helper')).toMatchObject({ channel: false, socket: false });
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => { dials.push(drop.id); return { ok: true as const }; },
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(dials).toEqual([]);
+    expect(existsSync(pendingDropPath(dropDir, HELPER_ID))).toBe(false);
+    expect(existsSync(wakeTryPath(dropDir, HELPER_ID))).toBe(false);
+    // What the pass still does for the seat is the drop-file leg it always had, whose writer
+    // refuses in every real binding; the ladder added nothing for it.
+  });
+
+  test('a message read while an earlier offer was dialing is not offered: the receipt is read again before each offer', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = helperTeam(made, '    inbound: accept\n');
+    seedMessage(made, 'acme', 'helper', HELPER_ID, 'first\n\nwaiting', new Date(NOW.getTime() - 12 * MIN));
+    seedMessage(made, 'acme', 'helper', SECOND_ID, 'second\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      // The first offer wakes the seat, and its own read takes the second message too, before
+      // the pass reaches it: the seat's real read writes the signed receipt.
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => {
+        dials.push(drop.id);
+        if (drop.id === HELPER_ID) readInbox(made, SECOND_ID, 'helper', 'acme');
+        return { ok: true as const };
+      },
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(dials).toEqual([HELPER_ID]);
+  });
+
+  test('with no route the attempt is still counted, with its reason, and the ladder spaces the next look', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = helperTeam(made, '    inbound: accept\n');
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      socketRedeliver: async () => ({ ok: false as const, reason: 'no socket was found for its pane' }),
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(ledgerOf(dropDir, HELPER_ID)).toMatchObject({ tries: 1, reason: 'no socket was found for its pane' });
+    expect(ledgerOf(dropDir, HELPER_ID).route).toBeUndefined();
+  });
+  test('a lead\'s signed clearance written during an earlier offer stops the re-offer of that message', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = helperTeam(made, '    inbound: accept\n');
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'first\n\nwaiting', new Date(NOW.getTime() - 12 * MIN));
+    seedMessage(made, 'acme', 'helper', SECOND_ID, 'second\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      // While the first offer is dialing, the team's lead clears the second message: the receipt
+      // `team ack --seat helper --older-than` writes, signed, its `read_by` naming the lead.
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => {
+        dials.push(drop.id);
+        if (drop.id === HELPER_ID) {
+          const cleared = signReceiptPayload({
+            kind: 'receipt',
+            status: 'read',
+            id: SECOND_ID,
+            to: 'helper',
+            root: realpathSync(made.root),
+            session: 'acme',
+            at: NOW.toISOString(),
+            read_by: 'lead-ack:lead',
+          }, made.home);
+          writeFileSync(receiptPath(dropDir, SECOND_ID), `${JSON.stringify(cleared, null, 2)}\n`);
+        }
+        return { ok: true as const };
+      },
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(dials).toEqual([HELPER_ID]);
+    expect(existsSync(wakeTryPath(dropDir, SECOND_ID))).toBe(false);
   });
 });

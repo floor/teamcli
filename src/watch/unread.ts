@@ -58,6 +58,7 @@ import type { Seat, SeatWebhook } from '../file/types.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { claimBindingIn, listUnread, receiptHeld } from '../mcp/inbox.ts';
+import { channelPushPath } from '../mcp/channel.ts';
 import { herdrUnreliable, profileFor } from '../profiles/profile.ts';
 import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
@@ -76,8 +77,8 @@ import {
   wakePath,
   type WakeMark,
 } from '../send/wake-marker.ts';
-import { pendingDropPath } from '../send/pending.ts';
-import { isRead, readRecord, recordFile, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { markPending, pendingDropPath } from '../send/pending.ts';
+import { isRead, isReadOrCleared, readRecord, recordFile, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
@@ -131,7 +132,7 @@ function wakeMarkOf(dropDir: string, id: string): WakeMark | null {
 
 /** What the watch's typed wake retry has done for one message: how many attempts, whether any
  *  put a key into the pane, and the earliest instant the next one is due. */
-export type WakeTry = { tries: number; typed: boolean; next_at: string };
+export type WakeTry = { tries: number; typed: boolean; next_at: string; route?: 'channel' | 'socket'; reason?: string };
 
 /** The first retry waits this long after a failed attempt; each later one doubles. */
 const WAKE_TRY_BASE_MS = 5_000;
@@ -219,6 +220,106 @@ function recordWakeTry(dropDir: string, id: string, record: WakeTry): void {
   } catch {
     // Best effort: the message keeps its remaining tries rather than silently giving up.
   }
+}
+
+/** The most messages one pass re-offers to one seat on its event legs. */
+const EVENT_REOFFER_PER_PASS = 5;
+
+/** Whether a message is due on the event ladder: past its unread window, younger than the slow
+ *  ladder's last day, not held by the held-drop retry, and past the next attempt its ledger set. */
+function eventLadderDue(dropDir: string, message: { id: string; ts: string }, nowMs: number, unreadAfter: number): boolean {
+  const age = nowMs - Date.parse(message.ts);
+  if (!(age >= unreadAfter * 1000) || !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
+  if (existsSync(pendingDropPath(dropDir, message.id))) return false;
+  const ledger = wakeTryOf(dropDir, message.id);
+  if (ledger === null) return true;
+  const next = Date.parse(ledger.next_at);
+  return !(Number.isFinite(next) && nowMs < next);
+}
+
+/**
+ * The event ladder for a Claude seat's unread message: the watch offers it again on the seat's
+ * own event legs, in the cascade's order, and counts each attempt in the message's wake ledger
+ * so the next one waits 5, 10, 20, then 30 minutes, for up to seven days.
+ *
+ * 1. The channel push, when the seat's inbox server is live with its channel declared and has
+ *    not pushed this message yet: the channel marker goes down, and the server (with the held-drop
+ *    retry's one socket redelivery behind it) carries it. A message the server already pushed is
+ *    not pushed a second time through its single-writer marker.
+ * 2. The socket: the stored signed record, dialed under the same gate a send's socket leg reads
+ *    (`redeliverChannelOnSocket`).
+ *
+ * Neither leg types into the pane. A taken offer writes an `awaiting receipt` history line; the
+ * seat's own signed receipt is still the one proof of a read. Returns whether any message was
+ * offered, so the caller types nothing more for the seat this pass.
+ */
+async function reofferOnEventLegs(
+  scene: RetryScene,
+  seat: Seat,
+  dropDir: string,
+  candidates: readonly { id: string; ts: string }[],
+  nowMs: number,
+  unreadAfter: number,
+  home: string,
+): Promise<boolean> {
+  // The routes are the ones the seat's own resolved order permits, exclusions included: a seat
+  // whose order keeps the socket or the channel out (a drop-only word, a human) is never offered
+  // on it here either. A watch that cannot ask offers nothing.
+  const legs = scene.eventLegs?.(seat.name) ?? { channel: false, socket: false };
+  if (!legs.channel && !legs.socket) return false;
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return false;
+  const due = [...candidates]
+    .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
+    .filter((one) => eventLadderDue(dropDir, one, nowMs, unreadAfter))
+    .slice(0, EVENT_REOFFER_PER_PASS);
+  const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
+  let offered = false;
+  for (const message of due) {
+    // The candidates are the pass's earlier reading, and an offer just made may have had the
+    // seat read the rest: the signed read or replied receipt, or a lead's or the owner's signed
+    // clearance, is looked for again, under the seat's current claim binding, immediately before
+    // each offer (`isReadOrCleared`, the question the unread listing itself asks).
+    if (isReadOrCleared(dropDir, message.id, context, key.key, claimBindingIn(scene.root, scene.session, seat.name, message.id))) continue;
+    const payload = payloadOf(dropDir, message.id, home);
+    if (payload === null) continue;
+    const at = scene.now.toISOString();
+    let route: 'channel' | 'socket' | null = null;
+    let reason = '';
+    const channelUnpushed = legs.channel && !existsSync(channelPushPath(dropDir, message.id));
+    if (channelUnpushed) {
+      markPending(dropDir, { ts: at, from: payload.from, to: seat.name, body: payload.body, id: message.id, thread: payload.thread, leg: 'channel' });
+      route = 'channel';
+    } else if (legs.socket && scene.socketRedeliver !== undefined) {
+      const socket = await scene.socketRedeliver(dropDir, { id: message.id, from: payload.from, to: seat.name, body: payload.body, ts: at, tries: 0 });
+      if (socket.ok) route = 'socket';
+      else reason = socket.reason;
+    } else {
+      reason = legs.socket ? 'this watch carries no socket redelivery' : 'its channel already pushed it, and its order permits no socket';
+    }
+    const tries = (wakeTryOf(dropDir, message.id)?.tries ?? 0) + 1;
+    const nextAt = new Date(nowMs + wakeRetryDelayMs(tries - 1, 0)).toISOString();
+    // No route this time: the attempt is counted, so the ladder still spaces the next look, and
+    // the pass goes on to whatever else it walks for the seat. The reason stays in the ledger.
+    recordWakeTry(dropDir, message.id, route === null
+      ? { tries, typed: false, next_at: nextAt, reason }
+      : { tries, typed: false, next_at: nextAt, route });
+    if (route === null) continue;
+    offered = true;
+    appendHistory(scene.team.project, scene.root, home, {
+      ts: at,
+      from: payload.from,
+      to: seat.name,
+      body: payload.body,
+      id: message.id,
+      thread: payload.thread,
+      outcome: 'awaiting receipt',
+      note: `watch re-offer ${String(tries)} on the ${route}`,
+      via: route,
+    });
+    scene.say(`${seat.name}: a message from ${payload.from} was unread and was offered again on its ${route} (attempt ${String(tries)}); next at ${nextAt}`, false);
+  }
+  return offered;
 }
 
 /** What the watch's typed wake retry is for one seat, when it is on: the profile's attempt
@@ -595,6 +696,15 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       if (oldest !== undefined) {
         noteLeadEpisode(scene, seat.name, dropDir, oldest.id, nowMs, false);
       }
+    }
+    // A Claude seat has no typed wake of its own, so without this a message its channel push or
+    // its socket did not get read sat "pull-only" until the seat's next turn: the watch re-offers
+    // it on the event legs, channel push then socket, on the typed wake's slow ladder.
+    if (seat.cli === 'claude-code' && retry === null) {
+      const candidates = [...unread];
+      for (const one of fresh) if (!candidates.some((item) => item.id === one.id)) candidates.push(one);
+      const reoffered = await reofferOnEventLegs(scene, seat, dropDir, candidates, nowMs, unreadAfter, home);
+      if (reoffered) continue;
     }
     if (due.length === 0 && arrived.length === 0) continue;
     // The cascade's next leg below the one the send's walk took, per message: the adapter is
