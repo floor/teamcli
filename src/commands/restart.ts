@@ -109,7 +109,8 @@ import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/sta
 import { approvalStanding, findStore, readApproval, type Ceilings, type Standing } from '../store/store.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { placedCallerTeam, teamBinding, teamHoldsSeat } from '../registry/binding.ts';
-import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { findTeams, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { parseSpec } from '../send/resolve.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -120,7 +121,10 @@ import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 
 export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
+       team restart <seat>@<team> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
+
+<seat>@<team> names another team's seat by its registry id, project or session: only that team's owner or `leads`, or the entity's main orchestrator, may restart it that way.
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --resume, --file and --session are the owner's and take no --client), and is never the owner.
 
@@ -311,7 +315,20 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const reason = args.error ?? resumeProblem ?? (args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : args.rest.length === 0 ? 'a seat name is required' : clientProblem ?? 'the invocation cannot be read');
     return usage(out, json, reason);
   }
-  const name = args.rest[0] ?? '';
+  // A `<seat>@<team>` address names another team's seat the way `team send` spells it: the team
+  // is the registry record the scope names, never the caller's placed team or the folder. The
+  // address is a target, not an authority: it is admitted only for the target team's own owner or
+  // `leads`, or the entity's main orchestrator proven against that team, and dev mode never folds
+  // its refusal. `--file`, `--session` and `--client` name their own team and are not for it.
+  const spec = args.rest[0] ?? '';
+  const address = spec.includes('@') ? parseSpec(spec) : null;
+  if (address !== null && ('error' in address || address.kind !== 'at' || address.target === '' || address.target === 'lead')) {
+    return usage(out, json, `${plainLine(spec)}: address another team's seat as <seat>@<team id or project>`);
+  }
+  if (address !== null && (args.values.file !== undefined || args.values.session !== undefined || args.values.client !== undefined)) {
+    return usage(out, json, 'a <seat>@<team> address names its team: --file, --session and --client are not for it');
+  }
+  const name = address !== null && address.kind === 'at' ? address.target : spec;
   const pinnedResume = args.values.resume;
   const abandon = args.flags.has('abandon');
   // `--fresh` decides the conversation only: it is not `--abandon`, and never changes what the
@@ -352,11 +369,20 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (flagRefusal !== undefined) return callerRefused(out, json, flagRefusal, undefined, 'owner-only');
 
   const home = sources.home ?? homedir();
+  let addressed: TeamRecord | null = null;
+  if (address !== null && address.kind === 'at') {
+    const found = findTeams(home, address.scope);
+    if (found.length === 0) return configuration(out, json, `${plainLine(spec)}: no team registry record matches "${plainLine(address.scope)}" (by id, name or session)`);
+    if (found.length > 1) {
+      return configuration(out, json, `${plainLine(spec)}: "${plainLine(address.scope)}" names ${String(found.length)} teams (${found.map((one) => one.id ?? teamIdOf(one.root)).join(', ')}); say which by its id`);
+    }
+    addressed = found[0]!;
+  }
   // The pane is asked before the folder. One team whose state records this caller on its pane
   // is the team, and the launched pointer is not read. None leaves the folder binding. A `--file`
   // still names its file. On the folder path only a place that holds the cwd is the team: a
   // caller binding from that path still falls through to the pointer.
-  const paneTeam = args.values.file === undefined ? placedCallerTeam(home, io) : null;
+  const paneTeam = addressed !== null ? addressed : args.values.file === undefined ? placedCallerTeam(home, io) : null;
   const binding = paneTeam !== null
     ? { kind: 'bound' as const, team: paneTeam, by: 'caller' as const }
     : args.values.file === undefined
@@ -481,6 +507,17 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // refusal stays a refusal: the target placement, the CLI, the records, and trust. The
   // warning is logged where this call runs; a dry run says it beside the dry answer and
   // decides nothing.
+  if (addressed !== null && mainOrchestrator === null && mayChange.kind !== 'ok') {
+    // An address reaches another team only on proof: this team's owner or `leads`, or the
+    // entity's main orchestrator. Dev mode does not fold this gate for an address.
+    const why = `${plainLine(spec)}: only that team's owner or \`leads\`, or the entity's main orchestrator, restarts a seat by address; this call is ${plainLine(describeCaller(shown))}`;
+    return callerRefused(out, json, why, undefined, 'owner-or-leads', unblockingRestartRun(argv));
+  }
+  if (addressed !== null && dry) {
+    const line = `addressed: ${name} of team ${team.project} (${addressed.id ?? teamIdOf(addressed.root)}) at ${root}`;
+    if (json) notes.push(line);
+    else out.stdout(`! ${plainText(line)}\n`);
+  }
   const mayRun = clientRun !== null || mainOrchestrator !== null ? null : mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
     : mayChange.kind === 'another-pane' ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
       : mayChange.kind === 'refused' ? `only the owner or \`leads\` restarts a seat; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
@@ -713,6 +750,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   } else {
     // Neither record binds a conversation for this seat: the launch starts a fresh one.
     resumeNote = 'no recorded conversation';
+  }
+  if (addressed !== null && dry) {
+    const line = resume !== undefined ? `${name}: would resume conversation ${resume}` : `${name}: would start a fresh conversation (${resumeNote ?? 'no recorded conversation'})`;
+    if (json) notes.push(line);
+    else out.stdout(`! ${plainText(line)}\n`);
   }
 
   // The client's grant, read once more under its lock immediately before the first effect, and its audit

@@ -60,6 +60,7 @@ and `--abandon` replaces what is in that pane only under the same name.
 ## Synopsis
 
     team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat>@<team> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ## Flags
@@ -96,6 +97,15 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 | a run with no terminal | nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's seat, and never `--abandon` on a `working` seat |
 | the entity's main orchestrator: the lead seat of the team whose project is the entity itself | restart any declared seat of the entity's teams, as that team's own lead does — the proof is its head team's record, live file and recorded pane, never its seat name; it still never restarts a seat on the pane this call stands on |
+
+A caller placed in its own team reads a bare `<seat>` in that team, whatever folder it runs from: the main
+orchestrator running `team restart orchestrator` from another team's folder names its own seat and is refused
+as a self restart. `<seat>@<team>` names the other team's seat the way `team send` spells it, by the team's
+registry id, project or session. The address is a target, not an authority: it is admitted only for that
+team's owner or `leads`, or the entity's main orchestrator proven against that team, and dev mode never folds
+its refusal. It takes no `--file`, `--session` or `--client`. A scope no record holds, or one two records
+answer, is refused. A dry run prints the addressed team and whether the restart would resume the seat's
+recorded conversation or start a fresh one. An address naming the caller's own seat is still a self restart.
 
 A seat the record stops (`stopped: true`, as `team remove --keep` leaves one) is signed off: `team up` keeps
 leaving it out, and the owner, a `leads` seat of that seat's own team, or the entity's main orchestrator
