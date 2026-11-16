@@ -34,6 +34,7 @@ import { recordedGeneration } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
 import { intoRegistry, storedTeam, underRegistry, unreadableRegistryFolder } from './helpers/registry-team.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -1874,6 +1875,165 @@ describe('team restart <seat>', () => {
     expect(io.err).toContain('not the pane this call is on');
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(0);
+  });
+
+  // A `<seat>@<team>` address: the main orchestrator's own pane places it in its head team, so a
+  // bare `orchestrator` names its own seat and is refused as a self restart (2026-11-16, run from
+  // another team's folder). The address names the other team's seat, and the reach proof admits it.
+  describe('restart by <seat>@<team> address', () => {
+    function addressWorld(targetEntity = 'floor'): { fixture: Fixture; head: { root: string; dir: string; session: string } } {
+      const fixture = makeFixture(crossTeamTargetYaml(targetEntity));
+      updateState(fixture.dir, (state) => {
+        (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+      });
+      const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+      recordMainOrchestrator(head.dir, head.session, 'pane-main');
+      upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: targetEntity, session: 'acme', root: fixture.root, at: NOW.toISOString() });
+      upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+      return { fixture, head };
+    }
+
+    test("the bare name from the main orchestrator's pane is its own seat; the address reaches the other team", async () => {
+      const { fixture, head } = addressWorld();
+      const bare = makeHarness(fixture, { workerName: 'orchestrator' });
+      const bareIo = testIo(fixture.root);
+      bareIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(placedCallerTeam(fixture.home, bareIo)?.root).toBe(head.root);
+      expect(await runRestart(['orchestrator'], bareIo, bare.sources)).toBe(1);
+      expect(bareIo.err).toBe('team restart: the orchestrator cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
+      expect(bare.did.closed).toEqual([]);
+
+      const dryRun = makeHarness(fixture, { workerName: 'orchestrator' });
+      const dryIo = testIo(fixture.root);
+      dryIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator@acme', '--dry-run'], dryIo, dryRun.sources), dryIo.err).toBe(0);
+      expect(dryIo.out).toContain(`! addressed: orchestrator of team acme in session acme (${teamIdOf(fixture.root)}) at ${fixture.root}\n`);
+      expect(dryIo.out).toMatch(/! orchestrator: would (resume conversation|start a fresh conversation)/);
+      expect(dryRun.did.closed).toEqual([]);
+      expect(dryRun.did.created).toBe(0);
+
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      const io = testIo(fixture.root);
+      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator@acme'], io, sources), io.err).toBe(0);
+      expect(did.typed).toEqual(['/exit']);
+      expect(did.closed).toEqual(['ws-old']);
+      expect(did.created).toBe(1);
+      expect(io.out).toContain('team restart: restarted orchestrator; pane pane-old -> pane-new\n');
+    });
+
+    test('a head-team seat that is not the main orchestrator is refused the address, dev mode included', async () => {
+      const { fixture } = addressWorld();
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      const io = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-hops', session: 'floor' });
+      io.env = { TEAMCLI_DEV_MODE: '1' };
+      expect(await runRestart(['orchestrator@acme'], io, sources)).toBe(1);
+      expect(io.err).toContain("orchestrator@acme: only that team's owner or `leads`, or the entity's main orchestrator, restarts a seat by address");
+      expect(did.typed).toEqual([]);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+
+    test("an address to another entity's team is refused", async () => {
+      const { fixture, head } = addressWorld('radio');
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      const io = testIo(fixture.root);
+      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator@acme'], io, sources)).toBe(1);
+      expect(io.err).toContain('restarts a seat by address');
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+
+    test("an address naming the caller's own seat through its team id is a self restart", async () => {
+      const { fixture, head } = addressWorld();
+      setRoster(fixture.home, teamIdOf(head.root), [
+        { agent: 'agt_000000000000', seat: 'orchestrator', role: 'coordinator', leads: true },
+        { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+      ]);
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      const io = testIo(fixture.root);
+      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart([`orchestrator@${teamIdOf(head.root)}`], io, sources)).toBe(1);
+      expect(io.err).toBe('team restart: the orchestrator cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+
+    // The registry record names session `acme-b`; the file's default is `acme`, and the state also
+    // holds an older `acme` session where the lead is placed and the worker runs. The address is
+    // judged in `acme-b` only: the lead is not placed there, so it is refused, and nothing in
+    // `acme` is stopped or launched — the bare name's search across sessions is never used.
+    test("an address is judged in its record's session only, never another session of the root", async () => {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        const older = (state.sessions.acme ??= emptySession());
+        older.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+        older.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+        (state.sessions['acme-b'] ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-b', workspace: 'ws-b' };
+      });
+      upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', session: 'acme-b', root: fixture.root, at: NOW.toISOString() });
+      setRoster(fixture.home, teamIdOf(fixture.root), [
+        { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+        { agent: 'agt_111111111111', seat: 'worker', role: 'implementer' },
+      ]);
+      const { sources, did } = makeHarness(fixture);
+
+      // The bare name keeps its search: the lead is admitted in `acme`, where it stands.
+      const bareDry = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker', '--dry-run'], bareDry, sources), bareDry.err).toBe(0);
+
+      const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker@acme', '--dry-run'], io, sources)).toBe(1);
+      expect(io.out).not.toContain('! addressed:');
+      const real = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker@acme'], real, sources)).toBe(1);
+      expect(real.err).toContain('restarts a seat by address');
+      expect(did.typed).toEqual([]);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+      expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+    });
+
+    // A refused address leaves no dev-mode trace in the target team: a governing team policy turns
+    // dev mode off, so a run with the variable set would log that it was ignored, but the
+    // address is refused before dev mode is read at all — dry and real.
+    test('a refused address writes no dev-mode line to the target team log', async () => {
+      const { fixture } = addressWorld();
+      const written = writePolicySet(fixture.home, { level: 'team', target: fixture.root, teamRoot: fixture.root, name: 'dev-mode', value: 'off' }, { now: NOW });
+      if (!written.ok) throw new Error(written.why);
+      const logPath = join(fixture.dir, LOG_FILE);
+      const before = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      for (const extra of [['--dry-run'], []]) {
+        const io = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-hops', session: 'floor' });
+        io.env = { TEAMCLI_DEV_MODE: '1' };
+        expect(await runRestart(['orchestrator@acme', ...extra], io, sources)).toBe(1);
+        expect(io.err).toContain('restarts a seat by address');
+        expect(`${io.out}${io.err}`).not.toContain('dev mode');
+      }
+      const after = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+      expect(after).toBe(before);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+
+    test('an address takes no --file or --session, and a scope no record holds is refused', async () => {
+      const { fixture, head } = addressWorld();
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      for (const extra of [['--session', 'acme'], ['--file', 'team.yaml']]) {
+        const io = testIo(fixture.root);
+        io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+        expect(await runRestart(['orchestrator@acme', ...extra], io, sources)).toBe(2);
+        expect(io.err).toContain('a <seat>@<team> address names its team');
+      }
+      const io = testIo(fixture.root);
+      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator@nowhere'], io, sources)).not.toBe(0);
+      expect(io.err).toContain('no team registry record matches "nowhere"');
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
   });
 
   test("the entity's main orchestrator lifts a stopped seat's sign-off, and puts it back when the launch fails", async () => {
