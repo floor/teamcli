@@ -2265,6 +2265,9 @@ export async function executePlan(
           // is the fallback for a reading the host could not give twice.
           launched: launchedIdentity(processNow) ?? op.launched,
           ...(proof.kind === 'session' && op.session !== undefined ? { agent_session: op.session } : {}),
+          // A record adopted from `launched` or from a wait: the pane is the seat at its prompt
+          // now, so the dialog the record waited on is not there any more.
+          waiting: null,
         }, true);
         provedRestored.add(op.seat);
         dropped.add(op.seat);

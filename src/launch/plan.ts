@@ -628,6 +628,9 @@ export interface UpSeat {
   grantKeep?: string;
   /** Automatic restore keeps a live or unmeasured original pane and its record untouched. */
   restoreKeep?: { reason: string; uncertain: boolean };
+  /** `team up --retie` left this seat out: the plan would have launched, closed or relaunched
+   *  it. The seat is carried as `stopped` so no step reaches it; this is the line said for it. */
+  retieSkip?: string;
 }
 
 /**
@@ -1094,6 +1097,10 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'skip',
         text: `${seat.name}: the pane is a human's; nothing is launched into it or typed into it; left as it is`,
       });
+      continue;
+    }
+    if (seat.retieSkip !== undefined) {
+      steps.push({ kind: 'skip', text: `${seat.name}: ${seat.retieSkip}` });
       continue;
     }
     if (seat.stopped) {

@@ -894,4 +894,123 @@ describe('one-seat rebind across a machine restart', () => {
     expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
     expect(seatOf(WORKER)?.agent_session).toBe(SES);
   });
+
+  // The host restore clears every name (material's DeepSeek seat, 2026-11-16): the recorded pane
+  // comes back unnamed, and placement by name alone refused it.
+  const unnamed = (session = SES): HerdrAgent => ({ ...liveAgent(WORKER, PANE, SPACE), name: null, session });
+
+  test('a restored pane the host left unnamed is tied again and named back', async () => {
+    const made = restored({ shellStart: BEFORE });
+    made.sources.launch!.agents = () => [unnamed()];
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(0);
+    expect(io.out).toContain('across the machine restart');
+    expect(io.out).toContain('its pane is named back');
+    expect(made.trace.renamed).toEqual([{ pane: PANE, name: WORKER }]);
+    expect(seatOf(WORKER)?.launched).toEqual({ shell: 700, cli: [800] });
+    expect(made.trace.runs).toEqual([]);
+    expect(made.trace.closed).toEqual([]);
+    expect(made.trace.typed).toEqual([]);
+  });
+
+  test('an unnamed pane is never tied without the restart proof', async () => {
+    // The recorded pids still in front, but no name: nothing shows it is this seat's pane.
+    const made = restored({ shellStart: BEFORE });
+    made.sources.launch!.agents = () => [unnamed()];
+    made.sources.launch!.processInfo = () => PANE_PROCESSES;
+    sock(200);
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(made.trace.renamed).toEqual([]);
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+  });
+
+  test('an unnamed pane with another conversation, or a second pane named for the seat, is refused', async () => {
+    const made = restored({ shellStart: BEFORE });
+    made.sources.launch!.agents = () => [unnamed('ses_someone_else')];
+    expect(await runUp(['--rebind', WORKER], testIo(root, { kind: 'owner' }), made.sources)).toBe(1);
+    made.sources.launch!.agents = () => [unnamed(), { ...liveAgent(WORKER, OTHER_PANE, SPACE), session: SES }];
+    expect(await runUp(['--rebind', WORKER], testIo(root, { kind: 'owner' }), made.sources)).toBe(1);
+    expect(made.trace.renamed).toEqual([]);
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+  });
+
+  test('an unnamed pane running another CLI is refused', async () => {
+    const made = restored({ shellStart: BEFORE });
+    made.sources.launch!.agents = () => [{ ...unnamed(), agent: 'codex' }];
+    expect(await runUp(['--rebind', WORKER], testIo(root, { kind: 'owner' }), made.sources)).toBe(1);
+    expect(made.trace.renamed).toEqual([]);
+  });
+});
+
+// The teamcli lead after the second restart on 2026-11-16: its record had stopped at `launched`,
+// waiting at a question dialog, and the host restored its pane unnamed with the seat's own
+// conversation in it. `team up` planned a fresh workspace resuming that conversation beside it.
+describe('a waiting record whose pane the host restored with its own conversation', () => {
+  const RESTORED_PANE: PaneProcesses = { shell: 700, foreground: [800] };
+  function restoredWaiting() {
+    stand([{ name: WORKER }, { name: SPARE }]);
+    recordSeat(WORKER, { stage: 'launched', pane: PANE, workspace: SPACE, launched: RECORDED });
+    updateState(dir, (file) => {
+      file.sessions[SESSION]!.seats[WORKER]!.waiting = { state: 'waiting-owner', classification: 'question' };
+    });
+    registerSeat(WORKER, { pane: PANE, address: null });
+    return makeWorld({
+      agents: (_session, worlds) => [
+        { ...liveAgent(WORKER, PANE, SPACE), name: null, session: SES },
+        ...worlds.map((one) => liveAgent(one.label, one.pane, one.workspace)),
+      ],
+      processInfo: (_session, pane, worlds) => {
+        if (pane === PANE) return RESTORED_PANE;
+        if (worlds.some((one) => one.pane === pane)) return MADE_PROCESSES;
+        return null;
+      },
+      workspaces: () => [{ id: SPACE, label: WORKER }],
+      workspacePanes: (_session, workspace) => (workspace === SPACE ? [PANE] : null),
+    });
+  }
+
+  test('team up adopts the pane where it stands and never launches a second copy', async () => {
+    const made = restoredWaiting();
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources, { nonInteractive: true });
+    expect(made.trace.created, `up said:\n${said(io)}`).not.toContain(WORKER);
+    expect(made.trace.runs.filter((one) => one.pane === PANE)).toEqual([]);
+    expect(made.trace.closed).not.toContain(SPACE);
+    expect(made.trace.renamed).toContainEqual({ pane: PANE, name: WORKER });
+    const held = seatOf(WORKER)!;
+    expect(held.stage).toBe('ready');
+    expect(held.waiting).toBeUndefined();
+    expect(held.launched).toEqual({ shell: 700, cli: [800] });
+    expect(held.agent_session).toBe(SES);
+  });
+
+  test('team up --retie re-ties it and launches the unrecorded seat nowhere', async () => {
+    const made = restoredWaiting();
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--retie'], io, made.sources, { nonInteractive: true }), `up said:\n${said(io)}`).toBe(0);
+    expect(made.trace.created).toEqual([]);
+    expect(made.trace.runs).toEqual([]);
+    expect(made.trace.closed).toEqual([]);
+    expect(said(io)).toContain(`${SPARE}: not launched: --retie only re-ties seats whose panes are running`);
+    expect(made.trace.renamed).toContainEqual({ pane: PANE, name: WORKER });
+    expect(seatOf(WORKER)?.stage).toBe('ready');
+    expect(seatOf(SPARE)).toBeUndefined();
+  });
+
+  test('a dry --retie plans no launch', async () => {
+    const made = restoredWaiting();
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--retie', '--dry-run'], io, made.sources), `up said:\n${said(io)}`).toBe(0);
+    expect(io.out).toContain('not launched: --retie');
+    expect(made.trace.created).toEqual([]);
+    expect(seatOf(WORKER)?.stage).toBe('launched');
+  });
+
+  test('--retie takes no --rebind or --all', async () => {
+    const io = testIo(root, { kind: 'owner' });
+    stand([{ name: WORKER }]);
+    expect(await runUp(['--retie', '--all'], io, makeWorld().sources)).toBe(2);
+    expect(said(io)).toContain('--retie re-ties one running team');
+  });
 });

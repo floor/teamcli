@@ -231,3 +231,48 @@ export function restoreRelaunch(input: {
   if (input.modelDiffers) return 'model';
   return 'channel';
 }
+
+/**
+ * A seat whose record stopped before ready — still `launched`, or recorded waiting at a dialog —
+ * whose pane the host restored with the seat's own conversation in it. The plain proof above never
+ * adopts such a record (rule 1), and the waiting path used to read the replaced pids as "not that
+ * seat" and plan a fresh workspace resuming the same conversation: a second live copy of the seat
+ * beside the first (the teamcli lead after the 2026-11-16 restart). The record's stage is not what
+ * proves the pane; the conversation is. So only the strong proof is accepted here: the pane the
+ * record names, in its workspace, the declared CLI in front, unnamed or named for this seat, and
+ * its live conversation exactly the one the records bind. The weak `cli` proof never adopts a
+ * record that did not reach ready.
+ */
+export function unreadyRestoreProof(input: Omit<RestoreProofInput, 'allowSame'>): Extract<RestoreProof, { kind: 'session' }> | null {
+  const { recorded } = input;
+  if (input.recordedSession === undefined || input.recordedSession === '') return null;
+  const proof = restoreProof({
+    ...input,
+    recorded: {
+      stage: 'ready',
+      ...(recorded.pane === undefined ? {} : { pane: recorded.pane }),
+      ...(recorded.workspace === undefined ? {} : { workspace: recorded.workspace }),
+      ...(recorded.launched === undefined ? {} : { launched: recorded.launched }),
+    },
+  });
+  return proof.kind === 'session' ? proof : null;
+}
+
+/**
+ * The conversation a plan would put on a launch line, when that conversation is already live on a
+ * pane the plan does not exit first. Resuming it would run two copies of one seat's history side
+ * by side, so the seat is held instead: nothing is launched, nothing is closed. An in-place repair
+ * (its own pane, exited before the line runs) is not a second copy.
+ */
+export function liveConversationElsewhere(input: {
+  /** The id the launch would resume, when it resumes one. */
+  resume: string | undefined;
+  /** The pane the plan exits or closes before launching, when it repairs in place. */
+  inPlace: string | undefined;
+  agents: readonly Pick<HerdrAgent, 'pane' | 'session'>[] | null;
+}): string | null {
+  const id = input.resume;
+  if (id === undefined || id === '' || input.agents === null) return null;
+  const live = input.agents.find((agent) => agent.session === id && agent.pane !== input.inPlace);
+  return live === undefined ? null : live.pane;
+}
