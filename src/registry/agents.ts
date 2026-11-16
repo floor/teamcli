@@ -16,6 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isSeatId, updateState, withLock, type SeatState } from '../state.ts';
+import type { LaunchedIdentity } from '../launch/identity.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
 
@@ -457,6 +458,52 @@ export function recordProvenSeatConversation(
       const seat = state.sessions[current.reach.session]?.seats[current.reach.seat];
       if (seat === undefined || JSON.stringify(seat) !== snapshot) return false;
       seat.agent_session = conversation;
+      return true;
+    }, { writeWhen: (result) => result });
+    if (!written) return false;
+    next.provenance.seq = takeSeq(agentsDir(home));
+    writeAgentFile(file, next);
+    return true;
+  });
+}
+
+/**
+ * Ties a seat whose pane the terminal host restored after a machine restart (the proof is
+ * `rebootRebindProof`): the state takes the pane's live process identity and shell start, and
+ * the registry its live socket or none. The conversation is unchanged: the proof requires the
+ * pane to hold exactly the recorded one. Both snapshots must stand, as for a conversation write.
+ */
+export function recordRebootRebind(
+  home: string,
+  expected: Agent,
+  dir: string,
+  held: SeatState,
+  live: { launched: LaunchedIdentity; paneShell: number; paneShellStart: number; address: string | null },
+): boolean {
+  if (!isAgentId(expected.id) || expected.cli !== 'claude-code' || expected.lifecycle !== 'running'
+    || !held.launched || held.pane !== expected.reach.pane
+    || !held.agent_session || held.agent_session !== expected.reach.agent_session
+    || (held.id !== undefined && expected.seat_handle !== held.id)
+    || live.launched.cli.length === 0 || !Number.isInteger(live.paneShell) || live.paneShell <= 0
+    || !Number.isInteger(live.paneShellStart) || live.paneShellStart <= 0) return false;
+  const snapshot = JSON.stringify(held);
+  return withLock(agentsDir(home), () => {
+    const file = agentFile(home, expected.id);
+    const current = readAgentFile(file, expected.id);
+    if (!current || current.lifecycle !== 'running' || current.cli !== expected.cli
+      || current.reach.team !== expected.reach.team || current.reach.session !== expected.reach.session
+      || current.reach.seat !== expected.reach.seat || current.reach.pane !== expected.reach.pane
+      || current.reach.agent_session !== expected.reach.agent_session
+      || current.reach.address !== expected.reach.address || current.provenance.seq !== expected.provenance.seq) return false;
+    const next = patchedAgent(current, { reach: { address: live.address } });
+    const problem = invalid(next);
+    if (problem) throw new Error(`cannot update ${expected.id}: ${problem}`);
+    const written = updateState(dir, (state) => {
+      const seat = state.sessions[current.reach.session]?.seats[current.reach.seat];
+      if (seat === undefined || JSON.stringify(seat) !== snapshot) return false;
+      seat.launched = { shell: live.launched.shell, cli: [...live.launched.cli] };
+      seat.pane_shell = live.paneShell;
+      seat.pane_shell_start = live.paneShellStart;
       return true;
     }, { writeWhen: (result) => result });
     if (!written) return false;

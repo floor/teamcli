@@ -812,6 +812,7 @@
     "test/readable-wake.test.ts": 5,
     "test/readings.test.ts": 2,
     "test/readme-example.test.ts": 0,
+    "test/reboot-restore.test.ts": 3,
     "test/readme-profile-range-boundaries.test.ts": 0,
     "test/reconcile-offloop.test.ts": 3,
     "test/recorded-endpoint-review.test.ts": 1,

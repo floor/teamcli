@@ -203,7 +203,9 @@ export type Op =
     }
   /** A seat already running, painted from the file without typing into it or launching it again.
    *  Line 1 is the workspace title; line 2 is display_agent. A failed call is one line. */
-  | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string }
+  | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string;
+      /** The pane's live line differed from the file's: said and logged when painted. */
+      differs?: string }
   | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string;
       /**
        * Whether a launch line for this seat can carry the rules at all: its profile names a
@@ -417,6 +419,10 @@ export interface UpSeat {
   label: string;
   /** Sidebar line 2, set on the pane after launch. Absent: the plan does not report one. */
   displayAgent?: string;
+  /** Line 2 as the recorded pane shows it now, when that differs from `displayAgent`: a seat
+   *  that stays is repainted with this one, and `liveDisplayNote` says what differed. */
+  liveDisplayAgent?: string;
+  liveDisplayNote?: string;
   /** The team file's repair for this seat (`relaunchRepair`'s markdown text): every line this
    *  run prints that names a repair prints this one, never a `remove --keep` a lead seat's file
    *  would refuse. */
@@ -1009,19 +1015,25 @@ export function upPlan(input: UpInput): Step[] {
   // A seat's sidebar is painted from the record: line 1 its label, line 2 its display-agent.
   // The same step serves a ready seat and a restored one. Nothing is typed into the pane, and
   // the seat is not launched again.
+  // A seat that stays is painted with the line its recorded pane shows now, where that reads and
+  // differs from the file's; the step's note names the difference.
   const repaint = (seat: UpSeat, pane: string | undefined, workspace: string | undefined): void => {
     if (!pane || !workspace || !seat.displayAgent) return;
+    const live = pane === seat.pane ? seat.liveDisplayAgent : undefined;
+    const line = live ?? seat.displayAgent;
     steps.push({
       kind: 'run',
       argv: herdr(session, 'workspace', 'rename', workspace, seat.label),
-      also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent),
+      also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', line),
+      ...(live !== undefined && seat.liveDisplayNote !== undefined ? { note: seat.liveDisplayNote } : {}),
       do: {
         do: 'relabel',
         seat: seat.name,
         pane,
         workspace,
         title: seat.label,
-        displayAgent: seat.displayAgent,
+        displayAgent: line,
+        ...(live !== undefined && seat.liveDisplayNote !== undefined ? { differs: seat.liveDisplayNote } : {}),
       },
     });
   };

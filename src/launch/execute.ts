@@ -2403,6 +2403,8 @@ export async function executePlan(
           !host.reportDisplayAgent(session, op.pane, op.displayAgent, SIDEBAR_TTL_CAP_MS)
         ) {
           sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
+        } else if (host.reportDisplayAgent && op.differs !== undefined) {
+          host.log(op.seat, `sidebar line 2 painted from the pane: ${op.differs}`);
         }
         break;
       }
