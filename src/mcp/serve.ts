@@ -38,6 +38,8 @@ import { attributedBody } from '../send/sender-claim.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
+import { agentList, paneProcesses, paneRootPid } from '../herdr.ts';
+import { profileFor } from '../profiles/profile.ts';
 import type { BuildIdentity, InstallIdentity } from '../version.ts';
 import { admitChannelDelivery } from './channel-admit.ts';
 import {
@@ -1168,7 +1170,79 @@ export async function placementAtStart(
  *  owed to the serving loop, or the refusal the start answers with. */
 /** One reading of what the start may do: serve (with what it proved), wait and read again, or
  *  refuse for good. */
-export type StartReading<T = true> = { ok: true; value: T } | { ok: false; wait: boolean; why: string };
+export type StartReading<T = true> = { ok: true; value: T } | {
+  ok: false;
+  wait: boolean;
+  why: string;
+  /** A wait that ends with this refusal once the start has waited this long (from the first
+   *  reading). Absent: the wait lasts while the client stays connected. Once a reading carries
+   *  a bound, the start keeps that deadline through every later waiting refusal. */
+  waitBoundMs?: number;
+  /** The restored-pane window's lineage proof: once a reading carries it, the start re-reads it
+   *  before it binds, and a miss (null is proven) refuses instead of binding. */
+  lineage?: () => string | null;
+};
+
+/** How long a server under herdr waits for a placement it cannot place yet when its process
+ *  carries no pane variable. After a machine restart
+ *  herdr restores a lead's Claude pane and resumes the conversation itself: the CLI starts its
+ *  MCP servers before herdr has detected an agent in the pane, the restored process can carry no
+ *  pane variable, and the record may still name the pane from before the restart until the
+ *  restore re-ties it. Claude Code never starts a stdio server again once it has closed, so a
+ *  refusal there left the seat's team-inbox failed until a manual /mcp reconnect (jedi, vlist and
+ *  material, 2026-11-16, both restarts; the agent was named about two minutes later). The wait
+ *  serves nothing meanwhile — every tool call refuses with the reason — and the proof is the same
+ *  placement as before: only the time it is waited for changes. */
+export const SERVE_RESTORED_PLACEMENT_WAIT_MS = 10 * 60_000;
+/** Past the first minute of a bounded wait, the placement is read at this pace. */
+export const SERVE_PLACEMENT_BACKOFF_POLL_MS = 5000;
+
+/**
+ * Why this server is not the restored seat CLI's own child in the pane the seat's record names,
+ * or null when it is. The pids decide, never a variable: herdr is among the ancestors; the
+ * server's direct parent is a live process named as the seat CLI's profile names it; that CLI is
+ * one of the recorded pane's foreground processes; herdr's root for the pane is above it; and,
+ * when herdr reports the pane's conversation and the record holds one, the two are the same. A
+ * sibling or background job under the pane's shell, a process in another pane and a caller
+ * outside herdr all fail it. Read when the restored-pane wait opens and again before it binds.
+ * The parent is read live (`readAncestors` re-checks the parent pid), so a reused pid of an
+ * exited CLI is not this server's parent.
+ */
+export function restoredLineageMiss(
+  io: Io,
+  stateDir: string,
+  session: string,
+  name: string,
+  recorded: string,
+  cliNames: readonly string[],
+): string | null {
+  const sources = io.callerSources?.(session);
+  const ancestors = sources ? sources.ancestors() : callerAncestors(io);
+  if (ancestors === null || ancestors.length === 0) return 'its parent processes cannot be read';
+  if (!ancestors.some((one) => one.name === 'herdr')) return 'it does not run under herdr';
+  const parent = ancestors[0]!;
+  if (cliNames.length === 0 || !cliNames.includes(parent.name)) {
+    return `its parent process is not the seat's CLI (${cliNames.join(', ') || 'the CLI names no process'})`;
+  }
+  const root = sources ? sources.paneRootPid(recorded) : paneRootPid(recorded, session);
+  if (root === null || !ancestors.slice(1).some((one) => one.pid === root)) return `its CLI does not run in pane ${recorded}`;
+  const processes = sources ? (sources.paneProcesses?.(recorded) ?? null) : paneProcesses(recorded, session);
+  if (processes === null || !processes.foreground.includes(parent.pid)) {
+    return `its CLI is not the foreground process of pane ${recorded}`;
+  }
+  let recordedConversation: string | undefined;
+  try {
+    recordedConversation = readState(stateDir).sessions[session]?.seats?.[name]?.agent_session;
+  } catch {
+    return 'the team state cannot be read';
+  }
+  if (recordedConversation !== undefined && recordedConversation !== '') {
+    const agents = sources ? sources.agents() : agentList(session);
+    const live = agents ? agents.find((one) => one.pane === recorded)?.session : undefined;
+    if (live !== undefined && live !== recordedConversation) return `pane ${recorded} runs another conversation than the seat's record`;
+  }
+  return null;
+}
 
 /**
  * The placement alone, as a start reading. A state that cannot be read yet is waited for. A
@@ -1177,7 +1251,14 @@ export type StartReading<T = true> = { ok: true; value: T } | { ok: false; wait:
  * while none is recorded. A caller placed as another seat, in another launch's pane, or outside
  * herdr is foreign and refused.
  */
-export function placementReading(io: Io, stateDir: string, session: string, name: string): StartReading {
+export function placementReading(
+  io: Io,
+  stateDir: string,
+  session: string,
+  name: string,
+  /** The seat CLI's process names; without them the restored-pane window never opens. */
+  cliNames: readonly string[] = [],
+): StartReading {
   const verdict = placementOf(io, stateDir, session, name);
   if (verdict.ok) return { ok: true, value: true };
   if (verdict.kind === 'unreadable') return { ok: false, wait: true, why: verdict.why };
@@ -1185,7 +1266,20 @@ export function placementReading(io: Io, stateDir: string, session: string, name
   const pane = io.env.HERDR_PANE_ID;
   const recorded = recordedPaneOf(stateDir, session, name);
   const wait = pane !== undefined && pane !== '' && (recorded === undefined || recorded === pane);
-  return { ok: false, wait, why: verdict.why };
+  if (wait) return { ok: false, wait, why: verdict.why };
+  // A caller herdr has not named, with no pane variable, whose process runs in the pane the seat's
+  // record names (herdr's root for that pane is its ancestor): the restored-pane window (the state
+  // named the same pane both times, so only a missing variable explains the refusal there). It is
+  // waited for, bounded, and proven by the same placement. A variable that names another pane than
+  // the record's, a process in another pane, and a caller outside herdr are refused at once.
+  if ((pane === undefined || pane === '') && recorded !== undefined
+    && restoredLineageMiss(io, stateDir, session, name, recorded, cliNames) === null) {
+    return {
+      ok: false, wait: true, why: verdict.why, waitBoundMs: SERVE_RESTORED_PLACEMENT_WAIT_MS,
+      lineage: () => restoredLineageMiss(io, stateDir, session, name, recorded, cliNames),
+    };
+  }
+  return { ok: false, wait: false, why: verdict.why };
 }
 
 type ServingProof<T = true> =
@@ -1314,8 +1408,20 @@ export async function proveWhileServing<T = true>(input: {
   }
   async function readUntilProven(check: () => StartReading<T>): Promise<ServingProof<T>> {
   const start = now();
+  // The restored-pane window, once entered, holds for the rest of the start: its deadline ends
+  // every later wait whatever the refusal becomes, and its lineage is proven again at the bind.
+  let deadline: number | null = null;
+  let lineage: (() => string | null) | null = null;
   for (;;) {
     const verdict = check();
+    if (verdict.ok && lineage !== null) {
+      const miss = lineage();
+      if (miss !== null) {
+        const why = `this server waited as the restored seat's own CLI child and is no longer proven as one: ${miss}`;
+        input.onRefusal?.(why);
+        return { ok: false, why };
+      }
+    }
     if (verdict.ok) {
       // A line that already arrived is handed on as it came; otherwise the outstanding read, which
       // its one handler already observes; otherwise a read started only when the loop asks.
@@ -1333,7 +1439,13 @@ export async function proveWhileServing<T = true>(input: {
     // A client that has gone is waited for by no one: the last refusal is returned at once.
     if (ended) return { ok: false, why: verdict.why };
     const elapsed = now() - start;
-    await serveUntil(sleep(elapsed < SERVE_PLACEMENT_WAIT_MS ? SERVE_PLACEMENT_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS));
+    if (verdict.waitBoundMs !== undefined && deadline === null) deadline = start + verdict.waitBoundMs;
+    if (verdict.lineage !== undefined && lineage === null) lineage = verdict.lineage;
+    if (deadline !== null && now() >= deadline) return { ok: false, why: verdict.why };
+    const pace = elapsed < SERVE_PLACEMENT_WAIT_MS
+      ? SERVE_PLACEMENT_POLL_MS
+      : deadline !== null && elapsed >= 60_000 ? SERVE_PLACEMENT_BACKOFF_POLL_MS : SERVE_PLACEMENT_SLOW_POLL_MS;
+    await serveUntil(sleep(pace));
   }
   }
 }
@@ -1484,7 +1596,7 @@ export async function runMcpServe(
     const stoppedNow = declarationRefusal(team, team.session, seat.name);
     if (stoppedNow !== null) return { ok: false, wait: false, why: stoppedNow };
     const stateDir = dirname(loaded.path);
-    const placed = placementReading(io, stateDir, team.session, seat.name);
+    const placed = placementReading(io, stateDir, team.session, seat.name, profileFor(seat.cli)?.processNames ?? []);
     if (!placed.ok) return placed;
     const generation = generationOf(stateDir, team.session, seat.name);
     if (generation.kind === 'unreadable') {
