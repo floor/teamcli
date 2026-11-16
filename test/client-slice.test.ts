@@ -1313,7 +1313,7 @@ describe('the client send walk', () => {
     // The client contract is unchanged: one confirmation line, one key-isolation line.
     expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
     expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
-    expect(host.dials()).toBe(1);
+    expect(host.dials(), readFileSync(join(w.dir, LOG_FILE), 'utf8')).toBe(1);
     expect(host.frames[0]).toContain(CLIENT_SLICE_DISPLAY_NAME);
     expect(host.typed).toEqual([]);
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
@@ -1355,7 +1355,7 @@ describe('the client send walk', () => {
         read: () => {
           reads += 1;
           if (enters > 0 || prompted.length > 0) return working;
-          if (typed.length > 0 && scene.composer !== null) return idle.replace(scene.composer, `› ${typed[typed.length - 1]}`);
+          if (typed.length > 0 && scene.composer !== null) return idle.replace(scene.composer, `› ${(typed[typed.length - 1] ?? '').replaceAll('\n', '\n  ')}`);
           return idle;
         },
         type: (_pane, text) => { typed.push(text); return true; },
@@ -1369,7 +1369,7 @@ describe('the client send walk', () => {
       expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
       // Codex types its one line and presses Enter; Grok's profile submits by agent prompt.
       if (scene.cli === 'codex') {
-        expect(typed).toHaveLength(1);
+        expect(typed, readFileSync(join(w.dir, LOG_FILE), 'utf8')).toHaveLength(1);
         expect(enters).toBe(1);
       } else {
         expect(prompted).toHaveLength(1);
