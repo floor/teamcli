@@ -12,10 +12,10 @@ Each completed `team send` run (`delivered`, `delivered (read)`, `delivered (lat
 `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per line to
 `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|drop|mcp-inbox|native|headless-resume|channel|session|webhook>","session":"<session-id>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>","wake":{"attempted":true,"keys_sent":<true|false>}}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|drop|mcp-inbox|native|headless-resume|channel|session|webhook>","session":"<session-id>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>","wake_keys_sent":<true|false>}
 
-The fields after `outcome` are optional. `wake` is written when the send ran a typed wake that
-did not deliver: `keys_sent` says whether any key reached the pane, so the watch can tell a wake
+The fields after `outcome` are optional. `wake_keys_sent` is written when the send ran a typed
+wake that did not deliver: it says whether any key reached the pane, so the watch can tell a wake
 refused before any key from one submitted and not taken. `from_team` is the sending team's registry id, written by
 the send run (and by `--record`, `--confirm`, `reply` and the daemon) on the line it appends; a
 receipt line for the same id that carries none takes it from the send's own line when the feed

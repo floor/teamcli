@@ -1082,7 +1082,7 @@ describe('team send: the typed wake', () => {
       expect(history.ok).toBe(true);
       if (history.ok) {
         const lines = history.entries.filter((entry) => entry.id === msgId);
-        expect(lines[lines.length - 1]?.wake).toEqual({ attempted: true, keys_sent: true });
+        expect(lines[lines.length - 1]?.wake_keys_sent).toBe(true);
         expect(existsSync(join(drops, `${msgId}.wake`))).toBe(false);
         expect(wakeAttemptOf(drops, msgId, () => lines)).toBe('submitted');
       }
@@ -1101,7 +1101,7 @@ describe('team send: the typed wake', () => {
       if (history.ok) {
         const lines = history.entries.filter((entry) => entry.id === msgId);
         expect(lines.length).toBeGreaterThan(0);
-        expect(lines[lines.length - 1]?.wake).toEqual({ attempted: true, keys_sent: false });
+        expect(lines[lines.length - 1]?.wake_keys_sent).toBe(false);
         expect(wakeAttemptOf(drops, msgId, () => lines)).toBe('refused');
       }
     }

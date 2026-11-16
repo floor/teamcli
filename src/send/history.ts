@@ -114,10 +114,10 @@ export type HistoryEntry = {
   thread?: string;
   /** On a reply's line, the id of the record it answers. */
   in_reply_to?: string;
-  /** The typed wake this send attempted, when it attempted one that did not deliver: whether any
-   *  key reached the pane. The watch reads it to tell a refused wake from one submitted and not
+  /** Written when this send ran a typed wake that did not deliver: whether any key reached the
+   *  pane. The watch reads it to tell a wake refused before any key from one submitted and not
    *  taken; absent, the send made no typed attempt it did not deliver. */
-  wake?: { attempted: true; keys_sent: boolean };
+  wake_keys_sent?: boolean;
 };
 
 export type HistoryWrite =
@@ -304,7 +304,7 @@ export function appendHistory(project: string, root: string, home: string, entry
   if (entry.note !== undefined) record.note = entry.note;
   if (entry.thread !== undefined) record.thread = entry.thread;
   if (entry.in_reply_to !== undefined) record.in_reply_to = entry.in_reply_to;
-  if (entry.wake !== undefined) record.wake = { attempted: true, keys_sent: entry.wake.keys_sent };
+  if (entry.wake_keys_sent !== undefined) record.wake_keys_sent = entry.wake_keys_sent;
   return appendStoreLine(project, root, home, HISTORY_FILE, record);
 }
 
@@ -454,9 +454,8 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
   if (typeof obj.in_reply_to === 'string' && obj.in_reply_to !== '') {
     entry.in_reply_to = obj.in_reply_to;
   }
-  const wake = obj.wake as { attempted?: unknown; keys_sent?: unknown } | undefined;
-  if (wake !== null && typeof wake === 'object' && wake.attempted === true && typeof wake.keys_sent === 'boolean') {
-    entry.wake = { attempted: true, keys_sent: wake.keys_sent };
+  if (typeof obj.wake_keys_sent === 'boolean') {
+    entry.wake_keys_sent = obj.wake_keys_sent;
   }
   return entry;
 }

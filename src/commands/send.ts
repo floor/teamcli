@@ -603,8 +603,8 @@ type Report = {
    *  before a team was read names none, and writes no history line anyway. */
   from_team?: string;
   /** The typed wake this send attempted without delivering, and whether any key reached the
-   *  pane: carried into every history line the send writes after it, as the `wake` field. */
-  typedWake?: { attempted: true; keys_sent: boolean };
+   *  pane: carried into every history line the send writes after it, as `wake_keys_sent`. */
+  typedWake?: { keysSent: boolean };
   /** The resolved walk's legs, in order: a real send fills each state as the walk runs, and a
    *  dry run lists the candidates it would walk. Absent on a run that never resolved a walk. */
   delivery?: LegReport[];
@@ -634,10 +634,10 @@ type Report = {
 type SentAs = { spec: string; resolved: string };
 
 /** The sender's team as every history line this run writes carries it. */
-function historySender(report: Report): { from_team?: string; wake?: { attempted: true; keys_sent: boolean } } {
+function historySender(report: Report): { from_team?: string; wake_keys_sent?: boolean } {
   return {
     ...(report.from_team === undefined ? {} : { from_team: report.from_team }),
-    ...(report.typedWake === undefined ? {} : { wake: report.typedWake }),
+    ...(report.typedWake === undefined ? {} : { wake_keys_sent: report.typedWake.keysSent }),
   };
 }
 
@@ -3384,7 +3384,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         return delivered(io, to.seat, report, 'typed wake', 'typed');
       }
       // Any wake that ran and did not deliver is recorded with whether a key reached the pane.
-      report.typedWake = { attempted: true, keys_sent: wake.typed };
+      report.typedWake = { keysSent: wake.typed };
       if (wake.typed || wake.reason.startsWith('the screen stayed working')) {
         // The drop is already in the inbox. The history line is the same one the keep
         // path writes, plus the wake's own reason, so a later read is not an empty journal.
@@ -6273,7 +6273,7 @@ export async function walkReplyDelivery(input: {
       if (wake.delivered) {
         return ended({ via: 'typed', walked: true, unconfirmed: false, summary: `${seatName}: delivered (typed wake)` });
       }
-      report.typedWake = { attempted: true, keys_sent: wake.typed };
+      report.typedWake = { keysSent: wake.typed };
       failures.push(`typed: ${wake.reason}`);
       continue;
     }

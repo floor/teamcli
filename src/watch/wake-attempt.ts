@@ -23,15 +23,15 @@ function ledgerTyped(dropDir: string, id: string): boolean | null {
 }
 
 /** What the history lines about one message say of its wake, from their structured fields only:
- *  a typed or webhook leg that delivered is a submitted wake; a line whose `wake` field records an
- *  attempt is submitted when a key reached the pane and refused when none did. A leg passed over
- *  without an attempt writes no `wake` field and is no attempt. */
+ *  a typed or webhook leg that delivered is a submitted wake; a line carrying `wake_keys_sent`
+ *  records an attempt, submitted when a key reached the pane and refused when none did. A leg
+ *  passed over without an attempt writes no such field and is no attempt. */
 function historyAttempt(lines: readonly HistoryEntry[]): WakeAttempt {
   let found: WakeAttempt = 'none';
   for (const line of lines) {
     if ((line.via === 'typed' || line.via === 'webhook') && line.outcome.startsWith('delivered')) return 'submitted';
-    if (line.wake !== undefined) {
-      if (line.wake.keys_sent) return 'submitted';
+    if (line.wake_keys_sent !== undefined) {
+      if (line.wake_keys_sent) return 'submitted';
       found = 'refused';
     }
   }
