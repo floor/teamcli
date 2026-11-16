@@ -5715,7 +5715,6 @@ async function deliverClientRecord(
     address: agentRecord?.reach.address ?? null,
     who: from,
     identityHeader: CLIENT_FRAME_HEADER,
-    agentId: target.recipientId,
   });
   const failures = [...walk.failures];
   if (!walk.walked) {
@@ -5851,9 +5850,6 @@ export async function walkReplyDelivery(input: {
   /** The socket frame's identity line, when the carrier names its sender itself: a client send
    *  names the person's client. Absent, the line is the sending seat's, read from `naming`. */
   identityHeader?: string;
-  /** The receiving seat's registry id, when the caller resolved one: the live placement the
-   *  socket leg proves is read by it, as a send's own walk reads it. */
-  agentId?: string | null;
 }): Promise<ReplyWalkResult> {
   const seatName = input.seat;
   const from = input.payload.from;
@@ -5983,7 +5979,7 @@ export async function walkReplyDelivery(input: {
   const stagedRecordOf = (): RecordWritten | null => stagedWalk;
   const aim: Aim = {
     seat: seatName,
-    agentId: input.agentId ?? null,
+    agentId: null,
     session: input.session,
     cli,
     address: input.address,
