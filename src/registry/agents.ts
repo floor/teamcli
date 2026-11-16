@@ -480,7 +480,9 @@ export function recordRebootRebind(
   held: SeatState,
   live: { launched: LaunchedIdentity; paneShell: number; paneShellStart: number; address: string | null },
 ): boolean {
-  if (!isAgentId(expected.id) || expected.cli !== 'claude-code' || expected.lifecycle !== 'running'
+  // Any CLI the restart proof covers is tied. Only a Claude Code seat has a socket address; any
+  // other CLI is written with none, so a socket reading never becomes another CLI's route.
+  if (!isAgentId(expected.id) || (expected.cli !== 'claude-code' && live.address !== null) || expected.lifecycle !== 'running'
     || !held.launched || held.pane !== expected.reach.pane
     || !held.agent_session || held.agent_session !== expected.reach.agent_session
     || (held.id !== undefined && expected.seat_handle !== held.id)

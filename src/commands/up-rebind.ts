@@ -98,7 +98,7 @@ export function proveSeatRebind(input: {
     || samePane.length !== 1 || samePane[0]?.agent !== reports[0]?.agent || samePane[0]?.session !== conversation) {
     return fail('the live conversation changed while its pane proof was being read');
   }
-  return { ok: true as const, agent, held, conversation, address: socketOk ? address : null, reboot, unnamed };
+  return { ok: true as const, agent, held, conversation, address: socketOk && seat.cli === 'claude-code' ? address : null, reboot, unnamed };
 }
 
 export function runSeatRebind(input: {

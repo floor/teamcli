@@ -948,7 +948,7 @@ describe('one-seat rebind across a machine restart', () => {
 // conversation in it. `team up` planned a fresh workspace resuming that conversation beside it.
 describe('a waiting record whose pane the host restored with its own conversation', () => {
   const RESTORED_PANE: PaneProcesses = { shell: 700, foreground: [800] };
-  function restoredWaiting() {
+  function restoredWaiting(screen: string | null = CLAUDE_IDLE) {
     stand([{ name: WORKER }, { name: SPARE }]);
     recordSeat(WORKER, { stage: 'launched', pane: PANE, workspace: SPACE, launched: RECORDED });
     updateState(dir, (file) => {
@@ -972,9 +972,39 @@ describe('a waiting record whose pane the host restored with its own conversatio
       },
       workspaces: () => [{ id: SPACE, label: WORKER }],
       workspacePanes: (_session, workspace) => (workspace === SPACE ? [PANE] : null),
+      paneText: (_session, pane) => (pane === PANE ? screen : CLAUDE_IDLE),
     });
     return world;
   }
+
+  // Round 1b review, finding 3: the conversation proves the pane is the seat, not that its
+  // dialog has gone. A pane still showing the dialog, or one whose screen cannot be read, is
+  // re-tied with its wait and stage kept.
+  test('a restored pane still at its dialog is re-tied, and its wait is kept', async () => {
+    const question = readFileSync(join(import.meta.dir, 'fixtures/claude-code/2.1.289/question-plain.txt'), 'utf8');
+    const made = restoredWaiting(question);
+    const io = testIo(root, { kind: 'owner' });
+    await runUp(['--retie'], io, made.sources, { nonInteractive: true });
+    expect(made.trace.created).toEqual([]);
+    expect(made.trace.runs).toEqual([]);
+    expect(made.trace.typed).toEqual([]);
+    expect(made.trace.renamed).toContainEqual({ pane: PANE, name: WORKER });
+    const held = seatOf(WORKER)!;
+    expect(held.stage).toBe('launched');
+    expect(held.waiting).toEqual({ state: 'waiting-owner', classification: 'question' });
+    expect(held.launched).toEqual({ shell: 700, cli: [800] });
+    expect(said(io)).toContain('its screen is not at the idle prompt');
+  });
+
+  test('a restored pane whose screen cannot be read keeps its wait', async () => {
+    const made = restoredWaiting(null);
+    const io = testIo(root, { kind: 'owner' });
+    await runUp(['--retie'], io, made.sources, { nonInteractive: true });
+    expect(made.trace.created).toEqual([]);
+    const held = seatOf(WORKER)!;
+    expect(held.stage).toBe('launched');
+    expect(held.waiting).toEqual({ state: 'waiting-owner', classification: 'question' });
+  });
 
   test('team up adopts the pane where it stands and never launches a second copy', async () => {
     const made = restoredWaiting();

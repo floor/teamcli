@@ -976,6 +976,7 @@ function seatPlan(
               via: 'session',
               sentence: proof.sentence,
               session: continuitySession,
+              unready: true,
             },
           };
         }
@@ -1389,6 +1390,7 @@ function seatPlan(
           via: 'session',
           sentence: unready.sentence,
           session: continuitySession,
+          unready: true,
         },
       };
     }
@@ -3415,7 +3417,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   }
   // The team's event bus: started beside the watch unless the file sets `bus.autostart: false`,
   // and only when the bus does not already answer. A world that cannot probe it plans none.
-  const startBus = team.bus?.autostart !== false && sources.busAlive !== undefined;
+  // `--retie` starts and closes nothing: no Bus, no stray Bus sweep.
+  const startBus = !retie && team.bus?.autostart !== false && sources.busAlive !== undefined;
   const busAlive = startBus ? await sources.busAlive!(root) : false;
   // One Bus per team. A workspace already carrying the Bus's label is reused rather than
   // duplicated, and any extra labelled workspace is a stray that closes only after the live Bus
@@ -3514,7 +3517,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         },
       )
     : null;
-  const watchPid = identity?.kind === 'verified' ? identity.pid : null;
+  // `--retie` signals no process: a stale watch waits for a plain `team up`.
+  const watchPid = identity?.kind === 'verified' && !retie ? identity.pid : null;
   const watchHold = sitting.kind === 'pane' && identity?.kind === 'unproven'
     ? `watch: ${identity.why}; nothing was signalled and no replacement is started`
     : null;
@@ -3620,7 +3624,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
 
   /** The legacy watch workspaces this run closes, or would close on a dry run: only when the
    *  daemon's hosted watch owns this route. A pane watch still holding a workspace keeps it. */
-  const legacyWatchWorkspaces = (launch: Launch): string[] => sitting.kind !== 'hosted'
+  const legacyWatchWorkspaces = (launch: Launch): string[] => sitting.kind !== 'hosted' || retie
     ? []
     : closableLegacyWatchWorkspaces({
         label: watchLabel(team.project),
@@ -4713,7 +4717,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     });
     // A dead bus is started in its own process, with no owner at a terminal. The up process does
     // not serve the bus: that process would die when up exits. A test leaves superviseBus unset.
-    if (sources.superviseBus === true) {
+    if (sources.superviseBus === true && !retie) {
       try {
         await spawnInheritedBus(root, sources.home);
       } catch {

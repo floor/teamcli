@@ -2257,6 +2257,32 @@ export async function executePlan(
         if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, op.pane, op.displayAgent)) {
           sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
         }
+        // A record that never reached ready is re-tied by its conversation, but its stage and
+        // its wait describe the screen, and the conversation says nothing about that. Only a
+        // pane read at its idle prompt now, with herdr not reporting a turn, makes it ready and
+        // clears the wait; a dialog, a running turn, unsent text or an unreadable screen keeps
+        // both, and the seat is said as left out with its identity re-tied.
+        if (op.unready === true) {
+          const screenNow = host.paneText?.(session, op.pane) ?? null;
+          const statusNow = agentsNow?.find((agent) => agent.pane === op.pane)?.status;
+          const atPrompt = proof.kind === 'session' && screenNow !== null && screenNow !== ''
+            && statusNow !== 'working' && readScreen(op.cli, screenNow).kind === 'idle';
+          if (!atPrompt) {
+            recordSeat(op.seat, {
+              pane: op.pane,
+              workspace: op.workspace,
+              launched: launchedIdentity(processNow) ?? op.launched,
+              ...(proof.kind === 'session' && op.session !== undefined ? { agent_session: op.session } : {}),
+            }, true);
+            held = true;
+            dropped.add(op.seat);
+            final(op.seat, {
+              kind: 'left out',
+              reason: 're-tied to its restored pane; its screen is not at the idle prompt, so its record and any wait are kept',
+            }, `  restored and re-tied: ${proof.sentence}\n`);
+            break;
+          }
+        }
         recordSeat(op.seat, {
           stage: 'ready',
           pane: op.pane,
@@ -2265,9 +2291,9 @@ export async function executePlan(
           // is the fallback for a reading the host could not give twice.
           launched: launchedIdentity(processNow) ?? op.launched,
           ...(proof.kind === 'session' && op.session !== undefined ? { agent_session: op.session } : {}),
-          // A record adopted from `launched` or from a wait: the pane is the seat at its prompt
-          // now, so the dialog the record waited on is not there any more.
-          waiting: null,
+          // A record adopted from `launched` or from a wait, read at its idle prompt just now:
+          // the dialog the record waited on is not there any more.
+          ...(op.unready === true ? { waiting: null } : {}),
         }, true);
         provedRestored.add(op.seat);
         dropped.add(op.seat);

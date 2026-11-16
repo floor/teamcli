@@ -7,10 +7,15 @@
 //    (`unreadyRestoreProof`), and no plan resumes a conversation already live on another pane
 //    (`liveConversationElsewhere`).
 // 2. `team up --retie` launches nothing: a seat it would start is carried with a skip line.
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { liveConversationElsewhere, unreadyRestoreProof } from '../src/launch/restore-proof.ts';
 import { upPlan, type UpInput, type UpSeat } from '../src/launch/plan.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
+import { findAgent, recordRebootRebind, registerAgent } from '../src/registry/agents.ts';
+import { emptySession, readState, updateState, type SeatState } from '../src/state.ts';
 
 const PANE = 'fixture-pane-lead';
 const SPACE = 'fixture-space-lead';
@@ -101,5 +106,70 @@ describe('team up --retie launches nothing', () => {
     expect(steps.some((step) => step.kind === 'skip' && step.text === 'tester-cursor: not launched: --retie only re-ties seats whose panes are running')).toBe(true);
     expect(steps.some((step) => step.kind === 'skip' && step.text.includes('stopped in the file'))).toBe(false);
     expect(steps.some((step) => step.kind === 'run' && (step.do as { seat?: string } | undefined)?.seat === 'tester-cursor')).toBe(false);
+  });
+});
+
+// Round 1b review, finding 2: the restart rebind's fenced writer took Claude Code alone, so a
+// proven Codex, Cursor or Grok rebind refused at the write. Each is written now, with no
+// socket address; a socket handed in for a non-Claude CLI is refused.
+describe('the restart rebind writes every CLI the proof covers', () => {
+  let base: string;
+  let home: string;
+  let dir: string;
+  const SESSION = 'fixture-session';
+  const TEAM = 'fixture-team-id';
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'restore-adopt-')));
+    home = join(base, 'home');
+    dir = join(base, 'root', '.agents');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(dir, { recursive: true });
+  });
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  function standing(cli: string, seat: string) {
+    const held: SeatState = {
+      stage: 'ready', id: `seat_${'0123456789ab'}`, pane: PANE, workspace: SPACE,
+      launched: LAUNCHED, agent_session: SES, pane_shell: 100, pane_shell_start: 1,
+    };
+    updateState(dir, (file) => {
+      const one = (file.sessions[SESSION] ??= emptySession());
+      one.seats[seat] = held;
+    });
+    registerAgent(home, {
+      name: seat,
+      signing: { model: 'Fixture', version: '1', role: 'implementer' },
+      lab: 'fixture-lab',
+      cli,
+      launcher: null,
+      launch: cli,
+      reach: { team: TEAM, seat, session: SESSION, pane: PANE, address: null, agent_session: SES },
+      seat_handle: held.id!,
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    return { agent: findAgent(home, { team: TEAM, seat })!, held: readState(dir).sessions[SESSION]!.seats[seat]! };
+  }
+
+  for (const cli of ['codex', 'cursor', 'grok', 'claude-code']) {
+    test(`a proven ${cli} rebind is written`, () => {
+      const { agent, held } = standing(cli, `seat-${cli}`);
+      const live = { launched: { shell: 700, cli: [800] }, paneShell: 700, paneShellStart: 5, address: null };
+      expect(recordRebootRebind(home, agent, dir, held, live)).toBe(true);
+      const after = readState(dir).sessions[SESSION]!.seats[`seat-${cli}`]!;
+      expect(after.launched).toEqual({ shell: 700, cli: [800] });
+      expect(after.pane_shell_start).toBe(5);
+    });
+  }
+
+  test('a socket address for a non-Claude CLI is refused and nothing is written', () => {
+    const { agent, held } = standing('codex', 'seat-codex');
+    const live = { launched: { shell: 700, cli: [800] }, paneShell: 700, paneShellStart: 5, address: '/fixture/800.sock' };
+    expect(recordRebootRebind(home, agent, dir, held, live)).toBe(false);
+    expect(readState(dir).sessions[SESSION]!.seats['seat-codex']!.launched).toEqual(LAUNCHED);
   });
 });
