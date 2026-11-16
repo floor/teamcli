@@ -398,6 +398,11 @@ export function compare(
       // seat no per-seat restart is offered (a lead is never removed or restarted alone), and
       // the whole-team restart it would take is never the repair: the note says what the
       // process is, and the lead reads it.
+      // The conversation came back on a process team did not launch: the same unproven channel.
+      if (continuity === 'restored' && verdict === 'replaced') {
+        const unproven = channelPushUnprovenNote(seat, team);
+        if (unproven !== undefined) notes.push(unproven);
+      }
       if (continuity === 'restored' && usesLauncher(seat)) {
         if (isLeadSeat(team, seat.name)) {
           notes.push(`${seat.name}: started by a launcher; team cannot tell its process from the one it launched`);
@@ -923,17 +928,20 @@ function restoreProofAt(
 
 /** A program is in front and the stored session does not tie it to the launch. The repair is to
  *  look. `up` does not close this pane. */
-/** A restored pane runs a process herdr resumed, not the seat's launch line: a Claude seat whose
- *  line loads the team channel was resumed without the development-channel flag, so its inbox
- *  serves at the next turn and nothing is pushed (Claude Code logs "not in --channels list").
- *  The repair relaunches through the seat's own line, resuming its conversation; a lead's own
- *  seat is relaunched by another lead or the owner, never by itself. */
-export function channelPushOffNote(seat: Seat, team: TeamFile): string | undefined {
+/** The evidence this note rests on, and only that: the pane's process is not the one team
+ *  launched, so it was not started from the seat's launch line, and the development-channel flag
+ *  that line carries is not proven on it. Nothing here reads the live process's options or the
+ *  client's channel capability, so the note never says the flag is missing or that push is off:
+ *  herdr's own resume of a restored Claude pane is known to drop the flag (Claude Code then logs
+ *  "not in --channels list"), and a process started by hand with the flag keeps it. The repair
+ *  relaunches through the seat's own line, resuming its conversation; a lead's own seat is
+ *  relaunched by another lead or the owner, never by itself. */
+export function channelPushUnprovenNote(seat: Seat, team: TeamFile): string | undefined {
   if (seat.cli !== 'claude-code' || !channelLaunchEnabled(seat.launch)) return undefined;
   const repair = isLeadSeat(team, seat.name)
     ? `when it is idle, another lead or the owner runs team restart ${seat.name} --resume <its conversation id>`
     : `when it is idle, team restart ${seat.name} --resume <its conversation id>`;
-  return `${seat.name}: channel push off: resumed without the channel flag (the terminal host resumed it, not its launch line), so messages reach it only at its next turn; ${repair}`;
+  return `${seat.name}: channel push not confirmed: the process in its pane was not started from its launch line, so its channel flag cannot be checked (a terminal-host resume drops it); if messages reach it only at its next turn, ${repair}`;
 }
 
 function cannotTie(
@@ -945,7 +953,7 @@ function cannotTie(
   proof: RestoreProof | null = null,
 ): { row: Row; difference?: Difference; note?: string } {
   const found = cannotTieRow(seat, pane, screen, team, namedOnPane, proof);
-  const pushOff = channelPushOffNote(seat, team);
+  const pushOff = channelPushUnprovenNote(seat, team);
   if (pushOff === undefined) return found;
   return { ...found, note: found.note === undefined ? pushOff : `${found.note}; ${pushOff}` };
 }
