@@ -109,7 +109,7 @@ export function runSeatRebind(input: {
     if (!dry && changed) logLine(dir, 'up', input.actor, detail, sources.now?.() ?? new Date());
     if (json) writeJson(io, 'team.up', { format: 1, dry_run: dry, status: dry ? 'dry-run' : 'ready',
       action_summary: detail, project: input.team.project, session, seats: [seat.name],
-      plan: [], notes: [detail], rebind: { seat: seat.name, changed, applied: !dry && changed, reboot: proof.reboot !== null } });
+      plan: [], notes: [detail], rebind: { seat: seat.name, changed, applied: !dry && changed, ...(proof.reboot !== null ? { reboot: true } : {}) } });
     else io.stdout(`${detail}\n`);
     return 0;
   } catch (error) {

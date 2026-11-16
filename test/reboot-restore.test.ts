@@ -109,7 +109,12 @@ describe('labelled leftovers after a restart', () => {
   });
 
   test('a human seat and a label two seats share are never offered; an unread host offers nothing', () => {
-    const twins = [seat('a', 'tester'), { ...seat('b', 'tester'), name: 'b', label: 'a' }, seat('h', 'owner', { human: true })];
+    // Two written labels alike: neither seat can be named the owner.
+    const twins = [
+      { name: 'a', role: 'tester', label: 'a · tester', labelWritten: true },
+      { name: 'b', role: 'tester', label: 'a · tester', labelWritten: true },
+      seat('h', 'owner', { human: true }),
+    ];
     expect(labelledLeftovers(twins, {}, [{ id: 'w1', label: 'a · tester' }, { id: 'w2', label: 'h · owner' }])).toEqual([]);
     expect(labelledLeftovers(seats, {}, null)).toEqual([]);
   });
