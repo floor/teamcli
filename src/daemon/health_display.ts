@@ -171,6 +171,7 @@ function rootsPhrase(roots: DaemonRootState[], at: string): string[] {
   const parts = [`roots ${String(roots.length)} (send ${String(sendServing)}, bus ${String(busServing)})`];
   if (starting > 0) parts.push(`${String(starting)} endpoint${starting === 1 ? '' : 's'} starting`);
   parts.push(...firstPassPhrases(roots));
+  parts.push(...restorePhrases(roots));
   const failed = roots.flatMap((root) => {
     const entries: string[] = [];
     // Every failed endpoint is named, with its reason. A record written before this build kept
@@ -225,6 +226,28 @@ export function firstPassPhrases(roots: DaemonRootState[]): string[] {
     }
     return [`first pass done at ${pass.doneAt} for ${root.root}`];
   });
+}
+
+/**
+ * The daemon-start restore's pending routes, one phrase each, so a session that was not restored
+ * after a machine restart is never silent: a stopped session waits for the owner to attach it and
+ * is restored then, a load-held one is still being retried, and one past its retry bound names the
+ * command that finishes it.
+ */
+export function restorePhrases(roots: DaemonRootState[]): string[] {
+  const stopped = roots.filter((root) => root.restore?.reason === 'stopped').map((root) => root.root);
+  const phrases = stopped.length === 0 ? [] : [
+    `restore pending for ${String(stopped.length)} root${stopped.length === 1 ? '' : 's'} whose session is not running, restored when attached (${stopped.join(', ')})`,
+  ];
+  return [...phrases, ...roots.flatMap((root) => {
+    const restore = root.restore;
+    if (restore === undefined || restore.reason === 'stopped') return [];
+    const detail = restore.detail === undefined ? '' : `: ${restore.detail}`;
+    if (restore.reason === 'load') {
+      return [`restore pending for ${root.root} (held by the load guard since ${restore.since}${detail}; retrying)`];
+    }
+    return [`restore pending for ${root.root} (held by the load guard since ${restore.since}${detail}; retry bound reached, run "team up --all" once the load clears)`];
+  })];
 }
 
 /** Digits grouped in threes: the same text on every machine, whichever locale it runs in. */

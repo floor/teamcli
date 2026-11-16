@@ -824,6 +824,35 @@ describe('bounded sidebar after the first watch cycle', () => {
     expect(asked).toBe(3);
   });
 
+  test('a stopped session is re-checked on the first wait, never doubled, and painted once it is attached', async () => {
+    // 16 Nov reboot: sessions the owner attached an hour later kept no model line, because the
+    // stopped session read as a slow host and the wait had doubled to ten minutes.
+    const { home, root } = makeWorld();
+    const route: ChoresChildRoute = { root, team: 'acme-app', session: 'acme-dev', teamFile: makeTeam() };
+    let attached = false;
+    let asked = 0;
+    const reported: string[] = [];
+    const config = makeConfig(home, route);
+    const slices = { ...openSlices, sliceMs: config.beatMs };
+    const pass = createSidebarPass(config, {
+      readSeats: () => ({ lead: { stage: 'ready', pane: 'p1', workspace: 'w1' } }),
+      sessionPanes: async () => { asked++; return attached ? [{ pane: 'p1', workspace: 'w1' }] : null; },
+      sessionRunning: async () => attached,
+      reportDisplayAsync: async (pane) => { reported.push(pane); return true; },
+    });
+    const at = (ms: number) => ({ route, at: new Date(NOW + ms), slices });
+    expect(await pass(at(0))).toEqual(['sidebar refresh: the session "acme-dev" is not running; the lines are painted once it is attached']);
+    expect(await pass(at(31_000))).toEqual([]);
+    expect(await pass(at(62_000))).toEqual([]);
+    expect(await pass(at(93_000))).toEqual([]);
+    // Every 30 s, not 30, 60, 120: three misses after the first.
+    expect(asked).toBe(4);
+    attached = true;
+    await pass(at(124_000));
+    expect(asked).toBe(5);
+    expect(reported).toEqual(['p1']);
+  });
+
   test('skips remaining reports when the existing display slice is spent', async () => {
     const { home, root } = makeWorld();
     const route: ChoresChildRoute = { root, team: 'acme-app', session: 'acme-dev', teamFile: makeTeam() };

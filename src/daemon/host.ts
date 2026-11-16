@@ -40,11 +40,12 @@ import { lobbyOf } from '../lobby/recorded.ts';
 import { getTeam, noteStoppedTeamRunning, readTeams, teamIdOf } from '../registry/teams.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import type { TeamFile } from '../file/types.ts';
-import { paneProcessesAsync, sessionRunningAsync, type PaneProcesses } from '../herdr.ts';
+import { paneProcessesAsync, sessionListAsync, sessionRunningAsync, type PaneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
 import { runRestoreSweepInChild } from './restore/spawn.ts';
+import { createRestoreAttachWatch, sessionsRunningMap, type RestorePending } from './restore/attach-watch.ts';
 import { restoreLifecycleProblem } from '../launch/restore-lifecycle.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive, readState, type State } from '../state.ts';
@@ -305,10 +306,10 @@ export type StartMachineDaemonInput = {
    * A route with no recorded seats, or whose session is not running,
    * is skipped, and the sweep never cold-starts a team.
    */
-  restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
+  restoreSweep?: boolean | ((root: string, teamFile: string | undefined, scope?: { session: string }) => Promise<RestoreSweepResult>);
   /**
-   * The growing-gap retry schedule when a canonical route's session is not yet running in the
-   * terminal host at daemon start, or a restore is deferred only by its load guard:
+   * The growing-gap retry schedule when a restore is deferred only by its load guard, or one of
+   * its seats was refused on a timeout (retried once):
    * `restoreRetryInitialDelayMs` (5 s default) doubles each retry
    * up to `restoreRetryMaxDelayMs` (60 s default) over a total bound of `restoreRetryBudgetMs`
    * (315 s / 5m 15s default). A test shortens these to observe the retry schedule without
@@ -317,6 +318,19 @@ export type StartMachineDaemonInput = {
   restoreRetryInitialDelayMs?: number;
   restoreRetryMaxDelayMs?: number;
   restoreRetryBudgetMs?: number;
+  /**
+   * A route whose session is not running (after a machine restart the owner attaches most
+   * sessions later) is watched instead of retried: one terminal-host session list every
+   * `restoreAttachPollMs` (30 s default), and the route's restore runs once its session reads
+   * running. A test shortens it.
+   */
+  restoreAttachPollMs?: number;
+  /**
+   * The session read the restore's attach watch polls: name to running, or null when the
+   * terminal host did not answer. Production reads the terminal host's session list. With an
+   * injected `restoreSweep` and no reader, the watch lets the injected runner answer.
+   */
+  restoreSessions?: () => Promise<ReadonlyMap<string, boolean> | null>;
   /**
    * The reminders this daemon runs on its beat, read fresh on every beat so an edited config is
    * picked up without a restart. Absent, no reminder runs; reading the configured list into
@@ -383,6 +397,9 @@ const STUCK_MS = 10_000;
  *  mark. */
 const FALLBACK_BEAT_SLICE_MS = 10;
 const PRESENCE_EVERY_MS = 250;
+/** A restore refusal that is a launch timeout (16 Nov reboot: "tester-gemini: timeout"); the
+ *  route gets one more pass on the retry schedule. */
+const TIMEOUT_REASON = /\btime[ds]?[ -]?out\b/i;
 /** Failed restarts of one send endpoint in a row before the daemon gives up and exits. */
 const SEND_RESTART_GIVE_UP = 5;
 /** How long a restart waits for an old send handle to close before trying the new listener; a
@@ -3006,11 +3023,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   if (input.restoreSweep !== false && routes.length > 0) {
     const runner = typeof input.restoreSweep === 'function'
       ? input.restoreSweep
-      : (root: string, teamFile: string | undefined) =>
+      : (root: string, teamFile: string | undefined, scope?: { session: string }) =>
           runRestoreSweepInChild({
             home,
             root,
             ...(teamFile === undefined ? {} : { teamFile }),
+            ...(scope === undefined ? {} : { session: scope.session }),
             signal: restoreAbort.signal,
           });
     // A hosted route whose registry row still says stopped is the same team when the row's id
@@ -3043,50 +3061,175 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       logLine(`registry ${canonical}: ${id} stopped to running`);
       return true;
     };
+    // The restore's pending reading on the route's own state row: display data the status line
+    // reads, written with the next state snapshot. Cleared when the route's pass has run.
+    const notePending = (route: HostedRoute, pending: RestorePending | null): void => {
+      const status = roots.find((row) => row.root === route.root);
+      if (status === undefined) return;
+      if (pending === null) delete status.restore;
+      else status.restore = pending;
+    };
+    const restoreSessions = input.restoreSessions
+      ?? (typeof input.restoreSweep === 'function'
+        ? undefined
+        : () => sessionsRunningMap(() => sessionListAsync({ signal: restoreAbort.signal })));
+    const waitAbortable = (ms: number): Promise<boolean> =>
+      new Promise((resolveWait) => {
+        if (closed || restoreAbort.signal.aborted) {
+          resolveWait(false);
+          return;
+        }
+        const onAbort = (): void => {
+          clearTimeout(waitTimer);
+          resolveWait(false);
+        };
+        const waitTimer = setTimeout(() => {
+          restoreAbort.signal.removeEventListener('abort', onAbort);
+          resolveWait(!closed && !restoreAbort.signal.aborted);
+        }, ms);
+        restoreAbort.signal.addEventListener('abort', onAbort, { once: true });
+      });
+    /** Why a watched route is no longer the one the daemon hosts, or null while it still is. */
+    const hostedRouteChange = (route: HostedRoute): string | null => {
+      const hosted = routes.find((one) => one.root === route.root);
+      if (hosted === undefined) return 'the root is no longer hosted';
+      if (hosted.session !== route.session || hosted.team !== route.team) return 'the hosted route changed';
+      const entry = routeTeams.get(route.root);
+      if (entry === undefined) return 'the root is no longer hosted';
+      let loaded: ReturnType<typeof readTeamConfig>;
+      try { loaded = readRouteTeam(entry, home); }
+      catch (error) { return `the team could not be read: ${messageOf(error)}`; }
+      if (!loaded.ok) return `the team could not be read: ${loaded.errors[0]?.message ?? 'unknown error'}`;
+      if (loaded.team.session !== route.session) {
+        return `the team's session is now "${loaded.team.session}", not the watched "${route.session}"`;
+      }
+      if (loaded.team.project !== route.team) return `the team is now "${loaded.team.project}", not the watched "${route.team}"`;
+      return null;
+    };
     restoreSweepRun = (async (): Promise<void> => {
       let pendingRoutes: HostedRoute[] = [];
       const loadReasons = new Map<string, string>();
+      /** Routes whose pass refused a seat on a timeout: retried once on the retry schedule. */
+      const timeoutRetry = new Set<string>();
+      const timeoutRetried = new Set<string>();
       const loadHeld = (route: HostedRoute, result: RestoreSweepResult): boolean => {
         if ((result.kind !== 'refused' && result.kind !== 'ran') || result.retry !== 'load') return false;
         const reason = result.detail ?? 'the load guard refused this restore';
         if (loadReasons.get(route.root) !== reason) logLine(`restore ${route.root}: waiting for load guard: ${reason}`);
         loadReasons.set(route.root, reason);
+        notePending(route, { reason: 'load', since: new Date().toISOString(), detail: reason });
         return true;
       };
-      for (const route of routes) {
-        if (closed) return;
+      // A seat refused only because its launch timed out (a loaded machine after a restart) gets
+      // one more pass; a survivor counts nowhere on that pass, so it repairs only what is left.
+      const timedOut = (route: HostedRoute, result: RestoreSweepResult): boolean => {
+        if (result.kind !== 'ran' || timeoutRetried.has(route.root)) return false;
+        if (!result.summary.refused_seats.some((entry) => TIMEOUT_REASON.test(entry.reason))) return false;
+        timeoutRetry.add(route.root);
+        return true;
+      };
+      const watch = createRestoreAttachWatch({
+        pollMs: Math.max(1, input.restoreAttachPollMs ?? 30_000),
+        loadBudgetMs: Math.max(0, input.restoreRetryBudgetMs ?? 315_000),
+        // Without a session reader (an injected test runner), the runner answers for the session.
+        sessionsRunning: restoreSessions
+          ?? (async () => new Map(watch.roots().flatMap((root) => {
+            const route = routes.find((one) => one.root === root);
+            return route === undefined ? [] : [[route.session, true] as const];
+          }))),
+        attempt: async (route) => {
+          const entry = routeTeams.get(route.root);
+          if (entry === undefined) return 'done';
+          // A late attach may come long after the route was watched: the pass runs only while the
+          // daemon still hosts this root under the same team and session the watch was keyed on,
+          // and the child is told that session so its own fresh load refuses any other.
+          const changed = hostedRouteChange(route);
+          if (changed !== null) {
+            logLine(`restore ${route.root}: ${changed}; the watched restore was dropped, nothing was restored`);
+            return 'done';
+          }
+          let lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+          if (lifecycleProblem !== null && await noteLiveStopped(route)) {
+            lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+          }
+          if (lifecycleProblem !== null) {
+            logLine(`restore ${route.root}: ${lifecycleProblem}`);
+            return 'done';
+          }
+          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file, { session: route.session }));
+          if (result.kind === 'not-running') return 'not-running';
+          if (result.kind === 'ran') logLine(`restore ${route.root}: ${result.summary.line}`);
+          if ((result.kind === 'ran' || result.kind === 'refused') && result.retry === 'load') return 'load';
+          if (timedOut(route, result)) {
+            // The same one extra pass the start-up schedule gives; the next poll runs it.
+            timeoutRetry.delete(route.root);
+            timeoutRetried.add(route.root);
+            logLine(`restore ${route.root}: a seat timed out; one more pass at the next poll`);
+            return 'retry';
+          }
+          if (result.kind === 'lock-held') logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
+          else if (result.kind === 'unreadable') logLine(`restore ${route.root}: ${result.reason}`);
+          else if (result.kind === 'refused') {
+            const detail = result.detail === undefined ? '' : `: ${result.detail}`;
+            logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
+          }
+          return 'done';
+        },
+        wait: waitAbortable,
+        closing: () => closed || restoreAbort.signal.aborted,
+        now: () => Date.now(),
+        log: logLine,
+        onPending: notePending,
+      });
+      const watchRun = watch.run();
+
+      // Each route's first pass is the restore child's own reading, as before: the daemon reads
+      // the terminal host itself only in the attach watch, after a child has said not running.
+      const ordered: readonly HostedRoute[] = routes;
+
+      /** One pass at a route; true when the route stays on the retry schedule. */
+      const passOnce = async (route: HostedRoute, retrying: boolean): Promise<boolean> => {
         const entry = routeTeams.get(route.root);
-        if (entry === undefined) continue;
+        if (entry === undefined) return false;
         let lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
         if (lifecycleProblem !== null && await noteLiveStopped(route)) {
           lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
         }
         if (lifecycleProblem !== null) {
           logLine(`restore ${route.root}: ${lifecycleProblem}`);
-          continue;
+          notePending(route, null);
+          return false;
         }
         try {
-          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file));
+          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file, { session: route.session }));
           if (result.kind === 'ran') {
             logLine(`restore ${route.root}: ${result.summary.line}`);
-            if (loadHeld(route, result)) pendingRoutes.push(route);
+            if (loadHeld(route, result)) return true;
+            notePending(route, null);
+            if (timedOut(route, result)) return true;
           } else if (result.kind === 'lock-held') {
             logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
           } else if (result.kind === 'not-running') {
-            logLine(`restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`);
-            pendingRoutes.push(route);
+            if (!retrying) logLine(`restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`);
+            loadReasons.delete(route.root);
+            watch.add(route);
           } else if (result.kind === 'unreadable') {
             logLine(`restore ${route.root}: ${result.reason}`);
           } else if (result.kind === 'refused') {
-            if (loadHeld(route, result)) { pendingRoutes.push(route); continue; }
+            if (loadHeld(route, result)) return true;
             const detail = result.detail === undefined ? '' : `: ${result.detail}`;
             logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
           }
         } catch (error) {
           logLine(`restore ${route.root}: ${messageOf(error)}`);
         }
+        return false;
+      };
+
+      for (const route of ordered) {
+        if (closed) break;
+        if (await passOnce(route, false)) pendingRoutes.push(route);
       }
-      if (pendingRoutes.length === 0 || closed || restoreAbort.signal.aborted) return;
 
       // Lead restore-under-load brief, 2026-11-11: reuse this existing startup retry cadence
       // and wait budget for load-held routes too; no new timeout or threshold is introduced.
@@ -3100,84 +3243,46 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const formatWait = (ms: number): string =>
         ms >= 1_000 && ms % 1_000 === 0 ? `${ms / 1_000}s` : `${ms}ms`;
 
-      const waitAbortable = (ms: number): Promise<boolean> =>
-        new Promise((resolveWait) => {
-          if (closed || restoreAbort.signal.aborted) {
-            resolveWait(false);
-            return;
-          }
-          const onAbort = (): void => {
-            clearTimeout(waitTimer);
-            resolveWait(false);
-          };
-          const waitTimer = setTimeout(() => {
-            restoreAbort.signal.removeEventListener('abort', onAbort);
-            resolveWait(!closed && !restoreAbort.signal.aborted);
-          }, ms);
-          restoreAbort.signal.addEventListener('abort', onAbort, { once: true });
-        });
-
       while (pendingRoutes.length > 0 && elapsedMs < budgetMs && !closed && !restoreAbort.signal.aborted) {
         const delayMs = Math.min(currentDelayMs, maxDelayMs, budgetMs - elapsedMs);
         if (delayMs <= 0) break;
         const loadCount = pendingRoutes.filter((route) => loadReasons.has(route.root)).length;
-        const prerequisite = loadCount === 0
-          ? `the terminal host to restore ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'}`
-          : `restore prerequisites for ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} (${loadCount} waiting for load guard)`;
+        const timeoutCount = pendingRoutes.filter((route) => timeoutRetry.has(route.root)).length;
+        const waits = [
+          ...(loadCount === 0 ? [] : [`${loadCount} waiting for load guard`]),
+          ...(timeoutCount === 0 ? [] : [`${timeoutCount} retrying a seat that timed out`]),
+        ];
         logLine(
-          `restore: waiting ${formatWait(delayMs)} for ${prerequisite} (attempt ${attempt}, elapsed ${formatWait(elapsedMs)}/${formatWait(budgetMs)})`,
+          `restore: waiting ${formatWait(delayMs)} for restore prerequisites for ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} (${waits.join(', ')}) (attempt ${attempt}, elapsed ${formatWait(elapsedMs)}/${formatWait(budgetMs)})`,
         );
         const waited = await waitAbortable(delayMs);
-        if (!waited || closed || restoreAbort.signal.aborted) return;
+        if (!waited || closed || restoreAbort.signal.aborted) break;
         elapsedMs += delayMs;
         currentDelayMs = Math.min(currentDelayMs * 2, maxDelayMs);
         attempt += 1;
 
         const stillPending: HostedRoute[] = [];
         for (const route of pendingRoutes) {
-          if (closed || restoreAbort.signal.aborted) return;
-          const entry = routeTeams.get(route.root);
-          if (entry === undefined) continue;
-          let lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
-          if (lifecycleProblem !== null && await noteLiveStopped(route)) {
-            lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
-          }
-          if (lifecycleProblem !== null) {
-            logLine(`restore ${route.root}: ${lifecycleProblem}`);
-            continue;
-          }
-          try {
-            const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file));
-            if (result.kind === 'ran') {
-              logLine(`restore ${route.root}: ${result.summary.line}`);
-              if (loadHeld(route, result)) stillPending.push(route);
-            } else if (result.kind === 'lock-held') {
-              logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
-            } else if (result.kind === 'not-running') {
-              loadReasons.delete(route.root);
-              stillPending.push(route);
-            } else if (result.kind === 'unreadable') {
-              logLine(`restore ${route.root}: ${result.reason}`);
-            } else if (result.kind === 'refused') {
-              if (loadHeld(route, result)) { stillPending.push(route); continue; }
-              const detail = result.detail === undefined ? '' : `: ${result.detail}`;
-              logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
-            }
-          } catch (error) {
-            logLine(`restore ${route.root}: ${messageOf(error)}`);
-          }
+          if (closed || restoreAbort.signal.aborted) break;
+          if (timeoutRetry.delete(route.root)) timeoutRetried.add(route.root);
+          if (await passOnce(route, true)) stillPending.push(route);
         }
         pendingRoutes = stillPending;
       }
 
-      if (pendingRoutes.length > 0 && !closed && !restoreAbort.signal.aborted) {
-        const loadCount = pendingRoutes.filter((route) => loadReasons.has(route.root)).length;
+      const loadHeldRoutes = pendingRoutes.filter((route) => loadReasons.has(route.root));
+      if (loadHeldRoutes.length > 0 && !closed && !restoreAbort.signal.aborted) {
+        const at = new Date().toISOString();
+        for (const route of loadHeldRoutes) {
+          const detail = loadReasons.get(route.root);
+          notePending(route, { reason: 'load-bound', since: at, ...(detail === undefined ? {} : { detail }) });
+        }
         logLine(
-          loadCount === 0
-            ? `restore: pending (${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} still restoring in the terminal host after ${formatWait(elapsedMs)}; run "team up --all" once the terminal host finishes restoring)`
-            : `restore: pending (${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'}, ${loadCount} still load-held after ${formatWait(elapsedMs)}; retry wait bound reached; run "team up --all" once the load guard clears)`,
+          `restore: pending (${loadHeldRoutes.length} session${loadHeldRoutes.length === 1 ? '' : 's'}, ${loadHeldRoutes.length} still load-held after ${formatWait(elapsedMs)}; retry wait bound reached; run "team up --all" once the load guard clears)`,
         );
       }
+      watch.seal();
+      await watchRun;
     })().catch((error: unknown) => {
       // The loop above already logs each route's failure; this catches the log write itself (or
       // anything outside the loop), so the tracked run never rejects into an unhandled rejection

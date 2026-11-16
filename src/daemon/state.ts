@@ -140,6 +140,19 @@ export type DaemonRootState = {
    * the daemon's own loop exactly as before the isolation.
    */
   chores?: DaemonChoresState;
+  /**
+   * The daemon-start restore's reading while it has not run for this route: `stopped` while the
+   * session waits for the owner to attach it (the attach watch runs the pass then), `load` while
+   * the load guard holds it, `load-bound` once its retry bound was reached. Absent once the pass
+   * ran, and in older records. Display data: a malformed one is left out.
+   */
+  restore?: DaemonRootRestore;
+};
+
+export type DaemonRootRestore = {
+  reason: 'stopped' | 'load' | 'load-bound';
+  since: string;
+  detail?: string;
 };
 
 /**
@@ -360,6 +373,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     const presence = presenceOf(entry.presence);
     const firstPass = firstPassOf(entry.firstPass);
     const chores = choresOf(entry.chores);
+    const restore = restoreOf(entry.restore);
     roots.push({
       root: entry.root,
       ...(entry.source === 'registry' ? { source: 'registry' as const } : {}),
@@ -375,9 +389,24 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
       ...(presence === null ? {} : { presence }),
       ...(firstPass === null ? {} : { firstPass }),
       ...(chores === null ? {} : { chores }),
+      ...(restore === null ? {} : { restore }),
     });
   }
   return roots;
+}
+
+/** A route's restore reading, or null when absent or malformed (display data, never fatal). */
+function restoreOf(raw: unknown): DaemonRootRestore | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (entry.reason !== 'stopped' && entry.reason !== 'load' && entry.reason !== 'load-bound') return null;
+  if (typeof entry.since !== 'string' || entry.since === '') return null;
+  if (!(entry.detail === undefined || typeof entry.detail === 'string')) return null;
+  return {
+    reason: entry.reason,
+    since: entry.since,
+    ...(entry.detail === undefined ? {} : { detail: entry.detail }),
+  };
 }
 
 /**

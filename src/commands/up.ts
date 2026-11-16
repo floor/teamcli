@@ -1887,6 +1887,11 @@ export type UpInternal = {
   restore?: boolean;
   /** Automatic restore may change a seat only while its original recorded pane is proven absent. */
   restoreMissingOnly?: boolean;
+  /** Restore-only: the session the caller already checked and holds the run lock for. The run
+   *  refuses, before any session read, lock or launch, when its own load of the team names
+   *  another, so a team changed between the caller's load and this one never acts under the
+   *  wrong lock. A CLI caller cannot provide this. */
+  expectedSession?: string;
   /** Restore-only observation of an unchanged load refusal. The sweep may retry it; this
    *  never changes this run's guard or exit, and a CLI caller cannot provide this callback. */
   onLoadDeferred?(input: { reason: string; seat?: string }): void;
@@ -2681,6 +2686,10 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // Owner-only targets are honoured only when no gate decided: a delegated run is the default
   // file's own session, and an aimed run by anyone but the owner has already returned above.
   const session = verdict !== null ? team.session : (args.values.session ?? team.session);
+  if (internal?.expectedSession !== undefined && internal.expectedSession !== session) {
+    out.stderr(`team up: the team's session is now "${plainText(session)}", not the locked "${plainText(internal.expectedSession)}"; nothing was restored\n`);
+    return 1;
+  }
   // The lobby this session operates on: the one the registry recorded for it, else its own when
   // the file sets `entity` or `lobby`, else the machine-global one. Every lobby read and make
   // below runs against it, so a second team on the machine — or another session of this one —

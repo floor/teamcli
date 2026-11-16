@@ -23,6 +23,7 @@ import type { TeamFile } from '../../file/types.ts';
 import {
   reportDisplayAgentAsync,
   sessionPaneDisplaysAsync,
+  sessionRunningAsync,
   type HerdrReadOptions,
   workspaceList,
   workspacePaneDisplays,
@@ -39,6 +40,9 @@ export type SidebarPassSources = {
   sessionPanes?: (session: string, options: HerdrReadOptions) => Promise<WorkspacePaneDisplay[] | null>;
   /** Awaited metadata report; the production adapter force-ends the read child at its deadline. */
   reportDisplayAsync?: (pane: string, text: string, session: string, ttlMs: number, options: HerdrReadOptions) => Promise<boolean>;
+  /** Whether the session runs: false when stopped, null when the host did not answer. With an
+   *  injected `sessionPanes` and no reader here, the read answers null (unknown). */
+  sessionRunning?: (session: string, options: HerdrReadOptions) => Promise<boolean | null>;
   /** Monotonic clock seam for budget scenes. */
   clock?: () => number;
   /** Reads the current display line for a pane: `undefined` when absent or expired, `null` when
@@ -78,6 +82,8 @@ function defaultReadTeam(
 /** The sidebar refresh's first wait after the terminal host did not answer, and its ceiling. */
 export const SIDEBAR_BACKOFF_FIRST_MS = 30_000;
 export const SIDEBAR_BACKOFF_MAX_MS = 10 * 60_000;
+/** The re-check wait while the root's session is stopped: the first backoff wait, never doubled. */
+export const SIDEBAR_STOPPED_POLL_MS = SIDEBAR_BACKOFF_FIRST_MS;
 
 export function createSidebarPass(
   config: ChoresChildConfig,
@@ -91,6 +97,8 @@ export function createSidebarPass(
   const readWorkspaces = sources.workspaces ?? workspaceList;
   const report = sources.reportDisplayAsync ?? sources.reportDisplay ?? reportDisplayAgentAsync;
   const sessionPanes = sources.sessionPanes ?? sessionPaneDisplaysAsync;
+  const sessionRunning = sources.sessionRunning
+    ?? (sources.sessionPanes === undefined ? sessionRunningAsync : async () => null);
   // The old injected read seams keep their synthetic scenes; production uses only the session read.
   const injectedWorkspaceReader = sources.paneDisplay !== undefined || sources.workspacePanes !== undefined || sources.workspaces !== undefined;
   const clock = sources.clock ?? (() => performance.now());
@@ -167,7 +175,19 @@ export function createSidebarPass(
       'sidebar session pane-list', () => bounded((options) => sessionPanes(route.session, options)),
     );
     if (allPanes === null) {
-      const waitMs = Math.min(SIDEBAR_BACKOFF_MAX_MS, backoff === undefined ? SIDEBAR_BACKOFF_FIRST_MS : backoff.waitMs * 2);
+      // A session that is simply not running (after a machine restart, until the owner attaches
+      // it) is not a slow host: re-check on the first wait, never doubling, so the lines are
+      // painted within one wait of the attach rather than up to ten minutes later.
+      const running = await traceChildStep(
+        'sidebar session state', () => bounded((options) => sessionRunning(route.session, options)),
+      );
+      if (running === false) {
+        hostBackoff.set(route.root, { until: nowMs + SIDEBAR_STOPPED_POLL_MS, waitMs: 0 });
+        return backoff === undefined
+          ? [`sidebar refresh: the session "${route.session}" is not running; the lines are painted once it is attached`]
+          : [];
+      }
+      const waitMs = Math.min(SIDEBAR_BACKOFF_MAX_MS, backoff === undefined || backoff.waitMs === 0 ? SIDEBAR_BACKOFF_FIRST_MS : backoff.waitMs * 2);
       hostBackoff.set(route.root, { until: nowMs + waitMs, waitMs });
       // Said once per stretch: a backing-off refresh is quiet until the host answers again.
       return backoff === undefined

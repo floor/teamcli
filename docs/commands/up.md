@@ -93,11 +93,15 @@ only [`team brief rollout --apply`](brief.md) recovers that delivery at the clai
 ## After a power loss
 
 The service manager starts the machine daemon at login, often before the terminal host has
-finished restoring the sessions it had. The daemon's startup pass sweeps the checkouts its service
-unit names and retries the ones whose session has not come back yet: it waits five seconds, then
-twice as long each time up to a minute, for five minutes and a quarter in all, and stops waiting
-early when every session is back or the daemon closes. A session still restoring at that bound is
-logged as pending, never reported as nothing to do.
+finished restoring the sessions it had, and the owner attaches most sessions later. The daemon's
+startup pass restores each checkout whose session runs and watches the others, without spending
+its retry wait on them: one session list every thirty seconds, and a checkout's pass runs as soon
+as its session is attached, however late. Until then `team status` names it on the daemon line as
+`restore pending … restored when attached`. A pass the load guard holds is retried after five
+seconds, then twice as long each time up to a minute, for five minutes and a quarter in all; one
+still held at that bound is logged and shown as pending with `team up --all` to finish it. A seat
+refused because its launch timed out gets one more pass on the same schedule. The sidebar's model
+line is painted within thirty seconds of an attach.
 
 One command runs the restore pass across every registered team, whatever the daemon's checkouts:
 
