@@ -27,6 +27,10 @@ const PERMISSION = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.5
 const UNSENT = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.50', 'unsent.txt'), 'utf8');
 const UNSENT_WRAP = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.50', 'unsent-wrap.txt'), 'utf8');
 const SLASH_MENU = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.50', 'slash-menu.txt'), 'utf8');
+// The 1.0.77 fresh start: the welcome card over the empty box, a `Tip:` row between them.
+const WELCOME = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.77', 'welcome.txt'), 'utf8');
+const TRUST_1077 = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.77', 'trust.txt'), 'utf8');
+const PERMISSION_1077 = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.77', 'permission.txt'), 'utf8');
 
 const LINE = 'Read /t/mail/abc and do that.';
 const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
@@ -332,4 +336,27 @@ describe('team send: the Grok typed wake', () => {
     cleanups.push(made.cleanup);
     return made;
   }
+});
+
+describe('the Grok 1.0.77 fresh start: the welcome card over the empty box', () => {
+  test('the card over an empty box is idle; text in the box is unsent; the dialogs still refuse', () => {
+    expect(readScreen('grok', WELCOME).kind).toBe('idle');
+    const held = drawn(WELCOME, LINE);
+    expect(readScreen('grok', held).kind).toBe('unsent');
+    expect(boxHoldsText('grok', LINE, held)).toBe(true);
+    expect(readScreen('grok', TRUST_1077).kind).toBe('trust');
+    expect(readScreen('grok', PERMISSION_1077).kind).toBe('permission');
+  });
+
+  test('the wake prompts once on two welcome reads, and types nothing into a card holding a draft', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : WELCOME));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out).toMatchObject({ delivered: true, tries: 1 });
+    expect(pane.prompts).toEqual([LINE]);
+    const draft = wakeFake(() => drawn(WELCOME, 'half a thought'));
+    const refused = await deliverTypedWake(draft.host, 'pane-1', LINE, 'grok', FAST);
+    expect(refused.delivered).toBe(false);
+    expect(draft.prompts).toEqual([]);
+    expect(draft.typed).toEqual([]);
+  });
 });

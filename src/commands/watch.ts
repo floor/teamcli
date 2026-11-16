@@ -75,6 +75,9 @@ import { removeWorktree } from './worktree.ts';
 import { stateOf } from './down.ts';
 import type { DownSeat } from '../launch/plan.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
+import { wakeAttemptOf } from '../watch/wake-attempt.ts';
+import { readHistory, type HistoryEntry } from '../send/history.ts';
+import { strayWebhookOf } from '../send/webhook.ts';
 import { classifyWith, overridesInForceOf, quotaWith, type OverrideForce } from '../profiles/overrides.ts';
 import { ofTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -2207,6 +2210,22 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
   // template are read on the first record, never once per record.
   let words: WakeWords | undefined;
   const wordsNow = (): WakeWords => (words ??= wakeWordsFor(home, { root, session: team.session, team }, now));
+  // The send history, grouped by message id, read once per call and only when a record asks.
+  let history: Map<string, HistoryEntry[]> | undefined;
+  const historyFor = (id: string): HistoryEntry[] => {
+    if (history === undefined) {
+      history = new Map();
+      const read = readHistory(team.project, root, home);
+      if (read.ok) {
+        for (const entry of read.entries) {
+          const list = history.get(entry.id);
+          if (list === undefined) history.set(entry.id, [entry]);
+          else list.push(entry);
+        }
+      }
+    }
+    return history.get(id) ?? [];
+  };
   // The owner's inbox is delivered by the Runtime, not a seat's message: a record there never
   // counts as mail waiting in a pane.
   return scan.unacked().filter((record) => record.to !== 'owner').map((record) => {
@@ -2232,8 +2251,21 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
       brief: claimIdOf(record.to) === record.id,
       inDrops: existsSync(join(scan.dropDir(record.to), record.id)),
       text,
+      // Every trace a wake leaves is read: the `.wake` marker, the retry ledger, and the send's
+      // own history lines, so a failed retry or a refused send-side wake is never "no wake".
+      wake: wakeAttemptOf(scan.dropDir(record.to), record.id, () => historyFor(record.id)),
+      route: routeWords(seat),
     };
   });
+}
+
+/** The route a seat's wake takes, in the words the queued line uses. */
+function routeWords(seat: TeamFile['seats'][number] | undefined): string {
+  if (seat === undefined) return 'unknown';
+  if (seat.webhook !== undefined && strayWebhookOf(seat.webhook, seat.cli) === null) return 'webhook';
+  if (seat.cli === 'claude-code') return 'channel push';
+  if ((profileFor(seat.cli)?.typedWake ?? null) !== null) return 'typed wake';
+  return 'pull on turn';
 }
 
 async function deliver(

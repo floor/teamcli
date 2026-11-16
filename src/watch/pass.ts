@@ -170,6 +170,13 @@ export type MailboxWaiting = {
   /** The line the ring types: the record's message-display header, then the fixed read hint.
    *  Absent, the shipped nameless ring. */
   text?: string;
+  /** The wake this record has had (src/watch/wake-attempt.ts): none at all, one refused before
+   *  any key reached the pane, or one actually submitted. The watch's reader always sets it;
+   *  absent reads as submitted, the reading callers before this field had. */
+  wake?: 'none' | 'refused' | 'submitted';
+  /** The route the seat's wake takes, in plain words (`typed wake`, `webhook`, `pull on turn`),
+   *  for the line that says no wake was tried yet. */
+  route?: string;
 };
 
 export type PassResult = {
@@ -848,6 +855,22 @@ function seatWorkPlans(
     }
     const prior = episodes[obs.name];
     const unread = waiting.has(obs.name) && obs.screen.kind !== 'working';
+    // "Wake not taken" is a claim about a wake: it stands only when one was tried for a record
+    // this seat still has not read. A record with no attempt yet is queued, and the lead is told
+    // that instead, with the route its wake will take.
+    const mine = mailbox.filter((record) => record.to === obs.name && record.served && record.brief !== true);
+    const tried = mine.some((record) => (record.wake ?? 'submitted') === 'submitted');
+    if (unread && !tried) {
+      const route = mine.find((record) => record.route !== undefined)?.route ?? 'unknown';
+      const refused = mine.some((record) => record.wake === 'refused');
+      const key = `queued:${obs.name}`;
+      const text = refused
+        ? `${obs.name}: queued, the wake was refused before any key reached the pane (route: ${route})`
+        : `${obs.name}: queued, no wake tried (route: ${route})`;
+      const queued = once(key, text, 'orchestrator');
+      if (queued) reports.push(queued);
+      else keep(key);
+    }
     const found = seatCanWork({
       seat: obs.name,
       cli: obs.cli,
@@ -857,7 +880,7 @@ function seatWorkPlans(
       elapsedMs: prior === undefined ? 0 : now - prior.since,
       told: prior?.told === true,
       restarted: prior?.restarted === true,
-      ...(unread ? { wake: { submitted: false, working: false, receipt: false } } : {}),
+      ...(unread && tried ? { wake: { submitted: false, working: false, receipt: false } } : {}),
     });
     if (found.ok) {
       delete episodes[obs.name];

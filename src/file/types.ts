@@ -77,6 +77,13 @@ export type SeatWebhook = {
   urlFile: string;
   secretFile: string;
   /**
+   * The CLI the routine runs the seat as, when the row says so (`claude-code`, `cursor`, …). A
+   * webhook counts as the seat's delivery only when this target is the seat's own declared CLI.
+   * Absent, the target is read from the URL's host where that host names one CLI's vendor
+   * service, and a host that names none leaves the target open, which counts as before.
+   */
+  target?: string;
+  /**
    * The header the secret authenticates, when the routine reads it somewhere other than the
    * default. Set, the secret file's one line is that header's value verbatim — no scheme word is
    * added. Absent, the adapter sends the form rows used before this field existed:

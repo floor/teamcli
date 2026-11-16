@@ -21,6 +21,7 @@ import {
   watchWakeTriesKey,
 } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
+import { wakeAttemptOf } from '../src/watch/wake-attempt.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
 import { readBox, readScreen, type Screen } from '../src/watch/screen.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
@@ -1062,6 +1063,48 @@ describe('team send: the typed wake', () => {
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
     expect(records).toHaveLength(1);
     expect(recordBody(join(drops, records[0] as string))).toBe(filed(longBody));
+  });
+
+  test('a send-side typed wake that failed leaves its history line saying whether keys went in, and the next reading follows it', async () => {
+    // Keys went in and the line was not taken: submitted.
+    {
+      const made = museWorld();
+      const pane = wakeFake((read, enters, typed) => {
+        if (read < 2) return IDLE;
+        const line = typed[typed.length - 1] ?? '';
+        return enters === 0 ? holding(line) : workingHolding(line);
+      });
+      const host = fake(made, { agents: () => [{ name: 'muse', pane: 'pane-1' }], typedWake: () => pane.host });
+      expect(await runSend(['muse', 'check held'], owner(made.root), host)).toBe(1);
+      const drops = join(made.dir, 'send-drops', 'acme', 'muse');
+      const msgId = readdirSync(drops).filter((name) => !name.includes('.'))[0]!;
+      const history = readHistory('acme', made.root, host.home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        const lines = history.entries.filter((entry) => entry.id === msgId);
+        expect(lines[lines.length - 1]?.wake_keys_sent).toBe(true);
+        expect(existsSync(join(drops, `${msgId}.wake`))).toBe(false);
+        expect(wakeAttemptOf(drops, msgId, () => lines)).toBe('submitted');
+      }
+    }
+    // The box held a draft, so the wake typed nothing: refused, not "no wake" and not submitted.
+    {
+      const made = museWorld();
+      const pane = wakeFake(() => holding('a draft of its own'));
+      const host = fake(made, { agents: () => [{ name: 'muse', pane: 'pane-1' }], typedWake: () => pane.host });
+      await runSend(['muse', 'check draft'], owner(made.root), host);
+      expect(pane.typed).toEqual([]);
+      const drops = join(made.dir, 'send-drops', 'acme', 'muse');
+      const msgId = readdirSync(drops).filter((name) => !name.includes('.'))[0]!;
+      const history = readHistory('acme', made.root, host.home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        const lines = history.entries.filter((entry) => entry.id === msgId);
+        expect(lines.length).toBeGreaterThan(0);
+        expect(lines[lines.length - 1]?.wake_keys_sent).toBe(false);
+        expect(wakeAttemptOf(drops, msgId, () => lines)).toBe('refused');
+      }
+    }
   });
 
   test('independent adversarial: line held while working through bound in send is not delivered, never retyped, and message stays unread; box cleared or partial line mid-poll refuses', async () => {

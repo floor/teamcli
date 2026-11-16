@@ -42,6 +42,7 @@ import { MailPass } from '../src/watch/mail-pass.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
 import { defaultWatch } from '../src/file/sections/watch.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_PULL_SECONDS, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds } from '../src/watch/rhythm.ts';
+import { wakeAttemptOf } from '../src/watch/wake-attempt.ts';
 import { reportStuckSeats, reportUnreadDrops, reportedPath, wakeBackoffMs, wakeLinesPath, WAKE_SLOW_MAX_AGE_MS, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
 import { readScreen } from '../src/watch/screen.ts';
@@ -938,6 +939,22 @@ describe("the watch's typed wake retry", () => {
     const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
     expect(toOwner.body).toContain('no wake line was typed');
     expect(toOwner.body).not.toContain('a typed wake was tried');
+  });
+
+  test('a real failed retry is read by the next pass as a wake: refused with no keys, submitted with keys, none before', async () => {
+    for (const [result, expected] of [[TYPED_REFUSED, 'refused'], [TYPED_FAILED, 'submitted']] as const) {
+      const { made, team } = typedWorld('muse');
+      const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nnobody came', new Date(NOW.getTime() - 11 * MIN));
+      expect(wakeAttemptOf(dropDir, UNREAD_A)).toBe('none');
+      const one = pane(MUSE_IDLE);
+      const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+      const sources = typedSources(one, typedSeam([result], calls));
+      await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane') }), { unreadAfter: N });
+      expect(calls).toHaveLength(1);
+      // The retry gave its `.wake` marker back; the ledger it left is what the next reading sees.
+      expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+      expect(wakeAttemptOf(dropDir, UNREAD_A)).toBe(expected);
+    }
   });
 
   test('the report counts the typed attempts that never landed, singular where it is one', () => {

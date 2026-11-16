@@ -38,7 +38,7 @@ import type { SeatWebhook, TeamFile } from '../file/types.ts';
 import type { SignedRecord } from '../send/record.ts';
 import { appendHistory } from '../send/history.ts';
 import { webhookStep, type StepFields } from '../send/steps.ts';
-import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
+import { strayWebhookOf, webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
 import { WEBHOOK_SENDER_DEADLINE_MAX_MS } from '../settings/webhook-sender.ts';
 import { webhookSenderDeadlineMs } from '../settings/webhook-sender-policy.ts';
 import type { SignedEventRecord } from './log.ts';
@@ -454,7 +454,9 @@ async function shapeOf(
 export function webhookRoutesOf(team: TeamFile): Map<string, SeatWebhook> {
   const routes = new Map<string, SeatWebhook>();
   for (const seat of team.seats) {
-    if (seat.webhook !== undefined) routes.set(seat.name, seat.webhook);
+    // A webhook whose routine runs another CLI than the seat's own is not the seat's route: the
+    // bus never posts the seat's mail to it, and the seat's own pane route carries the message.
+    if (seat.webhook !== undefined && strayWebhookOf(seat.webhook, seat.cli) === null) routes.set(seat.name, seat.webhook);
   }
   return routes;
 }
@@ -463,6 +465,9 @@ export type WebhookDeliveryInput = {
   /** The seat the arrival is for, as the record names it. */
   seat: string;
   webhook: SeatWebhook;
+  /** The seat's declared CLI. The route read for the POST is refused when the routine runs as
+   *  another CLI, on the same reading of the URL the request is built from. */
+  cli?: string;
   record: SignedEventRecord;
   /** The project root: the inbox body shape reads the record the arrival names beneath it. */
   root?: string;
@@ -581,7 +586,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
   if (payload.kind === 'message.arrived' && to !== undefined && postedMarkAt(input.root, payload.session, to, payload.record_id)) {
     return done({ outcome: 'skipped', attempts: 0, reason: 'the send already posted this arrival' });
   }
-  const route = webhookRouteOf(input.webhook);
+  const route = webhookRouteOf(input.webhook, input.cli);
   if (route === null || !route.ok) {
     const reason = route === null ? 'no webhook adapter is configured' : route.reason;
     say(input.report, `webhook: ${input.seat}: not posted: ${reason}; the drop file stays in place`);
@@ -716,6 +721,9 @@ export type SenderPostInput = {
   seat: string;
   /** The seat's adapter row, as the receiving team file declares it. */
   webhook: SeatWebhook;
+  /** The seat's declared CLI; absent, the receiving team file's row for the seat names it. The
+   *  route read for the POST is refused when the routine runs as another CLI. */
+  cli?: string;
   /** The receiving team file, as the policy chain's team level reads it; absent, the release
    *  default bound stands. */
   team?: TeamFile | null;
@@ -766,7 +774,8 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     held = 'none';
   };
   try {
-    const route = webhookRouteOf(input.webhook);
+    const cli = input.cli ?? input.team?.seats.find((one) => one.name === input.seat)?.cli;
+    const route = webhookRouteOf(input.webhook, cli);
     if (route === null || !route.ok) return { kind: 'none', why: 'no-route' };
     const header = route.header === undefined ? {} : { header: route.header };
     let shape: WebhookShape;
@@ -1244,6 +1253,10 @@ export type WebhookDelivery = ((record: SignedEventRecord) => void) & {
  */
 export function makeWebhookDelivery(input: WebhookFactoryInput): WebhookDelivery {
   let routes = webhookRoutesOf(input.team);
+  // Each routed seat's declared CLI, rebuilt with the routes: the POST rechecks the target on its
+  // own reading of the URL, so a URL file changed after this map was built cannot slip through.
+  const clisOf = (team: TeamFile): Map<string, string> => new Map(team.seats.map((seat) => [seat.name, seat.cli]));
+  let clis = clisOf(input.team);
   const deliver: WebhookDelivery = (record: SignedEventRecord): void => {
     try {
       if (record.payload.kind !== 'message.arrived') return;
@@ -1253,9 +1266,11 @@ export function makeWebhookDelivery(input: WebhookFactoryInput): WebhookDelivery
       if (webhook === undefined) return;
       const report = (text: string): void => say(input.stderr, text);
       const onResult = input.onResult;
+      const cli = clis.get(to);
       void deliverWebhook({
         seat: to,
         webhook,
+        ...(cli === undefined ? {} : { cli }),
         record,
         ...(input.root === undefined ? {} : { root: input.root }),
         ...(input.policy === undefined ? {} : { policy: input.policy }),
@@ -1272,6 +1287,7 @@ export function makeWebhookDelivery(input: WebhookFactoryInput): WebhookDelivery
   };
   deliver.reload = (team: TeamFile): void => {
     routes = webhookRoutesOf(team);
+    clis = clisOf(team);
   };
   return deliver;
 }

@@ -602,6 +602,9 @@ type Report = {
    *  so a reader in another team resolves the sender like the record does. A run that refused
    *  before a team was read names none, and writes no history line anyway. */
   from_team?: string;
+  /** The typed wake this send attempted without delivering, and whether any key reached the
+   *  pane: carried into every history line the send writes after it, as `wake_keys_sent`. */
+  typedWake?: { keysSent: boolean };
   /** The resolved walk's legs, in order: a real send fills each state as the walk runs, and a
    *  dry run lists the candidates it would walk. Absent on a run that never resolved a walk. */
   delivery?: LegReport[];
@@ -631,8 +634,11 @@ type Report = {
 type SentAs = { spec: string; resolved: string };
 
 /** The sender's team as every history line this run writes carries it. */
-function historySender(report: Report): { from_team?: string } {
-  return report.from_team === undefined ? {} : { from_team: report.from_team };
+function historySender(report: Report): { from_team?: string; wake_keys_sent?: boolean } {
+  return {
+    ...(report.from_team === undefined ? {} : { from_team: report.from_team }),
+    ...(report.typedWake === undefined ? {} : { wake_keys_sent: report.typedWake.keysSent }),
+  };
 }
 
 /** The receiving seat's runtime record, when the team's state can be read: the launch's own
@@ -1264,7 +1270,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // The adapter row's usability, read once before the walk runs: it decides whether the dry
   // phrase names the webhook, whether a stale serving channel is held off (the sender's own
   // post is a wake only when the route stands), and the leg itself re-reads it when reached.
-  const webhookReason = input.declared === undefined || input.declared.webhook === undefined ? null : webhookRefusal(input.declared.webhook);
+  const webhookReason = input.declared === undefined || input.declared.webhook === undefined ? null : webhookRefusal(input.declared.webhook, input.declared.cli);
   const cascade = cascadeWalk(ordered, webhookWalked);
   // No pane messaging, continued: the drop leg always closes the walk, so a seat with no event
   // adapter keeps the message in its bus inbox and the sender is told so.
@@ -2609,7 +2615,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       // this leg staged itself is posted before the bus is told of it, so the claim decides who
       // posts and one arrival wakes the seat once.
       const hook = declared?.webhook;
-      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook);
+      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook, declared?.cli);
       if (hook === undefined || routeRefusal !== null) {
         const why = routeRefusal ?? 'the receiving seat declares no webhook row';
         failures.push(`webhook: ${why}`);
@@ -3392,6 +3398,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         markLeg('typed', 'attempted');
         return delivered(io, to.seat, report, 'typed wake', 'typed');
       }
+      // Any wake that ran and did not deliver is recorded with whether a key reached the pane.
+      report.typedWake = { keysSent: wake.typed };
       if (wake.typed || wake.reason.startsWith('the screen stayed working')) {
         // The drop is already in the inbox. The history line is the same one the keep
         // path writes, plus the wake's own reason, so a later read is not an empty journal.
@@ -6172,7 +6180,7 @@ export async function walkReplyDelivery(input: {
     }
     if (leg === 'webhook') {
       const hook = declared.webhook;
-      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook);
+      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook, declared?.cli);
       if (hook === undefined || routeRefusal !== null) {
         failures.push(`webhook: ${routeRefusal ?? 'the receiving seat declares no webhook row'}`);
         continue;
@@ -6282,6 +6290,7 @@ export async function walkReplyDelivery(input: {
       if (wake.delivered) {
         return ended({ via: 'typed', walked: true, unconfirmed: false, summary: `${seatName}: delivered (typed wake)` });
       }
+      report.typedWake = { keysSent: wake.typed };
       failures.push(`typed: ${wake.reason}`);
       continue;
     }

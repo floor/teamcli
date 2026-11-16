@@ -762,6 +762,13 @@
                 ],
                 "$comment": "the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event"
               },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "$comment": "the CLI the routine runs the seat as; the webhook counts as the seat's delivery only when this is the seat's own cli; absent, the URL host decides where it names one vendor service, and otherwise the row counts as before"
+              },
               "timeout_ms": {
                 "type": "integer",
                 "minimum": 1,

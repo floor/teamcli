@@ -18,6 +18,7 @@ import {
   type InboundDeclaration,
 } from '../send/inbound.ts';
 import { seatAgent } from '../send/resolve.ts';
+import { strayWebhookOf } from '../send/webhook.ts';
 import { findTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
@@ -775,6 +776,16 @@ export function compare(
   // old; this note is what stands either way. A record left by a daemon that has since stopped
   // is not the watch now, and the note says so rather than printing the dead process as it.
   if (state.watch) notes.push(...watchNotes(state.watch, daemon, now));
+
+  // A webhook row whose routine runs another CLI than the seat's own: the send never counts it
+  // and the bus never posts to it, so the row is flagged where the lead reads the team.
+  for (const seat of team.seats) {
+    if (seat.stopped === true || seat.webhook === undefined) continue;
+    const stray = strayWebhookOf(seat.webhook, seat.cli);
+    if (stray !== null) {
+      notes.push(`${seat.name}: its webhook runs as ${stray.target}, not as its ${stray.cli}; messages take the seat's own route, and the webhook row is not used (remove it, or point it at a routine that runs as ${stray.cli})`);
+    }
+  }
 
   if (live.running && anyRunning) {
     const beat = state.watch ? Date.parse(state.watch.heartbeat) : NaN;

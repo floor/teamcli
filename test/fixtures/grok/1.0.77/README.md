@@ -14,13 +14,20 @@ Captured from the installed Grok Build CLI on 2026-11-11 with `herdr pane read`.
   `cd … && team ack …; echo …` command: the option rows keep the `┃` gutter, and the footer
   ends at `Ctrl+c:cancel` without the `Esc:scrollback` cell. Paths, ids and names are
   replaced. Nothing was answered.
+- `welcome.txt`: the fresh start a restored seat showed on 2026-11-16 (the welcome card, a
+  `Tip:` row, then the empty box). Rebuilt from that day's `herdr pane read` rows on the
+  1.0.70 frame's geometry, with the folder line `~/work/demo` and the footer
+  `Grok 4.7 (high) · auto`. It reads as `idle`; the same frame with a line drawn in the box
+  reads as `unsent`.
 
 ## Not produced
 
-This folder holds the screens measured on 1.0.77: the trust dialog and the command approval.
+This folder holds the screens measured on 1.0.77: the trust dialog, the command approval and
+the welcome frame.
 The other screens of the profile stay measured on the earlier version folders.
 
 - `idle`: not produced in this folder; the idle prompt is measured in the earlier version folders.
+  `welcome.txt` above is a rebuilt frame, not a capture.
 - `unsent`: not produced in this folder; the box with typed text is measured in the earlier
   version folders (and its wrapped rows live on 1.0.77, 2026-11-12, by the typed-wake probe).
 - `working`: not produced in this folder; measured in the earlier version folders.
