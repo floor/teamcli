@@ -687,7 +687,7 @@ async function restoreWithLeftover(screen: string | undefined, restore = true) {
   seedWatch();
   const made = makeWorld({
     panes: { [OTHER_PANE]: { workspace: OTHER_SPACE, process: { shell: 500, foreground: [500] }, ...(screen === undefined ? {} : { screen }) } },
-    labels: { [OTHER_SPACE]: `${WORKER} · implementer` },
+    labels: { [OTHER_SPACE]: WORKER },
   });
   const io = testIo(root, { kind: 'owner' });
   const exit = await runUp([], io, made.sources, restore ? { restore: true, nonInteractive: true } : {});
@@ -717,7 +717,7 @@ test('a labelled leftover holding another program is left as it is', async () =>
   seedWatch();
   const made = makeWorld({
     panes: { [OTHER_PANE]: { workspace: OTHER_SPACE, process: { shell: 500, foreground: [500, 501] }, screen: '❯\n' } },
-    labels: { [OTHER_SPACE]: `${WORKER} · implementer` },
+    labels: { [OTHER_SPACE]: WORKER },
   });
   await runUp([], testIo(root, { kind: 'owner' }), made.sources, { restore: true, nonInteractive: true });
   expect(made.trace.closed).toEqual([]);
