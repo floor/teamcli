@@ -919,17 +919,15 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
     return { ended: 'refused', dir, who, reason: resolved.error };
   }
   const hit = 'error' in resolved ? null : resolved;
-  // A seat never sends to itself: the frame would wake the sender with its own words and the
-  // command would print "delivered", which reads as the other seat having it. This is how a lead
-  // that meant another team's seat of the same name learned nothing for a whole morning.
-  const ownSeat = selfAddressed(caller, seatName, hit, root);
-  if (ownSeat !== null) return { ended: 'refused', dir, who, reason: ownSeat };
   const standing = standingOf(dir, judged.session, caller);
   return { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit };
 }
 
 /** The refusal for a send whose target is the sending seat itself: the same seat of the same team
- *  in the same session. Null for every other target, and for a caller that is not a seat. */
+ *  in the same session. Null for every other target, and for a caller that is not a seat. A seat
+ *  never sends to itself: the frame would wake the sender with its own words and the command would
+ *  print "delivered", which reads as the other seat having it. It is asked only once the caller is
+ *  admitted, so a caller the placement or admission checks refuse keeps that refusal. */
 export function selfAddressed(caller: Caller, seatName: string, hit: Target | null, root: string): string | null {
   if (caller.kind !== 'seat') return null;
   const seat = hit === null ? seatName : hit.agent.reach.seat;
@@ -1710,6 +1708,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       cross,
     };
   }
+  const ownSeat = selfAddressed(acting, seatName, hit, root);
+  if (ownSeat !== null) return refuse(io, dir, who, ownSeat, host, report);
   host.modelDriftNotice?.admitted?.();
   // Whether this sender can make the native leg itself: a seat whose registry record or team file
   // declares Claude Code carries the cross-session SendMessage the leg is made with. The owner's
@@ -4215,6 +4215,8 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
       cross,
     };
   }
+  const ownSeat = selfAddressed(caller, seatName, hit, root);
+  if (ownSeat !== null) return refuse(io, dir, who, ownSeat, host, report);
   report.seat = to.seat;
   report.project = to.project;
   report.session = to.session;
