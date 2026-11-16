@@ -286,7 +286,7 @@ seats:
   return result.team;
 }
 
-function statusNotes(launch: string, liveSession: string | undefined, foreground: number[]): string[] {
+function statusNotes(launch: string, liveSession: string | undefined, foreground: number[], shell = 500): string[] {
   const team = statusTeam(launch);
   const state = emptySession();
   state.seats.lead = { stage: 'ready', pane: 'w1:p1', workspace: 'w1', launched: { shell: 400, cli: [401] }, agent_session: 'conversation-kept' };
@@ -295,7 +295,7 @@ function statusNotes(launch: string, liveSession: string | undefined, foreground
     agents: [{ name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null, ...(liveSession === undefined ? {} : { session: liveSession }) }],
     workspaces: [{ id: 'w1', label: 'lead' }],
     screens: { 'w1:p1': CLAUDE_IDLE },
-    processes: { 'w1:p1': { shell: 500, foreground },
+    processes: { 'w1:p1': { shell, foreground },
     },
   };
   const sockets = realpathSync(mkdtempSync(join(tmpdir(), 'team-channel-reboot-sockets-')));
@@ -320,7 +320,7 @@ test('an untied process says the channel is not confirmed, never that push is of
 });
 
 test('the process team launched, or a line with no channel, draws no channel note', () => {
-  expect(statusNotes(CHANNEL_LINE, 'conversation-kept', [401]).join('\n')).not.toContain('channel push');
+  expect(statusNotes(CHANNEL_LINE, 'conversation-kept', [401], 400).join('\n')).not.toContain('channel push');
   expect(statusNotes('claude --model opus', 'conversation-kept', [501]).join('\n')).not.toContain('channel push');
 });
 
