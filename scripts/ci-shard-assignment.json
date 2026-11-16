@@ -989,6 +989,7 @@
     "test/send-record-identity.test.ts": 3,
     "test/send-record.test.ts": 3,
     "test/send-resolve.test.ts": 4,
+    "test/send-team-bound.test.ts": 2,
     "test/send-s3-memo.test.ts": 5,
     "test/send-socket-leg.test.ts": 2,
     "test/send-socket-timing.test.ts": 0,

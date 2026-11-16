@@ -163,7 +163,11 @@ export function resolveTarget(
   // the pane proof placed nobody. The longest nested root still wins on that path, and a
   // name that several teams carry, when the cwd sits in none of them, is not picked.
   const placed = placedCallerTeam(home, io);
-  if (placed !== null) return lookupInTeam(home, spec, placed, parsed.seat, live, false);
+  if (placed !== null) {
+    const crossed = folderTeamAlsoNames(home, spec, io.cwd, placed, parsed.seat);
+    if (crossed !== null) return crossed;
+    return lookupInTeam(home, spec, placed, parsed.seat, live, false);
+  }
   const binding = teamBinding(home, io.cwd, parsed.seat, io);
   if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') return { error: binding.message, kind: 'ambiguous' };
   const loaded = readTeamConfig(binding.kind === 'bound' ? binding.team.root : io.cwd, { home });
@@ -172,6 +176,29 @@ export function resolveTarget(
   if (team === null) return { error: `${spec}: this team has no registry record yet` };
   if ('error' in team) return team;
   return lookupInTeam(home, spec, team, parsed.seat, live, false);
+}
+
+/**
+ * A placed caller who stands in another team's folder and writes a plain seat that folder's team
+ * also has. The pane places the sender, so the plain name would resolve in the caller's own team,
+ * while the folder says the other: a lead who runs `team send orchestrator` from another team's
+ * folder reached its own seat and was told "delivered" (2026-11-16). Neither team is picked: the
+ * send is refused, naming both full addresses. A folder of the caller's own team, a folder no team
+ * binds, and a seat the folder's team does not have keep the placed resolution.
+ */
+function folderTeamAlsoNames(home: string, spec: string, cwd: string, placed: TeamRecord, seat: string): ResolveProblem | null {
+  const binding = teamBinding(home, cwd);
+  if (binding.kind !== 'bound') return null;
+  const folder = binding.team;
+  const placedId = placed.id ?? teamIdOf(placed.root);
+  const folderId = folder.id ?? teamIdOf(folder.root);
+  if (folderId === placedId) return null;
+  const chosen = seatOfTarget(home, folder, spec, seat, false, null);
+  if (chosen === null || 'error' in chosen) return null;
+  return {
+    error: `${spec}: you are a seat of ${placed.project} (${placedId}) and this folder is ${folder.project}'s (${folderId}), which has "${seat}" too; write ${seat}@${placedId} or ${seat}@${folderId}; nothing was sent`,
+    kind: 'ambiguous',
+  };
 }
 
 /** The agent that holds a seat, across the spellings a record's `reach.team` may use: the

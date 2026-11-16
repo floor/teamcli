@@ -923,6 +923,19 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   return { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit };
 }
 
+/** The refusal for a send whose target is the sending seat itself: the same seat of the same team
+ *  in the same session. Null for every other target, and for a caller that is not a seat. A seat
+ *  never sends to itself: the frame would wake the sender with its own words and the command would
+ *  print "delivered", which reads as the other seat having it. It is asked only once the caller is
+ *  admitted, so a caller the placement or admission checks refuse keeps that refusal. The aim is
+ *  the resolved one — its seat, its team's root and its session — never the words written, so a
+ *  nickname, an id or a `seat@team` that names the sender is refused like its seat's own name. */
+export function selfAddressed(caller: Caller, seatName: string, to: { seat: string; root: string; session: string }, root: string): string | null {
+  if (caller.kind !== 'seat') return null;
+  if (to.seat !== caller.name || to.session !== caller.session || to.root !== root) return null;
+  return `${seatName}: that is your own seat (${caller.name} of this team); nothing was sent. To reach another team's seat of that name, write ${caller.name}@<team id> (team send --list shows the addresses)`;
+}
+
 /**
  * A full address from a folder that is no team: the registry names the receiving team's root, so
  * its own file is loaded and the caller — the owner, the only caller this path admits, since
@@ -1695,6 +1708,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       cross,
     };
   }
+  const ownSeat = selfAddressed(acting, seatName, to, root);
+  if (ownSeat !== null) return refuse(io, dir, who, ownSeat, host, report);
   host.modelDriftNotice?.admitted?.();
   // Whether this sender can make the native leg itself: a seat whose registry record or team file
   // declares Claude Code carries the cross-session SendMessage the leg is made with. The owner's
@@ -4200,6 +4215,8 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
       cross,
     };
   }
+  const ownSeat = selfAddressed(caller, seatName, to, root);
+  if (ownSeat !== null) return refuse(io, dir, who, ownSeat, host, report);
   report.seat = to.seat;
   report.project = to.project;
   report.session = to.session;

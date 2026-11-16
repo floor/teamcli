@@ -782,6 +782,28 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(existsSync(join(alpha.root, '.agents', 'send-drops'))).toBe(false);
     expect(existsSync(historyPath('alpha', alpha.root, alpha.home))).toBe(false);
   });
+
+  test('a lead with no agent record writing its own file nickname is refused as its own seat, in a send and a record', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [
+      `${seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')}    nickname: Atlas\n`,
+      seatBlock('builder', 'builder-1', 'claude-code', 'anthropic'),
+    ]);
+    // No agent record and no team record: the bare nickname is answered by the declared-seat path.
+    place(alpha.root, 'alpha', 'lead', 'pane-alpha-lead');
+    const leadPane = scripted(['idle', 'working']);
+    const host = sendHost(alpha, 'alpha', { lead: { pane: 'pane-alpha-lead', paneStatus: leadPane } });
+    const lead: Caller = { kind: 'seat', name: 'lead', pane: 'pane-alpha-lead', session: 'alpha' };
+
+    const sent = testIo(alpha.root, lead);
+    expect(await runSend(['Atlas', BODY], sent, host)).toBe(1);
+    expect(sent.err).toContain('Atlas: that is your own seat (lead of this team); nothing was sent');
+    const recorded = testIo(alpha.root, lead);
+    expect(await runSend(['--record', 'Atlas', '--channel', 'native', '--ms', '812'], recorded, host)).toBe(1);
+    expect(recorded.err).toContain('Atlas: that is your own seat (lead of this team); nothing was sent');
+    expect(leadPane.typed).toEqual([]);
+    expect(existsSync(join(alpha.root, '.agents', 'send-drops'))).toBe(false);
+    expect(existsSync(historyPath('alpha', alpha.root, alpha.home))).toBe(false);
+  });
 });
 
 describe('the whole command from a folder that is no team', () => {
