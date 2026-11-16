@@ -803,6 +803,19 @@ function restoredModelUnread(
   return !words.some((word) => id.includes(word));
 }
 
+/**
+ * Whether a seat's plan runs its launch line (fresh, again in its pane, or after a repair's exit
+ * or close). A seat the plan keeps, adopts, restores, holds or refuses starts nothing, whatever
+ * its stage and pane fields read: those plans carry their own place.
+ */
+export function planStartsProcess(planned: UpSeat): boolean {
+  if (planned.stopped || planned.human || planned.waiting !== undefined || planned.grantKeep !== undefined
+    || planned.restoreKeep !== undefined || planned.adopted !== undefined || planned.restored !== undefined
+    || planned.sessionDoubt !== undefined || planned.resumeHold !== undefined || planned.driftHold !== undefined
+    || planned.driftRefused !== undefined || planned.unidentifiedHold !== undefined) return false;
+  return launchWillRun(planned) || planned.repair !== undefined || planned.replacedPane !== undefined;
+}
+
 function seatPlan(
   standing: Standing,
   team: TeamFile,
@@ -3162,8 +3175,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // The last word on a launch that resumes: a conversation already live on another pane is
     // never started a second time, whatever the record's stage said. The seat is held with
     // nothing launched and nothing closed; `team up --rebind <seat>` ties the live pane.
-    if (!planned.stopped && !planned.human && planned.waiting === undefined
-      && (launchWillRun(planned) || planned.repair !== undefined)) {
+    if (planStartsProcess(planned)) {
       const livePane = liveConversationElsewhere({
         resume: planned.resume ?? planned.registry?.sessionId,
         inPlace: planned.repair?.pane,
@@ -3192,7 +3204,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // reason, before its start folder is checked, so one parked seat's folder never refuses the
     // whole repair. Nothing is swept either: a vacated workspace waits for a plain `team up`.
     if (retie && !planned.stopped && !planned.human) {
-      const wouldStart = launchWillRun(planned) || planned.repair !== undefined || planned.replacedPane !== undefined;
+      const wouldStart = planStartsProcess(planned);
       const kept: UpSeat = { ...planned };
       delete kept.sweep;
       delete kept.closeLeftover;
