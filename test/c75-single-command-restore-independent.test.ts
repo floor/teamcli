@@ -831,9 +831,10 @@ describe('the daemon start sweep: a session that is not running is watched, not 
     }
   }, 30_000);
 
-  test('the start-up session read sends a stopped session to the watch without a restore child, and restores a running one first', async () => {
+  test('the attach watch reads the sessions itself and runs no restore child until the session runs', async () => {
     const calls: string[] = [];
     let attached = false;
+    let reads = 0;
     const started = await startMachineDaemon({
       home,
       roots: [mainTeam.root],
@@ -841,9 +842,10 @@ describe('the daemon start sweep: a session that is not running is watched, not 
       version: '0.5.12-test',
       heartbeatMs: 10_000,
       restoreAttachPollMs: 5,
-      restoreSessions: async () => new Map([[mainTeam.session, attached]]),
+      restoreSessions: async () => { reads++; return new Map([[mainTeam.session, attached]]); },
       restoreSweep: async (root) => {
         calls.push(root);
+        if (calls.length === 1) return { kind: 'not-running', state: 'stopped' };
         return { kind: 'ran', summary: { ...ZERO_SUMMARY, repaired: 1, repaired_seats: ['lead-1'], line: '1 seat repaired, 0 skipped (working), 0 refused' }, failed: false };
       },
     });
@@ -851,11 +853,13 @@ describe('the daemon start sweep: a session that is not running is watched, not 
     if (started.kind !== 'serving') return;
     try {
       await waitForLog(daemonLogPath(home), 'the restore runs when it is attached', 3000);
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      expect(calls).toEqual([]);
+      const deadline = Date.now() + 3000;
+      while (reads < 5 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(reads).toBeGreaterThanOrEqual(5);
+      expect(calls.length).toBe(1);
       attached = true;
       await waitForLog(daemonLogPath(home), '1 seat repaired', 3000);
-      expect(calls.length).toBe(1);
+      expect(calls.length).toBe(2);
     } finally {
       await started.daemon.close();
     }

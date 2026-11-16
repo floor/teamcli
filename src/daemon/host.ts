@@ -326,10 +326,9 @@ export type StartMachineDaemonInput = {
    */
   restoreAttachPollMs?: number;
   /**
-   * The session read the restore uses for its start-up check and its attach watch: name to
-   * running, or null when the terminal host did not answer. Production reads the terminal host's
-   * session list. With an injected `restoreSweep` and no reader, the start-up check is skipped
-   * and the watch lets the injected runner answer for the session.
+   * The session read the restore's attach watch polls: name to running, or null when the
+   * terminal host did not answer. Production reads the terminal host's session list. With an
+   * injected `restoreSweep` and no reader, the watch lets the injected runner answer.
    */
   restoreSessions?: () => Promise<ReadonlyMap<string, boolean> | null>;
   /**
@@ -3151,31 +3150,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       });
       const watchRun = watch.run();
 
-      // One session read before any child is spawned: a stopped session goes straight to the
-      // watch (no child, no retry budget spent on it), and running sessions are restored first.
-      let ordered: HostedRoute[] = [...routes];
-      if (restoreSessions !== undefined) {
-        const running = await restoreSessions();
-        if (running !== null) {
-          const live: HostedRoute[] = [];
-          const stopped: HostedRoute[] = [];
-          for (const route of routes) {
-            if (running.get(route.session) === true) live.push(route);
-            else stopped.push(route);
-          }
-          ordered = live;
-          for (const route of stopped) {
-            if (closed) break;
-            if (!routeTeams.has(route.root)) continue;
-            const lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
-            if (lifecycleProblem !== null) {
-              logLine(`restore ${route.root}: ${lifecycleProblem}`);
-              continue;
-            }
-            watch.add(route);
-          }
-        }
-      }
+      // Each route's first pass is the restore child's own reading, as before: the daemon reads
+      // the terminal host itself only in the attach watch, after a child has said not running.
+      const ordered: readonly HostedRoute[] = routes;
 
       /** One pass at a route; true when the route stays on the retry schedule. */
       const passOnce = async (route: HostedRoute, retrying: boolean): Promise<boolean> => {
