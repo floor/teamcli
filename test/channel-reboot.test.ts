@@ -27,7 +27,7 @@ afterEach(() => {
   for (const root of owned.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-type Live = { name: string | null; listed: boolean; ancestors: { pid: number; name: string }[] };
+type Live = { name: string | null; listed: boolean; root: number; ancestors: { pid: number; name: string }[] };
 
 function scene(env: Record<string, string>, live: Partial<Live> = {}): { io: Io; stateDir: string; live: Live } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'team-channel-reboot-')));
@@ -39,6 +39,7 @@ function scene(env: Record<string, string>, live: Partial<Live> = {}): { io: Io;
   const state: Live = {
     name: null,
     listed: false,
+    root: SHELL,
     ancestors: [{ pid: CLI, name: 'claude' }, { pid: SHELL, name: 'shell' }, { pid: 8100, name: 'herdr' }, { pid: 1, name: 'init' }],
     ...live,
   };
@@ -50,7 +51,7 @@ function scene(env: Record<string, string>, live: Partial<Live> = {}): { io: Io;
     agents: () => (state.listed
       ? [{ name: state.name, agent: 'claude', pane: PANE, workspace: 'fixture-ws', status: 'idle', cwd: null }]
       : []),
-    paneRootPid: (pane) => (pane === PANE ? SHELL : null),
+    paneRootPid: (pane) => (pane === PANE ? state.root : null),
     env: io.env,
     stdinIsTTY: false,
     paneProcesses: (pane) => (pane === PANE ? { shell: SHELL, foreground: [CLI] } : null),
@@ -79,6 +80,13 @@ test('outside herdr with no pane variable, an unplaced start is refused at once'
     expect(reading.wait).toBe(false);
     expect(reading.waitBoundMs).toBeUndefined();
   }
+});
+
+test('a process in another herdr pane, with no pane variable, is refused at once', () => {
+  const made = scene({}, { root: 999 });
+  const reading = placementReading(made.io, made.stateDir, SESSION, SEAT);
+  expect(reading.ok).toBe(false);
+  if (!reading.ok) expect(reading.wait).toBe(false);
 });
 
 test('a pane variable naming another pane than the record is still refused at once', () => {

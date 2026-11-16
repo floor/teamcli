@@ -38,6 +38,7 @@ import { attributedBody } from '../send/sender-claim.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
+import { paneRootPid } from '../herdr.ts';
 import type { BuildIdentity, InstallIdentity } from '../version.ts';
 import { admitChannelDelivery } from './channel-admit.ts';
 import {
@@ -1191,10 +1192,15 @@ export const SERVE_RESTORED_PLACEMENT_WAIT_MS = 10 * 60_000;
 /** Past the first minute of a bounded wait, the placement is read at this pace. */
 export const SERVE_PLACEMENT_BACKOFF_POLL_MS = 5000;
 
-/** Whether this process runs under herdr: a herdr process is among its ancestors. */
-function underHerdr(io: Io): boolean {
-  const ancestors = callerAncestors(io);
-  return ancestors !== null && ancestors.some((one) => one.name === 'herdr');
+/** Whether this process runs under herdr inside the pane the seat's record names: a herdr
+ *  process is among its ancestors, and herdr's root process for that pane is one of them. The pid
+ *  decides, never a variable: a process in another pane (or outside herdr) is not in this window. */
+function inRecordedPane(io: Io, session: string, recorded: string): boolean {
+  const sources = io.callerSources?.(session);
+  const ancestors = sources ? sources.ancestors() : callerAncestors(io);
+  if (ancestors === null || !ancestors.some((one) => one.name === 'herdr')) return false;
+  const root = sources ? sources.paneRootPid(recorded) : paneRootPid(recorded, session);
+  return root !== null && ancestors.some((one) => one.pid === root);
 }
 
 /**
@@ -1213,11 +1219,12 @@ export function placementReading(io: Io, stateDir: string, session: string, name
   const recorded = recordedPaneOf(stateDir, session, name);
   const wait = pane !== undefined && pane !== '' && (recorded === undefined || recorded === pane);
   if (wait) return { ok: false, wait, why: verdict.why };
-  // A caller herdr has not named, under herdr itself, with no pane variable: the restored-pane
-  // window (the state named the same pane both times, so only a missing variable explains the
-  // refusal there). It is waited for, bounded, and proven by the same placement. A variable that
-  // names another pane than the record's, and a caller outside herdr, are still refused at once.
-  if ((pane === undefined || pane === '') && underHerdr(io)) {
+  // A caller herdr has not named, with no pane variable, whose process runs in the pane the seat's
+  // record names (herdr's root for that pane is its ancestor): the restored-pane window (the state
+  // named the same pane both times, so only a missing variable explains the refusal there). It is
+  // waited for, bounded, and proven by the same placement. A variable that names another pane than
+  // the record's, a process in another pane, and a caller outside herdr are refused at once.
+  if ((pane === undefined || pane === '') && recorded !== undefined && inRecordedPane(io, session, recorded)) {
     return { ok: false, wait: true, why: verdict.why, waitBoundMs: SERVE_RESTORED_PLACEMENT_WAIT_MS };
   }
   return { ok: false, wait: false, why: verdict.why };
