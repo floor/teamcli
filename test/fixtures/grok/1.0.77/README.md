@@ -26,8 +26,8 @@ This folder holds the screens measured on 1.0.77: the trust dialog, the command 
 the welcome frame.
 The other screens of the profile stay measured on the earlier version folders.
 
-- `idle`: `welcome.txt` above is the fresh-start idle frame; the in-session idle prompt is
-  measured in the earlier version folders.
+- `idle`: not produced in this folder; the idle prompt is measured in the earlier version folders.
+  `welcome.txt` above is a rebuilt frame, not a capture.
 - `unsent`: not produced in this folder; the box with typed text is measured in the earlier
   version folders (and its wrapped rows live on 1.0.77, 2026-11-12, by the typed-wake probe).
 - `working`: not produced in this folder; measured in the earlier version folders.
