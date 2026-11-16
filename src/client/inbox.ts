@@ -46,12 +46,14 @@ import {
   recordNameOk,
   isRecordSidecarName,
   signReceiptPayload,
+  statusOf,
   verifyRecord,
   type RecordPayload,
   type ReceiptPayload,
   type SignedReceipt,
 } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { readHistory } from '../send/history.ts';
 import { claimClientRequest } from './replay.ts';
 import {
   KEY_ISOLATION_LINE,
@@ -449,9 +451,61 @@ type ClientReading = {
   notes: string[];
   differences: OutputDifference[];
   ack?: { id: string; status: 'acknowledged' | 'already-acked' | 'refused'; written: boolean; message?: string };
+  /** The status events of the messages this client sent (`clientSentStatuses`). */
+  sent: SentRow[];
 };
 
 type AckOutcome = NonNullable<ClientReading['ack']>;
+
+/** Where one message this client sent stands, from the signed evidence beside it: `queued` while
+ *  nothing took it, `delivered` once a leg did, `read` and `replied` once the seat's own signed
+ *  receipt says so, or a reply on its thread is in this inbox. */
+export type SentStatus = 'queued' | 'delivered' | 'read' | 'replied';
+
+export type SentRow = { id: string; to: string; at: string; status: SentStatus };
+
+/** The history outcomes that mean a leg took the message. */
+const DELIVERED_OUTCOMES = new Set(['delivered', 'delivered (read)', 'delivered (late)', 'delivered (typed wake)', 'sent (channel)', 'answered']);
+
+/**
+ * The status events of the messages this client sent to the coordinator's team, newest last: the
+ * read side of the sender-bound `message.delivered`, `message.read` and `message.replied` events
+ * a seat's own send gets on the bus. A client has no bus subscription; it reads its inbox, so the
+ * same events reach it here, on the route it already uses for replies. Every status is derived
+ * from what is signed: the team's history line for the delivery, the seat's signed receipt for a
+ * read or a reply (`statusOf`), and a verified reply on the message's own thread in this inbox.
+ * Nothing here is written, and a line or receipt that does not verify proves nothing.
+ */
+export function clientSentStatuses(
+  input: { home: string; coordinator: EntityCoordinator; clientId: string; key: KeyObject; replies: readonly ShownReply[]; limit: number },
+): SentRow[] {
+  const read = readHistory(input.coordinator.entity, input.coordinator.teamRoot, input.home);
+  if (!read.ok) return [];
+  const from = `client:${input.clientId}`;
+  const first = new Map<string, { to: string; at: string }>();
+  const delivered = new Set<string>();
+  for (const entry of read.entries) {
+    if (entry.from !== from) continue;
+    if (!first.has(entry.id)) first.set(entry.id, { to: entry.to, at: entry.ts });
+    if (DELIVERED_OUTCOMES.has(entry.outcome)) delivered.add(entry.id);
+  }
+  const answered = new Set(input.replies.map((reply) => reply.thread));
+  const rows = [...first.entries()]
+    .sort((left, right) => (left[1].at < right[1].at ? -1 : left[1].at > right[1].at ? 1 : 0))
+    .slice(-input.limit);
+  return rows.map(([id, sent]) => {
+    const dropDir = join(input.coordinator.teamRoot, '.agents', 'send-drops', input.coordinator.session, sent.to);
+    const signed = statusOf(dropDir, id, { to: sent.to, root: input.coordinator.teamRoot, session: input.coordinator.session }, input.key);
+    const status: SentStatus = answered.has(id) || signed === 'replied'
+      ? 'replied'
+      : signed === 'read'
+        ? 'read'
+        : signed === 'delivered' || delivered.has(id)
+          ? 'delivered'
+          : 'queued';
+    return { id, to: sent.to, at: sent.at, status };
+  });
+}
 
 type ClientReadOutcome =
   | {
@@ -739,6 +793,14 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
     refused: outcome.scan.refused,
     notes: differences.length === 0 && selected.length === 0 && ack?.status !== 'refused' ? ['nothing is waiting'] : [],
     differences,
+    sent: clientSentStatuses({
+      home: sources.home,
+      coordinator: outcome.coordinator,
+      clientId: outcome.grant.clientId,
+      key: outcome.key,
+      replies: ordered,
+      limit,
+    }),
     ...(ack !== undefined ? { ack } : {}),
   };
   printReading(io, reading, json, sources.now());
@@ -795,6 +857,7 @@ function printReading(io: Io, reading: ClientReading, json: boolean, now: Date):
             refused: reading.refused.length,
           },
           ...(reading.ack !== undefined ? { ack: reading.ack } : {}),
+          sent: reading.sent,
           key_isolation: KEY_ISOLATION_LINE,
         },
         null,
@@ -815,6 +878,18 @@ function printReading(io: Io, reading: ClientReading, json: boolean, now: Date):
   );
   for (const row of reading.rows) {
     lines.push('', `${row.reply.id}:`, ...bodyLines(row.body ?? ''));
+  }
+  if (reading.sent.length > 0) {
+    lines.push(
+      '',
+      'Sent by this client:',
+      ...renderTable({
+        headers: ['ID', 'TO', 'SENT', 'STATUS'],
+        rows: reading.sent.map((row) => [row.id, row.to, formatRelativeTime(row.at, now), row.status]),
+        indent: '  ',
+        style,
+      }),
+    );
   }
   if (reading.notes.length > 0) lines.push('', ...renderNotes(reading.notes));
   if (reading.differences.length > 0) lines.push('', ...renderDifferences(reading.differences, style));

@@ -5642,30 +5642,20 @@ export async function walkBriefDelivery(input: {
  *  person (`Client Grok Bot (owner relay):`). */
 const CLIENT_FRAME_HEADER = CLIENT_SLICE_DISPLAY_NAME;
 
-/** The legs a client send walks. The drop its grant wrote is already the durable copy, so a
- *  declared order's drop, native and headless-resume legs add nothing here: the walk is the
- *  transport that reaches a live receiver — the cross-session socket and the typed trigger — in
- *  the cascade's order, or socket, then typed. The retired `mcp-inbox` name is dropped from a
- *  declared order before this walk, so no word for it exists to walk. */
-const CLIENT_LEGS: readonly DeliveryLeg[] = ['socket', 'typed'];
-
 /**
  * The client send's own walk, after the grant wrote its drop: the same signed record, carried
- * through the coordinator seat's resolved delivery order. The order is the receiver's own — its
- * files and signed settings, or the host's injected chain in a test — and a level that declares
- * one is walked as written, restricted to the three legs a client grant understands. With no
- * declared order the walk is the client default the owner asked for: the seat's own inbox
- * channel, the cross-session socket when the receiver's launch declares `accept`, then the typed
- * trigger. Every leg keeps its pane-safety checks: a human's pane is never dialed or typed into,
- * a bare shell is never typed into, and a held frame keeps the socket out until the receiver's
- * declaration is re-confirmed.
+ * through the receiving seat's resolved delivery order by the walk a reply makes
+ * (`walkReplyDelivery`), which resolves the order exactly as a seat's send does. The receiving
+ * seat's channel push, its cross-session socket, its webhook and a profile's typed wake are all
+ * walked in the cascade's order, with the bus inbox under them, and every leg keeps its
+ * pane-safety checks: a human's pane is never dialed or typed into, a bare shell is never typed
+ * into, and a held frame keeps the socket out until the receiver's declaration is re-confirmed.
  *
  * The drop is already written and signed, so no leg stages a second record: each write accepts
- * the record at the same id, and the socket leg's receipt keeps it from being served twice. The
- * walk's own outcome lines are swallowed — the client invocation's two streams keep the contract
- * they had before any walk existed — while the receiving team's log and history record what each
- * leg did. A walk with no leg left writes one log and history line and returns: the drop is the
- * message, and this function never fails the invocation.
+ * the record at the same id. The walk's own outcome lines are swallowed — the client invocation's
+ * two streams keep the contract they had before any walk existed — while the receiving team's
+ * log and history record what the walk did. The drop is the message, and this function never
+ * fails the invocation.
  */
 async function deliverClientRecord(
   io: Io,
@@ -5676,27 +5666,10 @@ async function deliverClientRecord(
   const target = sent.target;
   const root = target.teamRoot;
   const dir = join(root, '.agents');
-  const dropDir = target.dropDir;
   const session = target.session;
   const seatName = target.recipientSeat;
   const from = record.from;
   const startedAt = host.now().getTime();
-  // The legs write the receiving team's log and history as they always do; their own outcome
-  // and refusal lines go to a quiet stream, so the client's stdout keeps its one contract line
-  // and its stderr its key-isolation line.
-  const quiet: Io = {
-    ...io,
-    stdout: () => { /* the drop's confirmation is already printed */ },
-    stderr: () => { /* the walk's reason is in the receiving team's log */ },
-  };
-  const report: Report = { json: false, seat: seatName, sent: null, project: null, session };
-  const failures: string[] = [];
-  const markLeg = (leg: DeliveryLeg, state: LegState, reason?: string): void => {
-    const entry = report.delivery?.find((one) => one.leg === leg && one.state === 'not-reached');
-    if (entry === undefined) return;
-    entry.state = state;
-    if (reason !== undefined) entry.reason = reason;
-  };
   // The receiving team's file names the seat, its CLI, its own declarations and its order. A
   // file this run cannot read or that names no such seat leaves the drop as the delivery: no
   // pane is read on a guess.
@@ -5713,185 +5686,69 @@ async function deliverClientRecord(
     return;
   }
   const project = team.project;
-  let overrides: SeatOverrides = {};
-  if (!host.delivery) {
-    const read = resolveSeatOverrides({ home: host.home, root, seat: seatName });
-    if (!read.ok) {
-      logLine(dir, 'send', from, `${seatName}: the client drop was written; its settings record cannot be read (${read.why}), so no delivery leg was walked`, host.now());
-      return;
-    }
-    overrides = read.overrides;
-  }
-  // A person reads the drop file; no frame is dialed and no line is typed into their pane.
-  const human = overrides.human ?? (seat.human === true);
-  if (human) {
-    logLine(dir, 'send', from, `${seatName}: the client drop was written to its folder; its pane is a human's, so no frame and no trigger were walked`, host.now());
-    appendHistory(project, root, host.home, {
-      ts: host.now().toISOString(),
-      from,
-      to: seatName,
-      body: record.body,
-      id: record.id,
-      thread: record.thread,
-      // A person's pane is the one seat nothing ever wakes while it is idle, so the stored drop
-      // is `queued, not woken`, never `sent (unconfirmed)`.
-      outcome: 'queued, not woken',
-      ms: host.now().getTime() - startedAt,
-      via: 'drop',
-    });
-    return;
-  }
-  // The client's drop is already written; a project order this run cannot read leaves it as the
-  // delivery, and no leg is walked on a guess that could travel where the project forbids.
-  let rawChain: DeliveryChain;
-  try {
-    rawChain = host.delivery ?? deliveryChainOf({
-      root,
-      seat: seatName,
-      home: host.home,
-      file: team,
-      projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
-      overrides,
-      now: host.now(),
-    });
-  } catch (error) {
-    if (!(error instanceof DeliveryChainUnreadable)) throw error;
-    logLine(dir, 'send', from, `${seatName}: the client drop was written; ${error.message}, so no delivery leg was walked`, host.now());
-    return;
-  }
-  const order = deliveryOrder(rawChain);
-  const declaredOrder = Object.values(rawChain).some((word) => word !== undefined && word.length > 0);
-  const inbound = declaredInboundOf({
-    dir,
-    root,
-    session,
-    seat: seatName,
-    ...(seat.launch !== undefined ? { launch: seat.launch } : {}),
-  });
-  const socketWord = seat.inbound;
-  const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(dir, session, seatName)), inbound);
-  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
   // The agent record the grant bound: its CLI and cross-session address when the registry still
   // holds them, the receiving file's own seat otherwise.
   const agentRecord = getAgent(host.home, target.recipientId);
   const cli = agentRecord?.cli ?? seat.cli;
-  const defaultWalk: DeliveryLeg[] = [];
-  if (socketNow) defaultWalk.push('socket');
-  defaultWalk.push('typed');
-  const walk: readonly DeliveryLeg[] = declaredOrder
-    ? cascadeOrder(order.filter((leg) => CLIENT_LEGS.includes(leg)))
-    : defaultWalk;
-  // The implied socket default's omission is named when the walk does not carry it, the same
-  // way an ordinary send's report explains the socket it did not dial.
-  const impliedSocket = declaredOrder || socketNow ? null : socketIneligibleReason(cli, socketWord, inbound, heldStanding, true);
-  report.delivery = [
-    ...(impliedSocket === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocket }]),
-    ...walk.map((leg) => ({ leg, state: 'not-reached' as const })),
-  ];
-  const aim: Aim = {
-    seat: seatName,
-    agentId: target.recipientId,
-    session,
-    cli,
-    address: agentRecord?.reach.address ?? null,
-    sentAs: null,
+  // The client's walk is the walk every other carrier of a written record takes: the same order
+  // resolution a seat's send makes (`resolveWalkOrder`), the same legs in the same cascade — the
+  // development channel's push, the cross-session socket, the webhook, a profile's typed wake,
+  // the bus inbox under them — with every pane-safety, held-box and human rule they keep. Before
+  // this, the client walked its own two-leg list and filtered a declared order down to `socket`
+  // and `typed`, so a Claude seat whose team declares the retired `typed` word was never pushed or
+  // dialed: the drop waited, "queued, not woken", while every seat send reached the same seat in a
+  // second. The grant's admission is already decided; the frame names the client as the person's.
+  const naming = namingFor({ home: host.home, root, viewerTeam: target.teamId, seat: seatName, file: team });
+  const walk = await walkReplyDelivery({
+    io,
+    host,
     dir,
-    project,
     root,
-    cross: false,
-  };
-  // A minimal host (the exit-code scenes hand one in) cannot read panes or write a socket; the
-  // legs that would need those capabilities are skipped rather than crashed through.
-  const canPane = typeof host.agents === 'function' && typeof host.processInfo === 'function';
-  const canSocket = canPane && typeof host.deliver === 'function' && host.native !== undefined;
-  const canType = canPane && host.native !== undefined;
-  const clientBlocked = workBlock(host, dir, session, seatName, cli);
-  if (clientBlocked !== null) {
-    logLine(dir, 'send', record.from, `${seatName}: ${clientBlocked.line}`, host.now());
+    project,
+    session,
+    seat: seatName,
+    cli,
+    payload: record,
+    naming,
+    file: team,
+    sender: { teamId: target.teamId, project, label: null },
+    address: agentRecord?.reach.address ?? null,
+    who: from,
+    identityHeader: CLIENT_FRAME_HEADER,
+  });
+  const failures = [...walk.failures];
+  if (!walk.walked) {
+    const why = failures.length === 0 ? 'no delivery leg could run' : failures.join('; ');
+    logLine(dir, 'send', from, `${seatName}: the client drop was written; ${why}, so no delivery leg was walked`, host.now());
     return;
   }
-  for (const leg of walk) {
-    if (leg === 'socket') {
-      // The socket dials only a receiving Claude session whose launch declares
-      // `crossSessionInbound: accept`; the checks are the ordinary walk's, in its order, plus the
-      // host capability a client send may lack.
-      const why = canSocket
-        ? socketIneligibleReason(cli, socketWord, inbound, heldStanding, true)
-        : 'the send host cannot read a pane or write a socket, so no frame was dialed';
-      if (why !== null) {
-        failures.push(`socket: ${why}`);
-        markLeg('socket', 'skipped', why);
-        continue;
-      }
-      markLeg('socket', 'attempted');
-      const attempt = await deliverSocketFrame(dir, from, from, aim, record, failures, host, report, startedAt, false, inbound, CLIENT_FRAME_HEADER, false);
-      if (attempt.kind === 'delivered') return;
-      failures.push(`socket: ${attempt.reason}`);
-      // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
-      // the reported class, so the summary never claims a wake that did not happen. A surviving
-      // webhook-only route still reads as queued — the send's webhook leg posts it before the
-      // typed leg, and the bus carries it after the send returns — and the words keep the
-      // typed-wake exception: a profile that declares a typed wake reads the message at its
-      // next turn, not "no way to be woken".
-      if (attempt.kind === 'fallback' && attempt.socketUnusable === true) {
-        const lowered = classWithoutSocket(aim, host.home);
-        report.deliveryClass = lowered.cls;
-        report.deliveryWords = classWords(lowered, aim.seat);
-      }
-      markLeg('socket', 'attempted', attempt.reason);
-      logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
-      continue;
+  if (walk.via !== 'drop' && walk.endpointBlocked === undefined) {
+    // The leg that took it, with the legs that did not before it: the same audit a send's walk
+    // leaves. The socket leg writes its own history line as it lands; the others are written here,
+    // in the words a reply's walk uses.
+    const tail = failures.length === 0 ? '' : ` (after: ${failures.join('; ')})`;
+    logLine(dir, 'send', from, `${walk.summary ?? `${seatName}: delivered (${walk.via})`} for client drop ${record.id}${tail}`, host.now());
+    if (walk.via !== 'socket') {
+      appendHistory(project, root, host.home, {
+        ts: host.now().toISOString(),
+        from,
+        to: seatName,
+        body: record.body,
+        id: record.id,
+        thread: record.thread,
+        outcome: walk.via === 'channel'
+          ? 'sent (channel)'
+          : walk.via === 'typed'
+            ? 'delivered (typed wake)'
+            : walk.unconfirmed ? 'sent (unconfirmed)' : 'delivered',
+        ms: host.now().getTime() - startedAt,
+        via: walk.via,
+        ...(failures.length > 0 ? { failed: [...failures] } : {}),
+      });
     }
-    // The typed leg: the drop is on disk, and the pane receives the one trigger that makes the
-    // seat read it — the same receipt-writing read its own turn-start hook runs.
-    // No pane messaging (src/send/no-pane-messaging.ts): the client drop already waits in the
-    // seat's bus inbox, and nothing is typed to point at it.
-    const typedWhy = NO_PANE_MESSAGING.length > 0 ? NO_PANE_MESSAGING : canType ? null : 'the send host cannot read a pane, so no trigger was typed';
-    if (typedWhy !== null) {
-      failures.push(`typed: ${typedWhy}`);
-      markLeg('typed', 'skipped', typedWhy);
-      continue;
-    }
-    const compose = profileFor(cli)?.compose ?? null;
-    const wakeTemplate = messageDisplayInForce({ home: host.home, root, team, now: host.now() });
-    const trigger = inlineWake(record, host.home, typedWakeMaxFor(cli)) ?? readTriggerLine(seatName, session, {
-      seat: from,
-      team: project,
-      template: wakeTemplate,
-      body: record.body,
-      ageMs: 0,
-      ...(record.subject === undefined ? {} : { subject: record.subject }),
-    }, cli, 'Body too long; read it with: team drops --read.');
-    if (trigger === null && compose === null) {
-      failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
-      markLeg('typed', 'skipped', `the trigger would exceed ${String(TRIGGER_MAX)} characters`);
-      continue;
-    }
-    const found = findAgent(host, session, seatName);
-    if (!found.ok) {
-      failures.push(`typed: ${found.reason}`);
-      markLeg('typed', 'skipped', found.reason);
-      continue;
-    }
-    if (isBareShellPane(dir, session, seatName, host.processInfo(session, found.pane))) {
-      failures.push('typed: the seat is back at its shell; nothing was typed');
-      markLeg('typed', 'skipped', 'the seat is back at its shell; nothing was typed');
-      continue;
-    }
-    markLeg('typed', 'attempted');
-    if (compose === null) {
-      if (trigger === null) {
-        failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
-        markLeg('typed', 'attempted', `the trigger would exceed ${String(TRIGGER_MAX)} characters`);
-        continue;
-      }
-      await deliverNative(quiet, dir, root, from, from, project, session, seatName, cli, found.pane, dropDir, record, trigger, host, report, startedAt, undefined, failures);
-      return;
-    }
-    // A compose seat's typed leg builds the body through its CLI's own screens.
-    await deliverComposeSeat(quiet, dir, root, from, from, project, session, seatName, cli, found.pane, dropDir, record, resolve(root, seat.cwd), host, report, startedAt, failures);
     return;
   }
+  if (walk.endpointBlocked !== undefined && walk.summary !== null) logLine(dir, 'send', from, walk.summary, host.now());
   // The client drop is already the seat's bus inbox: no event adapter took it, so it waits there
   // (src/send/no-pane-messaging.ts), recorded as the drop leg, never as unreachable. The class is
   // read at the ending, the read the plain walk makes before it starts: a seat nothing wakes
@@ -5903,9 +5760,10 @@ async function deliverClientRecord(
     root,
     session,
     seat: seatName,
-    ...(seat === undefined ? {} : { declared: seat }),
+    declared: seat,
     home: host.home,
   });
+  const report: Report = { json: false, seat: seatName, sent: null, project, session };
   report.deliveryClass = ending.cls;
   report.deliveryWords = ending.words;
   const notWoken = dropNotWoken(report);
@@ -5989,6 +5847,9 @@ export async function walkReplyDelivery(input: {
   address: string | null;
   /** The caller's log tag, as every leg logs it. */
   who: string;
+  /** The socket frame's identity line, when the carrier names its sender itself: a client send
+   *  names the person's client. Absent, the line is the sending seat's, read from `naming`. */
+  identityHeader?: string;
 }): Promise<ReplyWalkResult> {
   const seatName = input.seat;
   const from = input.payload.from;
@@ -6230,7 +6091,8 @@ export async function walkReplyDelivery(input: {
         continue;
       }
       await ensureStaged();
-      const identityHeader = frameIdentityHeader(input.payload, input.naming, input.sender.teamId, input.sender.project, input.sender.label);
+      const identityHeader = input.identityHeader
+        ?? frameIdentityHeader(input.payload, input.naming, input.sender.teamId, input.sender.project, input.sender.label);
       const attempt = await deliverSocketFrame(
         input.dir, input.who, from, aim, input.payload, failures, input.host, report, startedAt,
         false, inbound, identityHeader, false, false, { mode: 'first', staged: stagedRecordOf() },
