@@ -113,3 +113,41 @@ test('a partial batch deferred only by load retries the remaining restore', asyn
     expect(attempts).toBe(2);
   } finally { await started.daemon.close(); }
 });
+
+test('a seat refused on a launch timeout gets exactly one more pass on the retry schedule', async () => {
+  // 16 Nov reboot: "3 seats repaired, 0 skipped (working), 1 refused (tester-gemini: timeout)".
+  const { root, home } = fixture(); let attempts = 0;
+  const started = await startMachineDaemon({ home, roots: [root], version: 'test', startedBy: 'test', heartbeatMs: 10_000,
+    restoreRetryInitialDelayMs: 5, restoreRetryMaxDelayMs: 10, restoreRetryBudgetMs: 60,
+    restoreSweep: async () => {
+      attempts++;
+      return { kind: 'ran', failed: true, summary: restoreSummaryOf([{ seat: 'worker', outcome: 'refused', reason: 'timeout' }]) };
+    },
+  });
+  expect(started.kind).toBe('serving'); if (started.kind !== 'serving') return;
+  const log = () => existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
+  try {
+    await waitFor(() => attempts >= 2);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(attempts).toBe(2);
+    expect(log()).toContain('1 retrying a seat that timed out');
+    expect(log()).not.toContain('restore: pending');
+  } finally { await started.daemon.close(); }
+});
+
+test('a refusal that is not a timeout is not given the extra pass', async () => {
+  const { root, home } = fixture(); let attempts = 0;
+  const started = await startMachineDaemon({ home, roots: [root], version: 'test', startedBy: 'test', heartbeatMs: 10_000,
+    restoreRetryInitialDelayMs: 5, restoreRetryMaxDelayMs: 10, restoreRetryBudgetMs: 60,
+    restoreSweep: async () => {
+      attempts++;
+      return { kind: 'ran', failed: true, summary: restoreSummaryOf([{ seat: 'worker', outcome: 'refused', reason: 'the login prompt is up' }]) };
+    },
+  });
+  expect(started.kind).toBe('serving'); if (started.kind !== 'serving') return;
+  try {
+    await waitFor(() => attempts >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(attempts).toBe(1);
+  } finally { await started.daemon.close(); }
+});

@@ -544,7 +544,7 @@ describe('team up --all single-command multi-team restore', () => {
     expect(parsed.teams.map((t: { session: string }) => t.session)).toEqual(['main-team', 'alpha', 'beta']);
   });
 
-  test('daemon startup sweep retries not-running routes with a growing gap, logs each wait, and reports pending when still restoring at the bound', async () => {
+  test('daemon startup sweep keeps watching a not-running route past the retry budget, with a pending row in the state record', async () => {
     let attempts = 0;
     const started = await startMachineDaemon({
       home,
@@ -555,26 +555,25 @@ describe('team up --all single-command multi-team restore', () => {
       restoreRetryInitialDelayMs: 5,
       restoreRetryMaxDelayMs: 20,
       restoreRetryBudgetMs: 35,
+      restoreAttachPollMs: 5,
       restoreSweep: async () => {
         attempts += 1;
-        return { kind: 'not-running', state: 'absent' };
+        return { kind: 'not-running', state: 'stopped' };
       },
     });
     expect(started.kind).toBe('serving');
     if (started.kind !== 'serving') return;
     try {
+      // Well past the 35 ms budget the old schedule gave up at: the watch is still trying.
       const deadline = Date.now() + 2000;
-      while (Date.now() < deadline) {
-        const log = existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
-        if (log.includes('restore: pending')) break;
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      // Initial pass + 3 growing-gap retries (5ms + 10ms + 20ms = 35ms budget) = 4 attempts
-      expect(attempts).toBe(4);
+      while (Date.now() < deadline && attempts < 12) await new Promise((r) => setTimeout(r, 10));
+      expect(attempts).toBeGreaterThanOrEqual(12);
       const log = readFileSync(daemonLogPath(home), 'utf8');
-      expect(log).toContain('restore: waiting');
-      expect(log).toContain('restore: pending');
+      expect(log).toContain('the restore runs when it is attached');
+      expect(log).not.toContain('restore: pending');
       expect(log).not.toContain('nothing restored');
+      const row = started.daemon.roots.find((one) => one.root === alphaTeam.root);
+      expect(row?.restore?.reason).toBe('stopped');
     } finally {
       await started.daemon.close();
     }
@@ -591,6 +590,7 @@ describe('team up --all single-command multi-team restore', () => {
       restoreRetryInitialDelayMs: 5,
       restoreRetryMaxDelayMs: 20,
       restoreRetryBudgetMs: 100,
+      restoreAttachPollMs: 5,
       restoreSweep: async () => {
         attempts += 1;
         if (attempts < 3) return { kind: 'not-running', state: 'absent' };
@@ -620,9 +620,10 @@ describe('team up --all single-command multi-team restore', () => {
       }
       expect(attempts).toBe(3);
       const log = readFileSync(daemonLogPath(home), 'utf8');
-      expect(log).toContain('restore: waiting 5ms');
-      expect(log).toContain('restore: waiting 10ms');
+      expect(log).toContain('the restore runs when it is attached');
+      expect(log).not.toContain('restore: waiting');
       expect(log).toContain(`restore ${alphaTeam.root}: 1 seat repaired, 0 skipped (working), 0 refused`);
+      expect(started.daemon.roots.find((one) => one.root === alphaTeam.root)?.restore).toBeUndefined();
       expect(log).not.toContain('restore: pending');
     } finally {
       await started.daemon.close();
