@@ -190,6 +190,8 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
       nonInteractive: true,
       restore: true,
       restoreMissingOnly: true,
+      // The session checked above and locked: the run's own reload must name the same one.
+      expectedSession: session,
       onLoadDeferred: ({ reason, seat }) => {
         if (seat === undefined) loadReason = reason;
         else loadSeats.set(seat, reason);

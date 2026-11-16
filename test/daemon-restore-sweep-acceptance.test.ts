@@ -194,6 +194,36 @@ describe('the daemon restores its routes at start', () => {
     expect(operations).toEqual([]);
   });
 
+  test('a team that changes session after the pass locked its own refuses in the run, with no operation on either session', async () => {
+    // Review round 2c: the run reloads the team under the pass's lock; a reload naming another
+    // session must never act there under this session's lock.
+    const { root, home } = scratch();
+    updateState(join(root, '.agents'), (state) => {
+      const session = state.sessions.acme = emptySession();
+      session.seats.clerk = { stage: 'ready', pane: 'fixture-pane-1' };
+    });
+    const operations: string[] = [];
+    const launch = new Proxy({} as Launch, { get: (_target, name) => () => { operations.push(String(name)); throw new Error('unexpected launch operation'); } });
+    const file = join(root, '.agents', 'team.yaml');
+    const reads: string[] = [];
+    const result = await runRestoreSweepForRoute({
+      home, root, expectedSession: 'acme',
+      sources: {
+        home,
+        // The locked check reads the hosted session; the team file changes right after it.
+        sessionRunning: (name: string) => {
+          reads.push(name);
+          if (reads.length === 1) writeFileSync(file, readFileSync(file, 'utf8').replace('session: acme\n', 'session: other\n'));
+          return true;
+        },
+        agents: () => [], launch,
+      },
+    });
+    expect(result).toMatchObject({ kind: 'refused', detail: expect.stringContaining('not the locked "acme"') });
+    expect(reads).toEqual(['acme']);
+    expect(operations).toEqual([]);
+  });
+
   test('the restore child rechecks lifecycle under the run lock before launching', async () => {
     const { root, home } = scratch();
     const id = teamIdOf(root);
