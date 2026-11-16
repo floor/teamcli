@@ -3179,6 +3179,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       const livePane = liveConversationElsewhere({
         resume: planned.resume ?? planned.registry?.sessionId,
         inPlace: planned.repair?.pane,
+        cli: seat.cli,
         agents,
       });
       if (livePane !== null) {

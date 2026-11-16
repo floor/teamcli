@@ -15,6 +15,7 @@ import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
 const PANE = 'fixture-pane-lead';
 const SPACE = 'fixture-space-lead';
 const SES = 'ses_lead_conversation';
+const CLI = 'claude-code';
 const LAUNCHED = { shell: 100, cli: [200] };
 const RESTORED: PaneProcesses = { shell: 700, foreground: [800] };
 
@@ -72,16 +73,20 @@ describe('a conversation already live is never launched a second time', () => {
   const agents = [entry({ pane: 'fixture-pane-live', session: SES }), entry({ pane: 'fixture-pane-else', session: 'ses_else' })];
 
   test('a resume whose conversation runs on another pane names that pane', () => {
-    expect(liveConversationElsewhere({ resume: SES, inPlace: undefined, agents })).toBe('fixture-pane-live');
-    expect(liveConversationElsewhere({ resume: SES, inPlace: 'fixture-pane-other', agents })).toBe('fixture-pane-live');
+    expect(liveConversationElsewhere({ resume: SES, inPlace: undefined, cli: CLI, agents })).toBe('fixture-pane-live');
+    expect(liveConversationElsewhere({ resume: SES, inPlace: 'fixture-pane-other', cli: CLI, agents })).toBe('fixture-pane-live');
   });
 
   test('an in-place repair of the pane holding it, no resume, or no reading is not a second copy', () => {
-    expect(liveConversationElsewhere({ resume: SES, inPlace: 'fixture-pane-live', agents })).toBeNull();
-    expect(liveConversationElsewhere({ resume: undefined, inPlace: undefined, agents })).toBeNull();
-    expect(liveConversationElsewhere({ resume: '', inPlace: undefined, agents })).toBeNull();
-    expect(liveConversationElsewhere({ resume: 'ses_not_live', inPlace: undefined, agents })).toBeNull();
-    expect(liveConversationElsewhere({ resume: SES, inPlace: undefined, agents: null })).toBeNull();
+    expect(liveConversationElsewhere({ resume: SES, inPlace: 'fixture-pane-live', cli: CLI, agents })).toBeNull();
+    expect(liveConversationElsewhere({ resume: undefined, inPlace: undefined, cli: CLI, agents })).toBeNull();
+    expect(liveConversationElsewhere({ resume: '', inPlace: undefined, cli: CLI, agents })).toBeNull();
+    expect(liveConversationElsewhere({ resume: 'ses_not_live', inPlace: undefined, cli: CLI, agents })).toBeNull();
+    expect(liveConversationElsewhere({ resume: SES, inPlace: undefined, cli: CLI, agents: null })).toBeNull();
+  });
+
+  test("another CLI's conversation with the same id is another namespace", () => {
+    expect(liveConversationElsewhere({ resume: SES, inPlace: undefined, cli: 'codex', agents })).toBeNull();
   });
 });
 

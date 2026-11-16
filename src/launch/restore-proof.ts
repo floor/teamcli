@@ -269,10 +269,14 @@ export function liveConversationElsewhere(input: {
   resume: string | undefined;
   /** The pane the plan exits or closes before launching, when it repairs in place. */
   inPlace: string | undefined;
-  agents: readonly Pick<HerdrAgent, 'pane' | 'session'>[] | null;
+  /** The seat's CLI: a conversation id is that CLI's own; another CLI's id is another namespace. */
+  cli: string;
+  agents: readonly Pick<HerdrAgent, 'pane' | 'session' | 'agent'>[] | null;
 }): string | null {
   const id = input.resume;
   if (id === undefined || id === '' || input.agents === null) return null;
-  const live = input.agents.find((agent) => agent.session === id && agent.pane !== input.inPlace);
+  const names = profileFor(input.cli)?.processNames ?? [];
+  const live = input.agents.find((agent) => agent.session === id && agent.pane !== input.inPlace
+    && reportedAgentIsCli(agent.agent, input.cli, names));
   return live === undefined ? null : live.pane;
 }
