@@ -306,7 +306,7 @@ export type StartMachineDaemonInput = {
    * A route with no recorded seats, or whose session is not running,
    * is skipped, and the sweep never cold-starts a team.
    */
-  restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
+  restoreSweep?: boolean | ((root: string, teamFile: string | undefined, scope?: { session: string }) => Promise<RestoreSweepResult>);
   /**
    * The growing-gap retry schedule when a restore is deferred only by its load guard, or one of
    * its seats was refused on a timeout (retried once):
@@ -3023,11 +3023,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   if (input.restoreSweep !== false && routes.length > 0) {
     const runner = typeof input.restoreSweep === 'function'
       ? input.restoreSweep
-      : (root: string, teamFile: string | undefined) =>
+      : (root: string, teamFile: string | undefined, scope?: { session: string }) =>
           runRestoreSweepInChild({
             home,
             root,
             ...(teamFile === undefined ? {} : { teamFile }),
+            ...(scope === undefined ? {} : { session: scope.session }),
             signal: restoreAbort.signal,
           });
     // A hosted route whose registry row still says stopped is the same team when the row's id
@@ -3088,6 +3089,23 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         }, ms);
         restoreAbort.signal.addEventListener('abort', onAbort, { once: true });
       });
+    /** Why a watched route is no longer the one the daemon hosts, or null while it still is. */
+    const hostedRouteChange = (route: HostedRoute): string | null => {
+      const hosted = routes.find((one) => one.root === route.root);
+      if (hosted === undefined) return 'the root is no longer hosted';
+      if (hosted.session !== route.session || hosted.team !== route.team) return 'the hosted route changed';
+      const entry = routeTeams.get(route.root);
+      if (entry === undefined) return 'the root is no longer hosted';
+      let loaded: ReturnType<typeof readTeamConfig>;
+      try { loaded = readRouteTeam(entry, home); }
+      catch (error) { return `the team could not be read: ${messageOf(error)}`; }
+      if (!loaded.ok) return `the team could not be read: ${loaded.errors[0]?.message ?? 'unknown error'}`;
+      if (loaded.team.session !== route.session) {
+        return `the team's session is now "${loaded.team.session}", not the watched "${route.session}"`;
+      }
+      if (loaded.team.project !== route.team) return `the team is now "${loaded.team.project}", not the watched "${route.team}"`;
+      return null;
+    };
     restoreSweepRun = (async (): Promise<void> => {
       let pendingRoutes: HostedRoute[] = [];
       const loadReasons = new Map<string, string>();
@@ -3122,6 +3140,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         attempt: async (route) => {
           const entry = routeTeams.get(route.root);
           if (entry === undefined) return 'done';
+          // A late attach may come long after the route was watched: the pass runs only while the
+          // daemon still hosts this root under the same team and session the watch was keyed on,
+          // and the child is told that session so its own fresh load refuses any other.
+          const changed = hostedRouteChange(route);
+          if (changed !== null) {
+            logLine(`restore ${route.root}: ${changed}; the watched restore was dropped, nothing was restored`);
+            return 'done';
+          }
           let lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
           if (lifecycleProblem !== null && await noteLiveStopped(route)) {
             lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
@@ -3130,10 +3156,17 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             logLine(`restore ${route.root}: ${lifecycleProblem}`);
             return 'done';
           }
-          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file));
+          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file, { session: route.session }));
           if (result.kind === 'not-running') return 'not-running';
           if (result.kind === 'ran') logLine(`restore ${route.root}: ${result.summary.line}`);
           if ((result.kind === 'ran' || result.kind === 'refused') && result.retry === 'load') return 'load';
+          if (timedOut(route, result)) {
+            // The same one extra pass the start-up schedule gives; the next poll runs it.
+            timeoutRetry.delete(route.root);
+            timeoutRetried.add(route.root);
+            logLine(`restore ${route.root}: a seat timed out; one more pass at the next poll`);
+            return 'retry';
+          }
           if (result.kind === 'lock-held') logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
           else if (result.kind === 'unreadable') logLine(`restore ${route.root}: ${result.reason}`);
           else if (result.kind === 'refused') {
@@ -3168,7 +3201,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           return false;
         }
         try {
-          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file));
+          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file, { session: route.session }));
           if (result.kind === 'ran') {
             logLine(`restore ${route.root}: ${result.summary.line}`);
             if (loadHeld(route, result)) return true;

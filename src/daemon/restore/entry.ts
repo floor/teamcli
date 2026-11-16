@@ -47,6 +47,7 @@ if (read.kind === 'refused') {
       home: read.request.home,
       root: read.request.root,
       ...(read.request.teamFile === undefined ? {} : { teamFile: read.request.teamFile }),
+      ...(read.request.session === undefined ? {} : { expectedSession: read.request.session }),
       isClosing: () => closing,
     });
     // The pass is done and the token spent: a signal after this point is the parent ending a

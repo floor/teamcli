@@ -50,6 +50,9 @@ export type RestoreSweepInput = {
    *  way every writer does, and never reads a leftover beside the root. */
   teamFile?: string;
   now?: () => Date;
+  /** The session the daemon hosts this route under. When the loaded team names another, the
+   *  pass refuses before any read of either session: the route changed since the daemon looked. */
+  expectedSession?: string;
   /** The daemon's closing flag: stops the pass between seat steps. */
   isClosing?: () => boolean;
   /** A test's world in place of the real launch and read sources. A test that injects one owns
@@ -118,6 +121,13 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
   }
   const { team } = loaded;
   const session = team.session;
+  if (input.expectedSession !== undefined && input.expectedSession !== session) {
+    return {
+      kind: 'refused',
+      exit: 1,
+      detail: `the team's session is now "${session}", not the hosted "${input.expectedSession}"; nothing was restored`,
+    };
+  }
   const dir = dirname(loaded.path);
   const lifecycleProblem = restoreLifecycleProblem(sources.home, loaded.root, team.project);
   if (lifecycleProblem !== null) return { kind: 'refused', exit: 1, detail: lifecycleProblem };

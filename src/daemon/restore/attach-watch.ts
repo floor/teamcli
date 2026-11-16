@@ -22,7 +22,10 @@ export type RestoreAttachAttempt =
   /** The restore child found the session not running after all: keep watching. */
   | 'not-running'
   /** The load guard held the pass: retry on a later poll, inside the load budget. */
-  | 'load';
+  | 'load'
+  /** The pass ran and asked for one more (a seat timed out): run it at the next poll. The caller
+   *  owns the once-only limit. */
+  | 'retry';
 
 /** The pending reading a route carries in the daemon state record while it waits. */
 export type RestorePending =
@@ -107,6 +110,9 @@ export function createRestoreAttachWatch(input: RestoreAttachWatchInput): Restor
         }
         if (outcome === 'done') {
           watched.delete(route.root);
+          input.onPending(route, null);
+        } else if (outcome === 'retry') {
+          entry.loadSince = null;
           input.onPending(route, null);
         } else if (outcome === 'not-running') {
           entry.loadSince = null;

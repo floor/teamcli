@@ -176,6 +176,24 @@ describe('the daemon restores its routes at start', () => {
     expect(operations).toEqual([]);
   });
 
+  test('a pass told the hosted session refuses a team that now names another, before reading either session', async () => {
+    const { root, home } = scratch();
+    updateState(join(root, '.agents'), (state) => {
+      const session = state.sessions.acme = emptySession();
+      session.seats.clerk = { stage: 'ready', pane: 'fixture-pane-1' };
+    });
+    const operations: string[] = [];
+    const launch = new Proxy({} as Launch, { get: (_target, name) => () => { operations.push(String(name)); throw new Error('unexpected launch operation'); } });
+    let sessionReads = 0;
+    const result = await runRestoreSweepForRoute({
+      home, root, expectedSession: 'watched-earlier',
+      sources: { home, sessionRunning: () => { sessionReads++; return true; }, agents: () => [], launch },
+    });
+    expect(result).toMatchObject({ kind: 'refused', detail: expect.stringContaining('not the hosted "watched-earlier"') });
+    expect(sessionReads).toBe(0);
+    expect(operations).toEqual([]);
+  });
+
   test('the restore child rechecks lifecycle under the run lock before launching', async () => {
     const { root, home } = scratch();
     const id = teamIdOf(root);

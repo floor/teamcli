@@ -44,6 +44,8 @@ export type SpawnRestoreInput = {
   root: string;
   /** The team file the route was loaded from when it is a `team-file` route. */
   teamFile?: string;
+  /** The session the daemon hosts the route under; the pass refuses another. */
+  session?: string;
   /** The daemon's closing signal: the pass is ended between seat steps and reported as ended. */
   signal?: AbortSignal;
   /** The program entry the child runs. The default is the child entry beside this module; a test
@@ -111,6 +113,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
       home: input.home,
       root: input.root,
       ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+      ...(input.session === undefined ? {} : { session: input.session }),
       daemonPid: process.pid,
     });
   } catch (error) {

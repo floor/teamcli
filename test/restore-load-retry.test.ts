@@ -151,3 +151,77 @@ test('a refusal that is not a timeout is not given the extra pass', async () => 
     expect(attempts).toBe(1);
   } finally { await started.daemon.close(); }
 });
+
+const repaired: RestoreSweepResult = { kind: 'ran', failed: false, summary: restoreSummaryOf([{ seat: 'worker', outcome: 'repaired' }]) };
+const timedOutPass: RestoreSweepResult = { kind: 'ran', failed: true, summary: restoreSummaryOf([{ seat: 'worker', outcome: 'refused', reason: 'timeout' }]) };
+
+test('a late attach whose pass times out a seat gets exactly one more pass, then stops', async () => {
+  const { root, home } = fixture(); const scopes: Array<string | undefined> = [];
+  let attached = false;
+  const started = await startMachineDaemon({ home, roots: [root], version: 'test', startedBy: 'test', heartbeatMs: 10_000,
+    restoreAttachPollMs: 5,
+    restoreSessions: async () => new Map([['acme', attached]]),
+    restoreSweep: async (_root, _file, scope) => {
+      scopes.push(scope?.session);
+      // First the session is stopped; once attached, every pass times the seat out.
+      return scopes.length === 1 ? { kind: 'not-running', state: 'stopped' } : timedOutPass;
+    },
+  });
+  expect(started.kind).toBe('serving'); if (started.kind !== 'serving') return;
+  const log = () => existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
+  try {
+    await waitFor(() => log().includes('the restore runs when it is attached'));
+    attached = true;
+    await waitFor(() => scopes.length >= 3);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // The stopped reading, the attach pass, and the one extra pass: never a fourth.
+    expect(scopes.length).toBe(3);
+    expect(scopes).toEqual(['acme', 'acme', 'acme']);
+    expect(log()).toContain('a seat timed out; one more pass at the next poll');
+    expect(started.daemon.roots.find((one) => one.root === root)?.restore).toBeUndefined();
+  } finally { await started.daemon.close(); }
+});
+
+test('a late attach whose extra pass repairs the seat stops there', async () => {
+  const { root, home } = fixture(); let attempts = 0;
+  const started = await startMachineDaemon({ home, roots: [root], version: 'test', startedBy: 'test', heartbeatMs: 10_000,
+    restoreAttachPollMs: 5,
+    restoreSweep: async () => {
+      attempts++;
+      if (attempts === 1) return { kind: 'not-running', state: 'stopped' };
+      return attempts === 2 ? timedOutPass : repaired;
+    },
+  });
+  expect(started.kind).toBe('serving'); if (started.kind !== 'serving') return;
+  const log = () => existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
+  try {
+    await waitFor(() => log().includes('1 seat repaired'));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(attempts).toBe(3);
+  } finally { await started.daemon.close(); }
+});
+
+test('a late attach after the root changed its session restores neither session through the stale route', async () => {
+  const { root, home } = fixture(); let attempts = 0;
+  let attached = false;
+  const started = await startMachineDaemon({ home, roots: [root], version: 'test', startedBy: 'test', heartbeatMs: 10_000,
+    restoreAttachPollMs: 5,
+    // Both the watched session and the new one read running once "attached".
+    restoreSessions: async () => new Map([['acme', attached], ['acme-renamed', true]]),
+    restoreSweep: async () => { attempts++; return attempts === 1 ? { kind: 'not-running', state: 'stopped' } : repaired; },
+  });
+  expect(started.kind).toBe('serving'); if (started.kind !== 'serving') return;
+  const log = () => existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
+  try {
+    await waitFor(() => log().includes('the restore runs when it is attached'));
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('session: acme\n', 'session: acme-renamed\n'));
+    attached = true;
+    await waitFor(() => log().includes('the watched restore was dropped'));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(attempts).toBe(1);
+    expect(log()).toContain(`the team's session is now "acme-renamed", not the watched "acme"`);
+    expect(log()).not.toContain('seat repaired');
+    expect(started.daemon.roots.find((one) => one.root === root)?.restore).toBeUndefined();
+  } finally { await started.daemon.close(); }
+});
