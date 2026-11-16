@@ -4317,6 +4317,7 @@ Usage:
 
     team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]
     team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]
+    team up --retie [--dry-run] [--session <name>] [--file <path>] [--json]
     team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
     team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
@@ -4345,6 +4346,7 @@ Usage:
 | `--rebind` | yes | no | no |
 | `--request` | no | no | no |
 | `--resolve-launch` | no | no | no |
+| `--retie` | no | no | no |
 | `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |

@@ -19,6 +19,27 @@ lobby checks do not prevent this repair. A working process is eligible when it i
 CLI; a replaced process, ambiguous pane or changed snapshot is refused. Client grants and
 owner-request forms are not accepted by this narrower mode.
 
+After a machine restart the recorded pids are gone. `--rebind` then ties the restored pane
+when the record's launch predates this boot, the pane holds exactly the recorded conversation,
+and the declared CLI is in front. This works for any CLI (Codex, Cursor, Grok, Claude Code on
+another provider), and for a pane the host restored without its name: the pane is named back
+once the record is written. Outside a restart, only a Claude Code seat with a live socket is
+rebound, and an unnamed pane is never tied on its pids alone.
+
+To re-tie a whole running team after a restart without starting anything, run:
+
+    team up --retie
+
+Every seat whose restored pane proves it is re-tied (renamed back, its record updated). A
+record that stopped at `launched`, or waiting at a dialog, is adopted when its pane holds the
+seat's own recorded conversation. Every seat the plain run would launch, close or relaunch is
+listed as `not launched` and left as it is, and no workspace is swept: a parked seat stays
+parked, and one parked seat's start folder never refuses the repair.
+
+Whatever the record says, no run launches a conversation that is already live on another pane
+of the seat's CLI: the seat is held with nothing launched or closed, and the line names the
+pane and `team up --rebind <seat>`.
+
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
 declares and this machine can run, and the watch, in a workspace of its own labelled
 `Watch · <project>`. A fresh launch of
