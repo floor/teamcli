@@ -2365,7 +2365,7 @@ export async function executePlan(
         // is never listed, so no rename of its pane can be verified. When the pane's own
         // foreground process is the seat's CLI, it is declared an agent to herdr first, and the
         // rename below is verified against the list as for any other seat.
-        if (!listed() && op.cli && herdrUnreliable(op.cli) && host.reportAgent && runsCli()) {
+        if (op.cli && herdrUnreliable(op.cli) && host.reportAgent && !listed() && runsCli()) {
           if (host.reportAgent(session, here.pane, op.cli)) {
             host.log(op.seat, `herdr did not detect its ${op.cli} pane; declared it an agent so it can be named`);
           }
