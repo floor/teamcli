@@ -716,15 +716,15 @@ export function liveLineOf(
  * named, no seat record naming it, no screen working or holding unsent text.
  */
 export function labelledLeftovers(
-  seats: readonly { name: string; role: string; label: string; labelWritten?: boolean; stopped?: boolean; human?: boolean }[],
+  seats: readonly { name: string; role: string; label: string; labelWritten?: boolean; stopped?: boolean; human?: boolean; cli?: string }[],
   records: Readonly<Record<string, { workspace?: string }>>,
   workspaces: readonly { id: string; label: string }[] | null,
   already: readonly { workspace: string }[] = [],
-): { seat: string; workspace: string }[] {
+): { seat: string; workspace: string; cli?: string }[] {
   if (workspaces === null) return [];
   const named = new Set(Object.values(records).flatMap((held) => (held.workspace === undefined ? [] : [held.workspace])));
   for (const item of already) named.add(item.workspace);
-  const out: { seat: string; workspace: string }[] = [];
+  const out: { seat: string; workspace: string; cli?: string }[] = [];
   for (const workspace of workspaces) {
     if (named.has(workspace.id)) continue;
     const owners = seats.filter((seat) => seat.human !== true && workspaceLabel(seat) === workspace.label);
@@ -733,7 +733,7 @@ export function labelledLeftovers(
     const owner = owners[0]!;
     const held = records[owner.name];
     if (owner.stopped !== true && held?.workspace !== undefined && held.workspace === workspace.id) continue;
-    out.push({ seat: owner.name, workspace: workspace.id });
+    out.push({ seat: owner.name, workspace: workspace.id, ...(owner.cli === undefined ? {} : { cli: owner.cli }) });
     named.add(workspace.id);
   }
   return out;

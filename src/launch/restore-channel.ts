@@ -16,7 +16,8 @@ import { resolve } from 'node:path';
 import type { Caller } from '../caller.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
-import { channelLaunchEnabled } from '../mcp/channel.ts';
+import { CHANNEL_FLAG, CHANNEL_SERVER } from '../mcp/channel.ts';
+import { cliWordListOf } from './cli-scope.ts';
 import { channelPairPresent } from '../mcp/launch-config.ts';
 import { runMcpSetup } from '../mcp/setup.ts';
 import { writeRuntimeNotice } from '../send/endpoint-notice.ts';
@@ -30,15 +31,74 @@ export type RestoreChannelDeps = {
   now?: () => Date;
 };
 
+// Claude Code's options that take the next word as their value (`claude --help`): a word after
+// one of these is its value, prompt text included, never an option.
+const CLAUDE_VALUE_OPTIONS = new Set([
+  '--model', '--fallback-model', '--resume', '-r', '--session-id', '--name', '-n', '--settings',
+  '--setting-sources', '--append-system-prompt', '--append-system-prompt-file', '--system-prompt',
+  '--system-prompt-file', '--mcp-config', '--add-dir', '--allowedTools', '--allowed-tools',
+  '--disallowedTools', '--disallowed-tools', '--tools', '--permission-mode', '--output-format',
+  '--input-format', '--agents', '--agent', '--plugin-dir', '--max-turns', '--effort', '--betas',
+  '--debug-file', '--permission-prompt-tool', '--json-schema', '--max-budget-usd',
+]);
+// The options that take no value. An option on neither list is not known well enough to say
+// whether the word after it is a value, so a line holding one is not proof.
+const CLAUDE_BOOLEAN_OPTIONS = new Set([
+  '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--verbose',
+  '--continue', '-c', '--print', '-p', '--ide', '--strict-mcp-config', '--fork-session',
+  '--no-session-persistence', '--include-partial-messages', '--replay-user-messages', '--chrome',
+  '--no-chrome', '--disable-slash-commands',
+]);
+
+/**
+ * Whether the launch line passes the development-channel option naming the team server to the
+ * Claude CLI itself, as its argv: the line's words decoded as the shell hands them over, read from
+ * the `claude` word on, every option's value skipped, and stopped at `--`. A flag-shaped word
+ * inside a quoted prompt or after `--` is no option. A line whose words cannot be proved, that has
+ * no `claude` word, or that holds an option this reader cannot place is not proof either.
+ */
+export function channelOptionProven(launch: string | undefined): boolean {
+  if (typeof launch !== 'string' || launch.trim() === '') return false;
+  const words = cliWordListOf('claude', launch);
+  if (words === null) return false;
+  const start = words.findIndex((word) => word === 'claude' || word.endsWith('/claude'));
+  if (start === -1) return false;
+  const chosen = `server:${CHANNEL_SERVER}`;
+  const names = (value: string | undefined) => value !== undefined && value.split(',').includes(chosen);
+  let proven = false;
+  for (let at = start + 1; at < words.length; at += 1) {
+    const word = words[at]!;
+    if (word === '--') break;
+    if (word === CHANNEL_FLAG) {
+      const value = words[at + 1];
+      if (value === undefined || value.startsWith('-')) return false;
+      if (names(value)) proven = true;
+      at += 1;
+      continue;
+    }
+    if (word.startsWith(`${CHANNEL_FLAG}=`)) {
+      if (names(word.slice(CHANNEL_FLAG.length + 1))) proven = true;
+      continue;
+    }
+    if (!word.startsWith('-') || word === '-') continue;
+    if (word.startsWith('--') && word.includes('=')) continue;
+    if (CLAUDE_VALUE_OPTIONS.has(word)) { at += 1; continue; }
+    if (CLAUDE_BOOLEAN_OPTIONS.has(word)) continue;
+    // An option this reader cannot place: the next word may be its value or an option.
+    return false;
+  }
+  return proven;
+}
+
 /** The lead seats whose pair the restore may recreate: the evidence of an earlier setup is the
- *  channel flag on the declared launch line. */
+ *  channel option on the declared launch line, proved as the CLI's own argv. */
 export function channelRepairCandidates(team: Pick<TeamFile, 'orchestrator' | 'operator' | 'seats'>, root: string, present: (dir: string, seat: string) => boolean): string[] {
   const leads = [...new Set([team.orchestrator, team.operator])];
   return leads.filter((name) => {
     const seat = team.seats.find((one) => one.name === name);
     if (seat === undefined || seat.stopped || seat.human || seat.cli !== 'claude-code') return false;
     if (resolve(root, seat.cwd) !== resolve(root)) return false;
-    if (!channelLaunchEnabled(seat.launch)) return false;
+    if (!channelOptionProven(seat.launch)) return false;
     return !present(root, name);
   });
 }

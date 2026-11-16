@@ -8,7 +8,8 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { excludeLines, excludeLocally, excludeTarget } from '../src/mcp/local-exclude.ts';
-import { channelRepairCandidates, channelRepairLine, noticeId, restoreLeadChannels } from '../src/launch/restore-channel.ts';
+import { channelOptionProven, channelRepairCandidates, channelRepairLine, noticeId, restoreLeadChannels } from '../src/launch/restore-channel.ts';
+import { bareShellEmptyPrompt } from '../src/launch/bare-shell.ts';
 import { CHANNEL_LOCAL_FILES } from '../src/mcp/setup.ts';
 import type { Io } from '../src/io.ts';
 import { gitEnv } from './helpers.ts';
@@ -80,6 +81,20 @@ describe("setup keeps the pair in the checkout's local exclude", () => {
   });
 });
 
+describe('an empty shell prompt, read from the screen', () => {
+  test('a lone glyph or a prompt ending in one is empty; typed text, no text or another shape is not', () => {
+    expect(bareShellEmptyPrompt('~/Code/acme\n❯\n\n')).toBe(true);
+    expect(bareShellEmptyPrompt('jvial@mac acme %')).toBe(true);
+    expect(bareShellEmptyPrompt('\u001b[32m❯\u001b[0m')).toBe(true);
+    expect(bareShellEmptyPrompt('❯ git status')).toBe(false);
+    expect(bareShellEmptyPrompt('Resume this session with:\nclaude --resume x')).toBe(false);
+    expect(bareShellEmptyPrompt('price$')).toBe(false);
+    expect(bareShellEmptyPrompt('')).toBe(false);
+    expect(bareShellEmptyPrompt(null)).toBe(false);
+    expect(bareShellEmptyPrompt('\n\n  \n')).toBe(false);
+  });
+});
+
 const ROOT = '/fixture/acme';
 const seat = (name: string, over: Partial<{ cli: string; cwd: string; launch: string; stopped: boolean; human: boolean }> = {}) => ({
   name, cli: 'claude-code', cwd: '.', launch: 'claude --dangerously-load-development-channels server:team-inbox', ...over,
@@ -145,6 +160,38 @@ describe('the restore recreates a missing lead pair through setup', () => {
       deps: { present: () => false, setup: async () => 0, notify: () => true },
     });
     expect(repairs[0]?.outcome).toBe('refused');
+  });
+
+  test('a flag-shaped word in a quoted prompt, after --, or behind an unknown option is no evidence', async () => {
+    const lines = [
+      "claude --append-system-prompt 'remember --dangerously-load-development-channels server:team-inbox later'",
+      'claude --append-system-prompt --dangerously-load-development-channels server:team-inbox',
+      'claude --model opus -- --dangerously-load-development-channels server:team-inbox',
+      'claude --some-new-option --dangerously-load-development-channels server:team-inbox',
+      'echo claude --dangerously-load-development-channels server:team-inbox | sh',
+      'zsh ~/tools/launch.sh --dangerously-load-development-channels server:team-inbox',
+      'claude --dangerously-load-development-channels server:other-server',
+    ];
+    for (const launch of lines) {
+      expect(channelOptionProven(launch), launch).toBe(false);
+      let ran = false;
+      await restoreLeadChannels({
+        home: '/fixture/home', root: ROOT, team: team([seat('lead', { launch }), seat('op', { stopped: true })]), caller: { kind: 'owner' },
+        deps: { present: () => false, setup: async () => { ran = true; return 0; }, notify: () => true },
+      });
+      expect(ran, launch).toBe(false);
+    }
+  });
+
+  test("the channel option in the CLI's own argv, plain or through a forwarding wrapper, is evidence", () => {
+    for (const launch of [
+      'claude --model opus --dangerously-load-development-channels server:team-inbox',
+      'claude --dangerously-load-development-channels=server:other,server:team-inbox --name Priam',
+      "AGENT_UNATTENDED=1 zsh ~/tools/as-floor.sh claude --model opus --append-system-prompt-file /x/rules.md --dangerously-skip-permissions --dangerously-load-development-channels server:team-inbox",
+      'zsh -lc "claude --model opus --dangerously-load-development-channels server:team-inbox"',
+    ]) {
+      expect(channelOptionProven(launch), launch).toBe(true);
+    }
   });
 
   test('nothing missing means nothing run', async () => {

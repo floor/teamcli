@@ -34,6 +34,7 @@ import {
   type WaitingReads,
 } from './pause.ts';
 import { plainPaneText, plainText } from './plain.ts';
+import { bareShellEmptyPrompt } from './bare-shell.ts';
 import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
@@ -3233,6 +3234,12 @@ export async function executePlan(
           }
           if (!paneHoldsOnlyShell(process)) {
             blocked = 'holds a process beside its shell; left as it is';
+            break;
+          }
+          // A labelled leftover has no CLI to read its screen by: it closes only on readable
+          // proof of an empty shell prompt with nothing typed, and is left alone otherwise.
+          if (op.orphan === true && !bareShellEmptyPrompt(host.paneText?.(session, pane) ?? null)) {
+            blocked = `holds a pane (${pane}) not proven to be an empty shell prompt; left as it is`;
             break;
           }
           const kind = host.classify(session, pane, op.cli ?? '');
