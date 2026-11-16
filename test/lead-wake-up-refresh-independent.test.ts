@@ -948,7 +948,7 @@ describe('one-seat rebind across a machine restart', () => {
 // conversation in it. `team up` planned a fresh workspace resuming that conversation beside it.
 describe('a waiting record whose pane the host restored with its own conversation', () => {
   const RESTORED_PANE: PaneProcesses = { shell: 700, foreground: [800] };
-  function restoredWaiting(screen: string | null = CLAUDE_IDLE) {
+  function restoredWaiting(screen: string = CLAUDE_IDLE) {
     stand([{ name: WORKER }, { name: SPARE }]);
     recordSeat(WORKER, { stage: 'launched', pane: PANE, workspace: SPACE, launched: RECORDED });
     updateState(dir, (file) => {
@@ -997,7 +997,8 @@ describe('a waiting record whose pane the host restored with its own conversatio
   });
 
   test('a restored pane whose screen cannot be read keeps its wait', async () => {
-    const made = restoredWaiting(null);
+    // An empty reading: nothing on the screen proves the prompt.
+    const made = restoredWaiting('');
     const io = testIo(root, { kind: 'owner' });
     await runUp(['--retie'], io, made.sources, { nonInteractive: true });
     expect(made.trace.created).toEqual([]);

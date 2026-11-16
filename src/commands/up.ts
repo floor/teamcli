@@ -976,7 +976,7 @@ function seatPlan(
               via: 'session',
               sentence: proof.sentence,
               session: continuitySession,
-              unready: true,
+              unready: recorded.stage ?? 'launched',
             },
           };
         }
@@ -1390,7 +1390,7 @@ function seatPlan(
           via: 'session',
           sentence: unready.sentence,
           session: continuitySession,
-          unready: true,
+          unready: recorded.stage ?? 'launched',
         },
       };
     }

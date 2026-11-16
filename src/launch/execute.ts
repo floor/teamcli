@@ -2262,13 +2262,14 @@ export async function executePlan(
         // pane read at its idle prompt now, with herdr not reporting a turn, makes it ready and
         // clears the wait; a dialog, a running turn, unsent text or an unreadable screen keeps
         // both, and the seat is said as left out with its identity re-tied.
-        if (op.unready === true) {
+        if (op.unready !== undefined) {
           const screenNow = host.paneText?.(session, op.pane) ?? null;
           const statusNow = agentsNow?.find((agent) => agent.pane === op.pane)?.status;
           const atPrompt = proof.kind === 'session' && screenNow !== null && screenNow !== ''
             && statusNow !== 'working' && readScreen(op.cli, screenNow).kind === 'idle';
           if (!atPrompt) {
             recordSeat(op.seat, {
+              stage: op.unready,
               pane: op.pane,
               workspace: op.workspace,
               launched: launchedIdentity(processNow) ?? op.launched,
@@ -2293,7 +2294,7 @@ export async function executePlan(
           ...(proof.kind === 'session' && op.session !== undefined ? { agent_session: op.session } : {}),
           // A record adopted from `launched` or from a wait, read at its idle prompt just now:
           // the dialog the record waited on is not there any more.
-          ...(op.unready === true ? { waiting: null } : {}),
+          ...(op.unready !== undefined ? { waiting: null } : {}),
         }, true);
         provedRestored.add(op.seat);
         dropped.add(op.seat);

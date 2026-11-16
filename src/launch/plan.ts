@@ -310,8 +310,9 @@ export type Op =
       displayAgent?: string;
       /** The record never reached ready (stopped at `launched`, or waiting at a dialog). The
        *  identity is re-tied; the seat is recorded ready, and a wait cleared, only when the pane
-       *  is read at its idle prompt immediately before the write. */
-      unready?: true;
+       *  is read at its idle prompt immediately before the write. The value is the stage the
+       *  record holds, kept as it is when the prompt is not proven. */
+      unready?: 'launched' | 'named' | 'ready';
     }
   | { do: 'watch'; label: string; command: string; file?: string }
   /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. A reused
@@ -566,7 +567,7 @@ export interface UpSeat {
     via: 'session' | 'cli';
     sentence: string;
     /** The record never reached ready: see the adopt op's `unready`. */
-    unready?: true;
+    unready?: 'launched' | 'named' | 'ready';
   };
   /** A bound registry policy. Its launch/model are authoritative over the team file. */
   registry?: { launch: string; model: string; version: string; sessionId?: string };
@@ -1204,7 +1205,7 @@ export function upPlan(input: UpInput): Step[] {
           recordedLaunched: seat.adopted.recordedLaunched,
           ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
           ...(seat.adopted.session === undefined ? {} : { session: seat.adopted.session }),
-          ...(seat.adopted.unready === true ? { unready: true as const } : {}),
+          ...(seat.adopted.unready === undefined ? {} : { unready: seat.adopted.unready }),
         },
       });
       // The plan's own line. It carries no `do`: the re-tie is the run step above, so a walk
