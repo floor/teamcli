@@ -233,6 +233,46 @@ test('a launch\'s waiting record names the seat once, not beside a stuck line', 
   expect(out).not.toContain('stuck at a trust prompt');
 });
 
+// Seen 2026-11-16 after a restart: a wait recorded at a provider error kept the row "waiting for
+// owner (provider error)" while the pane sat at a ready prompt. A provider error owes no answer,
+// so the live ready prompt wins; a dialog that owes one (trust) keeps its row.
+const IDLE = readFileSync(new URL('./fixtures/claude-code/2.1.302/idle.txt', import.meta.url), 'utf8');
+const PROVIDER_ERROR = readFileSync(new URL('./fixtures/claude-code/provider-error.txt', import.meta.url), 'utf8');
+
+function recordWait(classification: 'provider error' | 'trust'): void {
+  updateState(join(dir, '.agents'), (state) => {
+    const session = (state.sessions['acme-web'] ??= emptySession());
+    session.seats['deepseek-acme'] = {
+      stage: 'launched',
+      pane: 'w3:p1',
+      workspace: 'w3',
+      cli: 'claude-code',
+      waiting: { state: 'waiting-owner', classification },
+    };
+  });
+}
+
+test('a provider-error wait whose pane reads a ready prompt is not shown waiting', () => {
+  live = { ...built(), screens: { 'w3:p1': IDLE } };
+  recordWait('provider error');
+  const { out } = check();
+  expect(out).not.toContain('waiting for owner (provider error)');
+});
+
+test('a provider-error wait whose pane still draws the error keeps its row', () => {
+  live = { ...built(), screens: { 'w3:p1': PROVIDER_ERROR } };
+  recordWait('provider error');
+  const { out } = check();
+  expect(out).toContain('waiting for owner (provider error)');
+});
+
+test('a trust wait keeps its row even over a ready prompt', () => {
+  live = { ...built(), screens: { 'w3:p1': IDLE } };
+  recordWait('trust');
+  const { out } = check();
+  expect(out).toContain('waiting for owner (trust)');
+});
+
 test('the JSON document carries the line and nothing of the suppression mark', () => {
   live = { ...built(), screens: { 'w3:p1': PERMISSION } };
   recordSeat('deepseek-acme', 'w3:p1', 'w3', 'claude-code');

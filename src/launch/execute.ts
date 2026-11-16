@@ -13,7 +13,7 @@ function saveTextFile(path: string, text: string): boolean {
 }
 import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { boxHoldsText, refusalReport, type Refusal } from './deliver.ts';
-import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, directConversationLaunch, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
+import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, directConversationLaunch, withoutResume, conversationMissingOnScreen, herdrUnreliable } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { ownStartFolderProblem } from '../worktree/place.ts';
 import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
@@ -181,6 +181,9 @@ export type Host = {
     seconds: number,
   ): Promise<boolean | 'no-agent' | Refusal>;
   renameAgent(session: string, pane: string, name: string): boolean;
+  /** Declares the pane an agent of the seat's CLI to herdr (`herdr pane report-agent`), for a
+   *  CLI herdr does not detect on its own. Absent: the rename waits on herdr alone. */
+  reportAgent?(session: string, pane: string, agent: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
   /** A host may offer a team-file stop. A sandbox warning does not call it: that stop is
    *  `sandbox_unapplied` on the seat's state, and the approved team file stays byte for byte. */
@@ -592,6 +595,22 @@ function namedForAnotherSeat(host: Host, session: string, pane: string, seat: st
   const agents = host.agentList?.(session) ?? null;
   return agents !== null
     && agents.some((agent) => agent.pane === pane && agent.name !== null && agent.name !== seat);
+}
+
+/**
+ * Whether this seat's naming step may declare its pane an agent to herdr. Every reading must be
+ * fresh and readable: herdr's agent list does not hold the pane at all (an agent listed there,
+ * under any name, is not declared again, and one named for another seat is that seat's), and
+ * the session's seat records name the pane for no other seat. An unreadable list or record is
+ * never absence: nothing is declared.
+ */
+function declarablePane(host: Host, session: string, pane: string, seat: string): boolean {
+  if (host.agentList === undefined || host.seatStates === undefined) return false;
+  const agents = host.agentList(session);
+  if (agents === null || agents.some((agent) => agent.pane === pane)) return false;
+  const records = host.seatStates(session);
+  if (records === null) return false;
+  return !Object.entries(records).some(([name, record]) => name !== seat && record?.pane === pane);
 }
 
 /** What the naming settled on: the host holds the name and lists it, the pane turned out to be
@@ -2350,6 +2369,16 @@ export async function executePlan(
           host.agentList?.(session)?.some((agent) => agent.pane === here.pane && agent.name === op.seat) === true;
         const verify = (ms: number): Promise<boolean> =>
           verifiedName(host, session, here.pane, op.seat, ms, sharedSleep, cancelled);
+        // A CLI herdr does not detect (`herdr_status: unreliable`, the jules TUI on herdr 0.7.x)
+        // is never listed, so no rename of its pane can be verified. The pane is declared an
+        // agent to herdr first, and the rename below is verified against the list as for any
+        // other seat, only when the pane is proven this seat's (`declarablePane`) and its own
+        // foreground process is the seat's CLI.
+        if (op.cli && herdrUnreliable(op.cli) && host.reportAgent && declarablePane(host, session, here.pane, op.seat) && runsCli()) {
+          if (host.reportAgent(session, here.pane, op.cli)) {
+            host.log(op.seat, `herdr did not detect its ${op.cli} pane; declared it an agent so it can be named`);
+          }
+        }
         let outcome: RenameOutcome;
         if (namedForAnotherSeat(host, session, here.pane, op.seat)) {
           outcome = 'other seat';

@@ -595,6 +595,7 @@
     "test/launch/pause.test.ts": 3,
     "test/launch/pretrust-boundaries.test.ts": 4,
     "test/launch/pretrust.test.ts": 3,
+    "test/launch/profile-restore.test.ts": 5,
     "test/launch/progress.test.ts": 5,
     "test/launch/project-root-pretrust.test.ts": 4,
     "test/launch/relaunch-shell-back.test.ts": 0,

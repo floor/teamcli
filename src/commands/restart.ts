@@ -43,6 +43,7 @@ import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import {
   agentList,
   agentRename,
+  reportAgentPresent,
   agentStatus,
   paneForeground,
   paneForegroundCwd,
@@ -166,6 +167,7 @@ const realUpLaunch: Launch = {
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
     reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
+  reportAgent: (session, pane, agent) => reportAgentPresent(pane, agent, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
     const agents = agentList(aim(session));
@@ -2170,6 +2172,10 @@ function hostOf(input: {
       return delivered === false && stopped.why !== null ? stopped.why : delivered;
     },
     renameAgent: launch.renameAgent,
+    ...(launch.reportAgent === undefined ? {} : { reportAgent: launch.reportAgent }),
+    // The session's seat records, read fresh: the naming step declares a pane an agent only when
+    // no other seat's record names it (`declarablePane`, src/launch/execute.ts).
+    seatStates: () => readState(dir).sessions[session]?.seats ?? null,
     closeWorkspace: launch.closeWorkspace,
     stopSession: () => false,
     dialog: { mode: 'keep' },

@@ -32,6 +32,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, type DeliveryClass } from '../launch/delivery-class.ts';
 import {
   agentList,
+  reportAgentPresent,
   agentStatus,
   agentRename,
   applySidebarLayout,
@@ -260,6 +261,9 @@ export type Launch = {
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
   renameWorkspace?(session: string, workspace: string, label: string): boolean;
   renameAgent(session: string, pane: string, name: string): boolean;
+  /** Declares a pane running the seat's CLI an agent to herdr, for a CLI herdr does not detect
+   *  (`herdr_status: unreliable`). Absent: such a pane is never named. */
+  reportAgent?(session: string, pane: string, agent: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
   agentPanes(session: string): string[] | null;
   /** The session's agents as herdr lists them now; null when the list can't be read. */
@@ -383,6 +387,7 @@ const realLaunch: Launch = {
     reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
+  reportAgent: (session, pane, agent) => reportAgentPresent(pane, agent, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
     const agents = agentList(aim(session));
@@ -4374,6 +4379,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         return delivered === false && stopped.why !== null ? stopped.why : delivered;
       },
       renameAgent: launch.renameAgent,
+      ...(launch.reportAgent === undefined ? {} : { reportAgent: launch.reportAgent }),
       closeWorkspace: launch.closeWorkspace,
       stopSession: (session) => launch.stopSession?.(session) ?? false,
       kill: (pid) => launch.kill?.(pid) ?? false,
