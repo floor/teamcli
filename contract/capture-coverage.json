@@ -416,7 +416,7 @@
     "grok": {
       "idle": {
         "real": 5,
-        "constructed": 0,
+        "constructed": 1,
         "undocumented": 0
       },
       "working": {
@@ -2466,7 +2466,7 @@
         "1.0.77": {
           "idle": {
             "real": 0,
-            "constructed": 0,
+            "constructed": 1,
             "undocumented": 0
           },
           "working": {
@@ -4895,6 +4895,12 @@
       "cli": "grok",
       "kind": "trust",
       "provenance": "capture"
+    },
+    {
+      "file": "grok/1.0.77/welcome.txt",
+      "cli": "grok",
+      "kind": "idle",
+      "provenance": "constructed"
     },
     {
       "file": "jules/0.1.42/done.txt",
