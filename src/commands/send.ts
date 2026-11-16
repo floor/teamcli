@@ -919,8 +919,23 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
     return { ended: 'refused', dir, who, reason: resolved.error };
   }
   const hit = 'error' in resolved ? null : resolved;
+  // A seat never sends to itself: the frame would wake the sender with its own words and the
+  // command would print "delivered", which reads as the other seat having it. This is how a lead
+  // that meant another team's seat of the same name learned nothing for a whole morning.
+  const ownSeat = selfAddressed(caller, seatName, hit, root);
+  if (ownSeat !== null) return { ended: 'refused', dir, who, reason: ownSeat };
   const standing = standingOf(dir, judged.session, caller);
   return { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit };
+}
+
+/** The refusal for a send whose target is the sending seat itself: the same seat of the same team
+ *  in the same session. Null for every other target, and for a caller that is not a seat. */
+export function selfAddressed(caller: Caller, seatName: string, hit: Target | null, root: string): string | null {
+  if (caller.kind !== 'seat') return null;
+  const seat = hit === null ? seatName : hit.agent.reach.seat;
+  if (seat !== caller.name) return null;
+  if (hit !== null && (hit.team.root !== root || hit.agent.reach.session !== caller.session)) return null;
+  return `${seatName}: that is your own seat (${caller.name} of this team); nothing was sent. To reach another team's seat of that name, write ${caller.name}@<team id> (team send --list shows the addresses)`;
 }
 
 /**
