@@ -261,6 +261,9 @@ export type Op =
       cli?: string;
       replaced?: true;
       after?: 'bus';
+      /** A labelled leftover a host restart brought back: no record, the seat's own included,
+       *  may name it when it closes. */
+      orphan?: true;
     }
   /**
    * A restored pane is not the seat's own running form: it runs the bare CLI where the seat's
@@ -726,7 +729,7 @@ export interface UpInput {
   busHold?: string;
   /** Records the team file no longer declares: each seat's vacated workspace is swept after the
    *  plan's own steps. A seat this run declares is swept through its own `sweep`. */
-  vacated?: readonly { seat: string; workspace: string; pane?: string; cli?: string }[];
+  vacated?: readonly { seat: string; workspace: string; pane?: string; cli?: string; orphan?: true }[];
   /**
    * The team file a flagless watch in `root` would not read. Recorded for the watch's pane
    * before its command runs. Absent when that flagless watch already reads the file.
@@ -2003,6 +2006,7 @@ export function upPlan(input: UpInput): Step[] {
         ...(held.pane === undefined ? {} : { pane: held.pane }),
         ...(held.cli === undefined ? {} : { cli: held.cli }),
         ...('replaced' in held && held.replaced === true ? { replaced: true as const } : {}),
+        ...('orphan' in held && held.orphan === true ? { orphan: true as const } : {}),
       },
     });
   }

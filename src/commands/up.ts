@@ -873,10 +873,6 @@ function seatPlan(
     ...(seat.cwdDefaulted === true ? { cwdDefaulted: true as const } : {}),
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
-    // The line a seat that stays is repainted with: the model and effort its recorded pane shows
-    // now, where the screen reads, and the file's line otherwise. A host restart drops line 2;
-    // repainting it from the file put a stale model back (Agamemnon, 2026-11-16).
-    ...liveLineOf(seat, registry, recorded?.pane === undefined ? null : screenOf(recorded.pane)),
     model: registry?.model ?? seat.model,
     version: registry?.version ?? seat.version,
     // `sessionId` is the resume id, and only the state-agreeing reader offers one: a restored
@@ -3224,7 +3220,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // edited by hand. Their workspaces are vacated and nothing this run starts replaces them, so
   // the plan sweeps them after its own steps — each close re-reads the host first.
   const declaredNames = new Set(team.seats.map((seat) => seat.name));
-  const vacated: { seat: string; workspace: string; pane?: string; cli?: string }[] = internal?.restoreMissingOnly === true ? [] : Object.entries(recorded?.seats ?? {})
+  const vacated: { seat: string; workspace: string; pane?: string; cli?: string; orphan?: true }[] = internal?.restoreMissingOnly === true ? [] : Object.entries(recorded?.seats ?? {})
     .filter(([vacatedName, held]) => !declaredNames.has(vacatedName) && held.workspace !== undefined)
     .map(([vacatedName, held]) => ({
       seat: vacatedName,
@@ -3232,7 +3228,13 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       ...(held.pane === undefined ? {} : { pane: held.pane }),
       ...(held.cli === undefined ? {} : { cli: held.cli }),
     }));
-  vacated.push(...labelledLeftovers(team.seats, recorded?.seats ?? {}, workspaces, vacated));
+  // After a host restart only: a restore pass offers the labelled leftovers the restart brought
+  // back, each closed only from fresh readings and never while any record, the seat's own
+  // included, names it.
+  if (internal?.restore === true) {
+    vacated.push(...labelledLeftovers(team.seats, recorded?.seats ?? {}, workspaces, vacated)
+      .map((one) => ({ ...one, orphan: true as const })));
+  }
   // The policy this run resolved per seat, cached before any writer runs: a later writer must
   // use what the launch actually ran, never re-read a record an earlier writer may have changed.
   const plannedByName = new Map(seats.map((planned) => [planned.name, planned]));
@@ -3934,6 +3936,21 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       const seat = seats[index]!;
       const keep = restoreKeepOf(seat.name);
       if (keep !== undefined) seats[index] = { ...seat, restoreKeep: keep, sweep: undefined };
+      // A restore pass repaints a seat that stays with the model its pane shows now: the host
+      // restart dropped line 2, and painting the file's line put a stale model back (Agamemnon,
+      // 2026-11-16). One screen read, for a kept, adopted or restored seat only.
+      const now = seats[index]!;
+      if (internal?.restore === true && now.pane !== undefined
+        && (now.restoreKeep !== undefined || now.adopted !== undefined || now.restored !== undefined)) {
+        const declared = team.seats.find((one) => one.name === now.name);
+        if (declared !== undefined) {
+          const text = sources.launch?.paneText(session, now.pane) ?? null;
+          const pinned = now.model !== undefined && now.version !== undefined
+            ? { model: now.model, version: now.version, launch: now.launch }
+            : undefined;
+          seats[index] = { ...now, ...liveLineOf(declared, pinned, text) };
+        }
+      }
     }
     const planned = buildPlan();
     const launchedSeats = planned.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));

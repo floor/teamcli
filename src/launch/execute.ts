@@ -3211,6 +3211,10 @@ export async function executePlan(
           said("is named by another seat's record; left as it is");
           break;
         }
+        if (op.orphan === true && op.seat !== undefined && seats[op.seat]?.workspace === op.workspace) {
+          said("is named by the seat's own record now; left as it is");
+          break;
+        }
         const agents = host.agentList?.(session) ?? null;
         if (agents === null) {
           said('holds panes whose names could not be read; left as it is');
