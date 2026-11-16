@@ -34,6 +34,7 @@ import {
   type WaitingReads,
 } from './pause.ts';
 import { plainPaneText, plainText } from './plain.ts';
+import { bareShellEmptyPrompt } from './bare-shell.ts';
 import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
@@ -2403,6 +2404,8 @@ export async function executePlan(
           !host.reportDisplayAgent(session, op.pane, op.displayAgent, SIDEBAR_TTL_CAP_MS)
         ) {
           sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
+        } else if (host.reportDisplayAgent && op.differs !== undefined) {
+          host.log(op.seat, `sidebar line 2 painted from the pane: ${op.differs}`);
         }
         break;
       }
@@ -3209,6 +3212,10 @@ export async function executePlan(
           said("is named by another seat's record; left as it is");
           break;
         }
+        if (op.orphan === true && op.seat !== undefined && seats[op.seat]?.workspace === op.workspace) {
+          said("is named by the seat's own record now; left as it is");
+          break;
+        }
         const agents = host.agentList?.(session) ?? null;
         if (agents === null) {
           said('holds panes whose names could not be read; left as it is');
@@ -3227,6 +3234,12 @@ export async function executePlan(
           }
           if (!paneHoldsOnlyShell(process)) {
             blocked = 'holds a process beside its shell; left as it is';
+            break;
+          }
+          // A labelled leftover has no CLI to read its screen by: it closes only on readable
+          // proof of an empty shell prompt with nothing typed, and is left alone otherwise.
+          if (op.orphan === true && !bareShellEmptyPrompt(host.paneText?.(session, pane) ?? null)) {
+            blocked = `holds a pane (${pane}) not proven to be an empty shell prompt; left as it is`;
             break;
           }
           const kind = host.classify(session, pane, op.cli ?? '');

@@ -27,6 +27,7 @@ import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
+import { observeLabel } from '../labels/observe.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, type DeliveryClass } from '../launch/delivery-class.ts';
 import {
@@ -682,6 +683,60 @@ function effectiveSeatOf(seat: Seat, planned: UpSeat | undefined): Seat {
     model: planned.model ?? seat.model,
     version: planned.version ?? seat.version,
   };
+}
+
+/** The live line 2 for a seat whose recorded pane reads, when it differs from the file's. */
+export function liveLineOf(
+  seat: Seat,
+  registry: { model: string; version: string; launch: string } | undefined,
+  screen: string | null,
+): { liveDisplayAgent?: string; liveDisplayNote?: string } {
+  if (screen === null || screen === '') return {};
+  const declared = displayAgent(seat);
+  const live = observeLabel({
+    cli: seat.cli,
+    model: registry?.model ?? seat.model,
+    version: registry?.version ?? seat.version,
+    display: seat.display,
+    ...(seat.effort === undefined ? {} : { effort: seat.effort }),
+    ...((registry?.launch ?? seat.launch) === undefined ? {} : { launch: registry?.launch ?? seat.launch }),
+    ...(seat.modelFrom === undefined ? {} : { modelFrom: seat.modelFrom }),
+  }, screen).line;
+  if (live === declared) return {};
+  return { liveDisplayAgent: live, liveDisplayNote: `its pane shows ${live}; the file declares ${declared}` };
+}
+
+/**
+ * Workspaces that carry a declared seat's own label while no seat record names them: a host
+ * restart restores a stopped or missing seat's workspace as a bare shell under its old title
+ * ("Automedon · tester", "Tiresias · reviewer" in vlist, 2026-11-16), and nothing else ever
+ * closes it. Only a seat that is stopped, or whose record names another workspace or none, is
+ * offered; a workspace whose label names no declared seat is never offered. Each is planned as a
+ * sweep, which closes it only from fresh readings: every pane bare at its own shell, no pane
+ * named, no seat record naming it, no screen working or holding unsent text.
+ */
+export function labelledLeftovers(
+  seats: readonly { name: string; role: string; label: string; labelWritten?: boolean; stopped?: boolean; human?: boolean; cli?: string }[],
+  records: Readonly<Record<string, { workspace?: string }>>,
+  workspaces: readonly { id: string; label: string }[] | null,
+  already: readonly { workspace: string }[] = [],
+): { seat: string; workspace: string; cli?: string }[] {
+  if (workspaces === null) return [];
+  const named = new Set(Object.values(records).flatMap((held) => (held.workspace === undefined ? [] : [held.workspace])));
+  for (const item of already) named.add(item.workspace);
+  const out: { seat: string; workspace: string; cli?: string }[] = [];
+  for (const workspace of workspaces) {
+    if (named.has(workspace.id)) continue;
+    const owners = seats.filter((seat) => seat.human !== true && workspaceLabel(seat) === workspace.label);
+    // Two seats with one label leave no owner to name: the workspace stays.
+    if (owners.length !== 1) continue;
+    const owner = owners[0]!;
+    const held = records[owner.name];
+    if (owner.stopped !== true && held?.workspace !== undefined && held.workspace === workspace.id) continue;
+    out.push({ seat: owner.name, workspace: workspace.id, ...(owner.cli === undefined ? {} : { cli: owner.cli }) });
+    named.add(workspace.id);
+  }
+  return out;
 }
 
 /** The workspace a host-moved seat left, when the host still lists it and the seat now reads
@@ -3131,6 +3186,19 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     }
     const start = seatStart({ ...team, session }, seat, root, sources.home, undefined, tree?.path, recorded);
     if ('problem' in start) {
+      // A restore pass leaves one misplaced seat out and goes on with the rest: a host restart
+      // drops every pane's name and sidebar line, and one seat's start folder refusing the whole
+      // pass left vlist unrepainted and unswept on 2026-11-16 (tester-cursor in the protected
+      // checkout). A file-level problem (`once`) still refuses the run.
+      if (internal?.restore === true && start.once !== true) {
+        seats.push({
+          ...planned,
+          launchProblem: start.problem,
+          ...(tree === undefined ? {} : { worktree: tree.path }),
+          ...(resumeCwd === undefined ? {} : { startCwd: resumeCwd }),
+        });
+        continue;
+      }
       if (!start.once || !refused.has(start.problem)) {
         refused.add(start.problem);
         refusals.push({ id: 'up.placement', message: start.problem });
@@ -3152,7 +3220,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // edited by hand. Their workspaces are vacated and nothing this run starts replaces them, so
   // the plan sweeps them after its own steps — each close re-reads the host first.
   const declaredNames = new Set(team.seats.map((seat) => seat.name));
-  const vacated = internal?.restoreMissingOnly === true ? [] : Object.entries(recorded?.seats ?? {})
+  const vacated: { seat: string; workspace: string; pane?: string; cli?: string; orphan?: true }[] = internal?.restoreMissingOnly === true ? [] : Object.entries(recorded?.seats ?? {})
     .filter(([vacatedName, held]) => !declaredNames.has(vacatedName) && held.workspace !== undefined)
     .map(([vacatedName, held]) => ({
       seat: vacatedName,
@@ -3160,6 +3228,13 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       ...(held.pane === undefined ? {} : { pane: held.pane }),
       ...(held.cli === undefined ? {} : { cli: held.cli }),
     }));
+  // After a host restart only: a restore pass offers the labelled leftovers the restart brought
+  // back, each closed only from fresh readings and never while any record, the seat's own
+  // included, names it.
+  if (internal?.restore === true) {
+    vacated.push(...labelledLeftovers(team.seats, recorded?.seats ?? {}, workspaces, vacated)
+      .map((one) => ({ ...one, orphan: true as const })));
+  }
   // The policy this run resolved per seat, cached before any writer runs: a later writer must
   // use what the launch actually ran, never re-read a record an earlier writer may have changed.
   const plannedByName = new Map(seats.map((planned) => [planned.name, planned]));
@@ -3861,6 +3936,21 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       const seat = seats[index]!;
       const keep = restoreKeepOf(seat.name);
       if (keep !== undefined) seats[index] = { ...seat, restoreKeep: keep, sweep: undefined };
+      // A restore pass repaints a seat that stays with the model its pane shows now: the host
+      // restart dropped line 2, and painting the file's line put a stale model back (Agamemnon,
+      // 2026-11-16). One screen read, for a kept, adopted or restored seat only.
+      const now = seats[index]!;
+      if (internal?.restore === true && now.pane !== undefined
+        && (now.restoreKeep !== undefined || now.adopted !== undefined || now.restored !== undefined)) {
+        const declared = team.seats.find((one) => one.name === now.name);
+        if (declared !== undefined) {
+          const text = sources.launch?.paneText(session, now.pane) ?? null;
+          const pinned = now.model !== undefined && now.version !== undefined
+            ? { model: now.model, version: now.version, launch: now.launch }
+            : undefined;
+          seats[index] = { ...now, ...liveLineOf(declared, pinned, text) };
+        }
+      }
     }
     const planned = buildPlan();
     const launchedSeats = planned.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));

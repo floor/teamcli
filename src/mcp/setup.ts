@@ -19,6 +19,7 @@ import { teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 import { CHANNEL_FLAG, CHANNEL_SERVER, channelLaunchEnabled } from './channel.ts';
 import { jsonValueText, removeJsonName, setJsonValue } from './json-text.ts';
+import { excludeLocally } from './local-exclude.ts';
 import { ConfigRefusal, channelDirectory, channelDocument, ownedEntry, planChannelPair, publishChannelPair, type ChannelPairPlan, type ChannelWrite } from './launch-config.ts';
 
 export type McpSetupSources = { config?: ConfigSources; register?: RegisterSources };
@@ -29,6 +30,8 @@ type Journal = {
   files: [SavedFile, SavedFile];
 };
 export const CHANNEL_SETUP_RECORD = '.team-channel-setup.json';
+/** The files setup keeps local to the checkout: the project pair, its approval, and the record. */
+export const CHANNEL_LOCAL_FILES = ['.mcp.json', '.claude/settings.local.json', CHANNEL_SETUP_RECORD] as const;
 function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function errorText(value: unknown): string { return value instanceof SyntaxError ? 'the setup record contains invalid JSON' : value instanceof Error ? value.message : 'the setup could not be safely read or written'; }
 function contains(root: string, cwd: string): boolean {
@@ -308,6 +311,14 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
     try {
       wrote.lease.check();
     } finally { wrote.lease.release(); }
+    if (!off) {
+      // The pair is local and untracked: a clean of untracked files must not take it away.
+      // An exclude line has no effect on a tracked file, so a committed approval file is unaffected.
+      const excluded = excludeLocally(cwd, CHANNEL_LOCAL_FILES);
+      if ('skipped' in excluded && excluded.skipped !== 'the folder is not inside a git checkout') {
+        io.stderr(`team mcp setup ${plainLine(name)}: ${excluded.skipped}\n`);
+      }
+    }
     if (off && journal!.approvalFolderCreated) {
       // Remove only the empty owned directory setup created; unrelated files keep it alive.
       try { channelDirectory(join(cwd, '.claude'), false); rmdirSync(join(cwd, '.claude')); } catch { /* not empty or no longer ours */ }

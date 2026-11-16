@@ -203,7 +203,9 @@ export type Op =
     }
   /** A seat already running, painted from the file without typing into it or launching it again.
    *  Line 1 is the workspace title; line 2 is display_agent. A failed call is one line. */
-  | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string }
+  | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string;
+      /** The pane's live line differed from the file's: said and logged when painted. */
+      differs?: string }
   | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string;
       /**
        * Whether a launch line for this seat can carry the rules at all: its profile names a
@@ -259,6 +261,9 @@ export type Op =
       cli?: string;
       replaced?: true;
       after?: 'bus';
+      /** A labelled leftover a host restart brought back: no record, the seat's own included,
+       *  may name it when it closes. */
+      orphan?: true;
     }
   /**
    * A restored pane is not the seat's own running form: it runs the bare CLI where the seat's
@@ -417,6 +422,10 @@ export interface UpSeat {
   label: string;
   /** Sidebar line 2, set on the pane after launch. Absent: the plan does not report one. */
   displayAgent?: string;
+  /** Line 2 as the recorded pane shows it now, when that differs from `displayAgent`: a seat
+   *  that stays is repainted with this one, and `liveDisplayNote` says what differed. */
+  liveDisplayAgent?: string;
+  liveDisplayNote?: string;
   /** The team file's repair for this seat (`relaunchRepair`'s markdown text): every line this
    *  run prints that names a repair prints this one, never a `remove --keep` a lead seat's file
    *  would refuse. */
@@ -720,7 +729,7 @@ export interface UpInput {
   busHold?: string;
   /** Records the team file no longer declares: each seat's vacated workspace is swept after the
    *  plan's own steps. A seat this run declares is swept through its own `sweep`. */
-  vacated?: readonly { seat: string; workspace: string; pane?: string; cli?: string }[];
+  vacated?: readonly { seat: string; workspace: string; pane?: string; cli?: string; orphan?: true }[];
   /**
    * The team file a flagless watch in `root` would not read. Recorded for the watch's pane
    * before its command runs. Absent when that flagless watch already reads the file.
@@ -1009,19 +1018,27 @@ export function upPlan(input: UpInput): Step[] {
   // A seat's sidebar is painted from the record: line 1 its label, line 2 its display-agent.
   // The same step serves a ready seat and a restored one. Nothing is typed into the pane, and
   // the seat is not launched again.
-  const repaint = (seat: UpSeat, pane: string | undefined, workspace: string | undefined): void => {
+  // A seat that stays is painted with the line its recorded pane shows now, where that reads and
+  // differs from the file's; the step's note names the difference.
+  // Only a restore's repaint (a kept, adopted or restored pane) reads the pane: the restart took
+  // line 2 away and the watch cannot paint a pane it has not placed yet.
+  const repaint = (seat: UpSeat, pane: string | undefined, workspace: string | undefined, fromPane = true): void => {
     if (!pane || !workspace || !seat.displayAgent) return;
+    const live = fromPane && pane === seat.pane ? seat.liveDisplayAgent : undefined;
+    const line = live ?? seat.displayAgent;
     steps.push({
       kind: 'run',
       argv: herdr(session, 'workspace', 'rename', workspace, seat.label),
-      also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent),
+      also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', line),
+      ...(live !== undefined && seat.liveDisplayNote !== undefined ? { note: seat.liveDisplayNote } : {}),
       do: {
         do: 'relabel',
         seat: seat.name,
         pane,
         workspace,
         title: seat.label,
-        displayAgent: seat.displayAgent,
+        displayAgent: line,
+        ...(live !== undefined && seat.liveDisplayNote !== undefined ? { differs: seat.liveDisplayNote } : {}),
       },
     });
   };
@@ -1299,7 +1316,8 @@ export function upPlan(input: UpInput): Step[] {
         continue;
       }
       // Seats launched before the sidebar took the file's lines still show the CLI or the role.
-      repaint(seat, seat.pane, seat.workspace);
+      // A ready seat's line 2 is the watch's to keep live; this run paints the file's.
+      repaint(seat, seat.pane, seat.workspace, false);
       steps.push({
         kind: 'skip',
         text: `${seat.name}: already ready; left as it is${seat.restartNote ? `; ${seat.restartNote}` : ''}`,
@@ -1988,6 +2006,7 @@ export function upPlan(input: UpInput): Step[] {
         ...(held.pane === undefined ? {} : { pane: held.pane }),
         ...(held.cli === undefined ? {} : { cli: held.cli }),
         ...('replaced' in held && held.replaced === true ? { replaced: true as const } : {}),
+        ...('orphan' in held && held.orphan === true ? { orphan: true as const } : {}),
       },
     });
   }

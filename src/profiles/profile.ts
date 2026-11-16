@@ -696,7 +696,16 @@ export function supportsSessionName(cli: string): boolean {
  *                                            (must be a valid UUID)
  */
 export function supportsSessionId(cli: string): boolean {
-  return cli === 'claude-code';
+  return cli === 'claude-code' || cli === 'grok';
+}
+
+/** The binary a minted `--session-id` is placed for: the program the launch line runs.
+ *  Grok takes the same flag (Grok CLI 1.0.70: `--session-id <uuid>` starts a new conversation
+ *  with that id, and `grok -r <id>` resumes it). Herdr reports no agent session for a Grok pane
+ *  (herdr agent list, 2026-11-16), so without a minted id a Grok seat has nothing to resume
+ *  after a machine restart and comes back as a blank start screen. */
+function sessionIdBinary(cli: string): string {
+  return cli === 'grok' ? 'grok' : 'claude';
 }
 
 /** True when the CLI keeps its sessions to resume by id, which is what makes a session's id
@@ -772,12 +781,13 @@ export function withLaunchSession(
   const words = cliWordList(cli, command);
   const named = words === null ? undefined : sessionIdIn(words);
   if (named !== undefined) return { command, sessionId: named };
-  if (words !== null && hasFlag(words, ['--session-id', '--resume', '-r', '--continue', '-c'])) return { command };
+  const selecting = cli === 'grok' ? ['--session-id', '--resume', '-r'] : ['--session-id', '--resume', '-r', '--continue', '-c'];
+  if (words !== null && hasFlag(words, selecting)) return { command };
   const sessionId = randomUUID();
-  // `supportsSessionId` names one CLI, and its launch binary is `claude`: a quoted script that
-  // runs it takes the id inside its quotes, where the CLI reads it, never after them. An id that
+  // A quoted script that runs the CLI's binary (`claude`, `grok`) takes the id inside its
+  // quotes, where the CLI reads it, never after them. An id that
   // cannot be placed where the CLI reads it is never recorded: the run says so instead.
-  const placed = placedOnLaunchLine(command, `--session-id ${sessionId}`, 'claude');
+  const placed = placedOnLaunchLine(command, `--session-id ${sessionId}`, sessionIdBinary(cli));
   if (placed === null) {
     return {
       command,

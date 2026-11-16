@@ -17,6 +17,7 @@ import { realSources, runUp, type UpSources } from '../commands/up.ts';
 import { restoreSummaryOf, type Report, type RestoreSweepSummary } from './execute.ts';
 import { acquireRunLock } from './run-lock.ts';
 import { restoreLifecycleProblem } from './restore-lifecycle.ts';
+import { channelRepairLine, restoreLeadChannels, type RestoreChannelDeps } from './restore-channel.ts';
 
 /** The ownership the sweep judged the route as, as the owner of the machine's daemon. The
  *  sweep's caller is the daemon's own, never a seat's: it launches no seat under a seat name. */
@@ -54,6 +55,9 @@ export type RestoreSweepInput = {
   /** A test's world in place of the real launch and read sources. A test that injects one owns
    *  its `home` too; the daemon never injects this. */
   sources?: UpSources;
+  /** A test's stand-ins for the channel repair (`restore-channel.ts`); with injected sources and
+   *  none of these, no repair runs. */
+  channelDeps?: RestoreChannelDeps;
 };
 
 /** Whether the route records at least one seat for its session. A session entry with no seat
@@ -154,6 +158,15 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
       stdout: (text) => out.push(text),
       stderr: (text) => err.push(text),
     };
+    // A lead whose channel pair went missing gets it back through setup before the run reads
+    // the folder: the launch then finds the pair instead of starting the lead without its inbox.
+    // A test world (injected sources) never runs setup against the real config writer.
+    const channelLine = input.sources === undefined || input.channelDeps !== undefined
+      ? channelRepairLine(await restoreLeadChannels({
+        home: sources.home, root: loaded.root, team, caller: OWNER,
+        ...(input.channelDeps === undefined ? {} : { deps: input.channelDeps }),
+      }))
+      : null;
     const seen: { report: Report | null } = { report: null };
     let loadReason: string | null = null;
     const loadSeats = new Map<string, string>();
@@ -183,6 +196,7 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
     const summary = restoreSummaryOf(seen.report.restoreBuckets);
     const note = seen.report.daemonHostNote;
     if (note !== undefined && note !== '') summary.line = `${summary.line}; ${note}`;
+    if (channelLine !== null) summary.line = `${summary.line}; ${channelLine}`;
     const loadOnly = summary.refused_seats.length > 0 && summary.refused_seats.every((seat) => loadSeats.has(seat.seat));
     return { kind: 'ran', summary, failed: exit !== 0,
       ...(loadOnly ? { retry: 'load' as const, detail: loadSeats.get(summary.refused_seats[0]!.seat)! } : {}) };
