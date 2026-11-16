@@ -1017,9 +1017,11 @@ export function upPlan(input: UpInput): Step[] {
   // the seat is not launched again.
   // A seat that stays is painted with the line its recorded pane shows now, where that reads and
   // differs from the file's; the step's note names the difference.
-  const repaint = (seat: UpSeat, pane: string | undefined, workspace: string | undefined): void => {
+  // Only a restore's repaint (a kept, adopted or restored pane) reads the pane: the restart took
+  // line 2 away and the watch cannot paint a pane it has not placed yet.
+  const repaint = (seat: UpSeat, pane: string | undefined, workspace: string | undefined, fromPane = true): void => {
     if (!pane || !workspace || !seat.displayAgent) return;
-    const live = pane === seat.pane ? seat.liveDisplayAgent : undefined;
+    const live = fromPane && pane === seat.pane ? seat.liveDisplayAgent : undefined;
     const line = live ?? seat.displayAgent;
     steps.push({
       kind: 'run',
@@ -1311,7 +1313,8 @@ export function upPlan(input: UpInput): Step[] {
         continue;
       }
       // Seats launched before the sidebar took the file's lines still show the CLI or the role.
-      repaint(seat, seat.pane, seat.workspace);
+      // A ready seat's line 2 is the watch's to keep live; this run paints the file's.
+      repaint(seat, seat.pane, seat.workspace, false);
       steps.push({
         kind: 'skip',
         text: `${seat.name}: already ready; left as it is${seat.restartNote ? `; ${seat.restartNote}` : ''}`,
