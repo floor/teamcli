@@ -146,6 +146,7 @@ export const seats: Section = {
             secret_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path\'s value nor its contents are ever printed or logged' },
             header: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[!#$%&\'*+\\-.^_`|~0-9A-Za-z]+$', $comment: 'an HTTP field name; the secret file\'s line is sent as this header\'s value verbatim, with no scheme word added; absent, the adapter sends Authorization: Bearer <secret>' },
             body: { enum: [...WEBHOOK_BODY_SHAPES], $comment: 'the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event' },
+            target: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-z][a-z0-9-]*$', $comment: 'the CLI the routine runs the seat as; the webhook counts as the seat\'s delivery only when this is the seat\'s own cli; absent, the URL host decides where it names one vendor service, and otherwise the row counts as before' },
             timeout_ms: { type: 'integer', minimum: 1, maximum: 60000, $comment: 'how long one POST waits for the routine\'s answer, in milliseconds; absent, 5000; an answer after the bound is not read and is never retried, so the routine is not asked twice' },
           },
           required: ['url_file', 'secret_file'],
@@ -500,12 +501,16 @@ function readWebhook(entry: YamlEntry | undefined, at: string, check: Check): Se
     check.fail(node.line, `${at}: webhook.secret_file is required`);
     return undefined;
   }
-  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file', 'header', 'body', 'timeout_ms']);
+  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file', 'header', 'body', 'timeout_ms', 'target']);
   const urlFile = readWebhookPath(check.required(fields.get('url_file'), `${at}: webhook.url_file`, node.line), `${at}: webhook.url_file`, fields.get('url_file'), check);
   const secretFile = readWebhookPath(check.required(fields.get('secret_file'), `${at}: webhook.secret_file`, node.line), `${at}: webhook.secret_file`, fields.get('secret_file'), check);
   const header = readWebhookHeader(fields.get('header'), `${at}: webhook.header`, check);
   const body = check.oneOf(fields.get('body'), `${at}: webhook.body`, [...WEBHOOK_BODY_SHAPES]);
   const timeoutMs = readWebhookTimeout(fields.get('timeout_ms'), `${at}: webhook.timeout_ms`, check);
+  const target = check.text(fields.get('target'), `${at}: webhook.target`);
+  if (target !== undefined && !/^[a-z][a-z0-9-]{0,63}$/.test(target)) {
+    check.fail(fields.get('target')?.value.line ?? node.line, `${at}: webhook.target must be a CLI name such as cursor or claude-code`);
+  }
   if (urlFile === undefined || secretFile === undefined) return undefined;
   return {
     urlFile,
@@ -513,6 +518,7 @@ function readWebhook(entry: YamlEntry | undefined, at: string, check: Check): Se
     ...(header === undefined ? {} : { header }),
     ...(body === undefined ? {} : { body }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(target === undefined || !/^[a-z][a-z0-9-]{0,63}$/.test(target) ? {} : { target }),
   };
 }
 

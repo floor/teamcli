@@ -170,6 +170,13 @@ export type MailboxWaiting = {
   /** The line the ring types: the record's message-display header, then the fixed read hint.
    *  Absent, the shipped nameless ring. */
   text?: string;
+  /** Whether a wake was tried for this record: its wake marker exists beside the drop, so a line
+   *  was typed, a webhook posted, or a dialog blocked the attempt. The watch's reader always
+   *  sets it; absent reads as tried, the reading callers before this field had. */
+  wakeTried?: boolean;
+  /** The route the seat's wake takes, in plain words (`typed wake`, `webhook`, `pull on turn`),
+   *  for the line that says no wake was tried yet. */
+  route?: string;
 };
 
 export type PassResult = {
@@ -848,6 +855,17 @@ function seatWorkPlans(
     }
     const prior = episodes[obs.name];
     const unread = waiting.has(obs.name) && obs.screen.kind !== 'working';
+    // "Wake not taken" is a claim about a wake: it stands only when one was tried for a record
+    // this seat still has not read. A record with no attempt yet is queued, and the lead is told
+    // that instead, with the route its wake will take.
+    const mine = mailbox.filter((record) => record.to === obs.name && record.served && record.brief !== true);
+    const tried = mine.some((record) => record.wakeTried !== false);
+    if (unread && !tried) {
+      const route = mine.find((record) => record.route !== undefined)?.route ?? 'unknown';
+      const queued = once(`queued:${obs.name}`, `${obs.name}: queued, no wake tried (route: ${route})`, 'orchestrator');
+      if (queued) reports.push(queued);
+      else keep(`queued:${obs.name}`);
+    }
     const found = seatCanWork({
       seat: obs.name,
       cli: obs.cli,
@@ -857,7 +875,7 @@ function seatWorkPlans(
       elapsedMs: prior === undefined ? 0 : now - prior.since,
       told: prior?.told === true,
       restarted: prior?.restarted === true,
-      ...(unread ? { wake: { submitted: false, working: false, receipt: false } } : {}),
+      ...(unread && tried ? { wake: { submitted: false, working: false, receipt: false } } : {}),
     });
     if (found.ok) {
       delete episodes[obs.name];

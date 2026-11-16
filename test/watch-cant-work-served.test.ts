@@ -102,3 +102,17 @@ test('the seat\'s current launch brief alone raises no "wake not taken"', () => 
   const result = passWith({ ...waiting(true), brief: true });
   expect((result.cantWork ?? []).find((plan) => plan.seat === SEAT)).toBeUndefined();
 });
+
+test('an unread drop with no wake tried yet is "queued, no wake tried", never "wake not taken"', () => {
+  const result = passWith({ ...waiting(true), wakeTried: false, route: 'typed wake' });
+  expect((result.cantWork ?? []).find((plan) => plan.seat === SEAT)).toBeUndefined();
+  const texts = result.reports.map((report) => report.text);
+  expect(texts).toContain(`${SEAT}: queued, no wake tried (route: typed wake)`);
+  expect(texts.some((text) => text.includes('wake not taken'))).toBe(false);
+});
+
+test('once a wake was tried for the record, an untaken one is "wake not taken" again', () => {
+  const result = passWith({ ...waiting(true), wakeTried: true, route: 'typed wake' });
+  expect((result.cantWork ?? []).find((plan) => plan.seat === SEAT)).toMatchObject({ seat: SEAT, line: "can't work: wake not taken" });
+  expect(result.reports.some((report) => report.text.includes('queued, no wake tried'))).toBe(false);
+});

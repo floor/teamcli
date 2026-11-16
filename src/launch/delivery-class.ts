@@ -348,7 +348,7 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
     inboundIsLive(inbound, dialed.path);
   // The webhook adapter is read from the two files its row names, right now: a route that cannot
   // be read is no evidence the seat wakes, and the words say why in the same breath.
-  const webhookRoute = input.declared?.webhook === undefined ? null : webhookRouteOf(input.declared.webhook);
+  const webhookRoute = input.declared?.webhook === undefined ? null : webhookRouteOf(input.declared.webhook, cli);
   const webhook = webhookRoute?.ok === true;
   const webhookReason = webhookRoute !== null && !webhookRoute.ok ? webhookRoute.reason : null;
   const facts: DeliveryFacts = {

@@ -53,6 +53,7 @@ import { appendEvent } from '../bus/log.ts';
 import { nudgeBus } from '../bus/server.ts';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { postArrivalWebhook } from '../bus/webhook.ts';
+import { strayWebhookOf } from '../send/webhook.ts';
 import type { Seat, SeatWebhook } from '../file/types.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -339,6 +340,8 @@ const WALKED_LEGS: readonly string[] = [...DELIVERY_LEGS, 'webhook'];
  */
 function webhookNext(seat: Seat, line: HistoryEntry | undefined): boolean {
   if (seat.webhook === undefined || line === undefined) return false;
+  // A webhook whose routine runs another CLI is not this seat's: the pass types instead.
+  if (strayWebhookOf(seat.webhook, seat.cli) !== null) return false;
   if ((line.failed ?? []).some((one) => one.startsWith('webhook: '))) return false;
   const via = line.via;
   if (via === 'webhook') return true;

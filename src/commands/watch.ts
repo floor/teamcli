@@ -75,6 +75,8 @@ import { removeWorktree } from './worktree.ts';
 import { stateOf } from './down.ts';
 import type { DownSeat } from '../launch/plan.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
+import { wakeMarkAt, wakePath } from '../send/wake-marker.ts';
+import { strayWebhookOf } from '../send/webhook.ts';
 import { classifyWith, overridesInForceOf, quotaWith, type OverrideForce } from '../profiles/overrides.ts';
 import { ofTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -2232,8 +2234,21 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
       brief: claimIdOf(record.to) === record.id,
       inDrops: existsSync(join(scan.dropDir(record.to), record.id)),
       text,
+      // A wake marker beside the drop is the one trace every wake leaves (typed, posted or
+      // blocked), so its absence is the proof no wake was tried for this record yet.
+      wakeTried: wakeMarkAt(wakePath(scan.dropDir(record.to), record.id)) !== null,
+      route: routeWords(seat),
     };
   });
+}
+
+/** The route a seat's wake takes, in the words the queued line uses. */
+function routeWords(seat: TeamFile['seats'][number] | undefined): string {
+  if (seat === undefined) return 'unknown';
+  if (seat.webhook !== undefined && strayWebhookOf(seat.webhook, seat.cli) === null) return 'webhook';
+  if (seat.cli === 'claude-code') return 'channel push';
+  if ((profileFor(seat.cli)?.typedWake ?? null) !== null) return 'typed wake';
+  return 'pull on turn';
 }
 
 async function deliver(

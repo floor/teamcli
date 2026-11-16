@@ -1251,7 +1251,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // The adapter row's usability, read once before the walk runs: it decides whether the dry
   // phrase names the webhook, whether a stale serving channel is held off (the sender's own
   // post is a wake only when the route stands), and the leg itself re-reads it when reached.
-  const webhookReason = input.declared === undefined || input.declared.webhook === undefined ? null : webhookRefusal(input.declared.webhook);
+  const webhookReason = input.declared === undefined || input.declared.webhook === undefined ? null : webhookRefusal(input.declared.webhook, input.declared.cli);
   const cascade = cascadeWalk(ordered, webhookWalked);
   // No pane messaging, continued: the drop leg always closes the walk, so a seat with no event
   // adapter keeps the message in its bus inbox and the sender is told so.
@@ -2594,7 +2594,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       // this leg staged itself is posted before the bus is told of it, so the claim decides who
       // posts and one arrival wakes the seat once.
       const hook = declared?.webhook;
-      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook);
+      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook, declared?.cli);
       if (hook === undefined || routeRefusal !== null) {
         const why = routeRefusal ?? 'the receiving seat declares no webhook row';
         failures.push(`webhook: ${why}`);
@@ -6155,7 +6155,7 @@ export async function walkReplyDelivery(input: {
     }
     if (leg === 'webhook') {
       const hook = declared.webhook;
-      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook);
+      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook, declared?.cli);
       if (hook === undefined || routeRefusal !== null) {
         failures.push(`webhook: ${routeRefusal ?? 'the receiving seat declares no webhook row'}`);
         continue;

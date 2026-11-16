@@ -38,7 +38,7 @@ import type { SeatWebhook, TeamFile } from '../file/types.ts';
 import type { SignedRecord } from '../send/record.ts';
 import { appendHistory } from '../send/history.ts';
 import { webhookStep, type StepFields } from '../send/steps.ts';
-import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
+import { strayWebhookOf, webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
 import { WEBHOOK_SENDER_DEADLINE_MAX_MS } from '../settings/webhook-sender.ts';
 import { webhookSenderDeadlineMs } from '../settings/webhook-sender-policy.ts';
 import type { SignedEventRecord } from './log.ts';
@@ -454,7 +454,9 @@ async function shapeOf(
 export function webhookRoutesOf(team: TeamFile): Map<string, SeatWebhook> {
   const routes = new Map<string, SeatWebhook>();
   for (const seat of team.seats) {
-    if (seat.webhook !== undefined) routes.set(seat.name, seat.webhook);
+    // A webhook whose routine runs another CLI than the seat's own is not the seat's route: the
+    // bus never posts the seat's mail to it, and the seat's own pane route carries the message.
+    if (seat.webhook !== undefined && strayWebhookOf(seat.webhook, seat.cli) === null) routes.set(seat.name, seat.webhook);
   }
   return routes;
 }
