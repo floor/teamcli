@@ -513,7 +513,7 @@ describe('the install contract writes only the opt-in that was asked for', () =>
     expect(service.programs.at(-1)).toMatchObject({ roots: [world.root], presence: true, watch: true });
   });
 
-  test('an install that drops an opt-in the installed unit runs with says so', async () => {
+  test('an install keeps the opt-ins the installed unit runs with; only --no-presence / --no-watch drop one', async () => {
     const world = scratch();
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: world.home });
     const install = async (argv: string[]) => {
@@ -526,10 +526,43 @@ describe('the install contract writes only the opt-in that was asked for', () =>
       }))).toBe(0);
       return io;
     };
-    expect((await install(['install', '--presence'])).err).not.toContain('drops');
+    expect((await install(['install', '--presence', '--watch'])).err).not.toContain('kept');
+    // A plain install (a new build, say) keeps both: dropping them silently once stopped every
+    // team's watch and the confined seats' relayed sends.
     const plain = await install(['install']);
-    expect(plain.err).toContain('the installed unit runs with --presence, and this install drops it');
-    expect(readFileSync(manager.unitPath(world.home), 'utf8')).not.toContain('--presence');
+    expect(plain.err).toContain('kept --presence and --watch from the installed unit (drop with --no-presence or --no-watch)');
+    const kept = readFileSync(manager.unitPath(world.home), 'utf8');
+    expect(kept).toContain('--presence');
+    expect(kept.split('--watch').length - 1).toBe(1);
+    // Naming one keeps the other.
+    const watchOnly = await install(['install', '--watch']);
+    expect(watchOnly.err).toContain('kept --presence from the installed unit');
+    expect(readFileSync(manager.unitPath(world.home), 'utf8')).toContain('--presence');
+    // Only the explicit drop drops, and says so.
+    const drop = await install(['install', '--no-presence']);
+    expect(drop.err).toContain('dropped --presence from the installed unit, as asked');
+    expect(drop.err).toContain('kept --watch');
+    const unit = readFileSync(manager.unitPath(world.home), 'utf8');
+    expect(unit).not.toContain('--presence');
+    expect(unit).toContain('--watch');
+    const none = await install(['install', '--no-watch']);
+    expect(none.err).toContain('dropped --watch');
+    expect(readFileSync(manager.unitPath(world.home), 'utf8')).not.toContain('--watch');
+  });
+
+  test('--no-presence and --no-watch belong to install, and never beside their own opt-in', async () => {
+    const world = scratch();
+    const cases: Array<[string[], string]> = [
+      [['run', '--no-watch'], '--no-watch belongs to install'],
+      [['status', '--no-presence'], '--no-presence belongs to install'],
+      [['install', '--watch', '--no-watch'], '--watch and --no-watch cannot both be given'],
+      [['install', '--presence', '--no-presence'], '--presence and --no-presence cannot both be given'],
+    ];
+    for (const [argv, why] of cases) {
+      const io = testIo(world.root, owner);
+      expect(await runDaemon(argv, io, sourcesOf(world.home, { service: fakeService() }))).toBe(2);
+      expect(io.err).toContain(why);
+    }
   });
 
   test('the written unit carries --watch exactly once and presence only when asked', async () => {
@@ -551,7 +584,7 @@ describe('the install contract writes only the opt-in that was asked for', () =>
     const presenceOnly = await install(['install', '--presence']);
     expect(presenceOnly.unit).toContain('--presence');
     expect(presenceOnly.unit).not.toContain('--watch');
-    const watchOnly = await install(['install', '--watch']);
+    const watchOnly = await install(['install', '--watch', '--no-presence']);
     expect(watchOnly.unit).not.toContain('--presence');
     expect(watchOnly.unit.split('--watch').length - 1).toBe(1);
     const both = await install(['install', '--presence', '--watch']);

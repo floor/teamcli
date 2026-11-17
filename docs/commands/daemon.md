@@ -18,7 +18,7 @@ machine with no broker handler never falls back to a per-clone broker.
 
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--no-presence] [--no-watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon restart [--dry-run] [--json]
     team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
@@ -105,7 +105,10 @@ before typing in the last mile, so a seat that is not proven current is held, no
 flag no checkout's watch is hosted, and the daemon reads no pane for one. The opt-in is the `run`
 flag alone; `install --watch` writes that same flag into the unit's run command, so a
 service-managed daemon hosts a watch only after an owner installs it that way. Presence and watch
-are independent flags: a daemon may host either, both or neither. A hosted watch renews and
+are independent flags: a daemon may host either, both or neither. An install keeps the opt-ins
+the installed unit already runs with and adds the ones it names, so a plain `install` of a new
+build never stops presence or the watches; `--no-presence` and `--no-watch` (install only) drop
+one, and the install says what it kept and what it dropped. A hosted watch renews and
 verifies its own authority on every fixed heartbeat beat and does not blur that beat into the
 watch's sweep rhythm; `status` and `check` name a watch that is standing down, stopped, failed or
 whose outbound gate is closed, and say nothing while it is simply cycling. The hosted loop is in
@@ -298,6 +301,8 @@ restart off and leaves the telling ([`team policy`](policy.md) carries the three
 | `--started-by` | `service-manager`, `manual` or `team-up` | the launcher recorded in the state; belongs to `run`, and defaults to `manual` |
 | `--presence` | — | host each checkout's presence pipeline; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
 | `--watch` | — | host one watch per checkout on the daemon's heartbeat; belongs to `run` and `install`, is written into the unit by `install`, is independent of `--presence`, and is off by default |
+| `--no-presence` | — | drop `--presence` from the installed unit; belongs to `install`, and is refused beside `--presence` |
+| `--no-watch` | — | drop `--watch` from the installed unit; belongs to `install`, and is refused beside `--watch` |
 | `--route` | a 32-character route id | the one hosted route to fault; belongs to `fault-watch`, where it is required |
 | `--dry-run` | — | print the install, restart or fault plan and write, stop or start nothing; belongs to `install`, `restart` and `fault-watch` |
 | `--request` | — | record the verb and its options for the owner seat to answer, and change nothing; belongs to `install` and `uninstall` |
