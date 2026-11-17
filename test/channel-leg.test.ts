@@ -319,6 +319,27 @@ describe('the channel leg', () => {
     });
   });
 
+  test('a live channel walks ahead of a socket the team opted in to (comms roadmap, 2026-11-17)', async () => {
+    // The seat declares `inbound: accept` and its launch accepts the frame, so the socket is
+    // eligible; the channel still takes the send first and the socket is never dialed.
+    const made = channelWorld();
+    // The fixture's lead already declares `inbound: accept` in its team file.
+    expect(readFileSync(join(made.dir, 'team.yaml'), 'utf8')).toContain('    inbound: accept\n');
+    declareSeat(made, 'lead', 'accept');
+    listening(made);
+    const one: Watched = { typed: [], enters: [] };
+    const host = senderHost(made, one, true, { channelGraceMs: 500 });
+    const io = owner(made.root);
+
+    const code = await runSend(['lead', TRIGGER], io, host);
+
+    expect(io.err).toBe('');
+    expect(code).toBe(0);
+    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: notified, not yet read (channel, 0 ms)\n`);
+    expect(host.frames).toEqual([]);
+    expect(lastEntry(made).via).toBe('channel');
+  });
+
   test('a channel walk names that leg in --json and the send schema accepts it', async () => {
     const made = channelWorld();
     listening(made);
