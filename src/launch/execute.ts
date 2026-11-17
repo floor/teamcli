@@ -115,6 +115,12 @@ export type Host = {
    */
   managedCodexEndpoint?(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }): Promise<ManagedEndpointRead>;
   /**
+   * What would stop this seat's managed endpoint from starting, read before a step exits the
+   * seat's running CLI in place (`codexEndpointPreflight`); null when nothing known in advance
+   * would. Absent: nothing is read ahead, as before.
+   */
+  codexEndpointProblem?(input: { dir: string; session: string; seat: string }): string | null;
+  /**
    * Stops the endpoint a launch this run started, including after a later failure. The record
    * is cleared only after a proven stop; an expected URL binds cleanup to this launch.
    */
@@ -701,8 +707,20 @@ export async function executePlan(
   const allowLaunch = (seat: string): string | null => (allowedBeforeExit.has(seat) ? null : host.allow(seat));
   /** The launch preconditions, asked before a step that stops the seat's running CLI. A refusal
    *  leaves the seat running as it is, out of this run; nothing is typed or closed. */
+  // The state folder a seat's managed Codex launch in this plan starts its endpoint under: its
+  // preconditions are read before the exit too, so an endpoint that could not start is found
+  // while the old CLI still runs.
+  const managedEndpointDir = new Map<string, string>();
+  for (const step of steps) {
+    const op = step.do;
+    if (op !== undefined && op.do === 'launch' && op.seat && op.codexEndpoint !== undefined) managedEndpointDir.set(op.seat, op.codexEndpoint.dir);
+  }
   const allowBeforeExit = (seat: string): boolean => {
-    const why = host.allow(seat);
+    const endpointDir = managedEndpointDir.get(seat);
+    const why = host.allow(seat)
+      ?? (endpointDir === undefined || host.codexEndpointProblem === undefined
+        ? null
+        : host.codexEndpointProblem({ dir: endpointDir, session, seat }));
     if (why) {
       if (restoreSeatNames.has(seat)) held = true;
       dropped.add(seat);

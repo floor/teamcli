@@ -68,7 +68,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, launchKind, type Host } from '../launch/execute.ts';
-import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { codexEndpointPreflight, launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
 import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
@@ -168,6 +168,7 @@ const realUpLaunch: Launch = {
     registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
+    preflight: (endpoint) => codexEndpointPreflight(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
@@ -1201,6 +1202,10 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // The home and the team let the plan read the seat's codex-daemon policy, as `team up` does.
     home,
     team,
+    // The state folder the launch below plans with, so the preview decides a managed Codex
+    // endpoint exactly as the launch does (launcher resolution included) and its preconditions
+    // can be read before the stop.
+    ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
     // The same secret store the launch below reads, so the preview refuses exactly what it would.
     ...(sources.upLaunch.secretStore === undefined ? {} : { secretStore: sources.upLaunch.secretStore }),
     ...(resolveLaunch ? { resolveLaunch: true as const, launcherDiscovery } : {}),
@@ -1334,6 +1339,19 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       }
       return problem;
     };
+    // The managed endpoint the relaunch will start, as the preview plan decided it (the same
+    // launcher resolution and policy the launch below plans with), and what would stop it.
+    const restartEndpointProblem = (): string | null => {
+      const preflight = sources.upLaunch.codexEndpoint?.preflight;
+      if (preflight === undefined) return null;
+      for (const step of preview) {
+        const op = step.do;
+        if (op !== undefined && op.do === 'launch' && op.seat === name && op.codexEndpoint !== undefined) {
+          return preflight({ dir: op.codexEndpoint.dir, session, seat: name });
+        }
+      }
+      return null;
+    };
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
     let handoverPath: string | undefined;
     let handoverAsked: string | undefined;
@@ -1403,6 +1421,10 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // pane is closed, so a seat that goes down is never left down by a guard below.
       const stopMachineProblem = machineRefusal();
       if (stopMachineProblem) return { kind: 'not-ready', message: stopMachineProblem };
+      // The same holds for a managed Codex seat's endpoint: what would stop it from starting is
+      // read while the old CLI still runs, never found after the exit with the pane at its shell.
+      const endpointProblem = restartEndpointProblem();
+      if (endpointProblem) return { kind: 'not-ready', message: `${name}: ${endpointProblem}; left running, nothing typed` };
 
       // A pane herdr still lists is stopped; one it no longer lists is not typed into, and the
       // old record is cleared below either way.
@@ -2206,6 +2228,7 @@ function hostOf(input: {
       : {
           managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }) => launch.codexEndpoint!.managed(endpoint),
           stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
+          ...(launch.codexEndpoint!.preflight === undefined ? {} : { codexEndpointProblem: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.preflight!(endpoint) }),
         }),
     ...(launch.registerInbox
       ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }

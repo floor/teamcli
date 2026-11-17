@@ -70,7 +70,7 @@ import {
   type CodexEndpointRecord,
 } from '../daemon/presence/endpoint-record.ts';
 import { isPresenceSeatName, presenceSessionFolder } from '../daemon/presence/spool.ts';
-import { readState, updateState, type SeatState, type SessionState, type State } from '../state.ts';
+import { emptySession, readState, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import type { Seat } from '../file/types.ts';
 
 /** The longest unix socket path this build will ask Codex to bind: macOS refuses paths over 104
@@ -1049,10 +1049,16 @@ export async function launchCodexEndpoint(
   if (isPresenceSeatName(input.seat)) {
     try {
       const binding = mintPresenceBinding();
+      // A seat with no entry yet is given one holding just the binding, as the Claude hook
+      // install records it (`recordPresenceBinding`, src/launch/cli-hook.ts): a restart drops
+      // the seat's entry when it stops it, and its relaunch records the seat again only once
+      // the pane runs. Minting into nothing left the endpoint with no binding to start under,
+      // after the old CLI had already exited.
       updateState(input.dir, (state) => {
-        const one = state.sessions[input.session];
-        const current = one?.seats[input.seat];
-        if (current !== undefined) current.presence_binding = binding;
+        const one = (state.sessions[input.session] ??= emptySession());
+        const current = one.seats[input.seat];
+        if (current === undefined) one.seats[input.seat] = { stage: 'launched', presence_binding: binding };
+        else current.presence_binding = binding;
       });
     } catch {
       const why = "the seat's fresh presence binding could not be recorded; the endpoint under an older binding is not reused";
@@ -1063,6 +1069,63 @@ export async function launchCodexEndpoint(
   const read = await ensureCodexEndpoint(input);
   rememberEndpointFallback(input, read.kind === 'unmanaged' ? read.why : null);
   return read;
+}
+
+/**
+ * What would stop a managed Codex launch of this seat from starting its endpoint, read before
+ * anything stops the seat's running CLI; null when nothing that can be known in advance would.
+ * A relaunch exits the old CLI first, so a reason found only after the exit leaves the seat a
+ * bare shell. Read-only: it mints a throwaway binding only to measure the socket path the real
+ * one (same length) will get, and writes nothing. The spawn and the listen are not provable in
+ * advance and stay the launch's own.
+ */
+export function codexEndpointPreflight(
+  input: { dir: string; session: string; seat: string; runtimeRoot?: string },
+): string | null {
+  try {
+    readState(input.dir);
+  } catch {
+    return 'the team state is unreadable; the managed endpoint could not be recorded';
+  }
+  const socket = endpointSocketOf(input.dir, input.session, input.seat, mintPresenceBinding(), input.runtimeRoot);
+  if (socket.kind !== 'ok') return socket.why;
+  // What already stands on the way is read now, as the launch would meet it: a folder the
+  // launch would make is fine absent, never when something other than a plain directory holds
+  // its place (`mkdirSync` and the plain-folder checks of `ensureCodexEndpoint` and
+  // `ensureRuntimeRoot` would refuse it after the exit).
+  if (socket.runtime) {
+    const at = lstatOrNull(socket.root);
+    if (at === null) return null;
+    if (at === 'unreadable') return 'the runtime folder cannot be read';
+    if (!at.isDirectory()) return 'the runtime folder is not a plain directory';
+    const uid = process.getuid?.();
+    if (uid !== undefined && at.uid !== uid) return 'the runtime folder is not this user’s own';
+    return null;
+  }
+  const folder = endpointFolder(input.dir, input.session, input.seat);
+  if (folder === null) return 'the session or seat cannot name an endpoint folder';
+  // From the state folder down: the first component that is not a plain directory is named as
+  // such, and the first absent one ends the walk (nothing below it can stand).
+  const components: string[] = [];
+  for (let path = folder; path.length > input.dir.length && path.startsWith(input.dir); path = dirname(path)) components.unshift(path);
+  for (const path of components) {
+    const at = lstatOrNull(path);
+    if (at === null) return null;
+    if (at === 'unreadable') return 'the endpoint folder cannot be read';
+    if (!at.isDirectory()) return 'the endpoint folder is not a plain directory';
+  }
+  return null;
+}
+
+/** The entry at `path`; null only when nothing is there (ENOENT). Any other failure to read it
+ *  (a permission, a component that is not a folder, an I/O error) is the string `'unreadable'`:
+ *  the preflight fails closed rather than calling an unreadable path absent. */
+function lstatOrNull(path: string): import('node:fs').Stats | null | 'unreadable' {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? null : 'unreadable';
+  }
 }
 
 /** Writes the launch's answer where `team status` and `team check` read it: the reason this
