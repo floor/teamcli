@@ -1890,7 +1890,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             ...(seat === undefined ? {} : { launch: seat.launch }),
           });
         };
-        if (!foreign && !quiet && hosted === undefined && paceVerified) {
+        // The held-drop retry types through the raw writers, which a hosted source set closes, so
+        // a daemon-hosted watch never runs it. The unread pass is then the one wake a held
+        // drop gets, and it is told so (`heldDropRetry`): before this, a pull-only seat's
+        // `.pending` drop marker kept that pass away while nothing else ever woke the seat.
+        const heldDropRetry = !foreign && !quiet && hosted === undefined && paceVerified;
+        if (heldDropRetry) {
           await retryHeldDrops({
             dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say,
             nativeHeld: nativeHeldNow,
@@ -1972,7 +1977,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
                 },
               }),
             },
-            { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, ...(quiet || !paceVerified ? { noNudge: true } : {}) },
+            { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, heldDropRetry, ...(quiet || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
             { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
