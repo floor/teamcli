@@ -11,7 +11,7 @@ import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { nudgeBus } from '../bus/server.ts';
+import { nudgeBusNoWait } from '../bus/server.ts';
 import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
@@ -4005,7 +4005,8 @@ export const ARRIVAL_NUDGE_MS = 250;
  */
 export async function announceArrival(payload: RecordPayload): Promise<void> {
   try {
-    await nudgeBus(
+    // Only the line has to reach the bus; its answer is never read here (`nudgeBusNoWait`).
+    await nudgeBusNoWait(
       payload.root,
       { session: payload.session, seat: payload.to, record_id: payload.id },
       { deadlineMs: ARRIVAL_NUDGE_MS },
