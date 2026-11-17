@@ -80,7 +80,7 @@ import { version as installedVersion, gitHead as installedGitHead } from '../ver
 
 export const USAGE = `Usage: team daemon status [--json]
        team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--no-presence] [--no-watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
        team daemon restart [--dry-run] [--json]
        team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
        team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
@@ -189,6 +189,9 @@ type Parsed = {
   dryRun: boolean;
   presence: boolean;
   watch: boolean;
+  /** `--no-presence` / `--no-watch`: an install drops that opt-in from the installed unit. */
+  noPresence: boolean;
+  noWatch: boolean;
   startedBy: string | undefined;
   /** The first of `--home`, `--root`, `--route`, `--reason` given a value that starts with `-`. */
   optionLike: string | null;
@@ -204,7 +207,7 @@ type Parsed = {
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited', 'approval', 'reason'], ['json', 'dry-run', 'presence', 'watch', 'request']);
+  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited', 'approval', 'reason'], ['json', 'dry-run', 'presence', 'watch', 'no-presence', 'no-watch', 'request']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
   // uses `known`; the flags and values come from `readArgs`. `chores` is the daemon's own child
@@ -243,6 +246,8 @@ function parse(argv: string[]): Parsed {
     dryRun: args.flags.has('dry-run'),
     presence: args.flags.has('presence'),
     watch: args.flags.has('watch'),
+    noPresence: args.flags.has('no-presence'),
+    noWatch: args.flags.has('no-watch'),
     startedBy: args.values['started-by'],
     optionLike: optionLikeValue(argv),
     request: args.flags.has('request'),
@@ -284,6 +289,10 @@ function verbProblem(parsed: Parsed): string | null {
   if (parsed.verb === 'run' && parsed.route !== undefined) return '--route belongs to fault-watch';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.presence) return '--presence belongs to run or install';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.watch) return '--watch belongs to run or install';
+  if (parsed.verb !== 'install' && parsed.noPresence) return '--no-presence belongs to install';
+  if (parsed.verb !== 'install' && parsed.noWatch) return '--no-watch belongs to install';
+  if (parsed.presence && parsed.noPresence) return '--presence and --no-presence cannot both be given';
+  if (parsed.watch && parsed.noWatch) return '--watch and --no-watch cannot both be given';
   if (parsed.verb === 'chores') {
     // The daemon's own child verb: it runs only from a one-use token, and every option a user
     // verb takes is refused rather than quietly ignored.
@@ -449,7 +458,7 @@ function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSourc
     return ownerAllows(io, sources, parsed.json, parsed.verb) ? { kind: 'allowed', spend: () => true, plan: null } : { kind: 'refused' };
   }
   const home = sources.home ?? homedir();
-  const plan = daemonPlan(io, parsed, home);
+  const plan = daemonPlan(io, parsed, home, (targetHome) => installedOptIns(managerOf(sources), targetHome));
   if ('why' in plan) {
     refuse(io, parsed.json, 'daemon', { id: 'daemon.approval-refused', message: `${plan.why}; nothing was recorded or run`, repair: null });
     return { kind: 'refused' };
@@ -478,9 +487,45 @@ function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSourc
  * nothing. A folder that does not resolve refuses the plan. `--dry-run` is not bound: a dry run
  * spends nothing.
  */
-type DaemonPlan = { targetHome: string; realTargetHome: string | null; roots: string[] | null; words: string[] };
+type DaemonPlan = {
+  targetHome: string;
+  realTargetHome: string | null;
+  roots: string[] | null;
+  words: string[];
+  /** For an install: the opt-ins the unit will run with, the explicit flags over the installed
+   *  unit's own. Bound into `words`, so an answer to one effective install never runs another. */
+  optIns?: OptIns;
+};
 
-function daemonPlan(io: Io, parsed: Parsed, home: string): DaemonPlan | { why: string } {
+type OptIns = { presence: boolean; watch: boolean };
+
+/** The opt-ins the unit installed for `targetHome` runs with; none when it cannot be read. */
+function installedOptIns(manager: ServiceManager | null, targetHome: string): OptIns {
+  let words: readonly string[] = [];
+  try {
+    words = manager?.unit(targetHome)?.programArguments ?? [];
+  } catch {
+    // An unreadable unit keeps nothing: the install writes the opt-ins it names.
+  }
+  return { presence: words.includes('--presence'), watch: words.includes('--watch') };
+}
+
+/** An install keeps the opt-ins the installed unit already runs with and adds the ones it names;
+ *  only `--no-presence` / `--no-watch` drop one. */
+function effectiveOptIns(parsed: Parsed, installed: OptIns): OptIns {
+  return {
+    presence: parsed.presence || (!parsed.noPresence && installed.presence),
+    watch: parsed.watch || (!parsed.noWatch && installed.watch),
+  };
+}
+
+function managerOf(sources: DaemonCommandSources): ServiceManager | null {
+  return sources.service !== undefined
+    ? sources.service
+    : systemServiceManager(sources.accountHome !== undefined ? { accountHome: sources.accountHome } : {});
+}
+
+function daemonPlan(io: Io, parsed: Parsed, home: string, installedFor?: (targetHome: string) => OptIns): DaemonPlan | { why: string } {
   let targetHome: string;
   let realTargetHome: string | null = null;
   if (parsed.home !== undefined) {
@@ -515,6 +560,13 @@ function daemonPlan(io: Io, parsed: Parsed, home: string): DaemonPlan | { why: s
     for (const root of roots) words.push(`registered=${root}`);
     if (parsed.presence) words.push('presence');
     if (parsed.watch) words.push('watch');
+    if (parsed.noPresence) words.push('no-presence');
+    if (parsed.noWatch) words.push('no-watch');
+    // What the unit will run with, read from the installed unit now: an answer to this plan
+    // admits only this effective install, and a unit whose opt-ins changed since admits nothing.
+    const optIns = effectiveOptIns(parsed, installedFor === undefined ? { presence: false, watch: false } : installedFor(targetHome));
+    words.push(`effective-presence=${optIns.presence ? 'on' : 'off'}`, `effective-watch=${optIns.watch ? 'on' : 'off'}`);
+    return { targetHome, realTargetHome, roots, words, optIns };
   }
   return { targetHome, realTargetHome, roots, words };
 }
@@ -1759,22 +1811,27 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // exit: daemon.entry-missing
     return 1;
   }
-  // An install writes exactly the opt-ins it is given (the install contract). One the installed
-  // unit runs with and this install does not name is dropped, and the install says so: a plain
-  // install once dropped `--presence` with no word and presence hosting stopped for three hours
-  // (2026-11-12). `team daemon restart` refreshes a new build and keeps the unit's opt-ins.
-  let installedWords: readonly string[] = [];
-  try {
-    installedWords = manager.unit(targetHome)?.programArguments ?? [];
-  } catch {
-    // An unreadable unit names nothing to warn about.
+  // An install keeps the opt-ins the installed unit already runs with, and adds the ones it
+  // names; only `--no-presence` / `--no-watch` drop one. A plain install that dropped them
+  // silently stopped presence hosting for three hours (2026-11-12) and every team's watch, and
+  // with it every confined seat's relayed send, for the rest of a day (2026-11-17).
+  // An answered request runs the opt-ins its plan bound (checked against the unit at the gate);
+  // every other install reads them from the unit now.
+  const unitOptIns = installedOptIns(manager, targetHome);
+  const { presence, watch } = answeredPlan?.optIns ?? effectiveOptIns(parsed, unitOptIns);
+  const kept = [
+    !parsed.presence && presence && unitOptIns.presence ? '--presence' : null,
+    !parsed.watch && watch && unitOptIns.watch ? '--watch' : null,
+  ].filter((word) => word !== null);
+  if (kept.length > 0) {
+    io.stderr(`team daemon: kept ${kept.join(' and ')} from the installed unit (drop with ${kept.map((word) => word.replace('--', '--no-')).join(' or ')})\n`);
   }
   const dropped = [
-    !parsed.presence && installedWords.includes('--presence') ? '--presence' : null,
-    !parsed.watch && installedWords.includes('--watch') ? '--watch' : null,
+    !presence && unitOptIns.presence ? '--presence' : null,
+    !watch && unitOptIns.watch ? '--watch' : null,
   ].filter((word) => word !== null);
   if (dropped.length > 0) {
-    io.stderr(`warning: the installed unit runs with ${dropped.join(' and ')}, and this install drops it; name it again to keep it, or use \`team daemon restart\` to load a new build with the unit's own opt-ins\n`);
+    io.stderr(`team daemon: dropped ${dropped.join(' and ')} from the installed unit, as asked\n`);
   }
   const fullProgram: ServiceProgram = {
     ...program,
@@ -1782,8 +1839,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // The installed unit is the service-managed run lifecycle; the flags an owner gives here are
     // written into its run command, so presence and watch hosting survive login restarts. A plain
     // install writes no flag and starts exactly the daemon it did before.
-    ...(parsed.presence ? { presence: true } : {}),
-    ...(parsed.watch ? { watch: true } : {}),
+    ...(presence ? { presence: true } : {}),
+    ...(watch ? { watch: true } : {}),
     // The general grant and client key that admitted this install (io.general) are the door's
     // for this run and are never written into the unit: the service-started run is admitted by
     // its own `--started-by service-manager`, and a definition that named a key or a grant would

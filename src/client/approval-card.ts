@@ -128,7 +128,11 @@ export function ownerActionChange(action: string, words: readonly string[] | und
     const verb = words[0] ?? '';
     const home = boundValue(words, 'home');
     const registered = words.filter((word) => word.startsWith('registered=')).map((word) => word.slice('registered='.length));
-    const flags = ['presence', 'watch'].filter((flag) => words.includes(flag));
+    // The opt-ins the unit will run with: the effective words an install plan binds (its own
+    // flags over the installed unit's), or, on a plan written before those, the flags it names.
+    const effective = (flag: string): boolean | null =>
+      words.includes(`effective-${flag}=on`) ? true : words.includes(`effective-${flag}=off`) ? false : null;
+    const flags = ['presence', 'watch'].filter((flag) => effective(flag) ?? words.includes(flag));
     const with_ = flags.length > 0 ? `, with ${flags.join(' and ')}` : '';
     const forHome = `for home ${home === undefined ? 'this home' : quoted(home)}`;
     if (verb !== 'install') {

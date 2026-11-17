@@ -1,6 +1,6 @@
-// An acknowledgement (a reply's receipt), and a read one older than seven days, moves with
+// An acknowledgement (a reply's receipt), and a read one older than two days, moves with
 // its receipts into send-drops/<session>/<seat>/archive/<YYYY-MM>/ and is never deleted. An
-// ordinary read under seven days is not an acknowledgement and stays, and so does an unread
+// ordinary read under two days is not an acknowledgement and stays, and so does an unread
 // message. The one-time
 // migration lists, with --dry-run, what it would move and which unread drops it would mark
 // read — those delivered before the seat's channel start — and writes nothing. Without the
@@ -161,7 +161,7 @@ test('a dry run lists the move and the reads it would mark, and writes nothing',
   expect(existsSync(join(made.dir, LOG_FILE))).toBe(false);
 });
 
-test('an acknowledged message and a read one older than seven days move with their receipts', async () => {
+test('an acknowledged message and a read one older than two days move with their receipts', async () => {
   const made = scene();
   const dir = drop(made);
   const ackedBytes = readFileSync(join(dir, ACKED));
@@ -256,7 +256,7 @@ test('a folder of a thousand files keeps every file that is not due', () => {
 
 const PLAIN_READ = '7ead0000-0000-4000-8000-0000000000f1';
 
-test('a read under seven days that was not acknowledged stays in the live folder', () => {
+test('a read under two days that was not acknowledged stays in the live folder', () => {
   const made = open();
   const at = '2026-11-07T00:00:00.000Z';
   const bytes = plant(made, PLAIN_READ, at, 'read');
@@ -270,6 +270,23 @@ test('a read under seven days that was not acknowledged stays in the live folder
   const key = messageKeyState(made.home);
   if (key.kind !== 'key') throw new Error('the fixture has no message key');
   expect(statusOf(drop(made), PLAIN_READ, { to: SEAT, root: made.root, session: SESSION }, key.key)).toBe('read');
+});
+
+const THREE_DAY_READ = '7ead0000-0000-4000-8000-0000000000f2';
+
+test('a read two days old or more moves, though under seven: the live folder keeps two days of reads', () => {
+  const made = open();
+  const at = '2026-11-05T12:00:00.000Z';
+  plant(made, THREE_DAY_READ, at, 'read');
+  listen(made);
+  const report = runInboxRetention(made.root, { now: RUN, home: made.home });
+  expect(report.move).toContain(THREE_DAY_READ);
+  expect(existsSync(join(drop(made), THREE_DAY_READ))).toBe(false);
+  expect(existsSync(archived(made, THREE_DAY_READ, at))).toBe(true);
+  // Still found, and still read, where it moved.
+  const key = messageKeyState(made.home);
+  if (key.kind !== 'key') throw new Error('the fixture has no message key');
+  expect(statusOf(dirname(archived(made, THREE_DAY_READ, at)), THREE_DAY_READ, { to: SEAT, root: made.root, session: SESSION }, key.key)).toBe('read');
 });
 
 test('an interrupted move, the receipt linked into the archive and still live, is completed', () => {

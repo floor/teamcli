@@ -109,7 +109,7 @@ Options:
   archive    move settled mail into send-drops/<session>/<seat>/archive/<YYYY-MM>/
              and mark unread drops delivered before the seat's channel started
              as read. An acknowledged message moves at once. A read message
-             moves once its receipt is older than 7 days. Unread mail stays,
+             moves once its receipt is older than 2 days. Unread mail stays,
              and nothing is deleted. --dry-run lists what would move and what
              it would mark read, and writes nothing. Without it, the moves and
              the marks are done and one audit line is written. The owner, the

@@ -21,7 +21,7 @@
 // beside a message. It is not a message and carries no body: it names the record, the thread and
 // the side that closed it, and `team reply` reads it before a reply is admitted.
 import { type KeyObject } from 'node:crypto';
-import { lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
@@ -980,8 +980,20 @@ export function readClose(path: string, expectedId?: string): CloseRead {
   return { ok: true, close };
 }
 
+/** The directory a path names, as device and inode, following links; null when it cannot be
+ *  read. For folders this is exactly `sameFolder`'s test: two paths resolve to the same canonical
+ *  folder when, and only when, they name the same directory. One stat is a fraction of a resolve. */
+function folderIdentity(at: string): string | null {
+  try {
+    const stat = statSync(at);
+    return `${String(stat.dev)}:${String(stat.ino)}`;
+  } catch {
+    return null;
+  }
+}
+
 const RECEIPT_STAMP_CACHE_LIMIT = 8192;
-const receiptStampCache = new Map<string, { stamp: string; scope: string }>();
+const receiptStampCache = new Map<string, { stamp: string; scope: string; payloadRoot: string }>();
 const keyPrintMemo = new WeakMap<KeyObject, string>();
 
 /** Stable fingerprint of a key's public half for in-memory stamp caches. */
@@ -1041,18 +1053,16 @@ export function receiptHolds(
   if (process.getuid !== undefined && held.uid !== process.getuid()) return false;
   const stamp = fileStatStamp(path);
   const keyPrint = stamp !== null ? keyPrintForCache(key) : '';
-  const rootReal = (() => {
-    try {
-      return realpathSync(context.root);
-    } catch {
-      return context.root;
-    }
-  })();
+  // The checkout scopes a cached yes by the directory it names now, never by a remembered name:
+  // a hit also needs the receipt's own signed root to name that same directory now, which is the
+  // fresh `sameFolder` test below. A checkout that cannot be read caches nothing.
+  const rootIdentity = folderIdentity(context.root);
   const briefScope = brief === undefined ? '' : `${brief.incarnation}\0${brief.sha256}\0${brief.epoch}`;
-  const scope = `${keyPrint}\0${id}\0${status}\0${context.to}\0${context.session}\0${rootReal}\0${briefScope}`;
+  const scope = `${keyPrint}\0${id}\0${status}\0${context.to}\0${context.session}\0${rootIdentity ?? ''}\0${briefScope}`;
   if (stamp !== null && keyPrint !== '') {
     const cached = receiptStampCache.get(path);
-    if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
+    if (cached !== undefined && rootIdentity !== null && cached.stamp === stamp && cached.scope === scope
+      && folderIdentity(cached.payloadRoot) === rootIdentity) {
       return true;
     }
   }
@@ -1081,7 +1091,7 @@ export function receiptHolds(
   }
   if (stamp !== null && keyPrint !== '') {
     if (receiptStampCache.size >= RECEIPT_STAMP_CACHE_LIMIT) receiptStampCache.clear();
-    receiptStampCache.set(path, { stamp, scope });
+    if (rootIdentity !== null) receiptStampCache.set(path, { stamp, scope, payloadRoot: payload.root });
   }
   return true;
 }

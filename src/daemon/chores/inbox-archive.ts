@@ -2,7 +2,7 @@
 // hosts the root, once a day, off-peak, bounded per pass and never under load.
 //
 // What moves is what the command moves (acknowledged mail at once, read mail once its receipt
-// is seven days old), plus one rule the command does not have: mail still unread fourteen days
+// is two days old), plus one rule the command does not have: mail still unread fourteen days
 // after it was sent, to a seat that is stopped or retired, moves to that seat's
 // `archive/<YYYY-MM>/unread/`. A running seat's unread mail is never moved, and nothing is ever
 // deleted. A lookup by id still finds a moved message, and `team drops archive --unread` lists
