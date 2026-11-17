@@ -2928,6 +2928,62 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(readState(fixture.dir).sessions.acme?.seats.worker).toEqual(before);
   });
 
+  // The decision before the stop is the plan's own: a line that opts out of the endpoint plans no
+  // managed launch, so its preflight is never asked and the restart goes on.
+  test('a restart whose line plans no managed endpoint never asks the endpoint preflight', async () => {
+    const line = 'codex -m gpt-6.1-sol --no-daemon';
+    const { fixture, run, agentId } = seeded({
+      registry: 'ses_old',
+      declaredCli: 'codex',
+      launch: line,
+      yaml: CODEX_TEAM_YAML.replace('    launch: codex -m gpt-6.1-sol', `    launch: ${line}`),
+    });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const asked: string[] = [];
+    run.sources.upLaunch.codexEndpoint = {
+      ...managedEndpoint(fixture, 'prs_fedcba987654'),
+      preflight: (input: { seat: string }) => { asked.push(input.seat); return 'would refuse'; },
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    await runRestart(['worker'], io, run.sources);
+    expect(asked).toEqual([]);
+    expect(io.err).not.toContain('would refuse');
+  });
+
+  // A shipped launcher resolves its own line, which the plan attaches to the endpoint even when the
+  // recorded line opted out: the preview reads the resolved launch, so the preflight is asked and
+  // its refusal stops nothing.
+  test('a shipped-launcher restart asks the preflight of the resolved launch and stops nothing on refusal', async () => {
+    const line = 'codex -m gpt-6.1-sol --no-daemon';
+    const { fixture, run, agentId } = seeded({
+      registry: 'ses_old',
+      declaredCli: 'codex',
+      launch: line,
+      yaml: CODEX_TEAM_YAML.replace('    launch: codex -m gpt-6.1-sol', `    launch: ${line}\n    launcher: codex\n    cwd: .`),
+    });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const asked: string[] = [];
+    run.sources.upLaunch.codexEndpoint = {
+      ...managedEndpoint(fixture, 'prs_fedcba987654'),
+      preflight: (input: { seat: string }) => { asked.push(input.seat); return 'the endpoint folder is not a plain directory'; },
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    const code = await runRestart(['worker'], io, run.sources);
+    expect(io.err).toContain('the endpoint folder is not a plain directory; left running, nothing typed');
+    expect(code).not.toBe(0);
+    expect(asked).toEqual(['worker']);
+    expect(run.did.typed).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+  });
+
   // The ambiguous reading: the endpoint holds two threads, so neither is proven to be this seat's.
   // Nothing is bound, and the restart stays honest about what a send will do.
   test('a restart whose Codex endpoint holds more than one thread binds none and stays pull-only', async () => {

@@ -1088,7 +1088,34 @@ export function codexEndpointPreflight(
     return 'the team state is unreadable; the managed endpoint could not be recorded';
   }
   const socket = endpointSocketOf(input.dir, input.session, input.seat, mintPresenceBinding(), input.runtimeRoot);
-  return socket.kind === 'ok' ? null : socket.why;
+  if (socket.kind !== 'ok') return socket.why;
+  // What already stands on the way is read now, as the launch would meet it: a folder the
+  // launch would make is fine absent, never when something other than a plain directory holds
+  // its place (`mkdirSync` and the plain-folder checks of `ensureCodexEndpoint` and
+  // `ensureRuntimeRoot` would refuse it after the exit).
+  if (socket.runtime) {
+    const at = lstatOrNull(socket.root);
+    if (at === null) return null;
+    if (!at.isDirectory()) return 'the runtime folder is not a plain directory';
+    const uid = process.getuid?.();
+    if (uid !== undefined && at.uid !== uid) return 'the runtime folder is not this user’s own';
+    return null;
+  }
+  const folder = endpointFolder(input.dir, input.session, input.seat);
+  if (folder === null) return 'the session or seat cannot name an endpoint folder';
+  for (let path = folder; path.length > input.dir.length && path.startsWith(input.dir); path = dirname(path)) {
+    const at = lstatOrNull(path);
+    if (at !== null && !at.isDirectory()) return 'the endpoint folder is not a plain directory';
+  }
+  return null;
+}
+
+function lstatOrNull(path: string): import('node:fs').Stats | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
 }
 
 /** Writes the launch's answer where `team status` and `team check` read it: the reason this

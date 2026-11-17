@@ -4,7 +4,7 @@
 // endpoint from starting is read before the old CLI is exited, never after (the seat must not be
 // left a bare shell). Folders are scratch, processes and panes synthetic.
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { codexEndpointPreflight, launchCodexEndpoint } from '../src/launch/codex-endpoint.ts';
 import { executePlan, type Host } from '../src/launch/execute.ts';
@@ -92,6 +92,90 @@ test('the preflight names a socket path no folder can bind', () => {
     const answer = codexEndpointPreflight({ dir: deep, session: SESSION, seat: SEAT, runtimeRoot: deep });
     expect(answer).not.toBeNull();
     expect(answer as string).toContain('this build binds at most');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function seeded(): string {
+  const dir = scratch();
+  updateState(dir, (state) => {
+    state.sessions[SESSION] ??= emptySession();
+  });
+  return dir;
+}
+
+test('the preflight refuses an endpoint folder that is already a regular file', () => {
+  const dir = seeded();
+  try {
+    mkdirSync(join(dir, 'run', SESSION), { recursive: true });
+    writeFileSync(join(dir, 'run', SESSION, SEAT), '');
+    expect(codexEndpointPreflight({ dir, session: SESSION, seat: SEAT, runtimeRoot: dir })).toBe('the endpoint folder is not a plain directory');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the preflight refuses an endpoint folder whose parent is a regular file', () => {
+  const dir = seeded();
+  try {
+    writeFileSync(join(dir, 'run'), '');
+    expect(codexEndpointPreflight({ dir, session: SESSION, seat: SEAT, runtimeRoot: dir })).toBe('the endpoint folder is not a plain directory');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the preflight refuses an endpoint folder that is a link, even to a directory', () => {
+  const dir = seeded();
+  try {
+    mkdirSync(join(dir, 'elsewhere'));
+    mkdirSync(join(dir, 'run', SESSION), { recursive: true });
+    symlinkSync(join(dir, 'elsewhere'), join(dir, 'run', SESSION, SEAT));
+    expect(codexEndpointPreflight({ dir, session: SESSION, seat: SEAT, runtimeRoot: dir })).toBe('the endpoint folder is not a plain directory');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the preflight passes an existing plain endpoint folder', () => {
+  const dir = seeded();
+  try {
+    mkdirSync(join(dir, 'run', SESSION, SEAT), { recursive: true });
+    expect(codexEndpointPreflight({ dir, session: SESSION, seat: SEAT, runtimeRoot: dir })).toBeNull();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the preflight refuses a runtime root that is a regular file when the socket moves there', () => {
+  const base = scratch();
+  try {
+    // A state folder too deep for its own socket sends the endpoint to the runtime folder.
+    const dir = join(base, 'd'.repeat(90));
+    mkdirSync(dir, { recursive: true });
+    updateState(dir, (state) => {
+      state.sessions[SESSION] ??= emptySession();
+    });
+    const runtime = join(base, 'rt');
+    writeFileSync(runtime, '');
+    expect(codexEndpointPreflight({ dir, session: SESSION, seat: SEAT, runtimeRoot: runtime })).toBe('the runtime folder is not a plain directory');
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a relaunch whose endpoint folder is blocked on disk is refused before any exit, close or key', async () => {
+  const dir = seeded();
+  try {
+    mkdirSync(join(dir, 'run', SESSION), { recursive: true });
+    writeFileSync(join(dir, 'run', SESSION, SEAT), '');
+    const made = world(null);
+    made.host.codexEndpointProblem = (input) => codexEndpointPreflight({ ...input, runtimeRoot: dir });
+    const steps = relaunchThenLaunch().map((step) => (step.do?.do === 'launch' ? { ...step, do: { ...step.do, codexEndpoint: { dir } } } : step)) as Step[];
+    await executePlan(steps, SESSION, made.host);
+    expect(made.effects).toEqual([]);
+    expect(made.said.join('')).toContain('the endpoint folder is not a plain directory; left running, nothing typed');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

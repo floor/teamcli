@@ -79,7 +79,7 @@ import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { currentCodexRecipe } from '../launch/features.ts';
 import { featureDialogClose } from '../launch/reboot.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { formatPlan, managedCodexLaunch, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
 import { isShippedLauncher } from '../launchers/shipped.ts';
@@ -97,7 +97,6 @@ import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
-import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { emptySession, mintSeatId, readState, carriedStartFolderProblem, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { findAgent as findRegisteredAgent, recordProvenAgentAddress, updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
@@ -1203,6 +1202,10 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // The home and the team let the plan read the seat's codex-daemon policy, as `team up` does.
     home,
     team,
+    // The state folder the launch below plans with, so the preview decides a managed Codex
+    // endpoint exactly as the launch does (launcher resolution included) and its preconditions
+    // can be read before the stop.
+    ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
     // The same secret store the launch below reads, so the preview refuses exactly what it would.
     ...(sources.upLaunch.secretStore === undefined ? {} : { secretStore: sources.upLaunch.secretStore }),
     ...(resolveLaunch ? { resolveLaunch: true as const, launcherDiscovery } : {}),
@@ -1336,20 +1339,18 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       }
       return problem;
     };
-    // The managed endpoint the relaunch will start, decided the way the plan decides it
-    // (`managedCodexLaunch`, src/launch/plan.ts), and what would stop it starting.
+    // The managed endpoint the relaunch will start, as the preview plan decided it (the same
+    // launcher resolution and policy the launch below plans with), and what would stop it.
     const restartEndpointProblem = (): string | null => {
-      const endpoint = sources.upLaunch.codexEndpoint;
-      if (endpoint?.preflight === undefined || next.cli !== 'codex') return null;
-      const managed = managedCodexLaunch({
-        cli: next.cli,
-        binary: profile.binary,
-        codexDaemon: codexDaemonForSeat({ home, root, team, seat: name, session }),
-        stateDir: dir,
-        launch: planSeat.launch,
-        command: planSeat.launch,
-      });
-      return managed ? endpoint.preflight({ dir, session, seat: name }) : null;
+      const preflight = sources.upLaunch.codexEndpoint?.preflight;
+      if (preflight === undefined) return null;
+      for (const step of preview) {
+        const op = step.do;
+        if (op !== undefined && op.do === 'launch' && op.seat === name && op.codexEndpoint !== undefined) {
+          return preflight({ dir: op.codexEndpoint.dir, session, seat: name });
+        }
+      }
+      return null;
     };
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
     let handoverPath: string | undefined;
