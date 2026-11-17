@@ -528,7 +528,11 @@ export const realHost: SendHost = {
   // (observed on this Mac as /tmp/cc-socks; a version-specific observation, not a public
   // API contract).
   handedWaitMs: HANDED_WAIT_MS,
-  socketsDir: join(tmpdir(), 'cc-socks'),
+  // Read when a send looks, not when the module loads: the warm send host serves callers whose
+  // runtime temp folder differs from its own (rfc-bus-send-server §2.4).
+  get socketsDir() { return join(tmpdir(), 'cc-socks'); },
+  // A fixture that assigns a folder replaces the reading with that plain value.
+  set socketsDir(value: string) { Object.defineProperty(this, 'socketsDir', { value, writable: true, enumerable: true, configurable: true }); },
   socketsDirAlt: '/tmp/cc-socks',
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
   native: {

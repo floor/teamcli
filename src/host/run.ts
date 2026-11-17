@@ -48,10 +48,15 @@ export type HostPeer = {
   currentParent: () => number | null;
 };
 
-/** Variables a module of the send path reads at import time (the audit in
+/** Variables the warm host cannot take from the request (the audit in
  *  test/send-host-import-captures.test.ts keeps this list whole). A request whose value differs
- *  from the host's own is handed back: the warm modules hold the host's. */
-export const IMPORT_TIME_ENV = ['HOME', 'TMPDIR'] as const;
+ *  from the host's own is handed back.
+ *  - HOME: modules of the send path read `homedir()` at import time, and Bun's `homedir()` is
+ *    fixed when the process starts (it does not follow `process.env.HOME`), so even a call-time
+ *    read answers the host's.
+ *  TMPDIR is not listed: the send path reads `tmpdir()` only when it runs, which follows the
+ *  request's environment the host puts in place for the line. */
+export const IMPORT_TIME_ENV = ['HOME'] as const;
 
 const SEND_FLAGS_WITH_VALUE = new Set(['--subject', '--file', '--brief']);
 const SEND_FLAGS = new Set(['--json', '--dry-run']);

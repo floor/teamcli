@@ -107,9 +107,7 @@ const CAPTURES: Record<string, string> = {
   'src/commands/ack.ts: homedir()': 'HOME',
   'src/commands/messages.ts: homedir()': 'HOME',
   'src/commands/reply.ts: homedir()': 'HOME',
-  'src/commands/send.ts: tmpdir()': 'TMPDIR',
   'src/commands/send.ts: homedir()': 'HOME',
-  'src/send/daemon.ts: tmpdir()': 'TMPDIR',
   'src/send/daemon.ts: homedir()': 'HOME',
 };
 

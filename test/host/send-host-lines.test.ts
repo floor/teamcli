@@ -53,9 +53,13 @@ describe('the environment', () => {
   test('the same HOME and TMPDIR are honoured; unrelated variables may differ', () => {
     expect(envFallback({ HOME: '/h', TMPDIR: '/t', OTHER: 'a' }, { HOME: '/h', TMPDIR: '/t', OTHER: 'b' })).toBeNull();
   });
-  test('another HOME, another TMPDIR, or one set where the host has none is handed back', () => {
+  test('another HOME, or one set where the host has none, is handed back', () => {
     expect(envFallback({ HOME: '/x', TMPDIR: '/t' }, { HOME: '/h', TMPDIR: '/t' })).toContain('HOME');
-    expect(envFallback({ HOME: '/h', TMPDIR: '/x' }, { HOME: '/h', TMPDIR: '/t' })).toContain('TMPDIR');
-    expect(envFallback({ HOME: '/h', TMPDIR: '/t' }, { HOME: '/h' })).toContain('TMPDIR');
+    expect(envFallback({ HOME: '/h' }, {})).toContain('HOME');
+  });
+  test('another TMPDIR, or none where the host has one, is served: the send path reads it only when it runs', () => {
+    expect(envFallback({ HOME: '/h', TMPDIR: '/x' }, { HOME: '/h', TMPDIR: '/t' })).toBeNull();
+    expect(envFallback({ HOME: '/h', TMPDIR: '/t' }, { HOME: '/h' })).toBeNull();
+    expect(envFallback({ HOME: '/h' }, { HOME: '/h', TMPDIR: '/t' })).toBeNull();
   });
 });

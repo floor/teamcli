@@ -109,8 +109,10 @@ for (const argv of LINES) {
     results.push({ argv, direct: d, hosted: h });
   }
 }
-// The environment the warm modules cannot honour: a request with another HOME or TMPDIR is
-// handed back, and the matching one after it still runs as in-process.
+// The environment the warm modules cannot honour: a request with another HOME is handed back, and
+// the matching one after it still runs as in-process. Another TMPDIR is served: the send path
+// reads the temp folder only when it runs.
+mkdirSync(join(home, 'tmp-elsewhere'), { recursive: true });
 const otherHome = await runHostedLine(
   { v: 1, build: 'test', argv: LINES[0]!, cwd: root, env: { ...env, HOME: join(home, 'elsewhere') }, tty: { stdin: false, stdout: false, stderr: false } },
   { pid: process.pid, ppid: process.ppid, check: () => null, currentParent: () => process.ppid },

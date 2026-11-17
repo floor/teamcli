@@ -100,7 +100,10 @@ export const realDaemonHost: DaemonHost = {
   agents: async (session) =>
     (await agentListAsync(session, HOST_READ))?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane })) ?? null,
   processInfo: (session, pane) => paneProcessesAsync(pane, session, HOST_READ),
-  socketsDir: join(tmpdir(), 'cc-socks'),
+  // Read when a send looks, not at module load (the send host's per-request temp folder).
+  get socketsDir() { return join(tmpdir(), 'cc-socks'); },
+  // A fixture that assigns a folder replaces the reading with that plain value.
+  set socketsDir(value: string) { Object.defineProperty(this, 'socketsDir', { value, writable: true, enumerable: true, configurable: true }); },
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
   native: {
     // No pane messaging: the send endpoint never types (src/send/no-pane-messaging.ts).
