@@ -8,7 +8,9 @@ send: how long the send took and the leg that took it, when the seat's signed re
 and when the reply landed in the caller's folder; or why the send was refused.
 
 Each message is an ordinary [`team send`](send.md), run as this same program in the caller's own
-folder and environment: the same admission, signing and delivery. A refused send is a row with its
+folder and environment, with the caller's own standard input — a terminal stays that terminal, so
+the owner at a terminal sends as the owner and a run without one is refused as a send would be: the
+same admission, signing and delivery. A refused send is a row with its
 refusal, never a route around it. A seat of another team is named `<seat>@<team>` (the team's
 session, name or id); the send rules decide whether this caller reaches it. The answer is an
 ordinary reply on the message's thread, admitted by the reply's own rule, never by this command.
@@ -28,9 +30,15 @@ ordinary reply on the message's thread, admitted by the reply's own rule, never 
 
 ## What it reads and writes
 
-Reads `team seats --json` for the team's seats and session, each target's
-`.agents/send-drops/<session>/<seat>/<id>.read.json` receipt, and the records in the caller's own
-session folder for replies on each message's thread. Writes nothing itself: each message is
+Reads `team seats --json` for the team's seats (`--all`), then, per message, the sent record by its
+id among the registered teams' folders and the caller's own team configuration, verified with the
+machine's message key. Its signed root, session, recipient and sender decide where the rest is
+read, never the folder the command runs in: the recipient's
+`.agents/send-drops/<session>/<seat>/<id>.read.json` receipt, counted only when its signature
+verifies and it names that id, recipient, root and session; and the sender's own folder (its team
+found by the sender's signed agent id in the registry roster, else the team the caller binds to),
+where a reply counts only when its record verifies, sits on the message's thread, comes from the
+recipient to the sender by name and agent id, and carries this run's token. Writes nothing itself: each message is
 written by its own `team send`, with that send's history line, and each answer by its seat's
 `team reply`.
 

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CallerSources } from '../src/caller.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import { hintedHerdrSession, placedCallerTeam } from '../src/registry/binding.ts';
 import { upsertTeam } from '../src/registry/teams.ts';
 
@@ -49,4 +50,36 @@ describe('caller placement narrowed by the herdr session hint', () => {
       expect([...new Set(asked)].sort()).toEqual(['alpha', 'beta', 'gamma']);
     }
   });
+
+  test('a readable wrong hint never places the caller in the hinted team (impostor)', () => {
+    // Two teams record the same seat name on the same pane id, in two sessions. The caller's
+    // real pane is `alpha`'s: its root process (5) is among the caller's ancestors. `beta`'s pane
+    // of that id has another root (99). A hint naming `beta` must not place the caller there.
+    const home = mkdtempSync(join(tmpdir(), 'hint-'));
+    for (const name of ['alpha', 'beta']) {
+      const root = join(home, 'repos', name);
+      mkdirSync(join(root, '.agents'), { recursive: true });
+      upsertTeam(home, `t-${name}`, { project: name, session: name, root, at: AT });
+      updateState(join(root, '.agents'), (state) => {
+        const session = (state.sessions[name] ??= emptySession());
+        session.seats.lead = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
+      });
+    }
+    const sources = (session?: string): CallerSources => ({
+      ancestors: () => [{ pid: 10, name: 'claude' }, { pid: 5, name: 'zsh' }, { pid: 2, name: 'herdr' }, { pid: 1, name: 'launchd' }],
+      agents: () => [{ name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null }],
+      paneRootPid: () => (session === 'alpha' ? 5 : 99),
+      env: { HERDR_PANE_ID: 'w1:p1' },
+      stdinIsTTY: false,
+    });
+    const at = (hint?: string) => placedCallerTeam(home, {
+      env: hint === undefined ? { HERDR_PANE_ID: 'w1:p1' } : { HERDR_PANE_ID: 'w1:p1', HERDR_SOCKET_PATH: socket(hint) },
+      stdinIsTTY: false,
+      callerSources: sources,
+    })?.session ?? null;
+    expect(at()).toBe('alpha');
+    expect(at('alpha')).toBe('alpha');
+    expect(at('beta')).toBeNull();
+  });
 });
+

@@ -5,19 +5,32 @@
 // reply (the agent acted on it) and when that reply landed in the caller's folder.
 //
 // Every message is an ordinary `team send`, run as this same program in the caller's own folder
-// and environment: admission, signing and delivery are exactly the ones a send has, and a refused
-// send is a row with its refusal, never a route around it. A seat of another team is named as
-// `<seat>@<team>`; the rules decide whether this caller may reach it. The answer is a
-// `team reply` on the message's own thread, admitted by the reply's own rule, never by this
-// command.
+// and environment, with the caller's own standard input (its terminal, when it has one: the
+// owner's identity at a terminal is that terminal, and a send without it is refused): admission,
+// signing and delivery are exactly the ones a send has, and a refused send is a row with its
+// refusal, never a route around it. A seat of another team is named as `<seat>@<team>`; the rules
+// decide whether this caller may reach it. The answer is a `team reply` on the message's own
+// thread, admitted by the reply's own rule, never by this command.
+//
+// Nothing is counted that does not verify. The sent record is found by its id and verified with
+// the machine's message key; its signed fields (root, session, recipient, sender and their agent
+// ids) are where the receipt and the reply are looked for, not the folder the command runs in. A
+// receipt counts only when its signature verifies and it names that id, recipient, root and
+// session; a reply only when its record verifies, sits on that thread, comes from the recipient
+// to the sender (by name and agent id) and carries this run's token.
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import type { KeyObject } from 'node:crypto';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { readArgs } from '../args.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
-import { readTeams } from '../registry/teams.ts';
+import { teamBinding } from '../registry/binding.ts';
+import { readTeams, type TeamRecord } from '../registry/teams.ts';
+import { sameFolder, signedReceiptOf, verifiedRecordAt, verifyReceipt, type RecordPayload } from '../send/record.ts';
+import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team ping <seat> [--wait <seconds>] [--json]
        team ping --all [--wait <seconds>] [--json]
@@ -43,11 +56,11 @@ export type PingRow = {
   /** The leg the send names: socket, channel, typed wake, read, inbox; or null. */
   leg: string | null;
   send_ms: number;
-  /** Milliseconds from the start of this seat's send to its read receipt; null when none came. */
+  /** Milliseconds from the start of this seat's send to its verified read receipt; null when none came. */
   read_ms: number | null;
-  /** From the same start to the reply's own signed `at`: when the seat sent it. */
+  /** From the same start to the verified reply's own signed `at`: when the seat sent it. */
   reply_sent_ms: number | null;
-  /** From the same start to the reply record landing in the caller's folder. */
+  /** From the same start to the verified reply landing in the sender's folder. */
   reply_landed_ms: number | null;
   status: 'replied' | 'read' | 'not read' | 'refused';
 };
@@ -55,21 +68,23 @@ export type PingRow = {
 export type PingHost = {
   home: string;
   now: () => number;
-  /** Runs `team <args>` in `cwd` and answers its exit code and output. */
+  /** Runs `team <args>` in the caller's folder and answers its exit code and output. */
   team: (args: string[], io: Io) => Promise<{ code: number; out: string }>;
   wait: (ms: number) => Promise<void>;
 };
 
-function runSelf(args: string[], io: Io): Promise<{ code: number; out: string }> {
+/** Runs `program args` with the caller's folder, environment and standard input, its output
+ *  captured. Standard input is inherited, never replaced: a terminal stays the terminal it is. */
+export function runChild(program: readonly string[], args: string[], io: Io): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [process.argv[1]!, ...args], {
+    const child = spawn(program[0]!, [...program.slice(1), ...args], {
       cwd: io.cwd,
       env: io.env as NodeJS.ProcessEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['inherit', 'pipe', 'pipe'],
     });
     let out = '';
-    child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
-    child.stderr.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
+    child.stdout!.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
+    child.stderr!.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
     child.on('close', (code) => resolve({ code: code ?? 1, out }));
     child.on('error', (error) => resolve({ code: 1, out: error.message }));
   });
@@ -78,7 +93,7 @@ function runSelf(args: string[], io: Io): Promise<{ code: number; out: string }>
 export const realHost: PingHost = {
   home: homedir(),
   now: () => Date.now(),
-  team: runSelf,
+  team: (args, io) => runChild([process.execPath, process.argv[1]!], args, io),
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
@@ -98,81 +113,110 @@ export function idOf(outcome: string): string | null {
   return /\bid ([0-9a-f-]{36})\b/.exec(outcome)?.[1] ?? null;
 }
 
-/** The folder holding `.agents/team.yaml`, from `cwd` up; null when none does. */
-function teamRootOf(cwd: string): string | null {
-  for (let dir = cwd; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, '.agents', 'team.yaml'))) return dir;
-    if (dirname(dir) === dir) return null;
+type Place = { root: string; session: string };
+
+/** Every place a record of this machine can sit: the registered teams, and the team the caller's
+ *  folder resolves to through the configuration seam a send uses (registry first, the team file
+ *  only when the registry holds none). */
+function placesOf(home: string, io: Io): { places: Place[]; teams: TeamRecord[] } {
+  let teams: TeamRecord[] = [];
+  try {
+    teams = Object.values(readTeams(home));
+  } catch {
+    teams = [];
   }
+  const places: Place[] = teams.map((team) => ({ root: team.root, session: team.session }));
+  try {
+    const loaded = readTeamConfig(io.cwd, { home });
+    if (loaded.ok) places.push({ root: loaded.root, session: loaded.team.session });
+  } catch {
+    // A folder that is no team adds no place.
+  }
+  return { places, teams };
 }
 
-/** Where the target's records land: its team's root and session. `seat@team` names the team by
- *  its session, its name or its id; a plain seat is the caller's own team. */
-function placeOf(home: string, target: string, own: { root: string; session: string } | null): { seat: string; team: string | null; root: string; session: string } | null {
-  const at = target.lastIndexOf('@');
-  if (at < 0) return own === null ? null : { seat: target, team: null, ...own };
-  const seat = target.slice(0, at);
-  const name = target.slice(at + 1);
-  let teams;
+/** The sent record `id` for `seat`, found among the places and verified with the message key:
+ *  its own signed fields must name that id, that recipient and the folder it sits in. */
+export function sentRecordOf(places: readonly Place[], seat: string, id: string, key: KeyObject): RecordPayload | null {
+  for (const place of places) {
+    const payload = verifiedRecordAt(join(place.root, '.agents', 'send-drops', place.session, seat, id), id, key);
+    if (payload === null) continue;
+    if (payload.id !== id || payload.to !== seat || payload.session !== place.session || !sameFolder(payload.root, place.root)) continue;
+    return payload;
+  }
+  return null;
+}
+
+/** When the recipient's verified read receipt for `sent` was written, in epoch milliseconds;
+ *  null while there is none that verifies and names that record, recipient, root and session. */
+export function receiptAt(sent: RecordPayload, key: KeyObject): number | null {
+  const path = join(sent.root, '.agents', 'send-drops', sent.session, sent.to, `${sent.id}.read.json`);
+  let receipt;
   try {
-    teams = readTeams(home);
+    receipt = signedReceiptOf(JSON.parse(readFileSync(path, 'utf8')));
   } catch {
     return null;
   }
-  const hits = Object.entries(teams).filter(([id, team]) => id === name || team.session === name || team.project === name);
-  if (hits.length !== 1) return null;
-  const [, team] = hits[0]!;
-  return { seat, team: name, root: team.root, session: team.session };
+  if (receipt === null || !verifyReceipt(receipt, key)) return null;
+  const at = receipt.payload;
+  if (at.id !== sent.id || at.to !== sent.to || at.session !== sent.session || !sameFolder(at.root, sent.root)) return null;
+  if (at.status !== 'read' && at.status !== 'replied') return null;
+  const when = Date.parse(at.at);
+  return Number.isNaN(when) ? null : when;
 }
 
-/** When the seat's read receipt for `id` was written (its signed `at`, else the file's time), in
- *  epoch milliseconds; null while there is none. */
-export function receiptAt(root: string, session: string, seat: string, id: string): number | null {
-  const path = join(root, '.agents', 'send-drops', session, seat, `${id}.read.json`);
-  try {
-    const at = (JSON.parse(readFileSync(path, 'utf8')) as { payload?: { at?: unknown } }).payload?.at;
-    if (typeof at === 'string' && !Number.isNaN(Date.parse(at))) return Date.parse(at);
-    return statSync(path).mtimeMs;
-  } catch {
-    return null;
+/** The folder the sender's replies land in: its team found by the sender's signed agent id in a
+ *  registered roster, else the team the caller's folder binds to, else the folder's own
+ *  configuration; null when none places it. */
+export function replyFolderOf(home: string, io: Io, sent: RecordPayload, teams: readonly TeamRecord[]): string | null {
+  const byId = sent.from_id === null ? [] : teams.filter((team) => team.roster.some((entry) => entry.agent === sent.from_id));
+  let place: Place | null = byId.length === 1 ? { root: byId[0]!.root, session: byId[0]!.session } : null;
+  if (place === null) {
+    const bound = teamBinding(home, io.cwd, sent.from, io);
+    if (bound.kind === 'bound') place = { root: bound.team.root, session: bound.team.session };
   }
-}
-
-/** Replies on the thread of each id, found among the records in `<root>/.agents/send-drops/
- *  <session>/*` newer than `since`: the reply's signed `at` (sent) and the file's time (landed). */
-export function repliesTo(root: string, session: string, ids: ReadonlySet<string>, since: number): Map<string, { sent: number; landed: number }> {
-  const found = new Map<string, { sent: number; landed: number }>();
-  const base = join(root, '.agents', 'send-drops', session);
-  let seats: string[];
-  try {
-    seats = readdirSync(base);
-  } catch {
-    return found;
-  }
-  for (const seat of seats) {
-    let names: string[];
+  if (place === null) {
     try {
-      names = readdirSync(join(base, seat));
+      const loaded = readTeamConfig(io.cwd, { home });
+      if (loaded.ok) place = { root: loaded.root, session: loaded.team.session };
+    } catch {
+      place = null;
+    }
+  }
+  return place === null ? null : join(place.root, '.agents', 'send-drops', place.session, sent.from);
+}
+
+/** The recipient's verified reply to `sent` in `folder`, newer than `since`: a record that
+ *  verifies, sits on the sent record's thread, comes from its recipient (name and agent id) to its
+ *  sender (name and agent id) and carries `pong <token>`. Its signed `at` (sent) and the file's
+ *  time (landed), or null. */
+export function replyTo(folder: string, sent: RecordPayload, token: string, since: number, key: KeyObject): { sent: number; landed: number } | null {
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    if (name.includes('.') || name === sent.id) continue;
+    const path = join(folder, name);
+    let landed: number;
+    try {
+      landed = statSync(path).mtimeMs;
     } catch {
       continue;
     }
-    for (const name of names) {
-      if (name.includes('.')) continue;
-      const path = join(base, seat, name);
-      try {
-        const landed = statSync(path).mtimeMs;
-        if (landed < since) continue;
-        const payload = (JSON.parse(readFileSync(path, 'utf8')) as { payload?: { thread?: unknown; id?: unknown; at?: unknown } }).payload;
-        const thread = payload?.thread;
-        if (typeof thread !== 'string' || !ids.has(thread) || payload?.id === thread || found.has(thread)) continue;
-        const sent = typeof payload?.at === 'string' ? Date.parse(payload.at) : Number.NaN;
-        found.set(thread, { sent: Number.isNaN(sent) ? landed : sent, landed });
-      } catch {
-        continue;
-      }
-    }
+    if (landed < since) continue;
+    const reply = verifiedRecordAt(path, name, key);
+    if (reply === null || reply.thread !== sent.thread) continue;
+    if (reply.from !== sent.to || reply.to !== sent.from) continue;
+    if (sent.to_id !== null && reply.from_id !== sent.to_id) continue;
+    if (sent.from_id !== null && reply.to_id !== sent.from_id) continue;
+    if (!reply.body.includes(`pong ${token}`)) continue;
+    const at = Date.parse(reply.at);
+    return { sent: Number.isNaN(at) ? landed : at, landed };
   }
-  return found;
+  return null;
 }
 
 export async function runPing(argv: string[], io: Io, host: PingHost): Promise<number> {
@@ -194,33 +238,42 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
     return 2; // exit: ping.usage
   }
 
-  const root = teamRootOf(io.cwd);
-  let session: string | null = null;
   let targets = args.rest;
-  const seats = await host.team(['seats', '--json'], io);
-  try {
-    const doc = JSON.parse(seats.out) as { session?: unknown; seats?: { name?: unknown }[] };
-    if (typeof doc.session === 'string') session = doc.session;
-    if (all) targets = (doc.seats ?? []).map((seat) => seat.name).filter((name): name is string => typeof name === 'string');
-  } catch {
-    if (all) {
+  if (all) {
+    const seats = await host.team(['seats', '--json'], io);
+    try {
+      const doc = JSON.parse(seats.out) as { seats?: { name?: unknown }[] };
+      targets = (doc.seats ?? []).map((seat) => seat.name).filter((name): name is string => typeof name === 'string');
+    } catch {
       refuse(io, json, 'ping', { id: 'ping.usage', message: 'the seats of this team could not be read (team seats --json)', repair: 'run team ping from a team folder', usage: USAGE });
       return 2; // exit: ping.usage
     }
   }
-  const own = root !== null && session !== null ? { root, session } : null;
+  // The key is read when there is something to verify: the sends this run makes may be the
+  // first to sign on this machine, and the key exists only after the first signature.
+  let key: KeyObject | null = null;
+  const keyNow = (): KeyObject | null => {
+    if (key === null) {
+      const state = messageKeyState(host.home);
+      if (state.kind === 'key') key = state.key;
+    }
+    return key;
+  };
+  const { places, teams } = placesOf(host.home, io);
 
   const token = `P${host.now().toString(36)}`;
-  const rows = await Promise.all(targets.map(async (target): Promise<PingRow & { place: ReturnType<typeof placeOf>; started: number }> => {
-    const place = placeOf(host.home, target, own);
+  type Tracked = PingRow & { started: number; sent: RecordPayload | null; folder: string | null };
+  const rows: Tracked[] = await Promise.all(targets.map(async (target): Promise<Tracked> => {
+    const at = target.lastIndexOf('@');
+    const seat = at < 0 ? target : target.slice(0, at);
     const started = host.now();
     const body = `ping ${token}: answer now with team reply and the id on this message's reader line, text: pong ${token}. Nothing else.`;
-    const sent = await host.team(['send', target, body], io);
-    const outcome = sent.out.trim().split('\n').filter(Boolean).pop() ?? '';
-    const id = sent.code === 0 || idOf(outcome) !== null ? idOf(outcome) : null;
+    const result = await host.team(['send', target, body], io);
+    const outcome = result.out.trim().split('\n').filter(Boolean).pop() ?? '';
+    const id = idOf(outcome);
     return {
-      seat: place?.seat ?? target,
-      team: place?.team ?? null,
+      seat,
+      team: at < 0 ? null : target.slice(at + 1),
       id,
       outcome,
       leg: id === null ? null : legOf(outcome),
@@ -229,28 +282,32 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
       reply_sent_ms: null,
       reply_landed_ms: null,
       status: id === null ? 'refused' : 'not read',
-      place,
       started,
+      sent: null,
+      folder: null,
     };
   }));
 
   const deadline = host.now() + waitSeconds * 1000;
   const since = Math.min(...rows.map((row) => row.started), host.now()) - 1000;
   for (;;) {
+    const key = keyNow();
     for (const row of rows) {
-      if (row.read_ms !== null || row.id === null || row.place === null) continue;
-      const at = receiptAt(row.place.root, row.place.session, row.place.seat, row.id);
-      if (at !== null) {
-        row.read_ms = Math.max(0, at - row.started);
-        if (row.status === 'not read') row.status = 'read';
+      if (row.id === null || key === null || row.status === 'replied') continue;
+      if (row.sent === null) {
+        row.sent = sentRecordOf(places, row.seat, row.id, key);
+        if (row.sent === null) continue;
+        row.folder = replyFolderOf(host.home, io, row.sent, teams);
       }
-    }
-    const waiting = new Set(rows.filter((row) => row.id !== null && row.status !== 'replied').map((row) => row.id!));
-    if (own !== null && waiting.size > 0) {
-      const replies = repliesTo(own.root, own.session, waiting, since);
-      for (const row of rows) {
-        const reply = row.id === null ? undefined : replies.get(row.id);
-        if (reply === undefined) continue;
+      if (row.read_ms === null) {
+        const read = receiptAt(row.sent, key);
+        if (read !== null) {
+          row.read_ms = Math.max(0, read - row.started);
+          row.status = 'read';
+        }
+      }
+      const reply = row.folder === null ? null : replyTo(row.folder, row.sent, token, since, key);
+      if (reply !== null) {
         row.reply_sent_ms = Math.max(0, reply.sent - row.started);
         row.reply_landed_ms = Math.max(0, reply.landed - row.started);
         row.status = 'replied';
@@ -260,7 +317,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
     await host.wait(250);
   }
 
-  const out: PingRow[] = rows.map(({ place: _place, started: _started, ...row }) => row);
+  const out: PingRow[] = rows.map(({ started: _started, sent: _sent, folder: _folder, ...row }) => row);
   const ok = out.length > 0 && out.every((row) => row.status === 'replied');
   if (json) {
     writeJson(io, 'team.ping', { token, wait_seconds: waitSeconds, rows: out, all_replied: ok });
