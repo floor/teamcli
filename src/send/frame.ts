@@ -75,6 +75,13 @@ export function bodyWithReaderLine(body: string, msgId: string, existingIds: Ite
   return `${body}\n\n${readerLine(msgId, existingIds)}`;
 }
 
+/** The reader line with the record's whole id, for a wake that cannot see the receiving mailbox:
+ *  a prefix there could be shared by another record in it, and `team reply` refuses an ambiguous
+ *  prefix, so only the full id is sure to name this record. */
+export function fullReaderLine(msgId: string): string {
+  return `↩ team reply ${msgId} "…" · team ack ${msgId}`;
+}
+
 /** Whether a served record ends with the reader line: not the seat's general brief, not a
  *  report the runtime itself wrote (`from: runtime`, the watch's unread reports), which no seat
  *  answers, and not a client's drop, whose delivery keeps its own text — every other record is a

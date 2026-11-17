@@ -963,7 +963,7 @@ describe('team send: the typed wake', () => {
     // It ends with the reader line: the record's id, which `team reply` and `team ack` take.
     expect(pane.typed).toHaveLength(1);
     // A typed wake keeps it on the body's last row: the composer draws a few rows only.
-    const id = /↩ team reply ([0-9a-f]{8})$/.exec(pane.typed[0]!)?.[1] ?? 'none';
+    const id = /↩ team reply ([0-9a-f-]{36})$/.exec(pane.typed[0]!)?.[1] ?? 'none';
     expect(pane.typed[0]).toBe(`owner · 2026-10-05 04:00Z · admitted: owner\n\nfrom the owner — admitted by: the owner\n\nhello ↩ team reply ${id}`);
     expect(pane.enters).toBe(1);
     // The record was written under the seat lock before the line was typed.

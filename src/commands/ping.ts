@@ -22,6 +22,7 @@
 // message the owner sent is answered where `team reply` answers it: the entity's
 // `owner-reply-to` endpoint.
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -79,6 +80,9 @@ export type PingHost = {
   /** Runs `team <args>` in the caller's folder and answers its exit code and output. */
   team: (args: string[], io: Io) => Promise<{ code: number; out: string }>;
   wait: (ms: number) => Promise<void>;
+  /** This run's own random part of the token: two runs in the same millisecond never share one.
+   *  The real host draws it; a test pins it. */
+  nonce?: () => string;
 };
 
 /** Runs `program args` with the caller's folder, environment and standard input, its output
@@ -225,7 +229,8 @@ export function replyDestinationOf(home: string, io: Io, sent: RecordPayload, te
 /** The recipient's verified answer to `sent` at its destination, newer than `since`: a record
  *  that verifies, comes from its recipient (name and agent id) to the destination's recipient
  *  (name and agent id) and carries `pong <token>`. On the sent record's thread it is a reply;
- *  on a thread of its own, an ordinary send (a seat that answered with `team send`): either is
+ *  a standalone record on a thread of its own, an ordinary send (a seat that answered with `team
+ *  send`); a reply on another thread does not count. Either answer is
  *  the seat acting on the ping, and its identity checks are the same. In one look a reply wins.
  *  Its signed `at` (sent), the file's time (landed) and how it came, or null. */
 export function replyTo(destination: ReplyDestination, sent: RecordPayload, token: string, since: number, key: KeyObject): { sent: number; landed: number; by: 'reply' | 'send' } | null {
@@ -256,7 +261,9 @@ export function replyTo(destination: ReplyDestination, sent: RecordPayload, toke
     const at = Date.parse(reply.at);
     const answer = { sent: Number.isNaN(at) ? landed : at, landed };
     if (reply.thread === sent.thread) return { ...answer, by: 'reply' };
-    if (bySend === null) bySend = { ...answer, by: 'send' };
+    // Off the thread, only a standalone send counts: a record that opens its own thread and
+    // answers no record. A reply on some other thread is an answer to that thread, not this ping.
+    if (bySend === null && reply.thread === reply.id && reply.in_reply_to === undefined) bySend = { ...answer, by: 'send' };
   }
   return bySend;
 }
@@ -303,7 +310,9 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
   };
   const { places, teams } = placesOf(host.home, io);
 
-  const token = `P${host.now().toString(36)}`;
+  // The token is this run's own: the clock alone repeats when two runs start in the same
+  // millisecond, and an answer to one would then count for the other.
+  const token = `P${host.now().toString(36)}${host.nonce?.() ?? randomBytes(6).toString('hex')}`;
   type Tracked = PingRow & { started: number; sent: RecordPayload | null; destination: ReplyDestination | null };
   const rows: Tracked[] = await Promise.all(targets.map(async (target): Promise<Tracked> => {
     const at = target.lastIndexOf('@');

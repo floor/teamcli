@@ -71,9 +71,20 @@ test('runtime wake retains all content and refuses an oversized body without tru
   // A runtime report carries no reader line: no seat answers it. A seat's message ends with it,
   // so the id `team reply` takes is on the screen.
   expect(inlineWake(payload, '/synthetic')).not.toContain('↩ team reply');
-  expect(inlineWake({ ...payload, from: 'lead' }, '/synthetic')!.endsWith('\n\n↩ team reply 0c0ffee0 "…" · team ack 0c0ffee0')).toBe(true);
+  const id = payload.id;
+  expect(inlineWake({ ...payload, from: 'lead' }, '/synthetic')!.endsWith(`\n\n↩ team reply ${id} "…" · team ack ${id}`)).toBe(true);
   // A typed wake keeps the id on the last row: a paragraph of its own leaves a composer unreadable.
-  expect(inlineWake({ ...payload, from: 'lead' }, '/synthetic', 200, 'typed')!.endsWith('One\nTwo ↩ team reply 0c0ffee0')).toBe(true);
+  expect(inlineWake({ ...payload, from: 'lead' }, '/synthetic', 200, 'typed')!.endsWith(`One\nTwo ↩ team reply ${id}`)).toBe(true);
+  // Two records sharing the shortest prefix: each wake, in both shapes, names its own whole id,
+  // never a prefix another record in the mailbox could share.
+  const twin = { ...payload, from: 'lead', id: '0c0ffee0-0000-4000-8000-000000000002' } as RecordPayload;
+  for (const shape of ['runtime', 'typed'] as const) {
+    const first = inlineWake({ ...payload, from: 'lead' }, '/synthetic', RUNTIME_WAKE_MAX, shape)!;
+    const second = inlineWake(twin, '/synthetic', RUNTIME_WAKE_MAX, shape)!;
+    expect(first).toContain(`team reply ${payload.id}`);
+    expect(second).toContain(`team reply ${twin.id}`);
+    expect(first).not.toContain(twin.id);
+  }
   expect(inlineWake({ ...payload, body: 'x'.repeat(RUNTIME_WAKE_MAX) }, '/synthetic')).toBeNull();
 });
 

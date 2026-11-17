@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { currentClaimIn, readMessage } from '../mcp/inbox.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { attributedBody } from './sender-claim.ts';
-import { bodyWithReaderLine, shortIdPrefix, takesReaderLine } from './frame.ts';
+import { fullReaderLine, takesReaderLine } from './frame.ts';
 import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { profileFor } from '../profiles/index.ts';
 import { verifiedRecordAt, type RecordPayload } from './record.ts';
@@ -22,15 +22,17 @@ export function oversizedWake(payload: RecordPayload): string {
 }
 
 /** The body a wake carries, ending with the reader line when the record takes one. A typed wake
- *  (`shape: 'typed'`) keeps the id on the body's last row instead (` ↩ team reply <prefix>`): a
- *  composer draws a few rows only, and a paragraph of its own makes the box unreadable. */
+ *  (`shape: 'typed'`) keeps the id on the body's last row instead (` ↩ team reply <id>`): a
+ *  composer draws a few rows only, and a paragraph of its own makes the box unreadable. Both
+ *  shapes name the whole id: a wake is built without the receiving mailbox, so a prefix it
+ *  printed could be shared by another record there, which `team reply` refuses as ambiguous. */
 export function inlineWake(payload: RecordPayload, home: string, limit = RUNTIME_WAKE_MAX, shape: 'runtime' | 'typed' = 'runtime'): string | null {
   const attributed = attributedBody(payload.body, payload.from, { record: payload, home, root: payload.root, compact: false });
   const text = !takesReaderLine(payload, isGeneralBriefRecord(payload))
     ? attributed
     : shape === 'typed'
-      ? `${attributed} ↩ team reply ${shortIdPrefix(payload.id)}`
-      : bodyWithReaderLine(attributed, payload.id);
+      ? `${attributed} ↩ team reply ${payload.id}`
+      : `${attributed}\n\n${fullReaderLine(payload.id)}`;
   return Buffer.byteLength(text, 'utf8') <= limit && !/[\x00-\x08\x0b-\x1f\x7f]/.test(text) ? text : null;
 }
 

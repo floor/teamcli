@@ -618,7 +618,7 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
         at: NOW.toISOString(),
         state: 'reserved',
       });
-      const shortWake = inlineWake(shortPayload, w.home, TYPED_WAKE_MAX)!;
+      const shortWake = inlineWake(shortPayload, w.home, TYPED_WAKE_MAX, 'typed')!;
       expect(shortWake).toContain('Child wake line 1\nChild wake line 2');
 
       const outInline = await serveWakeChild(
