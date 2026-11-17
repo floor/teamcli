@@ -49,6 +49,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   git: 'runs git against GitHub with the entity\'s token from the keychain; a cold run would reach the network',
   gh: 'runs the gh CLI against GitHub with the entity\'s token from the keychain; a cold run would reach the network',
   ack: "writes one signed read receipt into the addressee's folder",
+  ping: 'sends one message per seat through team send and waits for the read receipts',
   analyse: 'reads a project only after an owner-signed analyser is named; the cold smoke fixture names none, so it cannot produce the team.analyse report',
   show: "prints one message record from the addressee's folder and writes a signed read receipt",
   approvals: 'lists or revokes owner-seat always rules under the owner home',

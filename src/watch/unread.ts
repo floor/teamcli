@@ -1595,10 +1595,15 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
           // rather than read outside the pass's one shared reading.
           const screen = passPaneScreen(scene, pane);
           if (screen === null) {
+            // A hosted pass holds a screen only when it read one: its status read skips the
+            // screen of a seat herdr reports idle or working (`shouldReadScreenForStatus`), and
+            // the wake leg's own read (`passPaneScreenAsync`) caches the screen it takes. No
+            // screen here therefore means no wake read the pane this pass, not that a read
+            // failed; the old wording blamed the pane (2026-11-17, a Grok seat mid-turn).
             reason = {
               class: 'screen',
               kind: 'no-screen',
-              word: 'the pane screen could not be read, no wake reached it',
+              word: 'no wake read the pane this pass, no wake reached it',
             };
           } else {
             const kind = readScreen(seat.cli, screen).kind;
