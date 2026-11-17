@@ -809,6 +809,18 @@ function restoredModelUnread(
 }
 
 /**
+ * Whether a seat has no recorded conversation at all: the registry holds no binding for it
+ * (`none`, never a refusal) and the state names none. A refused binding (the state and the
+ * registry naming different conversations, a record that is another agent's) is a doubt, never
+ * the id-less case the worktree adoption is for.
+ */
+export function conversationAbsent(home: string, root: string, session: string, seat: Pick<Seat, 'name' | 'cli'>, recorded: SeatState | undefined): boolean {
+  if (recorded?.agent_session !== undefined && recorded.agent_session !== '') return false;
+  const bound = recordedSeatContinuity({ home, root, herdrSession: session, seat, state: recorded });
+  return bound.kind === 'none';
+}
+
+/**
  * Why `--retie` leaves a seat the plan would start. A pane proven the seat's own that needs an
  * in-place relaunch (its managed Codex endpoint died, or its launcher's settings are gone) names
  * that cause and the plain `team up` that repairs it, resuming its conversation; anything else
@@ -1559,7 +1571,7 @@ function seatPlan(
   // naming the pane, the declared CLI alone in its workspace at an idle prompt. A seat that needs
   // a relaunch (a launcher, a dead endpoint) is left to the paths that relaunch it.
   if (verdict === 'replaced' && recorded.stage !== 'ready' && recorded.pane && recorded.workspace && recorded.launched
-    && continuitySession === null && restoreWorktree !== undefined
+    && continuitySession === null && conversationAbsent(home, root, session, seat, recorded) && restoreWorktree !== undefined
     && !restoredBypassesLauncher(effectiveSeatOf(seat, planned)) && !endpointRelaunch(seat, recorded, planned.launch)) {
     const entry = agents?.find((agent) => agent.pane === recorded.pane);
     const proof = entry !== undefined && (entry.session === undefined || entry.session === '')
@@ -4970,11 +4982,20 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       restoreSeats: seats,
       // Read again from disk at the adoption: another seat recorded on the pane since the plan
       // read the state is a claim the evidence must see.
-      restoreWorktree: (name: string) => {
+      restoreWorktree: (name: string, pane: string) => {
         try {
-          return restoreWorktreeOf(team, root, readState(dir).sessions[session], name);
+          return restoreWorktreeOf(team, root, readState(dir).sessions[session], name, pane);
         } catch {
           return undefined;
+        }
+      },
+      restoreBindingAbsent: (name: string) => {
+        try {
+          const seat = team.seats.find((candidate) => candidate.name === name);
+          if (seat === undefined) return false;
+          return conversationAbsent(sources.home, root, session, seat, readState(dir).sessions[session]?.seats[name]);
+        } catch {
+          return false;
         }
       },
       ...(internal?.restoreMissingOnly === true ? {

@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { retieSkipReason } from '../src/commands/up.ts';
 import { executePlan, type Host } from '../src/launch/execute.ts';
 import type { Step, UpSeat } from '../src/launch/plan.ts';
-import type { RestoreWorktree } from '../src/launch/restore-proof.ts';
+import { restoreWorktreeOf, type RestoreWorktree } from '../src/launch/restore-proof.ts';
 import { readScreen } from '../src/watch/screen.ts';
 
 const fixture = (name: string): string => readFileSync(new URL(`./fixtures/antigravity/1.5.10/${name}`, import.meta.url), 'utf8');
@@ -92,21 +92,21 @@ const evidence = (over: Partial<RestoreWorktree> = {}): RestoreWorktree => ({ ow
 describe('an unready id-less seat adopted on its own worktree', () => {
   test('is re-tied and recorded ready at its idle prompt', async () => {
     const made = world(OWN);
-    await executePlan(adopt(), SESSION, made.host, { restoreWorktree: () => evidence() });
+    await executePlan(adopt(), SESSION, made.host, { restoreWorktree: () => evidence(), restoreBindingAbsent: () => true });
     expect(made.renames()).toBe(1);
     expect(made.records.some((record) => record.stage === 'ready')).toBe(true);
   });
 
   test('a folder that left the worktree since the plan is not adopted', async () => {
     const made = world(OTHER);
-    await executePlan(adopt(), SESSION, made.host, { restoreWorktree: () => evidence() });
+    await executePlan(adopt(), SESSION, made.host, { restoreWorktree: () => evidence(), restoreBindingAbsent: () => true });
     expect(made.renames()).toBe(0);
     expect(made.records).toEqual([]);
   });
 
   test('a pane another record claimed since the plan is not adopted', async () => {
     const made = world(OWN);
-    await executePlan(adopt(), SESSION, made.host, { restoreWorktree: () => evidence({ paneClaimed: true }) });
+    await executePlan(adopt(), SESSION, made.host, { restoreWorktree: () => evidence({ paneClaimed: true }), restoreBindingAbsent: () => true });
     expect(made.renames()).toBe(0);
   });
 
@@ -118,9 +118,52 @@ describe('an unready id-less seat adopted on its own worktree', () => {
 
   test('unsent text: re-tied, but its record keeps the stage it held', async () => {
     const made = world(OWN, fixture('unsent-after-mode.txt'));
-    await executePlan(adopt(), SESSION, made.host, { restoreWorktree: () => evidence() });
+    await executePlan(adopt(), SESSION, made.host, { restoreWorktree: () => evidence(), restoreBindingAbsent: () => true });
     expect(made.renames()).toBe(1);
     expect(made.records.some((record) => record.stage === 'ready')).toBe(false);
+  });
+});
+
+describe('the fresh claim is read for the operation\'s own pane', () => {
+  const team = { seats: [
+    { name: SEAT, cwd: 'worktrees/tester-gemini' },
+    { name: 'tester-codex', cwd: 'worktrees/tester-codex' },
+  ] } as never;
+  const ROOT = '/fixture/floor';
+  const after = (seats: Record<string, { pane?: string }>) => ({ seats, worktrees: {} }) as never;
+  const run = async (held: unknown) => {
+    const made = world(OWN);
+    await executePlan(adopt(), SESSION, made.host, {
+      restoreWorktree: (seat, pane) => restoreWorktreeOf(team, ROOT, held as never, seat, pane),
+      restoreBindingAbsent: () => true,
+    });
+    return made;
+  };
+
+  test('the seat still recorded on the pane, nobody else on it: adopted', async () => {
+    expect((await run(after({ [SEAT]: { pane: PANE } }))).renames()).toBe(1);
+  });
+
+  test('the seat\'s record moved to another pane and another seat claims this one: not adopted', async () => {
+    const made = await run(after({ [SEAT]: { pane: 'w99:p1' }, 'tester-codex': { pane: PANE } }));
+    expect(made.renames()).toBe(0);
+    expect(made.records).toEqual([]);
+  });
+
+  test('the seat\'s record is gone and another seat claims the pane: not adopted', async () => {
+    const made = await run(after({ 'tester-codex': { pane: PANE } }));
+    expect(made.renames()).toBe(0);
+    expect(made.records).toEqual([]);
+  });
+
+  test('the seat\'s record moved off the pane with no other claim: not adopted', async () => {
+    expect((await run(after({ [SEAT]: { pane: 'w99:p1' } }))).renames()).toBe(0);
+  });
+
+  test('a binding that is no longer absent at execution: not adopted', async () => {
+    const made = world(OWN);
+    await executePlan(adopt(), SESSION, made.host, { restoreWorktree: () => evidence(), restoreBindingAbsent: () => false });
+    expect(made.renames()).toBe(0);
   });
 });
 

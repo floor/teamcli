@@ -85,8 +85,9 @@ function ownedUrl(): string {
   return socket.url;
 }
 
-function record(opts: { session?: string | null; endpoint?: boolean; stage?: 'ready' | 'launched' } = {}): void {
+function record(opts: { session?: string | null; endpoint?: boolean; stage?: 'ready' | 'launched'; registrySession?: string | null } = {}): void {
   const session = opts.session === undefined ? THREAD : opts.session;
+  const registrySession = opts.registrySession === undefined ? session : opts.registrySession;
   const endpoint = opts.endpoint !== false;
   updateState(dir, (state) => {
     const held = (state.sessions[SESSION] ??= emptySession());
@@ -118,7 +119,7 @@ function record(opts: { session?: string | null; endpoint?: boolean; stage?: 're
       session: SESSION,
       pane: PANE,
       address: null,
-      ...(session === null ? {} : { agent_session: session }),
+      ...(registrySession === null ? {} : { agent_session: registrySession }),
     },
     seat_handle: HANDLE,
     mcp: [],
@@ -310,6 +311,30 @@ test('--retie leaves the same pane outside the seat\'s worktree untied', async (
   record({ session: null, endpoint: false, stage: 'launched' });
   worktree();
   const made = sources({ name: null, session: null, cwd: root });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp(RETIE, io, made.sources);
+  expect(made.trace.renamed).toEqual([]);
+  expect(seatState()?.stage).toBe('launched');
+});
+
+const OTHER_ID = '019a0000-aaaa-7bbb-8ccc-000000000009';
+
+test('state naming A and the registry naming B is a refusal, never the id-less case', async () => {
+  seatCwd = 'worktrees/worker';
+  setup();
+  record({ session: THREAD, registrySession: OTHER_ID, endpoint: false, stage: 'launched' });
+  const made = sources({ name: null, session: null, cwd: worktree() });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp(RETIE, io, made.sources);
+  expect(made.trace.renamed).toEqual([]);
+  expect(seatState()?.stage).toBe('launched');
+});
+
+test('a registry binding refused as no session token is not the id-less case', async () => {
+  seatCwd = 'worktrees/worker';
+  setup();
+  record({ session: null, registrySession: 'not a session token', endpoint: false, stage: 'launched' });
+  const made = sources({ name: null, session: null, cwd: worktree() });
   const io = testIo(root, { kind: 'owner' });
   await runUp(RETIE, io, made.sources);
   expect(made.trace.renamed).toEqual([]);
