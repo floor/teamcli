@@ -436,7 +436,8 @@ test('two roots sharing one terminal session make one start: one spawn across bo
   v.limitWaits(3);
   await runBootWork(v.deps);
   expect(w.spawns.length + v.spawns.length).toBe(1);
-  expect(readBootQueue(home)?.pending.map((one) => one.session)).toEqual(['floor']);
+  // Both routes stay queued for the one session; neither is settled until its server is up.
+  expect(readBootQueue(home)?.pending.map((one) => one.session)).toEqual(['floor', 'floor']);
 });
 
 test('a shared session\'s start is owned across entries: a second entry for it never spawns while the first holds a child', async () => {
@@ -462,4 +463,58 @@ test('an observation that can no longer be written is removed: the next restart 
   await runBootWork(next.deps);
   expect(next.spawns).toEqual([]);
   expect(dropSessionsRunning(home)).toBe(true);
+});
+
+test('every owner of a session is checked: a gone first owner never unblocks a live or unknown second', async () => {
+  for (const second of ['alive', 'unknown'] as const) {
+    writeBootQueue(home, {
+      boot: BOOT_B,
+      from: BOOT_A,
+      pending: [{ ...FLOOR, child: { pid: 1111, start: 1 } }, { ...SHARED, child: { pid: 2222, start: 2 } }],
+      settled: [],
+    });
+    const w = world({
+      boot: BOOT_B,
+      stopped: new Set(['floor']),
+      hosted: [FLOOR, SHARED],
+      childState: (child) => (child.pid === 1111 ? 'gone' : second),
+    });
+    w.limitWaits(3);
+    await runBootWork(w.deps);
+    expect(w.spawns).toEqual([]);
+    // The second owner's record stays; it still blocks a later daemon.
+    expect(readBootQueue(home)?.pending.find((one) => one.root === SHARED.root)?.child).toEqual({ pid: 2222, start: 2 });
+  }
+});
+
+test('when every owner of a session is proven gone, the records clear and one start runs', async () => {
+  writeBootQueue(home, {
+    boot: BOOT_B,
+    from: BOOT_A,
+    pending: [{ ...FLOOR, child: { pid: 1111, start: 1 } }, { ...SHARED, child: { pid: 2222, start: 2 } }],
+    settled: [],
+  });
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor']), hosted: [FLOOR, SHARED], childState: () => 'gone' });
+  w.limitWaits(3);
+  await runBootWork(w.deps);
+  expect(w.spawns).toEqual(['floor']);
+});
+
+test('a shared session whose first route fails its proof is started through the next eligible route, once', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR, SHARED] });
+  const w = world({
+    boot: BOOT_B,
+    stopped: new Set(['floor']),
+    hosted: [FLOOR, SHARED],
+    facts: (root) => (root === FLOOR.root ? { ...good(FLOOR), registry: { ...FLOOR, lifecycle: 'stopped' } } : good(SHARED)),
+  });
+  w.limitWaits(3);
+  await runBootWork(w.deps);
+  expect(w.spawns).toEqual(['floor']);
+  const queue = readBootQueue(home);
+  expect(queue?.pending).toEqual([]);
+  expect(queue?.settled.map((one) => [one.route.root, one.outcome])).toEqual([
+    [FLOOR.root, `started (session shared with ${SHARED.root})`],
+    [SHARED.root, 'started'],
+  ]);
 });

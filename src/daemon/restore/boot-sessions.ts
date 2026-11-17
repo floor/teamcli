@@ -174,11 +174,10 @@ export function planBootQueue(
   if (stored !== null && stored.boot === boot) return { queue: stored, isNew: false };
   if (observed === null || observed.boot === boot) return null;
   if (stored !== null && stored.from === observed.boot) return null;
-  // One start per terminal session: routes that share a session are one entry (the first),
-  // so no two routes can each start a server for the same session.
-  const bySession: BootRoute[] = [];
-  for (const route of uniqueRoutes(observed.running)) if (!bySession.some((one) => one.session === route.session)) bySession.push(route);
-  return { queue: { boot, from: observed.boot, pending: bySession, settled: [] }, isNew: true };
+  // Every route is queued: routes that share a terminal session are each a candidate (one may
+  // fail its proof where another passes). The worker makes it one start per session: ownership
+  // is looked up across every entry of the session, and a start settles them all.
+  return { queue: { boot, from: observed.boot, pending: uniqueRoutes(observed.running), settled: [] }, isNew: true };
 }
 
 /** The live facts a start is proven against, read fresh at the moment of the start. */

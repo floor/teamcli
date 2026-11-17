@@ -89,9 +89,18 @@ export async function workBootQueue(deps: BootRunDeps, queue: BootQueue): Promis
   const save = (what: string): void => {
     if (!deps.writeQueue(queue)) deps.log(`restore: the boot queue could not be written (${what}); it is written again with the next change`);
   };
+  // A route settles only when its terminal session is up (started, by this or an earlier
+  // attempt, or already running): every entry of that session settles with it, the one that
+  // started it by name and the others as sharing it.
   const settle = (route: QueueEntry, outcome: string): void => {
-    queue.pending = queue.pending.filter((one) => !same(one, route));
-    queue.settled.push({ route: { root: route.root, team: route.team, session: route.session }, outcome });
+    const sharing = queue.pending.filter((one) => one.session === route.session);
+    queue.pending = queue.pending.filter((one) => one.session !== route.session);
+    for (const one of sharing) {
+      queue.settled.push({
+        route: { root: one.root, team: one.team, session: one.session },
+        outcome: same(one, route) ? outcome : `${outcome} (session shared with ${route.root})`,
+      });
+    }
     save(`${route.session}: ${outcome}`);
   };
   const note = (route: QueueEntry, why: string): void => {
@@ -113,19 +122,26 @@ export async function workBootQueue(deps: BootRunDeps, queue: BootQueue): Promis
       // A server an earlier attempt spawned (or reserved) is never doubled: while it lives, or
       // while it cannot be told to be gone, the route waits for it (and settles once its session
       // reads running). Only a proven exit or a reused pid clears the record. Ownership is per
-      // terminal session: any pending entry for this session holding a child owns its start.
-      const entry = queue.pending.find((one) => one.session === route.session && one.child !== undefined)
-        ?? queue.pending.find((one) => same(one, route));
-      if (entry?.child !== undefined) {
-        const state = entry.child.pid === null ? 'unknown' : deps.childState({ pid: entry.child.pid, start: entry.child.start });
-        if (state !== 'gone') {
-          if ((await deps.sessions())?.get(route.session) === true) settle(route, 'started (by an earlier attempt)');
-          else note(route, entry.child.pid === null
-            ? 'an earlier start was reserved and its outcome is unknown; not started again (attach it to restore it)'
-            : state === 'alive' ? 'its server from an earlier attempt is still starting' : 'its earlier server cannot be told to be gone; not started again');
-          continue;
-        }
-        delete entry.child;
+      // terminal session: every pending entry for this session holding a child is checked, and
+      // any one alive, reserved or not readable blocks the start. Only owners proven gone clear.
+      const owners = queue.pending.filter((one) => one.session === route.session && one.child !== undefined);
+      let blocking: { pid: number | null; state: 'alive' | 'unknown' } | null = null;
+      const gone: QueueEntry[] = [];
+      for (const owner of owners) {
+        const child = owner.child as NonNullable<QueueEntry['child']>;
+        const state = child.pid === null ? 'unknown' : deps.childState({ pid: child.pid, start: child.start });
+        if (state === 'gone') gone.push(owner);
+        else if (blocking === null || state === 'alive') blocking = { pid: child.pid, state };
+      }
+      if (blocking !== null) {
+        if ((await deps.sessions())?.get(route.session) === true) settle(route, 'started (by an earlier attempt)');
+        else note(route, blocking.pid === null
+          ? 'an earlier start was reserved and its outcome is unknown; not started again (attach it to restore it)'
+          : blocking.state === 'alive' ? 'its server from an earlier attempt is still starting' : 'its earlier server cannot be told to be gone; not started again');
+        continue;
+      }
+      if (gone.length > 0) {
+        for (const owner of gone) delete owner.child;
         save(`${route.session}: the earlier attempt's server is gone`);
       }
       const facts = await deps.facts(route.root);
