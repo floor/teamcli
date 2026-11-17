@@ -46,7 +46,7 @@ import { featureDialog, featureDialogClose } from './reboot.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { processStartOf } from '../watch/pane.ts';
-import { modelFaultAtIdle, readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
+import { classifyComposer, readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
@@ -2725,14 +2725,27 @@ export async function executePlan(
           break;
         }
         const listedNow = agentsNow?.find((agent) => agent.pane === op.pane && (agent.name === null || agent.name === op.seat));
-        // A model-fault relaunch admits one more screen than the idle prompt: the CLI's own
-        // model-failure entry directly above an empty, idle composer, read fresh each time with
-        // the same structural reading the plan used. Any other provider-error screen, a draft, a
-        // dialog or a working turn is still refused below.
-        const faultAtIdle = (): boolean => op.modelFault === true && modelFaultAtIdle(op.cli, host.paneText?.(session, op.pane) ?? null);
+        // A launcher-bypass relaunch is authorised by structure, never by screen text, and the
+        // structure is proven again here, right before any key: the seat's record still names the
+        // launch the plan read (nothing launched it since), and the pane still holds a process
+        // team did not launch. Either changed: nothing is typed.
+        if (op.launcherBypass === true) {
+          const storedNow = host.seatStates?.(session)?.[op.seat]?.launched;
+          const sameRecord = storedNow !== undefined && JSON.stringify(storedNow) === JSON.stringify(op.launched);
+          if (!sameRecord || seatProcessVerdict(storedNow, processNow) !== 'replaced') {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: 'its record or its process changed since the plan; nothing typed' });
+            break;
+          }
+        }
+        // That relaunch may also exit a provider-error screen (a turn that failed on the model),
+        // but only while the composer itself is empty: a draft, a dialog or a working turn is
+        // still refused below, and no other repair widens.
+        const composerEmpty = (frame: string | null | undefined): boolean =>
+          frame != null && frame !== '' && classifyComposer(op.cli, frame.split('\n')).kind === 'idle';
         const screenKind = (): ScreenKind => {
           const read = host.classify(session, op.pane, op.cli);
-          return read === 'provider error' && faultAtIdle() ? 'idle' : read;
+          return read === 'provider error' && op.launcherBypass === true && composerEmpty(host.paneText?.(session, op.pane)) ? 'idle' : read;
         };
         const kind = screenKind();
         if (listedNow?.status === 'working' || kind === 'working') {
@@ -2800,9 +2813,9 @@ export async function executePlan(
               // or any other draft does not get Enter.
               const frame = host.paneText?.(session, op.pane) ?? undefined;
               const frameKind = launchKind(readScreen(op.cli, frame).kind);
-              // The exit word not drawn yet on the model-fault screen reads as that same fault;
-              // only this repair, and only the exact structure, counts it as the idle prompt.
-              const beforeEnter = frameKind === 'provider error' && op.modelFault === true && modelFaultAtIdle(op.cli, frame ?? null)
+              // The exit word not drawn yet on a provider-error screen reads as that error; only a
+              // launcher-bypass repair, and only with an empty composer, counts it as idle.
+              const beforeEnter = frameKind === 'provider error' && op.launcherBypass === true && composerEmpty(frame)
                 ? 'idle'
                 : frameKind;
               const composerIsExit = beforeEnter === 'unsent' && boxHoldsText(op.cli, exitWord, frame);

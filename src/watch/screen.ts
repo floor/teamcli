@@ -167,49 +167,6 @@ function limitTailIsHistory(data: ScreenData, text: string, options?: ScreenOpti
   return figures.length > 0 && figures.every((figure) => figure.left > 0);
 }
 
-// Claude Code's own rendering of a turn that failed on the model, as the 17 Nov panes showed
-// it: the response marker, then the CLI's whole sentence and nothing else. An assistant reply
-// that quotes the sentence inside other words, a message body, or a draft does not match.
-const MODEL_FAULT_ENTRY = /^⏺ There['’]s an issue with the selected model \([^()\s]+\)\.(?: It may not exist or you may not have access to it\.)?(?: Run \/model to pick a different model\.)?$/;
-const RULE_ROW = /^\s*─{3,}/;
-
-/**
- * Whether the pane is at an empty, idle prompt directly under the CLI's own model-failure entry:
- * the structured, current reading a restore may act on (a launcher seat the host resumed without
- * its endpoint). Every condition must hold, or it is no fault:
- * - the CLI is Claude Code (the launcher seats this repairs) and the profile reads the composer
- *   as idle (an empty input box: nothing typed is ever discarded);
- * - the last transcript entry above the box's top rule, its wrapped rows joined, is exactly the
- *   CLI's sentence behind its own response marker; a quoted mention, an older entry, or the
- *   sentence followed by any later output is not.
- * Planning and execution read the same way.
- */
-export function modelFaultAtIdle(cli: string, text: string | null | undefined): boolean {
-  if (cli !== 'claude-code' || text == null || text === '') return false;
-  const data = DATA[cli];
-  if (!data?.composer) return false;
-  const raw = text.split('\n');
-  if (classifyComposer(cli, raw).kind !== 'idle') return false;
-  const plain = raw.map((line) => stripSgr(line).trimEnd());
-  let prompt = -1;
-  for (let at = plain.length - 1; at >= 0; at -= 1) {
-    if (data.composer.prompt.test(plain[at]!)) { prompt = at; break; }
-  }
-  if (prompt <= 0 || !RULE_ROW.test(plain[prompt - 1]!)) return false;
-  let at = prompt - 2;
-  while (at >= 0 && plain[at]!.trim() === '') at -= 1;
-  const rows: string[] = [];
-  for (; at >= 0; at -= 1) {
-    const row = plain[at]!;
-    if (row.trim() === '') return false;
-    rows.unshift(row.trim());
-    if (row.startsWith('⏺')) break;
-    if (rows.length > 4) return false;
-  }
-  if (at < 0) return false;
-  return MODEL_FAULT_ENTRY.test(rows.join(' '));
-}
-
 /** A limit sentence on the live tail is out of tokens when the profile's own rate-limit rule
  *  did not match and the pane would otherwise look idle or done. A wall already classified, a
  *  running turn, and a dialog stay what they were. An unknown screen a rule recognised — the

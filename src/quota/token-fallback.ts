@@ -29,7 +29,7 @@ const PHRASES: readonly RegExp[] = [
 // and key its launcher sets; a provider refusing the model id reads the same. It is a launch or
 // model fault, never quota: reading it as out of tokens marked the seats unavailable and told
 // the lead to wait for a reset that would never fix them. `team up` relaunches a restored
-// launcher seat that shows it (src/launch/restore-proof.ts restoredModelFailure).
+// launcher seat the host restored bare (src/launch/restore-proof.ts restoredBypassesLauncher).
 const MODEL_FAULT = /issue with the selected model/i;
 
 /** The live tail of a shipped CLI's pane shows the turn failing on the model (a launch or model

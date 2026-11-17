@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
-import { modelFaultAtIdle, readScreen } from '../src/watch/screen.ts';
+import { readScreen } from '../src/watch/screen.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
 import { codexEndpointSocket, type ManagedEndpointRead } from '../src/launch/codex-endpoint.ts';
@@ -182,6 +182,9 @@ type Scene = {
   alive?: boolean;
   startOf?: number | null;
   managed?: ManagedEndpointRead;
+  /** Called on every read of the pane's processes, with the running count: a test changes the
+   *  world between the plan's reading and execution's. */
+  onProcessRead?: (count: number) => void;
 };
 
 function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
@@ -189,6 +192,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
   let exited = false;
   // After the relaunch the pane shows the fresh CLI's clean idle prompt.
   let relaunched = false;
+  let processReads = 0;
   let listedName = scene.name === undefined ? null : scene.name;
   const agents = (): HerdrAgent[] | null => [{
     name: listedName,
@@ -235,6 +239,10 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     paneText: () => (relaunched ? CLEAN : scene.screen ?? IDLE),
     foreground: () => (exited ? ['zsh'] : ['claude']),
     processInfo: (_session, pane) => {
+      if (pane === PANE) {
+        processReads += 1;
+        scene.onProcessRead?.(processReads);
+      }
       if (pane === OLD_PANE) return null;
       if (pane === PANE && scene.process !== undefined) return scene.process;
       if (pane === PANE && exited) return { shell: RESTORED.shell, foreground: [RESTORED.shell] };
@@ -320,15 +328,18 @@ test('a restored DeepSeek wrapper seat is relaunched in place through its own li
   expect(seatState()?.pane).toBe(PANE);
 });
 
-test('a restored wrapper seat whose turns do not fail is adopted where it stands', async () => {
+// Round 3: the bypass is structural (a process team did not launch, on a seat whose line runs a
+// launcher), so a restored wrapper seat is relaunched at a clean idle prompt too: its next turn
+// would fail. No screen text is needed.
+test('a restored wrapper seat at a clean idle prompt is relaunched: the bypass is structural', async () => {
   setup();
   record();
   const made = sources({ name: SEAT, screen: CLEAN });
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources), said(io)).toBe(0);
-  expect(made.trace.typed).toEqual([]);
-  expect(seatRuns(made.trace)).toEqual([]);
-  expect(said(io)).toContain('restored; left as it is');
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain('claude-deepseek.sh');
 });
 
 test('a restored seat whose line is the bare CLI is still adopted where it stands', async () => {
@@ -357,24 +368,29 @@ test('a working restored wrapper seat is held, never exited', async () => {
   expect(said(io)).toContain('the process in its pane is working; nothing closed');
 });
 
-describe('round 2: only the CLI own current failure entry triggers a relaunch', () => {
-  for (const [name, screen] of [['a quoted mention', QUOTED], ['an older entry with later output', OLDER]] as const) {
-    test(`${name} above an idle composer leaves a healthy restored seat alone`, async () => {
+describe('round 3: structure triggers the relaunch, screen text never does', () => {
+  // A correctly wrapped seat: the pane holds the very process team launched. Whatever its
+  // transcript shows — the exact fault sentence echoed by the assistant, a quote, an older entry,
+  // a live-looking fault frame — nothing is exited, for a worker or a lead.
+  const WRAPPED: PaneProcesses = { shell: RECORDED.shell, foreground: RECORDED.cli };
+  const ECHOES = [['an exact echo', FAILED], ['an exact echo with no quota row', LIVE_FAULT], ['a quoted mention', QUOTED], ['an older entry with later output', OLDER]] as const;
+  for (const [name, screen] of ECHOES) {
+    test(`${name} on a correctly wrapped seat types nothing`, async () => {
       setup();
       record();
-      const made = sources({ name: SEAT, screen });
+      const made = sources({ name: SEAT, screen, process: WRAPPED });
       const io = testIo(root, { kind: 'owner' });
-      expect(await runUp([], io, made.sources), said(io)).toBe(0);
+      await runUp([], io, made.sources);
       expect(made.trace.typed).toEqual([]);
       expect(seatRuns(made.trace)).toEqual([]);
     });
 
-    test(`${name} leaves a restored lead alone`, async () => {
+    test(`${name} on a correctly wrapped lead types nothing`, async () => {
       coordinator = SEAT;
       try {
         setup();
         record();
-        const made = sources({ name: SEAT, screen });
+        const made = sources({ name: SEAT, screen, process: WRAPPED });
         const io = testIo(root, { kind: 'owner' });
         await runUp([], io, made.sources);
         expect(made.trace.typed).toEqual([]);
@@ -384,6 +400,28 @@ describe('round 2: only the CLI own current failure entry triggers a relaunch', 
       }
     });
   }
+
+  test('a fault that recovers before execution (team launched the seat since the plan) types nothing', async () => {
+    setup();
+    record();
+    const scene: Scene = { name: SEAT, screen: LIVE_FAULT };
+    // Execution's first read of the pane: the seat was launched again by team since the plan,
+    // so its record now names the process in the pane, and the screen is a clean prompt.
+    scene.onProcessRead = (count) => {
+      if (count !== 3) return;
+      scene.screen = CLEAN;
+      updateState(dir, (state) => {
+        const held = state.sessions[SESSION]!.seats[SEAT]!;
+        held.launched = { shell: RESTORED.shell, cli: RESTORED.foreground };
+      });
+    };
+    const made = sources(scene);
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources);
+    expect(made.trace.typed).toEqual([]);
+    expect(seatRuns(made.trace)).toEqual([]);
+    expect(said(io)).toContain('its record or its process changed since the plan; nothing typed');
+  });
 
   test('a live model fault with no quota figures is exited and relaunched end to end', async () => {
     // The reader takes this frame for the model fault, not the idle prompt: the executor's
@@ -423,7 +461,6 @@ describe('round 2: only the CLI own current failure entry triggers a relaunch', 
   for (const [name, draft] of DRAFTS) {
     test(`a draft under the failure entry is never exited (${name})`, async () => {
       expect(readScreen('claude-code', draft).kind).toBe('unsent');
-      expect(modelFaultAtIdle('claude-code', draft)).toBe(false);
       setup();
       record();
       const made = sources({ name: SEAT, screen: draft });
