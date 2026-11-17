@@ -3,13 +3,14 @@
 // model ("There's an issue with the selected model (deepseek-flash)"). `team up` adopted it as
 // "restored; left as it is". A restored launcher seat is relaunched in place from its own line,
 // carrying the conversation. Synthetic CLI, pids, screens and clock; no live host or process.
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
+import { readScreen } from '../src/watch/screen.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
 import { codexEndpointSocket, type ManagedEndpointRead } from '../src/launch/codex-endpoint.ts';
@@ -39,6 +40,21 @@ const FAILED = CLEAN.replace(
   "\n⏺ There's an issue with the selected model (deepseek-flash). It may not exist or you may not have access to it. Run /model to pick a different model.\n────",
 );
 const IDLE = FAILED;
+// The same failure with no quota figures on the status row (a provider seat's line): the screen
+// reader cannot take it for history, so it reads as a provider error on the model, and the
+// executor must still exit it (Hermes round 1, P2).
+const LIVE_FAULT = FAILED.replace(' · S: - · W: 12% (-5.7%) (157h29m)', '').trimEnd();
+// A healthy restored seat whose last reply quotes the sentence, above an idle composer with
+// quota left (Hermes round 1, P1).
+const QUOTED = CLEAN.replace(
+  '\n\n────',
+  "\n⏺ The CLI said \"There's an issue with the selected model (deepseek-flash).\" earlier; that is fixed now.\n────",
+);
+// The sentence as an older entry, with later output under it.
+const OLDER = CLEAN.replace(
+  '\n\n────',
+  "\n⏺ There's an issue with the selected model (deepseek-flash). It may not exist or you may not have access to it.\n\n⏺ Back on the right endpoint; done.\n────",
+);
 const WRAPPER = 'zsh claude-deepseek.sh';
 
 let base: string;
@@ -54,12 +70,15 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 let launchLine = WRAPPER;
+let coordinator = 'lead';
+const OLD_PANE = 'fixture-pane-before-restart';
+const OLD_SPACE = 'fixture-space-before-restart';
 
 function teamText(): string {
   return `format: 1
 project: acme
-coordinator: lead
-operator: lead
+coordinator: ${coordinator}
+operator: ${coordinator}
 session: ${SESSION}
 trust:
   - ${lobby}
@@ -93,7 +112,7 @@ function ownedUrl(): string {
   return socket.url;
 }
 
-function record(opts: { session?: string | null; endpoint?: boolean; stage?: 'ready' | 'launched' } = {}): void {
+function record(opts: { session?: string | null; endpoint?: boolean; stage?: 'ready' | 'launched'; moved?: boolean } = {}): void {
   const session = opts.session === undefined ? THREAD : opts.session;
   const endpoint = opts.endpoint !== false;
   updateState(dir, (state) => {
@@ -101,8 +120,8 @@ function record(opts: { session?: string | null; endpoint?: boolean; stage?: 're
     held.seats[SEAT] = {
       stage: opts.stage ?? 'ready',
       id: HANDLE,
-      pane: PANE,
-      workspace: SPACE,
+      pane: opts.moved === true ? OLD_PANE : PANE,
+      workspace: opts.moved === true ? OLD_SPACE : SPACE,
       launched: RECORDED,
       ...(session === null ? {} : { agent_session: session }),
       ...(endpoint ? {} : {}),
@@ -119,7 +138,7 @@ function record(opts: { session?: string | null; endpoint?: boolean; stage?: 're
       team: teamIdOf(root),
       seat: SEAT,
       session: SESSION,
-      pane: PANE,
+      pane: opts.moved === true ? OLD_PANE : PANE,
       address: null,
       ...(session === null ? {} : { agent_session: session }),
     },
@@ -168,6 +187,8 @@ type Scene = {
 function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
   const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], managed: [] };
   let exited = false;
+  // After the relaunch the pane shows the fresh CLI's clean idle prompt.
+  let relaunched = false;
   let listedName = scene.name === undefined ? null : scene.name;
   const agents = (): HerdrAgent[] | null => [{
     name: listedName,
@@ -189,6 +210,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     paneRun(_session, pane, command) {
       trace.runs.push({ pane, command });
       exited = false;
+      relaunched = true;
       return true;
     },
     typeText(_session, pane, text) {
@@ -210,9 +232,10 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     agentPanes: () => [PANE],
     agents,
     workspacePanes: (_session, workspace) => (workspace === SPACE ? [PANE] : null),
-    paneText: () => scene.screen ?? IDLE,
+    paneText: () => (relaunched ? CLEAN : scene.screen ?? IDLE),
     foreground: () => (exited ? ['zsh'] : ['claude']),
     processInfo: (_session, pane) => {
+      if (pane === OLD_PANE) return null;
       if (pane === PANE && scene.process !== undefined) return scene.process;
       if (pane === PANE && exited) return { shell: RESTORED.shell, foreground: [RESTORED.shell] };
       return RESTORED;
@@ -332,4 +355,76 @@ test('a working restored wrapper seat is held, never exited', async () => {
   expect(made.trace.typed).toEqual([]);
   expect(seatRuns(made.trace)).toEqual([]);
   expect(said(io)).toContain('the process in its pane is working; nothing closed');
+});
+
+describe('round 2: only the CLI own current failure entry triggers a relaunch', () => {
+  for (const [name, screen] of [['a quoted mention', QUOTED], ['an older entry with later output', OLDER]] as const) {
+    test(`${name} above an idle composer leaves a healthy restored seat alone`, async () => {
+      setup();
+      record();
+      const made = sources({ name: SEAT, screen });
+      const io = testIo(root, { kind: 'owner' });
+      expect(await runUp([], io, made.sources), said(io)).toBe(0);
+      expect(made.trace.typed).toEqual([]);
+      expect(seatRuns(made.trace)).toEqual([]);
+    });
+
+    test(`${name} leaves a restored lead alone`, async () => {
+      coordinator = SEAT;
+      try {
+        setup();
+        record();
+        const made = sources({ name: SEAT, screen });
+        const io = testIo(root, { kind: 'owner' });
+        await runUp([], io, made.sources);
+        expect(made.trace.typed).toEqual([]);
+        expect(seatRuns(made.trace)).toEqual([]);
+      } finally {
+        coordinator = 'lead';
+      }
+    });
+  }
+
+  test('a live model fault with no quota figures is exited and relaunched end to end', async () => {
+    // The reader takes this frame for the model fault, not the idle prompt: the executor's
+    // allow-list must admit exactly this screen for this repair.
+    expect(readScreen('claude-code', LIVE_FAULT)).toEqual({ kind: 'provider error', reason: 'model' });
+    setup();
+    record();
+    const made = sources({ name: SEAT, screen: LIVE_FAULT });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp([], io, made.sources), said(io)).toBe(0);
+    expect(made.trace.typed).toEqual(['/exit']);
+    expect(seatRuns(made.trace)).toHaveLength(1);
+    expect(seatRuns(made.trace)[0]?.command).toContain('claude-deepseek.sh');
+    expect(seatRuns(made.trace)[0]?.command).toContain(`--resume ${THREAD}`);
+  });
+
+  test('a draft under the failure entry is never exited', async () => {
+    setup();
+    record();
+    // A captured draft frame (2.1.289, typed text in the box) under the failure entry.
+    const typed = readFileSync(new URL('./fixtures/claude-code/2.1.289/unsent-typed-ansi.txt', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const rule = typed.indexOf('\n─');
+    const draft = `${typed.slice(0, rule)}\n⏺ There's an issue with the selected model (deepseek-flash). It may not exist or you may not have access to it.${typed.slice(rule)}`;
+    expect(readScreen('claude-code', draft).kind).toBe('unsent');
+    const made = sources({ name: SEAT, screen: draft });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources);
+    expect(made.trace.typed).toEqual([]);
+    expect(seatRuns(made.trace)).toEqual([]);
+  });
+
+  test('a wrapper seat the host moved to another pane is relaunched there through execution', async () => {
+    setup();
+    record({ moved: true });
+    const made = sources({ name: SEAT, screen: LIVE_FAULT });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp([], io, made.sources), said(io)).toBe(0);
+    expect(made.trace.typed).toEqual(['/exit']);
+    expect(seatRuns(made.trace)).toHaveLength(1);
+    expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
+    expect(seatRuns(made.trace)[0]?.command).toContain(`--resume ${THREAD}`);
+    expect(seatState()?.pane).toBe(PANE);
+  });
 });

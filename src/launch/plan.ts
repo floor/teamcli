@@ -287,6 +287,10 @@ export type Op =
        *  proof is enough here: the pane is exited for the launch's fresh endpoint, not for a
        *  conversation. */
       endpoint?: true;
+      /** A launcher seat restored bare, at an idle prompt under the CLI's own model-failure
+       *  entry. Execution re-reads that exact structure (`modelFaultAtIdle`) and admits that
+       *  screen besides the idle prompt; nothing else widens. */
+      modelFault?: true;
     }
   /**
    * The host restored the seat's pane and cleared its name. Re-read the host, re-run the same
@@ -523,7 +527,9 @@ export interface UpSeat {
      *  line starts a wrapper, or a Codex seat whose recorded managed endpoint died with the host.
      *  The step re-proves the pane (strongly, or weakly for a dead endpoint), then exits the CLI
      *  in place; the seat is launched through its own line in that same pane, never adopted. */
-    ownLine?: { session?: string; endpoint?: true };
+    /** `modelFault`: a launcher seat at an idle prompt under the CLI's own model-failure entry;
+     *  execution may exit that screen (and only that one) besides the idle prompt. */
+    ownLine?: { session?: string; endpoint?: true; modelFault?: true };
     /** Codex is sitting on its feature-settings dialog. The workspace is closed with no key
      *  and no menu choice, and the seat is launched again with the profile's pinned features.
      *  `session` is the conversation the close re-proves immediately before it. */
@@ -1784,6 +1790,7 @@ export function upPlan(input: UpInput): Step[] {
               launched: repair.launched,
               ...(ownLine.session === undefined ? {} : { session: ownLine.session }),
               ...(ownLine.endpoint === true ? { endpoint: true as const } : {}),
+              ...(ownLine.modelFault === true ? { modelFault: true as const } : {}),
             },
           });
         } else {

@@ -1148,7 +1148,7 @@ function seatPlan(
       // seat lost its managed endpoint. Relaunched where the host moved it, carrying the
       // conversation; a working, unsent or dialog pane is held and said.
       const movedEndpointGone = endpointRelaunch(seat, movedRecord, planned.launch);
-      if ((restoredBypassesLauncher(effectiveSeatOf(seat, planned)) && restoredModelFailure(screenOf(candidate.pane))) || movedEndpointGone) {
+      if (recorded.launched && ((restoredBypassesLauncher(effectiveSeatOf(seat, planned)) && restoredModelFailure(seat.cli, screenOf(candidate.pane))) || movedEndpointGone)) {
         const held = replacedScreenRefusal(seat, candidate.pane, screenOf, candidate.status);
         if (held) {
           return {
@@ -1164,12 +1164,14 @@ function seatPlan(
           ...planned,
           pane: candidate.pane,
           workspace: movedRecord.workspace,
+          // The identity the record proves, not the one the pane holds now: execution re-proves
+          // the host's replacement of that recorded process before it types anything.
           repair: {
             pane: candidate.pane,
             workspace: movedRecord.workspace,
-            launched: next,
+            launched: recorded.launched,
             cli: seat.cli,
-            ownLine: { session: continuitySession, ...(movedEndpointGone ? { endpoint: true } : {}) },
+            ownLine: { session: continuitySession, ...(movedEndpointGone ? { endpoint: true } : { modelFault: true }) },
           },
           resume: continuitySession,
           ...(vacated === undefined ? {} : { sweep: vacated }),
@@ -1260,7 +1262,7 @@ function seatPlan(
       // endpoint's settings, a provider key): every turn fails on the model while the pane looks
       // idle and keeps its name. It is exited in place and launched again from its own line,
       // carrying the conversation; a working, unsent or dialog pane is held and said.
-      if (recorded.pane && restoredBypassesLauncher(effectiveSeatOf(seat, planned)) && restoredModelFailure(screenOf(recorded.pane))) {
+      if (recorded.pane && restoredBypassesLauncher(effectiveSeatOf(seat, planned)) && restoredModelFailure(seat.cli, screenOf(recorded.pane))) {
         const held = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
         if (held) {
           return {
@@ -1281,7 +1283,7 @@ function seatPlan(
             workspace: recorded.workspace,
             launched: recorded.launched,
             cli: seat.cli,
-            ownLine: { session: restoredSession },
+            ownLine: { session: restoredSession, modelFault: true },
           },
           resume: restoredSession,
         };
@@ -1449,7 +1451,7 @@ function seatPlan(
     // is gone, so every push leg answers ENOENT: material's operator after the 17 Nov restart).
     // Either is exited in place and launched again from its own line, carrying the conversation.
     const endpointGone = unready !== null && next !== null && endpointRelaunch(seat, recorded, planned.launch);
-    if (unready !== null && next !== null && ((restoredBypassesLauncher(effectiveSeatOf(seat, planned)) && restoredModelFailure(screenOf(recorded.pane))) || endpointGone)) {
+    if (unready !== null && next !== null && ((restoredBypassesLauncher(effectiveSeatOf(seat, planned)) && restoredModelFailure(seat.cli, screenOf(recorded.pane))) || endpointGone)) {
       const held = replacedScreenRefusal(seat, recorded.pane, screenOf, agents?.find((agent) => agent.pane === recorded.pane)?.status);
       if (held) {
         return {
@@ -1470,7 +1472,7 @@ function seatPlan(
           workspace: recorded.workspace,
           launched: recorded.launched,
           cli: seat.cli,
-          ownLine: { session: continuitySession, ...(endpointGone ? { endpoint: true } : {}) },
+          ownLine: { session: continuitySession, ...(endpointGone ? { endpoint: true } : { modelFault: true }) },
         },
         resume: continuitySession,
       };

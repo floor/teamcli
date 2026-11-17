@@ -16,7 +16,7 @@ import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 import { channelLaunchEnabled } from '../mcp/channel.ts';
 import type { SeatState } from '../state.ts';
 import { profileFor } from '../profiles/index.ts';
-import { readScreen } from '../watch/screen.ts';
+import { modelFaultAtIdle, readScreen } from '../watch/screen.ts';
 import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { seatProcessVerdict } from './identity.ts';
 import { usesLauncher } from './line.ts';
@@ -201,15 +201,14 @@ export type RestoreRelaunch = 'launcher' | 'model' | 'channel';
  * floor's DeepSeek seats after the 17 Nov restart), so such a seat is launched again from its
  * own line, never adopted where it stands.
  */
-/** The live tail of a restored pane shows the turn failing on the model: the CLI is running
- *  without the endpoint its launcher sets ("There's an issue with the selected model
- *  (deepseek-flash). It may not exist or you may not have access to it."). A banner or a status
- *  line naming the provider's model is not proof the settings are there: the 17 Nov DeepSeek
- *  seats showed `deepseek-flash` in their status line while every turn failed. */
-export function restoredModelFailure(screen: string | null): boolean {
-  if (screen == null || screen === '') return false;
-  const tail = screen.split('\n').map((line) => line.trimEnd()).filter((line) => line !== '').slice(-12).join('\n');
-  return /issue with the selected model/i.test(tail);
+/** The restored pane is at an empty idle prompt directly under the CLI's own model-failure
+ *  entry: the CLI is running without the endpoint its launcher sets ("There's an issue with the
+ *  selected model (deepseek-flash). …"). A banner or a status line naming the provider's model
+ *  is not proof the settings are there (the 17 Nov DeepSeek seats showed `deepseek-flash` in their
+ *  status line while every turn failed), and a quoted or older mention of the sentence is not a
+ *  fault: the reading is structural (`modelFaultAtIdle`), and execution repeats it. */
+export function restoredModelFailure(cli: string, screen: string | null): boolean {
+  return modelFaultAtIdle(cli, screen);
 }
 
 export function restoredBypassesLauncher(
