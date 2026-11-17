@@ -41,6 +41,7 @@ let root: string;
 let dir: string;
 let home: string;
 let lobby: string;
+let seatCwd: string | undefined;
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], {
@@ -57,7 +58,7 @@ session: ${SESSION}
 trust:
   - ${lobby}
   - ${root}
-workspace:
+${seatCwd !== undefined && seatCwd.startsWith('../') ? `  - ${join(root, seatCwd)}\n` : ''}workspace:
   mode: shared
 seats:
   - role: coordinator
@@ -77,7 +78,7 @@ seats:
     model: GPT Sol
     version: "6.1"
     launch: codex -m gpt-6.1-sol
-`;
+${seatCwd === undefined ? '' : `    cwd: ${seatCwd}\n`}`;
 }
 
 function ownedUrl(): string {
@@ -161,6 +162,7 @@ type Scene = {
   alive?: boolean;
   startOf?: number | null;
   managed?: ManagedEndpointRead;
+  cwd?: string;
 };
 
 function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
@@ -173,7 +175,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     pane: PANE,
     workspace: SPACE,
     status: scene.status ?? 'idle',
-    cwd: root,
+    cwd: scene.cwd ?? root,
     ...(scene.session === null ? {} : { session: scene.session ?? THREAD }),
   }];
   const launch: Launch = {
@@ -260,6 +262,7 @@ const seatRuns = (trace: Trace): Trace['runs'] => trace.runs.filter((run) => run
 const firstWord = (command: string): string => command.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*/, '').split(/\s/)[0] ?? '';
 
 beforeEach(() => {
+  seatCwd = undefined;
   base = realpathSync(mkdtempSync(join(shortSocketBase(), 'c75ep-')));
   root = join(base, 'acme');
   dir = join(root, '.agents');
@@ -435,4 +438,151 @@ test('a pane named for another seat is left untouched', async () => {
   expect(said(io)).toContain(`its pane is named ${OTHER}; team never adopts a pane another seat owns`);
   expect(seatState()?.pane).toBe(PANE);
   expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+// The machine restore pass (the daemon's sweep: `restoreMissingOnly`) keeps every live pane as it
+// is, but a Codex seat whose managed endpoint died with the machine is relaunched in its own pane:
+// a restored TUI otherwise runs its tools on an app-server another Codex process started, which
+// places the seat in no pane of its own (2026-11-17 reboot).
+const SWEEP = {
+  caller: { kind: 'owner' as const },
+  lockHeld: true,
+  nonInteractive: true,
+  restore: true,
+  restoreMissingOnly: true,
+  expectedSession: SESSION,
+};
+
+test('the restore pass relaunches a dead-endpoint Codex seat in its own pane, resuming it', async () => {
+  setup();
+  record();
+  const made = sources({ name: null });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources, SWEEP), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(made.trace.closed).toEqual([]);
+  expect(made.trace.created).toEqual([]);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+  expect(made.trace.managed).toEqual([{ dir, seat: SEAT }]);
+  expect(seatState()?.stage).toBe('ready');
+  expect(seatState()?.pane).toBe(PANE);
+});
+
+test('the restore pass leaves a working dead-endpoint pane untouched', async () => {
+  setup();
+  record();
+  const made = sources({ name: null, status: 'working' });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources, SWEEP);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+  expect(made.trace.closed).toEqual([]);
+  expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+test('the restore pass leaves unsent text in a dead-endpoint pane untouched', async () => {
+  setup();
+  record();
+  const made = sources({ name: null, screen: UNSENT });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources, SWEEP);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+  expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+test('the restore pass never relaunches a pane named for another seat', async () => {
+  setup();
+  record();
+  const made = sources({ name: OTHER });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources, SWEEP);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+  expect(made.trace.renamed).toEqual([]);
+  expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+test('the restore pass adopts a seat whose endpoint is still live, with no relaunch', async () => {
+  setup();
+  record({ session: null });
+  const made = sources({ name: null, session: null, socket: true, alive: true });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources, SWEEP), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+  expect(made.trace.renamed).toEqual([{ pane: PANE, name: SEAT }]);
+});
+
+// A pane resumed in another conversation of the seat, standing in the seat's own folder: re-tied,
+// and the record takes the conversation the pane runs (owner, 2026-11-17).
+const OTHER_THREAD = '019a0000-aaaa-7bbb-8ccc-000000000002';
+
+function seatFolder(): string {
+  const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  const seat = loaded.team.seats.find((candidate) => candidate.name === SEAT);
+  if (seat === undefined || seat.cwd === '.') throw new Error('the fixture seat has no folder of its own');
+  const folder = join(root, seat.cwd);
+  mkdirSync(folder, { recursive: true });
+  return realpathSync(folder);
+}
+
+test('a live-endpoint seat in another conversation, in its own folder, is re-tied to the new conversation', async () => {
+  seatCwd = 'worktrees/worker';
+  setup();
+  record();
+  const made = sources({ name: null, session: OTHER_THREAD, socket: true, alive: true, cwd: seatFolder() });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.renamed).toEqual([{ pane: PANE, name: SEAT }]);
+  expect(seatState()?.agent_session).toBe(OTHER_THREAD);
+  expect(said(io)).toContain(`its conversation moved from ${THREAD} to ${OTHER_THREAD}`);
+});
+
+test('the same pane outside the seat\'s folder is not re-tied', async () => {
+  seatCwd = 'worktrees/worker';
+  setup();
+  record();
+  seatFolder();
+  const made = sources({ name: null, session: OTHER_THREAD, socket: true, alive: true, cwd: root });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources);
+  expect(made.trace.renamed).toEqual([]);
+  expect(seatState()?.agent_session).toBe(THREAD);
+  expect(said(io)).toContain('its pane holds another conversation');
+});
+
+test('records naming A and a pane proven in B by its worktree, with a dead endpoint: the relaunch resumes B', async () => {
+  seatCwd = '../worker-tree';
+  setup();
+  record();
+  const made = sources({ name: null, session: OTHER_THREAD, cwd: seatFolder() });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${OTHER_THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).not.toContain(THREAD);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+});
+
+test('the restore pass resumes B too', async () => {
+  seatCwd = '../worker-tree';
+  setup();
+  record();
+  const made = sources({ name: null, session: OTHER_THREAD, cwd: seatFolder() });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources, SWEEP), said(io)).toBe(0);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${OTHER_THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).not.toContain(THREAD);
 });

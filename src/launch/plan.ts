@@ -283,6 +283,9 @@ export type Op =
       launched: LaunchedIdentity;
       /** The recorded conversation the relaunch resumes; absent when none is proven. */
       session?: string;
+      /** The pane moved to another conversation inside the seat's own worktree: `session` is
+       *  `to`, and the execute proves the change again, as the adopt op does. */
+      rebound?: { from: string; to: string };
       /** The seat's managed Codex endpoint is recorded but not live. The weak (`cli`) restore
        *  proof is enough here: the pane is exited for the launch's fresh endpoint, not for a
        *  conversation. */
@@ -306,6 +309,9 @@ export type Op =
       recordedLaunched: LaunchedIdentity;
       /** The recorded conversation the proof named; absent on a declared-CLI proof. */
       session?: string;
+      /** The pane moved to another conversation inside the seat's own worktree: `session` is
+       *  `to`, and the execute says the change on the seat's own line. */
+      rebound?: { from: string; to: string };
       /** Sidebar line 2, painted by the rename's own step (`also`). */
       displayAgent?: string;
       /** The record never reached ready (stopped at `launched`, or waiting at a dialog). The
@@ -523,7 +529,7 @@ export interface UpSeat {
      *  line starts a wrapper, or a Codex seat whose recorded managed endpoint died with the host.
      *  The step re-proves the pane (strongly, or weakly for a dead endpoint), then exits the CLI
      *  in place; the seat is launched through its own line in that same pane, never adopted. */
-    ownLine?: { session?: string; endpoint?: true };
+    ownLine?: { session?: string; endpoint?: true; rebound?: { from: string; to: string } };
     /** Codex is sitting on its feature-settings dialog. The workspace is closed with no key
      *  and no menu choice, and the seat is launched again with the profile's pinned features.
      *  `session` is the conversation the close re-proves immediately before it. */
@@ -564,6 +570,8 @@ export interface UpSeat {
     recordedLaunched: LaunchedIdentity;
     launched: LaunchedIdentity;
     session?: string;
+    /** See the adopt op's `rebound`. */
+    rebound?: { from: string; to: string };
     via: 'session' | 'cli';
     sentence: string;
     /** The record never reached ready: see the adopt op's `unready`. */
@@ -1205,6 +1213,7 @@ export function upPlan(input: UpInput): Step[] {
           recordedLaunched: seat.adopted.recordedLaunched,
           ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
           ...(seat.adopted.session === undefined ? {} : { session: seat.adopted.session }),
+          ...(seat.adopted.rebound === undefined ? {} : { rebound: seat.adopted.rebound }),
           ...(seat.adopted.unready === undefined ? {} : { unready: seat.adopted.unready }),
         },
       });
@@ -1783,6 +1792,7 @@ export function upPlan(input: UpInput): Step[] {
               workspace: repair.workspace,
               launched: repair.launched,
               ...(ownLine.session === undefined ? {} : { session: ownLine.session }),
+              ...(ownLine.rebound === undefined ? {} : { rebound: ownLine.rebound }),
               ...(ownLine.endpoint === true ? { endpoint: true as const } : {}),
             },
           });

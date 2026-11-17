@@ -8,7 +8,7 @@ import { herdrCommand } from '../herdr.ts';
 import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { featureDialog } from '../launch/reboot.ts';
-import { restoreProof, type RestoreProof } from '../launch/restore-proof.ts';
+import { restoreProof, restoreWorktreeOf, type RestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
@@ -393,7 +393,7 @@ export function compare(
         const found = verdict === 'gone'
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
           : cannotTie(seat, agent.pane, live.screens[agent.pane], team, recorded?.pane === agent.pane,
-              restoreProofAt(seat, recorded, live, agent.pane, recordedSession));
+              restoreProofAt(seat, recorded, live, agent.pane, recordedSession, route === undefined ? undefined : restoreWorktreeOf(team, route.root, state, seat.name)));
         rows.push({ ...found.row, ...idField });
         if (found.difference) differences.push(found.difference);
         if (found.note) notes.push(found.note);
@@ -626,7 +626,7 @@ export function compare(
       // Herdr lists no agent of this name: the pane is the seat only when the shared proof holds,
       // and the proof is what `team up` will read before it re-ties anything.
       const found = cannotTie(seat, held, live.screens[held], team, false,
-        restoreProofAt(seat, recorded, live, held, continuitySessionOf(continuityIds, declared.name, recorded?.agent_session)));
+        restoreProofAt(seat, recorded, live, held, continuitySessionOf(continuityIds, declared.name, recorded?.agent_session), route === undefined ? undefined : restoreWorktreeOf(team, route.root, state, seat.name)));
       rows.push({ ...found.row, ...idField });
       if (found.difference) differences.push(found.difference);
       if (found.note) notes.push(found.note);
@@ -931,9 +931,11 @@ function restoreProofAt(
   live: Live,
   pane: string,
   recordedSession: string | undefined,
+  worktree?: RestoreWorktree,
 ): RestoreProof | null {
   if (!recorded || recorded.pane !== pane) return null;
   return restoreProof({
+    ...(worktree === undefined ? {} : { worktree }),
     seat,
     recorded,
     agents: live.agents,

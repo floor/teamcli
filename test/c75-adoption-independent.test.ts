@@ -596,10 +596,12 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
           screen: CODEX_UNSENT,
         }),
       ),
+    // Tying a pane types and closes nothing: unsent text no longer blocks the re-tie (owner,
+    // 2026-11-17); a relaunch still holds it.
     ).toEqual({
-      kind: 'none',
-      why: `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${SEAT_ALPHA})`,
-      specific: true,
+      kind: 'cli',
+      pane: PANE_ALPHA,
+      sentence: 'its pane runs codex alone in its workspace, at an idle prompt',
     });
   });
 });
