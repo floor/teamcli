@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inboxEntryName, profileFor } from '../src/profiles/profile.ts';
-import { registerInbox, removeInbox, selfRunner, type InboxRun } from '../src/mcp/register.ts';
+import { excludeLineFor, registerInbox, removeInbox, selfRunner, type InboxRun } from '../src/mcp/register.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 // Another team, for the scenes where the seat's folder and the launch name different teams.
@@ -495,5 +495,34 @@ describe('the cursor file route', () => {
       reason: '.cursor/mcp.json is not a regular file',
     });
     expect(readFileSync(outside, 'utf8')).toBe('{"untouched": true}\n');
+  });
+});
+
+// 17 Nov reboot simulation: the exclude line was the bare `.grok/config.toml`, which git reads
+// from the top of the work tree (a pattern with a slash in it is anchored there), so a seat
+// folder nested below the top stayed un-ignored and the registration refused. The line is now
+// anchored at the seat folder's own path.
+describe('the exclude line is anchored at the seat folder', () => {
+  test('a nested seat folder gets its own anchored line, and git then ignores its file', () => {
+    const dir = folder({ repo: 'plain' });
+    const seat = join(dir, 'seats', 'grok-1');
+    mkdirSync(seat, { recursive: true });
+    const run = (_command: string, _args: readonly string[], cwd: string): InboxRun => {
+      mkdirSync(join(cwd, '.grok'), { recursive: true });
+      writeFileSync(join(cwd, '.grok', 'config.toml'), '[mcp_servers.team-inbox]\n');
+      return { code: 0 };
+    };
+    expect(registerInbox({ cli: 'grok', seat: 'helper', cwd: seat, file: fileOf(dir), run })).toEqual({ ok: true });
+    const exclude = readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8');
+    expect(exclude).toContain('/seats/grok-1/.grok/config.toml\n');
+    expect(exclude.split('\n')).not.toContain('.grok/config.toml');
+    // git itself agrees the nested file is ignored.
+    expect(() => execFileSync('git', ['check-ignore', '-q', '--', '.grok/config.toml'], { cwd: seat, stdio: 'ignore' })).not.toThrow();
+  });
+
+  test('the top folder of the work tree is anchored at the top', () => {
+    expect(excludeLineFor('', '.grok/config.toml')).toBe('/.grok/config.toml');
+    expect(excludeLineFor('seats/grok-1/', '.grok/config.toml')).toBe('/seats/grok-1/.grok/config.toml');
+    expect(excludeLineFor('seats/grok-1', '.grok/config.toml')).toBe('/seats/grok-1/.grok/config.toml');
   });
 });
