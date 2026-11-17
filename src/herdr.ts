@@ -1,4 +1,5 @@
 import { traceChildStep } from './diagnostics/child-steps.ts';
+import { herdrDirect } from './herdr-direct.ts';
 import { traceBeatWork } from './diagnostics/beat-work.ts';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -103,6 +104,10 @@ function run(args: string[], session?: string): unknown {
 
 function runMeasured(args: string[], session?: string): unknown {
   if (customRun) return customRun(args, session);
+  // The read-only calls go over the host's socket when the CLI's own socket is certain; the
+  // answer is the same `result` the CLI prints. Any other case starts the CLI, as before.
+  const direct = traceBeatWork('terminal-host read (socket)', () => herdrDirect(args, session, 10_000));
+  if (direct !== undefined) return direct.result;
   const full = session ? ['--session', session, ...args] : args;
   const out = traceBeatWork('terminal-host read (sync)', () => execFileSync('herdr', full, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }));
   return (JSON.parse(out) as { result?: unknown }).result;

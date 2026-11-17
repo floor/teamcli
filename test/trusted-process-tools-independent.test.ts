@@ -11,7 +11,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { readAncestors, placeCaller, readWithPs, type CallerSources } from '../src/caller.ts';
 import { processComm } from '../src/commands/doctor.ts';
 import { realSources } from '../src/commands/mcp.ts';
@@ -31,6 +31,7 @@ import {
   processStartOf,
   processWorkingFolderOf,
 } from '../src/watch/process-adapter.ts';
+import { setKernelProcessForTests } from '../src/process-kernel.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
 
@@ -48,7 +49,15 @@ const TRUSTED_PANE = 'fixture-pane-trusted';
 let scratchParent: string | undefined;
 const made: string[] = [];
 
+// The walk cases here prove the `ps` seam. On macOS the kernel reader answers the walk first and
+// starts no program at all, so no PATH shim can reach it; it is turned off so the seam itself is
+// what these cases exercise.
+beforeEach(() => {
+  setKernelProcessForTests(null);
+});
+
 afterEach(() => {
+  setKernelProcessForTests(undefined);
   discardFixtures(made.splice(0), { roots: scratchParent === undefined ? [] : [scratchParent] });
 });
 

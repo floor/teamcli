@@ -464,7 +464,25 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
  * Reads one state folder's history log (`messages.jsonl.2`, `messages.jsonl.1`, `messages.jsonl`)
  * in chronological order without following symbolic links.
  */
-export function readStoreHistory(storeDir: string, home: string): HistoryRead {
+/** Whether a raw history line can be skipped without parsing when only `wanted` ids matter.
+ *  An id of letters, digits and hyphens is written in JSON either as itself or through a `\u`
+ *  escape, so a line holding neither the id's text nor any `\u` cannot parse to an entry with
+ *  that id. Any other id shape keeps every line. Exported for tests. */
+export function historyLineSkippable(line: string, wanted: readonly string[]): boolean {
+  if (line.includes('\\u')) return false;
+  for (const id of wanted) {
+    if (!SKIPPABLE_ID.test(id) || line.includes(id)) return false;
+  }
+  return true;
+}
+
+const SKIPPABLE_ID = /^[A-Za-z0-9-]{1,128}$/;
+
+/**
+ * The project history's entries, oldest first. With `wanted`, only the entries whose id is one
+ * of those, read the same way: a line that cannot name one of them is passed over unparsed.
+ */
+export function readStoreHistory(storeDir: string, home: string, wanted?: ReadonlySet<string>): HistoryRead {
   const stateRoot = storesFolder(home);
   const configDir = dirname(stateRoot);
   for (const level of [configDir, stateRoot, storeDir]) {
@@ -486,9 +504,11 @@ export function readStoreHistory(storeDir: string, home: string): HistoryRead {
     if (heldAt(candidate).kind === 'missing') continue;
     const text = readNoFollow(candidate);
     if (text === null) return { ok: false, reason: 'the history log could not be read' };
+    const ids = wanted === undefined ? null : [...wanted];
     for (const line of text.split('\n')) {
+      if (ids !== null && historyLineSkippable(line, ids)) continue;
       const entry = parseHistoryLine(line);
-      if (entry !== null) entries.push(entry);
+      if (entry !== null && (wanted === undefined || wanted.has(entry.id))) entries.push(entry);
     }
   }
   return { ok: true, entries, path };
@@ -498,8 +518,8 @@ export function readStoreHistory(storeDir: string, home: string): HistoryRead {
  * Reads the project's history log (`messages.jsonl.2`, `messages.jsonl.1`, `messages.jsonl`)
  * in chronological order without following symbolic links.
  */
-export function readHistory(project: string, root: string, home: string): HistoryRead {
-  return readStoreHistory(storePath(project, root, home), home);
+export function readHistory(project: string, root: string, home: string, wanted?: ReadonlySet<string>): HistoryRead {
+  return readStoreHistory(storePath(project, root, home), home, wanted);
 }
 
 /**
