@@ -2913,11 +2913,12 @@ async function relayConfinedOutboxes(
     agents: () => (agents === null ? null : agents.map((agent) => ({ name: agent.name, pane: agent.pane }))),
     now,
     log: (line) => logLine(dir, 'watch', 'watch', line, now()),
-    run: async (command, argv, cwd, caller) => {
+    run: async (command, argv, cwd, caller, persist) => {
       let out = '';
       let err = '';
       const io: Io = {
-        stdout: (text) => { out += text; },
+        // Durable before the command goes on: a read seals its receipts only after this returns.
+        stdout: (text) => { persist(text); out += text; },
         stderr: (text) => { err += text; },
         cwd,
         env: process.env,

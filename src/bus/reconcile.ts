@@ -20,7 +20,7 @@ import { traceBeatWork } from '../diagnostics/beat-work.ts';
 // unchanged, and so is the parsed history. Correctness does not move: every record is still
 // raised on every pass (the dedupe set decides), read-once receipts keep their sender, and a
 // receipt that arrives in a later pass than its record still carries that record's sender.
-import { appendRecovered, queuedHint, recoverSessionQueues } from '../queue/append.ts';
+import { appendRecovered, currentGenerationName, recoverSessionQueues } from '../queue/append.ts';
 import { logLine } from '../log.ts';
 import { queueLog } from '../queue/log.ts';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
@@ -152,7 +152,7 @@ export type ReconcileStats = {
  *  signed fields, so a refused record can never contribute to an event; a refusal is cached by
  *  the same stat stamp as a verification, so an unchanged refused record is not read again. */
 type DropEntry =
-  | { kind: 'drop'; verified: true; event: EventAppendInput; queued?: true }
+  | { kind: 'drop'; verified: true; event: EventAppendInput; queued?: string }
   | { kind: 'drop'; verified: false };
 type ReceiptEntry = {
   kind: 'receipt';
@@ -628,11 +628,11 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   state.deferred = [];
   // The queue's recovery on start (rfc-event-comms §1, E4): the bus's first pass settles every
   // seat queue a crashed writer left mid-commit, before any record is looked at.
+  // It never waits for a queue lock: a held or unusable queue leaves recovery pending, and every
+  // later pass tries again until every seat queue has been opened once.
   if (!state.queuesRecovered && options.queueOrphans !== false) {
-    state.queuesRecovered = true;
-    for (const failed of recoverSessionQueues(root, session, { home, log: (line) => logLine(join(root, '.agents'), 'queue', 'queue', line) })) {
-      logLine(join(root, '.agents'), 'queue', 'queue', `${session}/${failed.seat}: not recovered (${failed.reason})`);
-    }
+    const failed = recoverSessionQueues(root, session, { home, lockWaitMs: 0, log: (line) => logLine(join(root, '.agents'), 'queue', 'queue', line) });
+    state.queuesRecovered = failed.length === 0;
   }
   const visited = new Set<string>();
   const nowDate = options.now ?? new Date();
@@ -839,6 +839,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       const previousSenders = state.senders.get(seatDir);
 
       let skippedDrops = 0;
+      // This seat's queue generation, read once per pass when a record asks for it.
+      let queueGeneration: string | null | undefined;
       for (const file of files) {
         if (file.startsWith('.') || isSideFile(file)) {
           skippedDrops += 1;
@@ -886,13 +888,19 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             if (entry.event.from !== undefined) sendersById.set(id, entry.event.from);
             raise(entry.event);
             // The queue's orphan source (rfc-event-comms §1, E4): a verified record with no
-            // committed entry is appended at the next seq, flagged recovered. Asked once per
-            // record file: a committed or existing answer is kept in the cache entry.
-            if (entry.queued !== true && options.queueOrphans !== false) {
-              const queued = queuedHint(seatDir, id)
-                ? 'existing'
-                : appendRecovered(seatDir, { root, session, seat }, id, { home, log: queueLog(seatDir) }).kind;
-              if (queued === 'existing' || queued === 'committed') entry.queued = true;
+            // committed entry is appended at the next seq, flagged recovered. The answer comes
+            // from the queue under its lock, never from a hint, and is kept bound to the
+            // generation that gave it: a replaced generation asks again. The lock is never
+            // waited for here (the pass is sliced); a held queue is asked on a later pass.
+            if (options.queueOrphans !== false) {
+              if (queueGeneration === undefined) queueGeneration = currentGenerationName(seatDir);
+              if (entry.queued === undefined || entry.queued !== queueGeneration) {
+                const queued = appendRecovered(seatDir, { root, session, seat }, id, { home, log: queueLog(seatDir), lockWaitMs: 0 });
+                if (queued.kind === 'committed' || queued.kind === 'existing') {
+                  entry.queued = queued.generation;
+                  queueGeneration = queued.generation;
+                }
+              }
             }
           }
         }

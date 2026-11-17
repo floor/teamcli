@@ -25,13 +25,14 @@
 // reconcile pass finds a record with no committed entry and appends it as `recovered`
 // (`appendRecovered`), so the index converges without the writer.
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, fsyncSync, lstatSync, readdirSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { ftruncateSync, mkdirSync, openSync, renameSync, writeSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join } from 'node:path';
 import { acquireLockAt, type LockSteps } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readNoFollow } from '../send/history.ts';
 import { recordFile, sameFolder, signedRecordOf, verifyRecord, type SignedRecord } from '../send/record.ts';
+import { heldAt } from '../launch/rules-file.ts';
 
 /** The domain a queue entry is signed over. */
 export const QUEUE_DOMAIN = 'team-queue-v1\n';
@@ -78,6 +79,10 @@ export type QueueOptions = {
   home: string;
   /** Test seam: called after each step; a crash test exits the process here. */
   after?: (step: AppendStep) => void;
+  /** Test seam: each durability point, in the order it happens. */
+  trace?: (point: 'record-fsync' | 'record-folder-fsync' | 'entry' | 'committed') => void;
+  /** Test seam: a failing record flush. */
+  syncRecord?: (path: string) => void;
   lock?: Partial<LockSteps>;
   /** How long an append waits for the receiver's lock. */
   lockWaitMs?: number;
@@ -128,8 +133,22 @@ function fsyncFolder(folder: string): void {
   }
 }
 
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+
+/** Opens the journal for append: never through a link, only a regular file of its own. */
+function openJournal(path: string, flags: number): number {
+  const fd = openSync(path, flags | NOFOLLOW, 0o600);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error('the journal is not a regular file');
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+  return fd;
+}
+
 function appendLine(path: string, line: JournalLine): void {
-  const fd = openSync(path, 'a', 0o600);
+  const fd = openJournal(path, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND);
   try {
     writeSync(fd, `${JSON.stringify(line)}\n`);
     fsyncSync(fd);
@@ -153,7 +172,7 @@ function ensureFolder(path: string): void {
   if (!plainFolder(path)) throw new Error(`${path} is not a folder of its own`);
 }
 
-type Journal = { lines: JournalLine[]; tornAt: number | null; corrupt: boolean };
+type Journal = { lines: JournalLine[]; tornAt: number | null; corrupt: boolean; unreadable?: true };
 
 function isLine(value: unknown): value is JournalLine {
   if (value === null || typeof value !== 'object') return false;
@@ -167,8 +186,10 @@ function isLine(value: unknown): value is JournalLine {
 /** The journal's whole lines. A last line with no newline, or one that does not parse, is a torn
  *  tail (`tornAt` is the byte where it starts); a bad line before the tail is corruption. */
 function readJournal(path: string): Journal {
+  // `readNoFollow` answers '' for a missing file and null for every fault or refused kind (a link,
+  // a folder, an unreadable file): only a missing journal is a new one.
   const text = readNoFollow(path);
-  if (text === null) return { lines: [], tornAt: null, corrupt: false };
+  if (text === null) return { lines: [], tornAt: null, corrupt: false, unreadable: true };
   const lines: JournalLine[] = [];
   let offset = 0;
   const parts = text.split('\n');
@@ -218,8 +239,11 @@ type Generation = { name: string; folder: string };
 function currentGeneration(base: string, log: (line: string) => void): Generation {
   ensureFolder(base);
   const pointer = join(base, 'current');
-  const named = readNoFollow(pointer)?.trim() ?? null;
-  if (named !== null && GENERATION.test(named) && plainFolder(join(base, named))) {
+  const text = readNoFollow(pointer);
+  // A pointer that cannot be read is not a missing one: the queue is not used this time.
+  if (text === null) throw new Error('the generation pointer cannot be read');
+  const named = text.trim();
+  if (GENERATION.test(named) && plainFolder(join(base, named))) {
     return { name: named, folder: join(base, named) };
   }
   const name = `g${randomBytes(8).toString('hex')}`;
@@ -227,7 +251,7 @@ function currentGeneration(base: string, log: (line: string) => void): Generatio
   ensureFolder(join(folder, 'entries'));
   ensureFolder(join(folder, 'ids'));
   writeDurable(pointer, `${name}\n`);
-  if (named !== null) log(`queue ${base}: generation ${named} unreadable; started ${name}`);
+  if (named !== '') log(`queue ${base}: generation pointer names no generation; started ${name}`);
   return { name, folder };
 }
 
@@ -249,17 +273,17 @@ type Target = { dropDir: string; root: string; session: string; seat: string };
 
 /** The record at the id's name, read without following a link, and whether it verifies for this
  *  receiver: this checkout's key signed it, and it names this seat, session and checkout. */
-function recordOnDisk(target: Target, msgId: string, home: string): { state: 'absent' } | { state: 'bad' } | { state: 'ok'; digest: string } {
+type OnDisk = { state: 'absent' } | { state: 'bad' } | { state: 'unreadable' } | { state: 'ok'; digest: string; path: string };
+
+function recordOnDisk(target: Target, msgId: string, home: string): OnDisk {
   const path = recordFile(target.dropDir, msgId);
+  const held = heldAt(path).kind;
+  if (held === 'missing') return { state: 'absent' };
+  // A link, a folder or a FIFO at the name is not a record; a plain file that cannot be read now
+  // is not proven absent or corrupt, and stays to be settled later.
+  if (held !== 'file') return { state: 'bad' };
   const text = readNoFollow(path);
-  if (text === null) {
-    try {
-      lstatSync(path);
-      return { state: 'bad' };
-    } catch {
-      return { state: 'absent' };
-    }
-  }
+  if (text === null) return { state: 'unreadable' };
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -273,7 +297,21 @@ function recordOnDisk(target: Target, msgId: string, home: string): { state: 'ab
   if (payload.id !== msgId || payload.to !== target.seat || payload.session !== target.session || !sameFolder(payload.root, target.root)) {
     return { state: 'bad' };
   }
-  return { state: 'ok', digest: digestOf(text) };
+  return { state: 'ok', digest: digestOf(text), path };
+}
+
+/** The canonical record and its folder entry made durable before any entry names it (§1 order). */
+function flushRecord(path: string, options: QueueOptions): void {
+  if (options.syncRecord !== undefined) options.syncRecord(path);
+  const fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  options.trace?.('record-fsync');
+  fsyncFolder(dirname(path));
+  options.trace?.('record-folder-fsync');
 }
 
 function signEntry(payload: QueueEntryPayload, home: string): QueueEntry {
@@ -332,9 +370,11 @@ function commit(locked: Locked, seq: number, msgId: string, opKey: string, diges
     ...(recovered ? { recovered: true as const } : {}),
   };
   writeDurable(join(generation.folder, 'entries', seqName(seq)), `${JSON.stringify(signEntry(payload, locked.options.home))}\n`);
+  locked.options.trace?.('entry');
   locked.options.after?.('entry');
   writeDurable(join(generation.folder, 'ids', msgId), `${String(seq)}\n`);
   writeJournal(locked, line(locked, seq, msgId, opKey, 'committed', recovered ? { recovered: true } : {}));
+  locked.options.trace?.('committed');
   locked.options.after?.('mark');
 }
 
@@ -344,25 +384,37 @@ function recover(locked: Locked): void {
   const expected = { root: target.root, session: target.session, seat: target.seat, generation: generation.name };
   for (const [seq, last] of [...locked.folded.last].sort((a, b) => a[0] - b[0])) {
     if (last.state === 'reserved') {
-      const entry = readEntry(generation.folder, seq, expected, options.home);
-      if (entry !== null && entry.payload.msg_id === last.msg_id) {
-        writeDurable(join(generation.folder, 'ids', last.msg_id), `${String(seq)}\n`);
-        writeJournal(locked, line(locked, seq, last.msg_id, last.op_key, 'committed', last.recovered ? { recovered: true } : {}));
-        locked.log(`queue ${target.session}/${target.seat}: recovered seq ${String(seq)} (entry written, not marked)`);
+      // Every path from reserved to committed proves the canonical record first: present, plain,
+      // verifying for this receiver, flushed, and — when an entry was already written — the very
+      // bytes that entry's digest names. An entry's signature proves who wrote the index, never
+      // that the body is still there.
+      const onDisk = recordOnDisk(target, last.msg_id, options.home);
+      if (onDisk.state === 'unreadable') {
+        locked.log(`queue ${target.session}/${target.seat}: seq ${String(seq)} left reserved: its record cannot be read now`);
         continue;
       }
-      const onDisk = recordOnDisk(target, last.msg_id, options.home);
-      if (onDisk.state === 'ok' && !locked.folded.committedIds.has(last.msg_id)) {
-        commit(locked, seq, last.msg_id, last.op_key, onDisk.digest, last.recovered === true);
-        locked.log(`queue ${target.session}/${target.seat}: recovered seq ${String(seq)} (record written, not indexed)`);
+      const entry = readEntry(generation.folder, seq, expected, options.home);
+      const entryMatches = entry !== null && entry.payload.msg_id === last.msg_id;
+      if (onDisk.state === 'ok' && !locked.folded.committedIds.has(last.msg_id)
+        && (!entryMatches || entry.payload.record_digest === onDisk.digest)) {
+        flushRecord(onDisk.path, options);
+        if (entryMatches) {
+          writeDurable(join(generation.folder, 'ids', last.msg_id), `${String(seq)}\n`);
+          writeJournal(locked, line(locked, seq, last.msg_id, last.op_key, 'committed', last.recovered ? { recovered: true } : {}));
+          locked.log(`queue ${target.session}/${target.seat}: recovered seq ${String(seq)} (entry written, not marked)`);
+        } else {
+          commit(locked, seq, last.msg_id, last.op_key, onDisk.digest, last.recovered === true);
+          locked.log(`queue ${target.session}/${target.seat}: recovered seq ${String(seq)} (record written, not indexed)`);
+        }
       } else {
         const reason = onDisk.state === 'absent' ? 'the record was never written'
           : onDisk.state === 'bad' ? 'the record at its name does not verify for this seat'
-            : 'the id is already committed at another seq';
+            : locked.folded.committedIds.has(last.msg_id) ? 'the id is already committed at another seq'
+              : 'the record no longer matches the entry written for it';
         writeJournal(locked, line(locked, seq, last.msg_id, last.op_key, 'void', { reason }));
         locked.log(`queue ${target.session}/${target.seat}: seq ${String(seq)} void: ${reason}`);
       }
-    } else if (last.state === 'committed' && readNoFollow(join(generation.folder, 'ids', last.msg_id)) === null) {
+    } else if (last.state === 'committed' && readNoFollow(join(generation.folder, 'ids', last.msg_id)) !== `${String(seq)}\n`) {
       writeDurable(join(generation.folder, 'ids', last.msg_id), `${String(seq)}\n`);
     }
   }
@@ -391,19 +443,33 @@ function open(dropDir: string, target: Omit<Target, 'dropDir'>, options: QueueOp
   if (base === null) return { skipped: 'the folder is not a seat drop folder' };
   if (!NAME.test(target.seat) || !NAME.test(target.session)) return { skipped: 'the seat or session cannot name a queue' };
   ensureFolder(base);
+  // The queue folder is its own, under this checkout's real `.agents`: no link above it lends
+  // another place.
+  const agents = dirname(dirname(dirname(base)));
+  try {
+    if (realpathSync(base) !== join(realpathSync(agents), 'queues', target.session, target.seat)) return { skipped: 'the queue folder is not this checkout\'s' };
+  } catch {
+    return { skipped: 'the queue folder cannot be resolved' };
+  }
   const lock = takeQueueLock(base, options);
   if (!('release' in lock)) return { skipped: `the queue lock is held (pid ${String(lock.held)})` };
   try {
     let generation = currentGeneration(base, log);
     let journalPath = join(generation.folder, 'journal.jsonl');
     let journal = readJournal(journalPath);
+    if (journal.unreadable === true) {
+      // Unknown is never empty: a journal that cannot be read is not appended to with a reset
+      // head. The append skips the queue (the shadow rule); the next opener tries again.
+      lock.release();
+      return { skipped: 'the journal cannot be read' };
+    }
     if (journal.corrupt) {
       generation = replaceGeneration(base, generation, log);
       journalPath = join(generation.folder, 'journal.jsonl');
       journal = { lines: [], tornAt: null, corrupt: false };
     }
     if (journal.tornAt !== null) {
-      const fd = openSync(journalPath, 'r+');
+      const fd = openJournal(journalPath, constants.O_RDWR);
       try {
         ftruncateSync(fd, journal.tornAt);
         fsyncSync(fd);
@@ -453,11 +519,17 @@ function afterWrite(locked: Locked, seq: number, msgId: string, opKey: string, o
     return { kind: 'void', generation: locked.generation.name, seq, reason: 'the write did not complete' };
   }
   const onDisk = recordOnDisk(locked.target, msgId, locked.options.home);
+  if (onDisk.state === 'unreadable') {
+    // Not proven either way: the intent stays reserved for the next holder of the lock.
+    return { kind: 'skipped', reason: 'the record cannot be read now; its seq stays reserved' };
+  }
   if (onDisk.state !== 'ok') {
     const reason = onDisk.state === 'absent' ? 'the record is not at its name' : 'the record at its name does not verify for this seat';
     writeJournal(locked, line(locked, seq, msgId, opKey, 'void', { reason }));
     return { kind: 'void', generation: locked.generation.name, seq, reason };
   }
+  // Record before entry (§1): a flush that fails throws, and the intent stays reserved.
+  flushRecord(onDisk.path, locked.options);
   commit(locked, seq, msgId, opKey, onDisk.digest, false);
   return { kind: 'committed', generation: locked.generation.name, seq };
 }
@@ -571,10 +643,19 @@ export function appendRecovered(dropDir: string, target: Omit<Target, 'dropDir'>
     const onDisk = recordOnDisk(locked.target, msgId, options.home);
     if (onDisk.state !== 'ok') return { kind: 'skipped', reason: 'the record does not verify for this seat' };
     const seq = locked.folded.head + 1;
-    writeJournal(locked, line(locked, seq, msgId, msgId, 'reserved', { recovered: true }));
-    options.after?.('reserve');
-    commit(locked, seq, msgId, msgId, onDisk.digest, true);
+    // A queue write that fails here never escapes into the caller's pass: the outcome is a
+    // retryable skip, and a written reserve stays for recovery.
+    try {
+      writeJournal(locked, line(locked, seq, msgId, msgId, 'reserved', { recovered: true }));
+      options.after?.('reserve');
+      flushRecord(onDisk.path, options);
+      commit(locked, seq, msgId, msgId, onDisk.digest, true);
+    } catch (error) {
+      return { kind: 'skipped', reason: `the orphan append could not be written (${(error as Error).message})` };
+    }
     return { kind: 'committed', generation: locked.generation.name, seq, recovered: true };
+  } catch (error) {
+    return { kind: 'skipped', reason: `the orphan append failed (${(error as Error).message})` };
   } finally {
     release();
   }
@@ -612,9 +693,18 @@ export function recoverSessionQueues(root: string, session: string, options: Que
 export function queuedHint(dropDir: string, msgId: string): boolean {
   const base = queueBaseOf(dropDir);
   if (base === null || !NAME.test(msgId)) return false;
-  const named = readNoFollow(join(base, 'current'))?.trim();
-  if (named === undefined || !GENERATION.test(named)) return false;
-  return readNoFollow(join(base, named, 'ids', msgId)) !== null;
+  const named = currentGenerationName(dropDir);
+  if (named === null) return false;
+  return /^\d+\n$/.test(readNoFollow(join(base, named, 'ids', msgId)) ?? '');
+}
+
+/** The seat's current generation's name, read without the lock; null when there is none. A
+ *  reader's cache key: an answer bound to one generation is asked again when it changes. */
+export function currentGenerationName(dropDir: string): string | null {
+  const base = queueBaseOf(dropDir);
+  if (base === null) return null;
+  const named = readNoFollow(join(base, 'current'))?.trim() ?? '';
+  return GENERATION.test(named) ? named : null;
 }
 
 /** The journal's lines, for tests and `team status` (not authority). */

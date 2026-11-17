@@ -6,10 +6,12 @@
 // changes the write.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
+import { acquireLockAt } from '../src/launch/seat-lock.ts';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendDeliverySync, appendRecovered, entriesOf, journalOf, queueBaseOf, queuedHint, recoverSessionQueues } from '../src/queue/append.ts';
+import { appendDeliverySync, appendRecovered, currentGenerationName, entriesOf, journalOf, queueBaseOf, queuedHint, recoverSessionQueues } from '../src/queue/append.ts';
 import { listDrops } from '../src/commands/drops.ts';
 import { signRecord, writeRecord, type SignedRecord } from '../src/send/record.ts';
 
@@ -254,5 +256,157 @@ describe('shadow: the queue never changes the write', () => {
     expect(after.filter((one) => one === id(1))).toHaveLength(1);
     // Nothing the queue writes lands in the drop folder a reader lists.
     expect(readdirSync(s.dropDir).every((name) => !name.includes('queue'))).toBe(true);
+  });
+});
+
+// Review round 1 (Hermes, Hestia): the gates the first diff missed.
+
+function genFolder(dropDir: string): string {
+  return join(queueBaseOf(dropDir)!, currentGenerationName(dropDir)!);
+}
+
+describe('round 1: recovery proves the record even when the entry was written', () => {
+  for (const [label, damage] of [
+    ['removed', (s: { dropDir: string }) => unlinkSync(join(s.dropDir, id(1)))],
+    ['corrupt', (s: { dropDir: string }) => writeFileSync(join(s.dropDir, id(1)), 'not json\n')],
+    ['replaced by another signed body', (s: { root: string; home: string; dropDir: string }) => {
+      const other = signRecord({
+        kind: 'message', id: id(1), to: SEAT, to_id: null, root: s.root, session: SESSION, at: '2026-11-17T22:00:00.000Z',
+        body: 'a different body', from: 'tester', from_id: null, rule: 'test', thread: id(1),
+      }, s.home);
+      writeFileSync(join(s.dropDir, id(1)), `${JSON.stringify(other, null, 2)}\n`);
+    }],
+  ] as const) {
+    test(`killed after the entry, record then ${label}: no committed outcome`, () => {
+      const s = scene();
+      expect(crashAt(s, id(1), 'entry')).toBe(9);
+      damage(s);
+      append(s, id(2));
+      expect(lastStates(s.dropDir).get(1)).toBe('void');
+      expect(queuedHint(s.dropDir, id(1))).toBe(false);
+    });
+  }
+});
+
+describe('round 1: an unreadable or linked journal is never treated as empty', () => {
+  test('a journal replaced by a link: the queue is skipped, the record is written once, no seq is reused, the link target is untouched', () => {
+    const s = scene();
+    append(s, id(1));
+    const folder = genFolder(s.dropDir);
+    const journal = join(folder, 'journal.jsonl');
+    const outside = join(base, 'outside.jsonl');
+    renameSync(journal, outside);
+    symlinkSync(outside, journal);
+    const before = readFileSync(outside, 'utf8');
+    let writes = 0;
+    const record = recordOf(s.root, s.home, id(2));
+    const out = appendDeliverySync({ dropDir: s.dropDir, record }, () => {
+      writes += 1;
+      const result = writeRecord(s.dropDir, record);
+      return { ok: result.ok, value: result };
+    }, { home: s.home });
+    expect(writes).toBe(1);
+    expect(out.value.ok).toBe(true);
+    expect(out.queue).toEqual({ kind: 'skipped', reason: 'the journal cannot be read' });
+    expect(readFileSync(outside, 'utf8')).toBe(before);
+    expect(readdirSync(join(folder, 'entries'))).toEqual(['000000000001']);
+  });
+});
+
+describe('round 1: the record is durable before the entry names it', () => {
+  test('the order is record flush, record folder flush, entry, committed line', () => {
+    const s = scene();
+    const points: string[] = [];
+    const record = recordOf(s.root, s.home, id(1));
+    appendDeliverySync({ dropDir: s.dropDir, record }, () => {
+      const result = writeRecord(s.dropDir, record);
+      return { ok: result.ok, value: result };
+    }, { home: s.home, trace: (point) => points.push(point) });
+    expect(points).toEqual(['record-fsync', 'record-folder-fsync', 'entry', 'committed']);
+  });
+
+  test('a record flush that fails leaves the seq reserved and the write as it was; the next holder commits it', () => {
+    const s = scene();
+    const record = recordOf(s.root, s.home, id(1));
+    const out = appendDeliverySync({ dropDir: s.dropDir, record }, () => {
+      const result = writeRecord(s.dropDir, record);
+      return { ok: result.ok, value: result };
+    }, { home: s.home, syncRecord: () => { throw new Error('EIO'); } });
+    expect(out.value.ok).toBe(true);
+    expect(out.queue.kind).toBe('skipped');
+    expect(lastStates(s.dropDir).get(1)).toBe('reserved');
+    expect(entriesOf(s.dropDir)).toEqual([]);
+    append(s, id(2));
+    expect(lastStates(s.dropDir)).toEqual(new Map([[1, 'committed'], [2, 'committed']]));
+  });
+});
+
+describe('round 1: the orphan source through the bus\'s own reconcile pass', () => {
+  const pass = (s: { root: string; home: string }, state = createReconcileState()) =>
+    reconcilePass({ project: SESSION, root: s.root, session: SESSION, home: s.home, state });
+
+  test('an existing queue and a new raw record: the pass indexes it; a removed id file is rebuilt', () => {
+    const s = scene();
+    append(s, id(1));
+    writeRecord(s.dropDir, recordOf(s.root, s.home, id(2)));
+    pass(s);
+    expect(queuedHint(s.dropDir, id(2))).toBe(true);
+    expect(journalOf(s.dropDir).lines.find((line) => line.msg_id === id(2) && line.state === 'committed')?.recovered).toBe(true);
+    unlinkSync(join(genFolder(s.dropDir), 'ids', id(1)));
+    pass(s);
+    expect(queuedHint(s.dropDir, id(1))).toBe(true);
+  });
+
+  test('the cache is bound to the generation: after a replacement both records are indexed once in the new one', () => {
+    const s = scene();
+    const state = createReconcileState();
+    writeRecord(s.dropDir, recordOf(s.root, s.home, id(1)));
+    pass(s, state);
+    const first = currentGenerationName(s.dropDir)!;
+    const journal = join(genFolder(s.dropDir), 'journal.jsonl');
+    writeFileSync(journal, `not json\n${readFileSync(journal, 'utf8')}`);
+    append(s, id(2));
+    const second = currentGenerationName(s.dropDir)!;
+    expect(second).not.toBe(first);
+    pass(s, state);
+    const committed = journalOf(s.dropDir).lines.filter((line) => line.state === 'committed').map((line) => line.msg_id).sort();
+    expect(committed).toEqual([id(1), id(2)]);
+  });
+
+  test('a held queue lock: the pass does not wait, and indexes the record on a later pass', () => {
+    const s = scene();
+    append(s, id(1));
+    writeRecord(s.dropDir, recordOf(s.root, s.home, id(2)));
+    const queue = queueBaseOf(s.dropDir)!;
+    const lock = acquireLockAt(join(queue, 'lock'), queue);
+    if (!('release' in lock)) throw new Error('the test could not hold the lock');
+    const state = createReconcileState();
+    const started = performance.now();
+    pass(s, state);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(queuedHint(s.dropDir, id(2))).toBe(false);
+    lock.release();
+    pass(s, state);
+    expect(queuedHint(s.dropDir, id(2))).toBe(true);
+  });
+
+  test('a queue write that fails is contained: the pass goes on, and the record is indexed once the queue is repaired', () => {
+    const s = scene();
+    append(s, id(1));
+    writeRecord(s.dropDir, recordOf(s.root, s.home, id(2)));
+    writeRecord(s.dropDir, recordOf(s.root, s.home, id(3)));
+    const entries = join(genFolder(s.dropDir), 'entries');
+    const aside = join(base, 'entries-aside');
+    renameSync(entries, aside);
+    writeFileSync(entries, 'not a folder');
+    const state = createReconcileState();
+    const raised: string[] = [];
+    reconcilePass({ project: SESSION, root: s.root, session: SESSION, home: s.home, state, onEvent: (event) => raised.push(event.payload.record_id) });
+    expect(raised).toContain(id(3));
+    unlinkSync(entries);
+    renameSync(aside, entries);
+    pass(s, state);
+    expect(queuedHint(s.dropDir, id(2))).toBe(true);
+    expect(queuedHint(s.dropDir, id(3))).toBe(true);
   });
 });

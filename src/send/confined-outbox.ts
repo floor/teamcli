@@ -18,8 +18,9 @@
 // files, never what the seat may send. This guards against a mistaken agent, as placement does:
 // every seat runs as the owner's user.
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { readNoFollow } from './history.ts';
+import { mkdirSync, openSync, renameSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerAncestors, callerOf } from '../caller.ts';
@@ -116,13 +117,36 @@ export function relayBindingRefusal(
   dir: string,
   request: { command: OutboxCommand; argv: readonly string[]; seat: string; session: string },
 ): string | null {
-  if (request.command !== 'ack' && request.command !== 'drops') return null;
+  const bound = relayBinding(dir, request);
+  return 'refused' in bound ? bound.refused : null;
+}
+
+/**
+ * The run a relayed read or acknowledgement is bound to (E5): the outbox's own team — its root,
+ * never the folder the request names — and, for an acknowledgement, the one full record id the
+ * check resolved in that seat's own folder, so the command acts on exactly what was proven.
+ * A send or a reply keeps its request's words and folder, as before.
+ */
+export function relayBinding(
+  dir: string,
+  request: { command: OutboxCommand; argv: readonly string[]; seat: string; session: string; cwd?: string },
+): { refused: string } | { argv: string[]; cwd: string | undefined } {
+  if (request.command !== 'ack' && request.command !== 'drops') return { argv: [...request.argv], cwd: request.cwd };
+  const refused = relayBindingCheck(dir, request);
+  if (typeof refused === 'string') return { refused };
+  return { argv: refused.argv, cwd: dirname(dir) };
+}
+
+function relayBindingCheck(
+  dir: string,
+  request: { command: OutboxCommand; argv: readonly string[]; seat: string; session: string },
+): string | { argv: string[] } {
   const grammar = GRAMMAR[request.command];
   const args = readArgs([...request.argv], [...grammar.valued], [...grammar.flags]);
   if (request.command === 'drops') {
     if (args.values.seat !== request.seat) return 'it reads another seat\'s mail than its outbox';
     if (args.values.session !== undefined && args.values.session !== request.session) return 'it reads another session than its outbox';
-    return null;
+    return { argv: [...request.argv] };
   }
   const id = args.rest[0] ?? '';
   if (!recordNameOk(id)) return 'its id is not a record id';
@@ -137,7 +161,7 @@ export function relayBindingRefusal(
   const records = names.filter((name) => name.startsWith(id) && !name.startsWith('.') && !isRecordSidecarName(name));
   if (records.length === 0) return 'no message of that id waits in the seat\'s own folder';
   if (records.length > 1) return 'that id prefix names more than one message in the seat\'s own folder';
-  return null;
+  return { argv: [records[0]!, ...(args.flags.has('json') ? ['--json'] : [])] };
 }
 
 /** A command's first step: a caller its sandbox confines hands the command to its outbox and
@@ -248,7 +272,10 @@ export type RelaySources = {
   /** The terminal host's agent list for the session, or null when it does not answer. */
   agents(): { name: string | null; pane: string }[] | null;
   /** Runs the seat's command as that seat; returns what it said. */
-  run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller): Promise<{ code: number; out: string; err: string }>;
+  /** Runs the seat's command as that seat; returns what it said. `persist` is the command's stdout
+   *  made durable in the seat's outbox as it is written: a read hands its bodies over through it
+   *  before it seals their receipts, so a run cut off after the hand-over still answers with them. */
+  run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller, persist: (text: string) => void): Promise<{ code: number; out: string; err: string }>;
   now(): Date;
   log(line: string): void;
 };
@@ -311,6 +338,7 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
       // The take is released only once its result stands: a failed publication leaves the
       // marker, and a later pass answers it as cut off.
       if (publishResult(folder, id, result, seat, sources)) {
+        dropPartial(folder, id);
         try { unlinkSync(taking); } catch { /* removed with the results */ }
       }
       ran += 1;
@@ -366,13 +394,18 @@ function recoverTaken(folder: string, names: readonly string[], nowMs: number, s
       continue;
     }
     sources.log(`outbox request ${id} was cut off while it ran; its outcome is unknown`);
+    // What the run had already handed over is answered with it, never replaced by an empty result.
+    const handed = readPartial(folder, id);
     if (publishResult(folder, id, {
       id,
       code: 1,
-      out: '',
-      err: 'team: the relay stopped while running this request; whether it was sent is unknown — check before sending again\n',
+      out: handed,
+      err: handed === ''
+        ? 'team: the relay stopped while running this request; whether it was sent is unknown — check before sending again\n'
+        : 'team: the relay stopped after this output was handed over; what it read is above\n',
       at: new Date(nowMs).toISOString(),
     }, id, sources) === false) continue;
+    dropPartial(folder, id);
     try { unlinkSync(path); } catch { /* the sweep removes it */ }
   }
 }
@@ -390,8 +423,35 @@ async function runRequest(dir: string, path: string, id: string, seat: string, s
   try {
     return await checkedRun(dir, path, id, seat, session, sources);
   } catch (error) {
-    return refusal(id, seat, sources, `it could not be run (${(error as Error).message})`);
+    // What the command already handed over stays the seat's: its durable output is the result's.
+    const handed = readPartial(dirname(path), id);
+    const result = refusal(id, seat, sources, `it could not be run (${(error as Error).message})`);
+    return handed === '' ? result : { ...result, out: handed };
   }
+}
+
+const PARTIAL_SUFFIX = '.partial';
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+
+/** Appends a run's stdout to `<id>.partial` in the outbox, flushed before it returns. A write that
+ *  fails throws into the command's own stdout, which then keeps its messages unread. */
+function appendPartial(folder: string, id: string, text: string): void {
+  const fd = openSync(join(folder, `${id}${PARTIAL_SUFFIX}`), constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | NOFOLLOW, 0o600);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error('the outbox output is not a plain file');
+    writeSync(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readPartial(folder: string, id: string): string {
+  return readNoFollow(join(folder, `${id}${PARTIAL_SUFFIX}`)) ?? '';
+}
+
+function dropPartial(folder: string, id: string): void {
+  try { unlinkSync(join(folder, `${id}${PARTIAL_SUFFIX}`)); } catch { /* none was written */ }
 }
 
 async function checkedRun(dir: string, path: string, id: string, seat: string, session: string, sources: RelaySources): Promise<OutboxResult> {
@@ -413,8 +473,8 @@ async function checkedRun(dir: string, path: string, id: string, seat: string, s
   const optionRefusal = relayRefusal(request.command, request.argv);
   if (optionRefusal !== null) return refuse(optionRefusal);
   if (request.seat !== seat || request.session !== session) return refuse('it names another seat or session than its outbox');
-  const binding = relayBindingRefusal(dir, request);
-  if (binding !== null) return refuse(binding);
+  const bound = relayBinding(dir, request);
+  if ('refused' in bound) return refuse(bound.refused);
   const written = Date.parse(request.at);
   if (!Number.isFinite(written) || at.getTime() - written > REQUEST_MAX_AGE_MS || written - at.getTime() > 60_000) {
     return refuse('it is older than ten minutes');
@@ -428,14 +488,15 @@ async function checkedRun(dir: string, path: string, id: string, seat: string, s
     if (listed !== undefined && listed.name && listed.name !== seat) return refuse('the pane belongs to another seat');
     if (agents.some((agent) => agent.name === seat && agent.pane !== request.pane)) return refuse('the seat runs in another pane');
   }
-  let cwd = typeof request.cwd === 'string' ? request.cwd : '';
+  let cwd = typeof bound.cwd === 'string' ? bound.cwd : '';
   try {
     if (cwd === '' || !lstatSync(cwd).isDirectory()) cwd = '';
   } catch {
     cwd = '';
   }
   if (cwd === '') return refuse('its working folder is not a folder');
-  const ran = await sources.run(request.command, request.argv, cwd, { kind: 'seat', name: seat, pane: request.pane, session });
+  const persist = (text: string): void => appendPartial(dirname(path), id, text);
+  const ran = await sources.run(request.command, bound.argv, cwd, { kind: 'seat', name: seat, pane: request.pane, session }, persist);
   sources.log(`${seat}: outbox request ${id} (${request.command}) ran, exit ${String(ran.code)}`);
   return { id, code: ran.code, out: ran.out, err: ran.err, at: at.toISOString() };
 }

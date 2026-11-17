@@ -3,7 +3,7 @@
 // the folder, seat, session and pane (the existing relay) and the binding E5 adds: the read names
 // that seat (and that session), the acknowledgement names exactly one record in that seat's own
 // drop folder. Nothing is granted to the sandbox; every refusal writes only the seat's own result.
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
@@ -153,5 +153,74 @@ describe('E5: confined ack and read through the outbox', () => {
     for (const flag of DROPS_VALUED_OPTIONS) expect(has('drops', flag, true)).toBe(true);
     for (const flag of DROPS_FLAG_OPTIONS.filter((one) => one !== 'dry-run' && one !== 'unread')) expect(has('drops', flag, false)).toBe(true);
     expect(relayRefusal('drops', ['--read', '--seat', 'keeper', '--dry-run'])).not.toBeNull();
+  });
+});
+
+// Review round 1: the run is bound to what was proven, and a read's hand-over survives the relay.
+
+type RunFn = RelaySources['run'];
+
+function relayWith(run: RunFn): RelaySources {
+  return {
+    recordedPane: (seat) => (seat === 'keeper' ? 'pane-k' : undefined),
+    agents: () => [{ name: 'keeper', pane: 'pane-k' }],
+    run,
+    now: () => new Date(),
+    log: () => {},
+  };
+}
+
+describe('E5 round 1: binding and hand-over', () => {
+  test('a request naming another checkout\'s folder runs in the outbox\'s own team root, on the full id the check resolved', async () => {
+    const { root, dir } = team();
+    const elsewhere = fixtureBase('outbox-elsewhere-');
+    made.push(elsewhere);
+    const seen: { argv: string[]; cwd: string }[] = [];
+    const sources = relayWith(async (_command, argv, cwd) => {
+      seen.push({ argv, cwd });
+      return { code: 0, out: '', err: '' };
+    });
+    const at = new Date().toISOString();
+    const ack = plant(dir, { v: 1, id: '00000000-0000-4000-8000-0000000000b1', command: 'ack', argv: ['b5000000-0000-4000-8000-00000000000'], cwd: elsewhere, seat: 'keeper', session: 's', pane: 'pane-k', at });
+    const read = plant(dir, { v: 1, id: '00000000-0000-4000-8000-0000000000b2', command: 'drops', argv: ['--read', '--seat', 'keeper'], cwd: elsewhere, seat: 'keeper', session: 's', pane: 'pane-k', at });
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(seen).toEqual([
+      { argv: [MINE], cwd: root },
+      { argv: ['--read', '--seat', 'keeper'], cwd: root },
+    ]);
+    expect(existsSync(ack)).toBe(true);
+    expect(existsSync(read)).toBe(true);
+  });
+
+  test('a read cut off after it handed its bodies over answers with them, not with an empty result', async () => {
+    const { root, dir } = team();
+    const sources = relayWith(async (_command, _argv, _cwd, _caller, persist) => {
+      persist('BODY OF MINE\n');
+      throw new Error('stopped after the hand-over');
+    });
+    const result = plant(dir, { v: 1, id: '00000000-0000-4000-8000-0000000000c1', command: 'drops', argv: ['--read', '--seat', 'keeper'], cwd: root, seat: 'keeper', session: 's', pane: 'pane-k', at: new Date().toISOString() });
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    const published = JSON.parse(readFileSync(result, 'utf8'));
+    expect(published.out).toBe('BODY OF MINE\n');
+  });
+
+  test('a result that cannot be published keeps the hand-over durable; the recovery answers with it', async () => {
+    const { root, dir } = team();
+    const folder = outboxFolder(dir, 's', 'keeper')!;
+    const id = '00000000-0000-4000-8000-0000000000d1';
+    const sources = relayWith(async (_command, _argv, _cwd, _caller, persist) => {
+      persist('BODY OF MINE\n');
+      return { code: 0, out: 'BODY OF MINE\n', err: '' };
+    });
+    const result = plant(dir, { v: 1, id, command: 'drops', argv: ['--read', '--seat', 'keeper'], cwd: root, seat: 'keeper', session: 's', pane: 'pane-k', at: new Date().toISOString() });
+    mkdirSync(result);
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(readFileSync(join(folder, `${id}.partial`), 'utf8')).toBe('BODY OF MINE\n');
+    rmdirSync(result);
+    const old = new Date(Date.now() - 6 * 60_000);
+    utimesSync(join(folder, `${id}.taking`), old, old);
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(JSON.parse(readFileSync(result, 'utf8')).out).toBe('BODY OF MINE\n');
+    expect(existsSync(join(folder, `${id}.partial`))).toBe(false);
   });
 });
