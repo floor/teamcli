@@ -2633,6 +2633,37 @@ Usage:
 | --- | --- | --- |
 | `seat` | no | no |
 
+## `ping`
+
+Hidden: no
+
+Usage:
+
+    team ping <seat> [--wait <seconds>] [--json]
+    team ping --all [--wait <seconds>] [--json]
+
+### Who may run it
+
+`admission` — each message is an ordinary team send from the caller's own folder, decided by the send admission; the acknowledgement is the seat's own read receipt, so this map admits no one to it
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--wait` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
+
 ## `plan`
 
 Hidden: no

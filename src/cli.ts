@@ -47,6 +47,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   next: () => import('./commands/next.ts'),
   plan: () => import('./commands/plan.ts'),
   peek: () => import('./commands/peek.ts'),
+  ping: () => import('./commands/ping.ts'),
   queue: () => import('./commands/queue.ts'),
   worktree: () => import('./commands/worktree.ts'),
   add: () => import('./commands/add.ts'),
