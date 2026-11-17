@@ -306,6 +306,9 @@ export type Op =
       recordedLaunched: LaunchedIdentity;
       /** The recorded conversation the proof named; absent on a declared-CLI proof. */
       session?: string;
+      /** The pane moved to another conversation inside the seat's own worktree: `session` is
+       *  `to`, and the execute says the change on the seat's own line. */
+      rebound?: { from: string; to: string };
       /** Sidebar line 2, painted by the rename's own step (`also`). */
       displayAgent?: string;
       /** The record never reached ready (stopped at `launched`, or waiting at a dialog). The
@@ -564,6 +567,8 @@ export interface UpSeat {
     recordedLaunched: LaunchedIdentity;
     launched: LaunchedIdentity;
     session?: string;
+    /** See the adopt op's `rebound`. */
+    rebound?: { from: string; to: string };
     via: 'session' | 'cli';
     sentence: string;
     /** The record never reached ready: see the adopt op's `unready`. */
@@ -1205,6 +1210,7 @@ export function upPlan(input: UpInput): Step[] {
           recordedLaunched: seat.adopted.recordedLaunched,
           ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
           ...(seat.adopted.session === undefined ? {} : { session: seat.adopted.session }),
+          ...(seat.adopted.rebound === undefined ? {} : { rebound: seat.adopted.rebound }),
           ...(seat.adopted.unready === undefined ? {} : { unready: seat.adopted.unready }),
         },
       });

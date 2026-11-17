@@ -143,6 +143,19 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
     ?? { kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' };
   const pids = new Set(ancestors.map((process) => process.pid));
 
+  // A Codex app-server one Codex process started for itself serves every Codex TUI that attaches
+  // to it, in any pane (codex-cli 0.169's per-user app-server daemon, measured 2026-11-17: after a
+  // machine restart every resumed Codex pane ran its tools under the daemon the first resumed TUI
+  // had spawned, so each seat walked up into that first pane). Its tools are not the pane's: a
+  // pane reading through it would name the TUI that happened to start the server, another seat or
+  // no seat. Such a caller is placed only by a managed endpoint record, never by a pane.
+  const shared = sharedCodexServer(ancestors);
+  if (shared) {
+    const served = endpointSeat(ancestors, sources, session);
+    if (served !== null) return served;
+    return { kind: 'unplaced', reason: SHARED_CODEX_REASON };
+  }
+
   // A herdr server is normally one of the caller's ancestors. A live handoff re-parents every
   // pane's root process to the system's first process, so the server leaves the chain while the
   // pane's own root process stays in it. The current server's record for the pane the
@@ -228,6 +241,20 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
   const served = endpointSeat(ancestors, sources, session);
   if (served !== null) return served;
   return walkOutside(ancestors, sources);
+}
+
+/** Why a caller under a Codex app-server another Codex process started is not placed by its pane. */
+export const SHARED_CODEX_REASON = 'its Codex tools run in an app-server another Codex process started, which serves more than one pane; team cannot tell which seat it is (a lead runs team restart <seat>, which attaches the seat to its own endpoint)';
+
+/** Whether the caller's nearest Codex ancestor was started directly by another Codex process: an
+ *  app-server a Codex TUI spawned for itself, not a pane's own CLI. A Codex the seat runs from a
+ *  shell (`codex exec` in a tool call) has that shell between the two and is not this case. */
+export function sharedCodexServer(ancestors: readonly Process[]): boolean {
+  const at = ancestors.findIndex((process) => processNameMatches(process.name, CLI_PROCESSES));
+  if (at < 0) return false;
+  const nearest = ancestors[at]!;
+  const parent = ancestors[at + 1];
+  return basename(nearest.name) === 'codex' && parent !== undefined && basename(parent.name) === 'codex';
 }
 
 /** The confined-seat reading (src/placement/confined.ts) for a caller whose parent walk could not

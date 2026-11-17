@@ -2317,7 +2317,12 @@ export async function executePlan(
         }, true);
         provedRestored.add(op.seat);
         dropped.add(op.seat);
-        final(op.seat, { kind: 'ready' }, `  restored and re-tied: ${proof.sentence}\n`);
+        // The audit line for a conversation the record did not hold: the plan proved the pane by
+        // the seat's own worktree, and the record now names the conversation the pane runs.
+        const reboundLine = op.rebound === undefined
+          ? ''
+          : `  its conversation moved from ${op.rebound.from} to ${op.rebound.to} in the seat's own worktree; the record now names ${op.rebound.to}\n`;
+        final(op.seat, { kind: 'ready' }, `  restored and re-tied: ${proof.sentence}\n${reboundLine}`);
         break;
       }
       case 'rename': {
