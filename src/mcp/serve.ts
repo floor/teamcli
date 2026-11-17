@@ -35,6 +35,7 @@ import { publishRecordRead } from '../send/read-receipt.ts';
 import { namingFor, senderDisplayName } from '../send/names.ts';
 import { alreadyReadSentence, readSealedRecord, recordAuthOfSealed, settledReadOf } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
+import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
@@ -357,9 +358,9 @@ function negotiate(params: unknown): string {
   return PROTOCOL_VERSION;
 }
 
-/** One channel notification: the message-display header, then the signed body whole. The record's
- *  complete raw payload must carry this key's signature before any field is read: a tampered or
- *  unsupported record is shown nowhere, not even as a header. */
+/** One channel notification: the message-display header, the signed body whole, then the reader
+ *  line. The record's complete raw payload must carry this key's signature before any field is
+ *  read: a tampered or unsupported record is shown nowhere, not even as a header. */
 function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string> } | null {
   const looked = readSealedRecord(join(serving.dropDir, id));
   if (!looked.ok || looked.sealed === null) return null;
@@ -405,8 +406,11 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
     displayName,
   }) + body;
   if (content.trim() === '') return null;
+  // The reader line every socket frame ends with: the record's id, as `team reply` and `team ack`
+  // take it. The meta carries the id too, but a client may show only the content, and a seat
+  // that cannot see the id cannot answer on the thread.
   return {
-    content,
+    content: takesReaderLine(payload, false) ? bodyWithReaderLine(content, id, existingRecordIdsIn(serving.dropDir)) : content,
     meta: { id, from: payload.from, seat: serving.seat, team: serving.project },
   };
 }

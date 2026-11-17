@@ -33,9 +33,13 @@ import { LOG_FILE, readState, updateState, type SeatState } from '../state.ts';
 import { wakeMarkAt, wakePath } from '../send/wake-marker.ts';
 import { cliHookStatePath, reportedModel } from '../launch/cli-hook.ts';
 
-/** How long a real send waits for the daemon's typed-wake child to report: a walk that types and
- *  sees the working screen takes a few seconds; one the guards refuse answers at once. */
-const HANDED_WAIT_MS = 20_000;
+/** How long a real send waits for the daemon's typed-wake child to report. Zero: the send returns
+ *  once the daemon has accepted the handoff and staged its copy, and says the outcome is pending.
+ *  Waiting held every send to a typed seat for up to 20 s, more while the machine was loaded
+ *  (2026-11-17: 22 s for a wake whose first read refused at once, measured after a reboot). The
+ *  child still records its ending in the history, the trace and the team log, and the watch's
+ *  unread pass wakes the seat again when the wake did not land. */
+const HANDED_WAIT_MS = 0;
 import { logLine } from '../log.ts';
 import { tokenMark } from '../quota/out-of-tokens.ts';
 import { messageKeyOf } from '../store/keys.ts';
@@ -3244,7 +3248,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     const compose = profileFor(to.cli)?.compose ?? null;
     // The receiving team's `message-display` policy decides the words the wake opens with; a team
     // file that did not read leaves the shipped template, never an unnamed wake.
-    const trigger = inlineWake(record, host.home, typedWakeMaxFor(to.cli)) ?? readTriggerLine(to.seat, to.session, {
+    const trigger = inlineWake(record, host.home, typedWakeMaxFor(to.cli), 'typed') ?? readTriggerLine(to.seat, to.session, {
       seat: record.from,
       team: team.project,
       template: wakeTemplate,
@@ -6165,7 +6169,7 @@ export async function walkReplyDelivery(input: {
         { seat: from, ...(input.payload.from_id === null ? {} : { id: input.payload.from_id }) },
         { ...input.naming, mode: 'nickname' },
       );
-      const trigger = inlineWake(input.payload, input.host.home, typedWakeMaxFor(cli)) ?? readTriggerLine(seatName, input.session, {
+      const trigger = inlineWake(input.payload, input.host.home, typedWakeMaxFor(cli), 'typed') ?? readTriggerLine(seatName, input.session, {
         seat: from,
         team: input.sender.project,
         template: wakeTemplate,
@@ -6664,7 +6668,9 @@ async function deliverSocketFrame(
     content = `${content.split('\n')[0]}\n\nMessage too long for this wake. Read it with: team drops --read --id ${msgId} --seat ${to.seat}`;
     bodyIncluded = false;
   }
-  const frame = frameFor(content, msgId, bodyIncluded ? null : reply, store?.mode === 'none' && carried !== null ? carried : undefined);
+  // The reader line rides with the body too: a seat handed the whole body still needs the id to
+  // answer it on its thread.
+  const frame = frameFor(content, msgId, reply, store?.mode === 'none' && carried !== null ? carried : undefined);
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }

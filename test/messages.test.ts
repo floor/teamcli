@@ -17,6 +17,7 @@ import { keyFingerprint, keyOf, MESSAGE_DOMAIN, messageKeyOf, messageKeyPath, me
 import { MESSAGES_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
+import { existingRecordIdsIn, readerLine } from '../src/send/frame.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -559,7 +560,7 @@ difference: lead/m1 does not verify: the record is not a message
     const key = messageKey();
 
     const read = readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home);
-    expect(read).toEqual({ ok: true, body: `lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\n${BODY}` });
+    expect(read).toEqual({ ok: true, body: `lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\n${BODY}\n\n${readerLine(ID, existingRecordIdsIn(scene.dropDir))}` });
     const receiptPath = recordReceiptFile(scene.dropDir, ID, 'read');
     const receipt = readFileSync(receiptPath, 'utf8');
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
@@ -851,7 +852,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     // lost with the child's stdout. Counted, never inferred: exactly one side returns the body.
     // The automatic reader's copy opens with the attributed mark; the manual reader's output is
     // text, so the body's own bytes are what it carries.
-    const markedBody = `lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\n${BODY}`;
+    const markedBody = `lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\n${BODY}\n\n${readerLine(ID, existingRecordIdsIn(scene.dropDir))}`;
     const exposed = (manualResult.out.includes(BODY) ? 1 : 0) + (automaticResult.body === markedBody ? 1 : 0);
     expect({ exposed, detail }).toEqual({ exposed: 1, detail });
     if (automaticResult.ok) {

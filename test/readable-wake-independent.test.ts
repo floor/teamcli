@@ -66,6 +66,9 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
       };
       expect(parsedInline.message.content).toContain('\n\nSocket line alpha\nSocket line beta\nSocket line gamma');
       expect(parsedInline.message.content).not.toContain('Message too long for this wake.');
+      // The whole body still ends with the reader line: the id the seat answers it by.
+      const inlineId = recordIdsIn(dropDir(w.dir, 'lead'))[0]!;
+      expect(parsedInline.message.content.endsWith(`\n\n↩ team reply ${inlineId.slice(0, 8)} "…" · team ack ${inlineId.slice(0, 8)}`)).toBe(true);
 
       const leadDrops = dropDir(w.dir, 'lead');
       expect(readdirSync(leadDrops).some((name) => name.endsWith('.read.json'))).toBe(true);
@@ -615,7 +618,7 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
         at: NOW.toISOString(),
         state: 'reserved',
       });
-      const shortWake = inlineWake(shortPayload, w.home, TYPED_WAKE_MAX)!;
+      const shortWake = inlineWake(shortPayload, w.home, TYPED_WAKE_MAX, 'typed')!;
       expect(shortWake).toContain('Child wake line 1\nChild wake line 2');
 
       const outInline = await serveWakeChild(
