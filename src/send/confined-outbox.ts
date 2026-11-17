@@ -52,6 +52,8 @@ export type OutboxResult = { id: string; code: number; out: string; err: string;
 
 const REQUEST_NAME = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.request\.json$/;
 const RESULT_SUFFIX = '.result.json';
+/** The requester's durable mark that it consumed a request's result (`consumeResult`). */
+const CONSUMED_SUFFIX = '.consumed';
 const MAX_REQUEST_BYTES = 256 * 1024;
 export const REQUEST_MAX_AGE_MS = 10 * 60_000;
 /** How long the seat's own command waits for the watch to run its request. */
@@ -246,7 +248,9 @@ export async function relayThroughOutbox(input: {
     if (result !== null) {
       if (result.out !== '') input.stdout(result.out);
       if (result.err !== '') input.stderr(result.err);
-      try { unlinkSync(resultPath); } catch { /* the watch removes it after a day */ }
+      // The requester never deletes the result: it marks it consumed, durably, and the relay's
+      // retire step removes it. A mark that cannot be written leaves the result to expire.
+      consumeResult(folder, id);
       return result.code;
     }
     if (Date.now() >= deadline) break;
@@ -254,6 +258,33 @@ export async function relayThroughOutbox(input: {
   }
   say(`queued in ${input.seat}'s outbox (id ${id}): the team's watch runs it on its next pass; its result is written to ${resultPath}`);
   return 0;
+}
+
+/** Writes `<id>.consumed` whole and durable (temp file fsynced, renamed, folder fsynced): the
+ *  record that the request's result was handed to the seat. Idempotent; false on any fault. */
+export function consumeResult(folder: string, id: string): boolean {
+  const mark = join(folder, `${id}${CONSUMED_SUFFIX}`);
+  try {
+    if (lstatSync(mark).isFile()) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+  }
+  const temp = join(folder, `.${id}.consumed.${randomUUID()}.tmp`);
+  try {
+    const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
+    try {
+      writeAll(fd, 'consumed\n');
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temp, mark);
+    fsyncFolder(folder);
+    return true;
+  } catch {
+    try { unlinkSync(temp); } catch { /* not created */ }
+    return false;
+  }
 }
 
 function readResult(path: string, id: string): OutboxResult | null {
@@ -420,7 +451,7 @@ function recoverTaken(dropDir: string, seat: string, folder: string, names: read
     const id = name.slice(0, -'.taking'.length);
     if (!/^[0-9a-f-]{36}$/.test(id)) continue;
     const path = join(folder, name);
-    if (!names.includes(`${id}${RESULT_SUFFIX}`)) {
+    if (!names.includes(`${id}${RESULT_SUFFIX}`) && !names.includes(`${id}${CONSUMED_SUFFIX}`)) {
       try {
         if (nowMs - lstatSync(path).mtimeMs < TAKEN_STALE_MS) continue;
       } catch {
@@ -462,6 +493,18 @@ function finishTake(dropDir: string, seat: string, folder: string, id: string, s
     sources.log(`${seat}: outbox request ${id}: ${why}; kept for a later pass`);
     return false;
   };
+  // The requester's durable consumed mark is read first: once it stands, the result went out and
+  // is never published again; only the retire is left to finish.
+  const markPath = join(folder, `${id}${CONSUMED_SUFFIX}`);
+  let consumed: boolean;
+  try {
+    const held = lstatSync(markPath);
+    if (held.isSymbolicLink() || !held.isFile()) return stop('its consumed mark is held by something that is not a file');
+    consumed = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return stop('its consumed mark cannot be read now');
+    consumed = false;
+  }
   const owned = claimsOwnedBy(dropDir, owner);
   if (owned === null) return stop('its read claims cannot be read now');
   const saved = readPartial(folder, id, sources.stat);
@@ -470,6 +513,9 @@ function finishTake(dropDir: string, seat: string, folder: string, id: string, s
   sources.fault?.('seal');
   const handed = owned.filter((one) => saved.ids.includes(one));
   if (handed.length > 0 && !sources.seal(seat, handed, owner)) return stop('a read receipt could not be sealed now');
+  if (consumed) {
+    // Published and consumed: steps 3b is done for good; resume at the discard.
+  } else {
   // 3b. publish
   sources.fault?.('publish');
   const resultPath = join(folder, `${id}${RESULT_SUFFIX}`);
@@ -502,6 +548,7 @@ function finishTake(dropDir: string, seat: string, folder: string, id: string, s
       return stop('its result could not be made durable now');
     }
   }
+  }
   // 4. discard
   sources.fault?.('discard');
   if (!discardSaved(folder, id, fsx)) return stop('its saved output could not be discarded now');
@@ -511,12 +558,22 @@ function finishTake(dropDir: string, seat: string, folder: string, id: string, s
   for (const one of owned) {
     if (!removeOwnedClaim(dropDir, one, owner, fsx)) return stop('a read claim could not be removed now');
   }
-  // the take is retired
+  // 6. retire, the only step that deletes the result: once the requester has consumed it (or it
+  // expired, see `sweepResults`), in order the result, the take and the consumed mark, then the
+  // folder is fsynced. Until then the take stays, and each pass finds every earlier step done.
+  if (!consumed) return true;
   sources.fault?.('retire');
+  for (const name of [`${id}${RESULT_SUFFIX}`, `${id}.taking`, `${id}${CONSUMED_SUFFIX}`]) {
+    try {
+      fsx.unlink(join(folder, name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return stop('it could not be retired now');
+    }
+  }
   try {
-    fsx.unlink(join(folder, `${id}.taking`));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return stop('its take could not be retired now');
+    fsx.fsyncFolder(folder);
+  } catch {
+    return stop('its retire could not be made durable now');
   }
   return true;
 }
@@ -727,9 +784,20 @@ function sweepResults(folder: string, names: readonly string[], nowMs: number): 
     if (!name.endsWith(RESULT_SUFFIX) && !tempFile) continue;
     const path = join(folder, name);
     try {
-      if (nowMs - lstatSync(path).mtimeMs > RESULT_KEEP_MS) unlinkSync(path);
+      if (nowMs - lstatSync(path).mtimeMs <= RESULT_KEEP_MS) continue;
+      const id = name.slice(0, -RESULT_SUFFIX.length);
+      // A result whose take still stands is the lifecycle's: expiry counts as its consumption,
+      // and the retire step removes it. Any other expired file goes here.
+      if (!tempFile && names.includes(`${id}.taking`)) consumeResult(folder, id);
+      else unlinkSync(path);
     } catch {
       // Gone already.
     }
+  }
+  // A consumed mark whose take is gone was left by a retire cut off before its last unlink.
+  for (const name of names) {
+    if (!name.endsWith(CONSUMED_SUFFIX)) continue;
+    if (names.includes(`${name.slice(0, -CONSUMED_SUFFIX.length)}.taking`)) continue;
+    try { unlinkSync(join(folder, name)); } catch { /* gone */ }
   }
 }

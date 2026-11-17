@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { recordDir } from '../src/commands/messages.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { currentClaimIn, readMessage, sealRecoveredRead } from '../src/mcp/inbox.ts';
-import { outboxFolder, relayOutboxes, type FinishStep, type RelaySources } from '../src/send/confined-outbox.ts';
+import { consumeResult, outboxFolder, relayOutboxes, type FinishStep, type RelaySources } from '../src/send/confined-outbox.ts';
 import { READ_CLAIMS, relayClaimOwner } from '../src/send/read-claim.ts';
 import { RECORD_KIND, signRecord, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
@@ -61,6 +61,9 @@ function realFsync(folder: string): void {
 type Fault = 'crash' | 'fsync' | 'unlink';
 
 /** Recovery's sources, with a fault at `step` on this pass only. */
+/** Every result publication any pass makes (counted at its temp file's flush). */
+let published = 0;
+
 function sources(made: World, step: FinishStep | null, fault: Fault | null): RelaySources {
   let current: FinishStep | null = null;
   const failing = (kind: Fault) => fault === kind && current === step && step !== null;
@@ -76,6 +79,7 @@ function sources(made: World, step: FinishStep | null, fault: Fault | null): Rel
       // A failed flush after the receipt was linked: it is visible, and reported not durable.
       return failing('fsync') ? false : sealed;
     }),
+    trace: (point) => { if (point === 'result-fsync') published += 1; },
     fault: (at) => {
       current = at;
       if (failing('crash')) throw new Error(`crash at ${at}`);
@@ -130,16 +134,39 @@ describe('the relayed read lifecycle, stopped at every step', () => {
           }
         };
 
+        // The real requester's side: the first result it sees is printed (counted) and marked
+        // consumed, durably; it never deletes the result. Once consumed, a result must never be
+        // published again.
+        const resultPath = join(folder, `${request}.result.json`);
+        let consumed = false;
+        const requester = () => {
+          if (consumed) {
+            expect(existsSync(resultPath) && !existsSync(join(folder, `${request}.consumed`))).toBe(false);
+            return;
+          }
+          if (!existsSync(resultPath)) return;
+          const out = (JSON.parse(readFileSync(resultPath, 'utf8')) as { out: string }).out;
+          wholeOut += bodiesIn(out, whole);
+          expect(out).not.toContain(torn);
+          expect(consumeResult(folder, request)).toBe(true);
+          consumed = true;
+          publishedAtConsumption = published;
+        };
+        let publishedAtConsumption = 0;
+
         await relayOutboxes(made.dir, SESSION, [SEAT], sources(made, step, fault)).catch(() => 0);
+        requester();
         rival();
-        for (let pass = 0; pass < 4 && existsSync(taking); pass += 1) {
+        for (let pass = 0; pass < 6 && existsSync(taking); pass += 1) {
           await relayOutboxes(made.dir, SESSION, [SEAT], sources(made, null, null));
+          requester();
           rival();
         }
+        expect(consumed).toBe(true);
+        // Once consumed, no pass publishes a result again.
+        expect(published).toBe(publishedAtConsumption);
         expect(existsSync(taking)).toBe(false);
-        const out = (JSON.parse(readFileSync(join(folder, `${request}.result.json`), 'utf8')) as { out: string }).out;
-        wholeOut += bodiesIn(out, whole);
-        expect(out).not.toContain(torn);
+        expect(existsSync(resultPath)).toBe(false);
         expect(wholeOut).toBe(1);
         expect(tornOut).toBe(1);
         // Nothing is left: no claim, no saved output, no unframed output.
@@ -147,6 +174,7 @@ describe('the relayed read lifecycle, stopped at every step', () => {
         expect(existsSync(join(target(made).dropDir, READ_CLAIMS, `${torn}.owner`))).toBe(false);
         expect(existsSync(join(folder, `${request}.partial`))).toBe(false);
         expect(existsSync(join(folder, `${request}.partial.000000`))).toBe(false);
+        expect(existsSync(join(folder, `${request}.consumed`))).toBe(false);
       });
     }
   }
@@ -174,5 +202,52 @@ describe('the relayed read lifecycle, stopped at every step', () => {
     const next = readMessage(target(made), id, made.home);
     expect(next.ok).toBe(true);
     if (next.ok) expect(bodiesIn(next.body, id)).toBe(1);
+  });
+
+  // Hermes and Hestia, round 8: the result is consumed, then the retire is cut after the result
+  // was removed and before the take was. The consumed mark is read first: the next pass never
+  // publishes again from the saved output, it only finishes the retire.
+  test('a retire cut after removing a consumed result never brings the result back', async () => {
+    const made = open();
+    const id = 'f1a10000-0000-4000-8000-000000000004';
+    plant(made, id);
+    const request = 'f1a1aaaa-0000-4000-8000-000000000004';
+    const folder = outboxFolder(made.dir, SESSION, SEAT)!;
+    mkdirSync(folder, { recursive: true });
+    const taking = join(folder, `${request}.taking`);
+    writeFileSync(taking, '{}');
+    const long = new Date(Date.now() - 10 * 60_000);
+    utimesSync(taking, long, long);
+    const owner = relayClaimOwner(folder, request);
+    const first = readMessage(target(made), id, made.home, undefined, undefined, { receipt: 'after', owner });
+    if (!first.ok) throw new Error('the deferred read was refused');
+    saveChunk(folder, request, 0, `${first.body}\n`, [id]);
+    writeFileSync(join(target(made).dropDir, READ_CLAIMS, id), '999999 dead 1\n');
+    // Publication is cut before its discard: the result stands with the saved chunk beside it.
+    await relayOutboxes(made.dir, SESSION, [SEAT], sources(made, 'discard', 'crash')).catch(() => 0);
+    const resultPath = join(folder, `${request}.result.json`);
+    const out = (JSON.parse(readFileSync(resultPath, 'utf8')) as { out: string }).out;
+    let exposed = bodiesIn(out, id);
+    expect(consumeResult(folder, request)).toBe(true);
+    const publishedAtConsumption = published;
+    // The retire removes the result, then fails on the take.
+    const cut: RelaySources = {
+      ...sources(made, null, null),
+      fs: {
+        unlink: (path) => { if (path === taking) throw Object.assign(new Error('injected EIO'), { code: 'EIO' }); unlinkSync(path); },
+        fsyncFolder: realFsync,
+      },
+    };
+    await relayOutboxes(made.dir, SESSION, [SEAT], cut);
+    expect(existsSync(resultPath)).toBe(false);
+    expect(existsSync(taking)).toBe(true);
+    // Even a stale take with its consumed mark is only retired: the result is never recreated.
+    await relayOutboxes(made.dir, SESSION, [SEAT], sources(made, null, null));
+    expect(existsSync(resultPath)).toBe(false);
+    expect(existsSync(taking)).toBe(false);
+    expect(published).toBe(publishedAtConsumption);
+    const again = readMessage(target(made), id, made.home);
+    if (again.ok) exposed += bodiesIn(again.body, id);
+    expect(exposed).toBe(1);
   });
 });
