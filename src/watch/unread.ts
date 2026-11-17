@@ -586,6 +586,33 @@ async function wakeByWebhook(
   return { outcome: 'next' };
 }
 
+/** Whether the seat is one of the team's leads (orchestrator or operator). */
+function isLeadSeat(scene: RetryScene, seat: string): boolean {
+  return (scene.team.orchestrator !== '' && seat === scene.team.orchestrator)
+    || (scene.team.operator !== '' && seat === scene.team.operator);
+}
+
+/** Re-arms every lead-alarm clock in the seat's drop folder that has not climbed: the clock
+ *  restarts at `nowMs`. A folder or marker that cannot be read or written is left as it is. */
+export function rearmLeadEpisodes(dropDir: string, nowMs: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(dropDir).filter((name) => name.endsWith('.lead-episode'));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const path = join(dropDir, name);
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { at?: unknown; climbed?: unknown };
+      if (parsed.climbed === true || typeof parsed.at !== 'number') continue;
+      writeFileSync(path, `${JSON.stringify({ at: nowMs, climbed: false })}\n`, { mode: 0o600 });
+    } catch {
+      // Unreadable or unwritable: the marker stays as it is.
+    }
+  }
+}
+
 /** Five minutes after a lead's first wake, with no read receipt, the parent is told once. */
 const LEAD_RECEIPT_MS = 5 * 60 * 1000;
 
@@ -704,7 +731,16 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // A held seat is not woken: its native presence proves a turn, a person wait, a session end,
     // or a projection this pass cannot trust. The message stays unread and the later report
     // still speaks; no reservation is taken and nothing is typed.
-    if (scene.nativeHeld?.has(seat.name) === true) continue;
+    if (scene.nativeHeld?.has(seat.name) === true) {
+      // RFC event-comms E3: a lead the presence proves mid-turn is not idle. Every running
+      // lead-alarm clock is re-armed here, so the alarm counts from the end of the turn, never
+      // from the wake before it. Other holds (a person wait, a gone or untrusted projection) keep
+      // the legacy clock. Nothing else happens for a held seat: no wake, no reservation, no key.
+      if (isLeadSeat(scene, seat.name) && scene.nativeWorking?.has(seat.name) === true) {
+        rearmLeadEpisodes(join(scene.dir, 'send-drops', scene.session, seat.name), scene.now.getTime());
+      }
+      continue;
+    }
     if (options.rung?.has(seat.name) === true) continue;
     // The seat's own retry, read from its profile and its file word. Off keeps today's
     // drop-file typed leg, whose writer refuses in every real binding.

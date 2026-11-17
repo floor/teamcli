@@ -3,6 +3,9 @@
 // id used once, and an appended revocation read again before the drop is written. No live key,
 // grant, pane or team record is touched.
 
+import { eventWalk } from '../src/launch/brief-at-ready.ts';
+import { readRecord as readStoredRecord } from '../src/send/record.ts';
+import { readTeamConfig as readTeamConfigE2 } from '../src/file/team-config.ts';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -1394,6 +1397,54 @@ describe('the client send walk', () => {
       expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('orchestrator: delivered (typed wake) for client drop drop-1');
     });
   }
+
+  test('RFC event-comms E2: the ready offer walks the real event cascade: a kept record, no adapter at first, the typed wake once the seat is idle', async () => {
+    const w = walkFixture('walk-ready-offer');
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('cli: claude-code', 'cli: codex').replace('launch: claude', 'launch: codex').replace('vendor: anthropic', 'vendor: openai'));
+    const idle = readFileSync(join(import.meta.dir, 'fixtures', 'codex/0.161.0/idle.txt'), 'utf8');
+    const working = readFileSync(join(import.meta.dir, 'fixtures', 'codex/0.161.0/working.txt'), 'utf8');
+    // At the first offer the seat is mid-turn: no wake leg can take the record, and it is kept.
+    const busyTyped: string[] = [];
+    const busy: TypedWakeHost = {
+      read: () => working,
+      type: (_pane, text) => { busyTyped.push(text); return true; },
+      enter: () => true,
+      prompt: () => true,
+      wait: async () => {},
+    };
+    const first = { ...walkHost(w), typedWake: () => busy, wakeVerifyMs: 50, wakePollMs: 1 } as unknown as WalkHost;
+    expect(await runSend(clientArgs(w), capture(w, { caller: owner }).io, first)).toBe(0);
+    expect(busyTyped).toEqual([]);
+    const dropDirs = readdirSync(join(w.dir, 'send-drops'));
+    const dropDir = join(w.dir, 'send-drops', dropDirs[0]!, 'orchestrator');
+    const recordsBefore = readdirSync(dropDir).filter((name) => /^[^.]+$/.test(name)).sort();
+    const stored = readStoredRecord(join(dropDir, 'drop-1'));
+    if (!stored.ok || stored.record === null) throw new Error('expected the kept record');
+    const loaded = readTeamConfigE2(w.teamRoot, { home: w.home });
+    if (!loaded.ok) throw new Error('the team file did not load');
+
+    // Ready: the box is idle now. The real walk (eventWalk -> walkReplyDelivery) takes the typed
+    // wake once, for the same record, and writes no second record.
+    const typed: string[] = [];
+    let enters = 0;
+    const ready: TypedWakeHost = {
+      read: () => (enters > 0 ? working : typed.length > 0 ? idle.replace('› Ask Codex to do anything', `› ${(typed[typed.length - 1] ?? '').replaceAll('\n', '\n  ')}`) : idle),
+      type: (_pane, text) => { typed.push(text); return true; },
+      enter: () => { enters += 1; return true; },
+      prompt: () => true,
+      wait: async () => {},
+    };
+    const host = { ...walkHost(w), typedWake: () => ready, wakeVerifyMs: 50, wakePollMs: 1 } as unknown as WalkHost;
+    const walked = await eventWalk({
+      dir: w.dir, root: w.teamRoot, session: dropDirs[0]!, home: w.home, team: loaded.team, host,
+      plan: { seat: 'orchestrator', cli: 'codex', payload: stored.record.payload },
+    });
+    expect(walked).toEqual({ ok: true, via: 'typed' });
+    expect(typed).toHaveLength(1);
+    expect(enters).toBe(1);
+    expect(readdirSync(dropDir).filter((name) => /^[^.]+$/.test(name)).sort()).toEqual(recordsBefore);
+  });
 
   test('the client reads its own message status events: delivered, then read, then replied', async () => {
     const w = walkFixture('walk-status');

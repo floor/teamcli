@@ -5209,7 +5209,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // RFC event-comms E2: a launch brief kept in its inbox (no live route when it was written) is
     // offered once more now that its seat is ready, bound to the seat's current claim. A note is
     // logged either way; a brief not taken here is still offered by the unread sweep.
-    for (const note of await offerBriefsAtReady({ report: briefReport, ready: new Set(Object.entries(readState(dir).sessions[session]?.seats ?? {}).filter(([, held]) => held?.stage === 'ready').map(([name]) => name)), dir, root, session, home: sources.home })) {
+    for (const note of await offerBriefsAtReady({ report: briefReport, ready: new Set(Object.entries(readState(dir).sessions[session]?.seats ?? {}).filter(([, held]) => held?.stage === 'ready').map(([name]) => name)), dir, team, root, session, home: sources.home })) {
       logLine(dir, 'up', callerLabel(caller), note.said, now());
       if (note.offered) stderrLine(`team up: ${note.said}\n`);
     }
