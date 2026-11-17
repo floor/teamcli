@@ -4,6 +4,7 @@
 // a pane: the answer is a signature from the owner page (passkey or Touch ID). Each command keeps
 // its own exits; this file only decides.
 
+import { HostedFallback, HostedStoppedAfterEffect, hostedFallbackPoint } from '../host/request-scope.ts';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -168,7 +169,11 @@ export function ownerSeatStep(
     return { kind: 'admitted', admission: { ok: true, via: 'leads', signer: leads.role } };
   }
   // A caller who asked for the card gets the card. The charter may admit a run that did not.
-  if (charterSigner !== null && !ask.request) return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: charterSigner } };
+  if (charterSigner !== null && !ask.request) {
+    // A charter's admission is the owner's authority, never decided in the warm send host.
+    hostedFallbackPoint('a charter admits this line');
+    return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: charterSigner } };
+  }
   if (!ask.request && ask.approval === undefined) return { kind: 'none' };
   if (ask.request && ask.approval !== undefined) return ownerRequestDoor(command, action, argv, ask, io, sources, null);
   const root = sources.root ?? findRoot(io.cwd);
@@ -343,8 +348,12 @@ export function ownerSeatRuleAdmits(
       ? covering[0]
       : covering.find((rule) => ruleSubjectAdmits(rule, home, io));
     if (admits === undefined) return false;
+    // An owner-seat rule's admission is the owner's authority: the warm send host hands the line
+    // back before the claim and its audit line (rfc-bus-send-server §2.5).
+    hostedFallbackPoint('an owner-seat rule admits this line');
     return admitOwnerActionByRule(home, { action, root, team: teamNameAt(root, home), claim: !dry, ruleId: admits.rule_id }, store, now).ok;
-  } catch {
+  } catch (error) {
+    if (error instanceof HostedFallback || error instanceof HostedStoppedAfterEffect) throw error;
     return false;
   }
 }

@@ -19,6 +19,7 @@
 // sender) so a live event-lock holder can never hold the send's line for the lock's whole budget.
 // A step the lock keeps out past a short bounded retry is deferred to the store's own folder and
 // flushed by a later append; it never fails the step it records.
+import { hostedCommit } from '../host/request-scope.ts';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -126,6 +127,7 @@ export function appendStep(
   lockWaitMs = STEP_APPEND_MS,
   options: AppendOptions = {},
 ): StepResult {
+  hostedCommit('appendStep');
   try {
     let result = appendOnce(store, input, lockWaitMs, options);
     if (!result.ok && result.busy === true && lockWaitMs < STEP_RETRY_BUDGET_MS) {

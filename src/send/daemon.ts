@@ -1,3 +1,4 @@
+import { hostedCommit } from '../host/request-scope.ts';
 import { recordDeliveredBody, RUNTIME_WAKE_MAX } from './readable-wake.ts';
 import { typedWakeMaxFor } from './readable-wake.ts';
 import { refuseTyping } from './no-pane-messaging.ts';
@@ -873,6 +874,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
       if (!dropLadder.ok) {
         return Promise.resolve(refuseTyped(`${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`));
       }
+      hostedCommit('relay stage');
       return relayStage(
         { dir: dropLadder.leaf, name: handoffId },
         { id: handoffId, record: request.body },
@@ -994,6 +996,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`,
       });
     }
+    hostedCommit('relay stage');
     return relayStage(
       { dir: dropLadder.leaf, name: queuedId },
       { id: queuedId, record: request.body },
@@ -1414,6 +1417,7 @@ async function executeQueuedSend(
   // The copy is the relay package's durable write: whole bytes, 0600 in a 0700 folder, published
   // by an exclusive link, so a holder already at the name is never replaced. The ladder above
   // stays this command's path policy; admission, history and the typed leg all stay here.
+  hostedCommit('relay stage');
   const staged = await relayStage(
     { dir: stateDropDir, name: msgId },
     { id: msgId, record: body },

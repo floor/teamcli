@@ -1,3 +1,4 @@
+import { hostedCommit } from '../host/request-scope.ts';
 import type { KeyObject } from 'node:crypto';
 // The seat's inbox: the drop folder `team send` already writes, read from the seat's own side.
 //
@@ -197,6 +198,7 @@ export function ensureInboxFolder(root: string, session: string, seat: string): 
 
 /** Writes the listener marker whole at 0600 by rename; false when it cannot be written. */
 export function writeListener(dropDir: string, listener: InboxListener): boolean {
+  hostedCommit('writeListener');
   try {
     dropMessage(dropDir, LISTENER_FILE, `${JSON.stringify(listener)}\n`);
     return true;

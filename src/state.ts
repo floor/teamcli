@@ -1,3 +1,4 @@
+import { hostedCommit } from './host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -1032,6 +1033,7 @@ export function updateState<T>(
   change: (state: State) => T,
   options: { waitMs?: number; writeWhen?: (result: T) => boolean } = {},
 ): T {
+  hostedCommit('updateState');
   return withLock(dir, () => {
     const state = readState(dir);
     const result = change(state);
@@ -1101,6 +1103,7 @@ function writeTemporary(path: string, text: string, random: () => string, mode?:
  * the only file this call created — leaving the live name as it was.
  */
 export function writeAtomic(path: string, text: string, options: { random?: () => string } = {}): void {
+  hostedCommit('writeAtomic');
   const random = options.random ?? (() => randomBytes(10).toString('hex'));
   const temporary = writeTemporary(path, text, random, 0o600);
   try {

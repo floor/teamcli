@@ -20,6 +20,7 @@
 // `team reply --close` and signed with `RECEIPT_DOMAIN` like a receipt, since it is derived state
 // beside a message. It is not a message and carries no body: it names the record, the thread and
 // the side that closed it, and `team reply` reads it before a reply is admitted.
+import { hostedCommit } from '../host/request-scope.ts';
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -788,6 +789,7 @@ export type RecordWrite = { ok: true; path: string; existing?: true } | { ok: fa
  * and a second write is the receiver's duplicate to drop, not the sender's to overwrite.
  */
 export function writeRecord(dropDir: string, record: SignedRecord): RecordWrite {
+  hostedCommit('writeRecord');
   const id = record.payload.id;
   if (!recordNameOk(id)) return { ok: false, reason: 'the record id cannot be a file name' };
   const path = recordFile(dropDir, id);
@@ -838,6 +840,7 @@ export type SealedRead = { ok: true; sealed: Sealed | null } | { ok: false; reas
  * name this key does not own.
  */
 export function writeRecordOver(dropDir: string, record: SignedRecord): RecordWrite {
+  hostedCommit('writeRecordOver');
   const id = record.payload.id;
   if (!recordNameOk(id)) return { ok: false, reason: 'the record id cannot be a file name' };
   const path = recordFile(dropDir, id);
@@ -1359,6 +1362,7 @@ export function isReadOrCleared(
  * past it.
  */
 export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: string, brief?: BriefBinding): RecordWrite {
+  hostedCommit('writeReceipt');
   const id = receipt.payload.id;
   const status = receipt.payload.status;
   if (!recordNameOk(id)) return { ok: false, reason: 'the receipt id cannot be a file name' };
@@ -1397,6 +1401,7 @@ function receivedAt(path: string, receipt: SignedReceipt, home: string, brief?: 
  * thread is the one that stands.
  */
 export function writeClose(dropDir: string, close: SignedClose): RecordWrite {
+  hostedCommit('writeClose');
   const id = close.payload.id;
   if (!recordNameOk(id)) return { ok: false, reason: 'the close id cannot be a file name' };
   const path = closeFile(dropDir, id);

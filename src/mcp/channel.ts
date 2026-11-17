@@ -13,6 +13,7 @@
 // A pushed message with no signed `read` receipt after the confirmation window is the one case
 // the watch redelivers. It redelivers exactly once (`redelivered: channel unconfirmed`), and only
 // for an id with no receipt: an acknowledged message is never touched again.
+import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -301,6 +302,7 @@ export function channelEmitted(dropDir: string, id: string): boolean {
 }
 
 export function recordChannelEmitted(dropDir: string, id: string, at: string): boolean {
+  hostedCommit('recordChannelEmitted');
   try {
     writeFileSync(channelEmittedPath(dropDir, id), `${JSON.stringify({ v: 1, id, at })}\n`, { flag: 'wx', mode: 0o600 });
     return true;
@@ -325,6 +327,7 @@ export function channelAborted(dropDir: string, id: string): boolean {
 }
 
 export function recordChannelAbort(dropDir: string, id: string, at: string, reason: string): boolean {
+  hostedCommit('recordChannelAbort');
   try {
     writeFileSync(channelAbortPath(dropDir, id), `${JSON.stringify({ v: 1, id, at, reason })}\n`, { flag: 'wx', mode: 0o600 });
     return true;
@@ -350,6 +353,7 @@ export type ChannelHeldReceipt = {
  * on either way; the marker only ever prevents a later push.
  */
 export function recordChannelHeld(dropDir: string, receipt: ChannelHeldReceipt): boolean {
+  hostedCommit('recordChannelHeld');
   try {
     writeFileSync(channelPushPath(dropDir, receipt.id), `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
     return true;
@@ -1008,6 +1012,7 @@ export type ChannelPushReceipt = {
  * must not write a notification without winning this reservation.
  */
 export function recordChannelPush(dropDir: string, receipt: ChannelPushReceipt): boolean {
+  hostedCommit('recordChannelPush');
   try {
     writeFileSync(channelPushPath(dropDir, receipt.id), `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
     return true;

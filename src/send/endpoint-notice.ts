@@ -3,6 +3,7 @@
 // enqueued. Restoring the team does not clear that mark. The notice reaches the lead through
 // the drop readers. Channel admission does not name this principal: the signature is the shared
 // home key, and it proves only that a seat wrote the record.
+import { hostedCommit } from '../host/request-scope.ts';
 import { randomUUID } from 'node:crypto';
 import { readStateFile, writeStateFile } from '../file-write.ts';
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
@@ -24,6 +25,7 @@ export function writeRuntimeNotice(input: {
   home: string; root: string; session: string; lead: string; id: string; body: string; at: string;
   prepareOnly?: boolean;
 }): { ok: true; payload: RecordPayload; existing: boolean } | { ok: false; reason: string } {
+  hostedCommit('writeRuntimeNotice');
   try {
     const payload: RecordPayload = {
       kind: 'message', id: input.id, to: input.lead, to_id: null,
@@ -84,6 +86,7 @@ export function writeEndpointBlockedNotice(input: {
   reason: string;
   at: string;
 }): boolean {
+  hostedCommit('writeEndpointBlockedNotice');
   if (input.lead === '' || input.lead === input.seat) return false;
   const mark = blockedMark(input.root, input.session, input.seat);
   try {

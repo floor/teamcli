@@ -20,6 +20,7 @@
 // through them. Revoking an always rule and forgetting a registry record are asked here too:
 // they remove a standing the owner already gave, and they do not hand a new one out.
 
+import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -530,6 +531,7 @@ export function prepareOwnerActionAnswer(home: string, id: string, word: string,
 
 /** Writes one signed answer for a prepared request, and its `always` rule where one is kept. */
 export function recordOwnerActionAnswer(home: string, prepared: PreparedOwnerAnswer, signed: SignedOwnerAnswer, store: OwnerSeatKeyStore, now: Date): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
+  hostedCommit('recordOwnerActionAnswer');
   const { record, choice } = prepared;
   const id = record.request_id;
   if (askedBy(record.params).includes(signed.signer)) return { ok: false, why: `signer "${signed.signer}" asked for request ${id}; no principal approves its own request` };
@@ -623,6 +625,7 @@ export function heldOwnerActionAnswer(home: string, record: OwnerActionRecord, s
  * request under the same id is refused. The card goes to the owner seat inbox once.
  */
 export function recordForeignOwnerAction(home: string, record: OwnerActionRecord, now: Date = new Date()): { ok: true; fresh: boolean; text: string } | { ok: false; why: string } {
+  hostedCommit('recordForeignOwnerAction');
   if (record.params.machine === undefined) return { ok: false, why: `request ${record.request_id} names no machine; only a request carried from another machine is recorded here` };
   const bundled = exactBundleProblem(record.params.actions, record.request_id);
   if (bundled !== null) return { ok: false, why: bundled };
@@ -653,6 +656,7 @@ export function recordForeignOwnerAction(home: string, record: OwnerActionRecord
  * checks, made before this one.
  */
 export function recordCarriedOwnerAnswer(home: string, record: OwnerActionRecord, signed: SignedOwnerAnswer, store: OwnerSeatKeyStore, now: Date): { ok: true; answer: OwnerSeatAnswer; signer: string } | { ok: false; why: string } {
+  hostedCommit('recordCarriedOwnerAnswer');
   const id = record.request_id;
   const checked = carriedOwnerAnswerCheck(home, record, signed, store, now);
   if (!checked.ok) return checked;

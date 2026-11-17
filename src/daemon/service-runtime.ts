@@ -100,6 +100,7 @@ export function serviceRunWords(program: ServiceProgram): string[] {
   if (program.presence === true) args.push('--presence');
   // The watch opt-in is separate: a unit may record either, both or neither.
   if (program.watch === true) args.push('--watch');
+  if (program.sendServer === true) args.push('--send-server');
   // The general grant and client key that admitted the install are never written here: the
   // service-started run is admitted by `--started-by service-manager` itself, and a definition
   // that named either would keep a credential on disk where the service manager reads it.

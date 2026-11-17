@@ -1,3 +1,5 @@
+import { hostedFallbackPoint } from './host/request-scope.ts';
+import { hostedRequest } from './host/request-scope.ts';
 import { execProcessToolSync } from './process-tools-adapter.ts';
 import { kernelProcess } from './process-kernel.ts';
 import { readFileSync } from 'node:fs';
@@ -207,6 +209,9 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
           foreground: sources.foreground?.(agent.pane) ?? null,
         });
         if (proved.kind === 'seat') {
+          // The warm send host never repairs a placement: the line goes back to the client, whose
+          // in-process run puts the name back exactly as it always has (rfc-bus-send-server §2.5).
+          hostedFallbackPoint('the seat pane lost its herdr name; the in-process run repairs it');
           reapplyHerdrName({ session, pane: agent.pane, name: proved.name, root: proved.root });
           return { kind: 'seat', name: proved.name, pane: agent.pane, session };
         }
@@ -854,10 +859,17 @@ export function readAncestors(
   note: (cause: string) => void = noteAncestorFailure,
 ): Process[] | null {
   const followsParent = pid === undefined;
-  const startPid = pid ?? process.ppid;
+  // In the warm send host the walk starts where the client's own walk would: its kernel parent
+  // (src/host/request-scope.ts). The parent-changed check then reads the client's parent again.
+  const hosted = hostedRequest();
+  const startPid = pid ?? hosted?.startPid ?? process.ppid;
   const parentMatches = (chain: Process[] | null): Process[] | null => {
     if (followsParent && chain !== null && chain.length > 0) {
-      const liveParent = process.ppid;
+      const liveParent = hosted !== null ? hosted.currentParent() : process.ppid;
+      if (liveParent === null) {
+        note('the client process is gone');
+        return null;
+      }
       const walkedParent = chain[0]!.pid;
       if (liveParent !== walkedParent) {
         note(`parent pid changed ${walkedParent} to ${liveParent}`);
@@ -875,7 +887,7 @@ export function readAncestors(
     cachedAncestorsSnapshotId = snapId;
     cachedDefaultAncestors = undefined;
   }
-  if (snapId !== null && startPid === process.ppid && read === processReader()) {
+  if (hosted === null && snapId !== null && startPid === process.ppid && read === processReader()) {
     if (cachedDefaultAncestors === undefined) cachedDefaultAncestors = fresh();
     const checked = parentMatches(cachedDefaultAncestors);
     if (checked === null) cachedDefaultAncestors = null;
@@ -957,4 +969,14 @@ export function currentCaller(
   const placed = placeCaller(sources, session);
   if (snapId !== null) cachedCurrentCallers.set(key, placed);
   return placed;
+}
+
+/** Forgets every placement and ancestor walk this process remembers. The warm send host calls it
+ *  before and after each request, so no request ever sees another's placement. */
+export function resetCallerCaches(): void {
+  cachedAncestorsSnapshotId = null;
+  cachedDefaultAncestors = undefined;
+  cachedCallerSnapshotId = null;
+  cachedCallerSourcesRef = undefined;
+  cachedCurrentCallers.clear();
 }

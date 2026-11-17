@@ -1,5 +1,6 @@
 import { traceBeatWork } from '../diagnostics/beat-work.ts';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
@@ -251,6 +252,13 @@ function heldBinding(witness: GitWitness | null, common: string): string | null 
 type GitRootHold = { entries: Map<string, HeldGitRoot>; ttlMs: number; now: () => number; holders: number };
 let gitRootHold: GitRootHold | null = null;
 
+/** How many times this process has started git for a root: what a test reads to tell an answer
+ *  the hold gave from one git gave. */
+let gitRootReads = 0;
+export function gitRootReadCount(): number {
+  return gitRootReads;
+}
+
 /** A test's seam between git's answer and the second witness; null outside a test. */
 let gitAnsweredHook: ((cwd: string) => void) | null = null;
 export function setGitAnsweredHook(hook: ((cwd: string) => void) | null): void {
@@ -278,13 +286,35 @@ export function holdGitRoots(options: { ttlMs?: number; now?: () => number } = {
   };
 }
 
-function heldGitRoot(key: string): string | undefined {
+/** The inputs, besides the folder and its files, that decide which root git names: the program
+ *  `PATH` finds, the configuration `HOME` and `XDG_CONFIG_HOME` select, and every `GIT_*`
+ *  variable. A held root is reused only by a run whose inputs digest the same, so a process that
+ *  serves runs with different environments (the warm send host) never answers one run with a
+ *  root git gave another. Exported for tests. */
+export function gitEnvDigest(env: Record<string, string | undefined> = process.env): string {
+  const parts: string[] = [];
+  for (const name of ['PATH', 'HOME', 'XDG_CONFIG_HOME']) parts.push(`${name}=${env[name] ?? '\u0000unset'}`);
+  for (const name of Object.keys(env).filter((key) => key.startsWith('GIT_')).sort()) parts.push(`${name}=${env[name] ?? ''}`);
+  return createHash('sha256').update(parts.join('\u0000')).digest('hex').slice(0, 32);
+}
+
+function heldGitRoot(holdKey: string, key: string): string | undefined {
   const hold = gitRootHold;
   if (hold === null) return undefined;
-  const held = hold.entries.get(key);
+  const held = hold.entries.get(holdKey);
   if (held === undefined) return undefined;
+  if (held.root === '') {
+    // A held "no repository": it stands while the folder and every `.git` absence above it read
+    // the same (keepNoRoot), within the same time bound.
+    const now = gitWitness(key);
+    if (hold.now() - held.at >= hold.ttlMs || now === null || now.bound !== null || now.text !== held.binding) {
+      hold.entries.delete(holdKey);
+      return undefined;
+    }
+    return '';
+  }
   if (hold.now() - held.at >= hold.ttlMs || heldBinding(gitWitness(key), held.common) !== held.binding) {
-    hold.entries.delete(key);
+    hold.entries.delete(holdKey);
     return undefined;
   }
   return held.root;
@@ -294,18 +324,18 @@ function heldGitRoot(key: string): string | undefined {
  *  and the one read after it are the same, and the nearest `.git` entry names the common
  *  directory git answered. A change while git ran leaves its answer unheld, never paired with a
  *  later tree. */
-function keepGitRoot(key: string, before: GitWitness | null, root: string, common: string): void {
+function keepGitRoot(holdKey: string, key: string, before: GitWitness | null, root: string, common: string): void {
   const hold = gitRootHold;
   if (hold === null || before === null) return;
   const after = gitWitness(key);
   if (after === null || after.text !== before.text || !witnessAgrees(after, common)) return;
   const binding = heldBinding(after, common);
   if (binding === null) return;
-  if (!hold.entries.has(key) && hold.entries.size >= HELD_GIT_ROOT_LIMIT) {
+  if (!hold.entries.has(holdKey) && hold.entries.size >= HELD_GIT_ROOT_LIMIT) {
     const oldest = hold.entries.keys().next();
     if (oldest.done !== true) hold.entries.delete(oldest.value);
   }
-  hold.entries.set(key, { root, common, at: hold.now(), binding });
+  hold.entries.set(holdKey, { root, common, at: hold.now(), binding });
 }
 
 export function findRoot(cwd: string): string | null {
@@ -315,12 +345,14 @@ export function findRoot(cwd: string): string | null {
     const cached = memo.gitRoots.get(key);
     if (cached !== undefined) return cached === '' ? null : cached;
   }
-  const held = heldGitRoot(key);
+  const holdKey = gitRootHold === null ? key : `${gitEnvDigest()}\u0000${key}`;
+  const held = heldGitRoot(holdKey, key);
   if (held !== undefined) {
     memo?.gitRoots.set(key, held);
-    return held;
+    return held === '' ? null : held;
   }
   const before = gitRootHold === null ? null : gitWitness(key);
+  gitRootReads += 1;
   try {
     const common = traceBeatWork('git root read (sync)', () => execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
       cwd,
@@ -331,7 +363,7 @@ export function findRoot(cwd: string): string | null {
     const root = common ? dirname(common) : null;
     if (root !== null && gitRootHold !== null) {
       gitAnsweredHook?.(cwd);
-      keepGitRoot(key, before, root, common);
+      keepGitRoot(holdKey, key, before, root, common);
     }
     if (memo !== null) {
       memo.gitRoots.set(key, root ?? '');
@@ -341,10 +373,30 @@ export function findRoot(cwd: string): string | null {
       }
     }
     return root;
-  } catch {
+  } catch (error) {
+    if (gitRootHold !== null) keepNoRoot(holdKey, key, before, error);
     memo?.gitRoots.set(key, '');
     return null;
   }
+}
+
+/** Holds git's "not a repository" answer for a folder with no `.git` entry anywhere above it,
+ *  read the same before and after git ran, and only when git itself said so (exit status 128): a
+ *  timeout or a missing git is never held. The entry sits in the run's git-environment partition
+ *  (`gitEnvDigest`), like a found root, so a run with another `GIT_DIR` asks git itself. A
+ *  long-lived process (the daemon, the warm send host) then stops starting a git child for a
+ *  folder such as a team home that is not a checkout. */
+function keepNoRoot(holdKey: string, key: string, before: GitWitness | null, error: unknown): void {
+  const hold = gitRootHold;
+  if (hold === null || before === null || before.bound !== null) return;
+  if ((error as { status?: unknown } | null)?.status !== 128) return;
+  const after = gitWitness(key);
+  if (after === null || after.bound !== null || after.text !== before.text) return;
+  if (!hold.entries.has(holdKey) && hold.entries.size >= HELD_GIT_ROOT_LIMIT) {
+    const oldest = hold.entries.keys().next();
+    if (oldest.done !== true) hold.entries.delete(oldest.value);
+  }
+  hold.entries.set(holdKey, { root: '', common: '', at: hold.now(), binding: after.text });
 }
 
 /** Said once, on a read that had to use the team file because the registry holds no config record. */

@@ -1,3 +1,4 @@
+import { hostedCommit } from '../host/request-scope.ts';
 import {
   chmodSync,
   closeSync,
@@ -285,6 +286,7 @@ function rotateHistory(path: string): string | null {
  * at mode 0600 without following symbolic links. Rotates at 1 MB keeping 3 files at mode 0600.
  */
 export function appendHistory(project: string, root: string, home: string, entry: HistoryEntry): HistoryWrite {
+  hostedCommit('appendHistory');
   const record: HistoryEntry = {
     ts: entry.ts,
     from: entry.from,
@@ -322,6 +324,7 @@ export function appendStoreLine(
   record: Record<string, unknown>,
   options: { rotate?: boolean; label?: string } = {},
 ): HistoryWrite {
+  hostedCommit('appendStoreLine');
   const storeDir = storePath(project, root, home);
   const ladderErr = ensureStoreLadder(storeDir, home);
   if (ladderErr !== null) return { ok: false, reason: ladderErr };

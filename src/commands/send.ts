@@ -1,3 +1,4 @@
+import { hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
@@ -1658,6 +1659,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // stays on the log line; the admission is the owner's, because the owner seat signed it.
   // The default rule lifts the same gate and leaves the sender as the seat: the header names
   // the seat, and the id rides the seat's own record, or the file's seat when it has none.
+  // The owner as acting principal is never decided in the warm send host (rfc-bus-send-server §2.5).
+  if (seatApproved && !leadsLift) hostedFallbackPoint('the owner would be the acting principal');
   const acting: Caller = seatApproved && !leadsLift ? { kind: 'owner' } : caller;
   // The line's own team, for every reader outside this one: the history the receiving team keeps
   // must say where its sender stood, not leave a shared seat name to the local roster.
@@ -3908,6 +3911,7 @@ async function stageSendRecord(
     }
   }
   const record = recordTextOf(signed);
+  hostedCommit('relay stage');
   const staged = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
   if (staged.outcome === 'refused') return { ok: false, reason: staged.reason };
   // The step fields are the record's own: the receiving team's store, the message id, the
