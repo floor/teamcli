@@ -65,6 +65,19 @@ export function argv0OfProcArgs(page: Uint8Array, length: number): string | null
   return text === '' ? null : text;
 }
 
+/**
+ * Whether this process runs under a Seatbelt profile: `sandbox_check(pid, NULL, SANDBOX_FILTER_NONE)`
+ * answers non-zero for a sandboxed process. A check that cannot be made counts as confined, so
+ * the walk falls back to `ps`, the reader every caller used before this one. Exported for tests.
+ */
+export function confinedBySeatbelt(check: (...args: unknown[]) => number): boolean {
+  try {
+    return check(process.pid, null, 0) !== 0;
+  } catch {
+    return true;
+  }
+}
+
 function bind(): Bound | null {
   if (process.platform !== 'darwin' || process.versions.bun === undefined) return null;
   try {
@@ -81,7 +94,14 @@ function bind(): Bound | null {
     const lib = ffi.dlopen('/usr/lib/libSystem.B.dylib', {
       proc_pidinfo: { args: [T.i32, T.i32, T.u64, T.ptr, T.i32], returns: T.i32 },
       sysctl: { args: [T.ptr, T.u32, T.ptr, T.ptr, T.ptr, T.u64], returns: T.i32 },
+      sandbox_check: { args: [T.i32, T.ptr, T.i32], returns: T.i32 },
     });
+    // A process its Seatbelt profile confines is never read this way: such a profile may let
+    // `proc_pidinfo` answer for processes outside it while `ps` is refused, and the confined-seat
+    // placement and its outbox relay (src/placement/confined.ts, src/send/confined-outbox.ts) are
+    // read only when the parent walk fails. Reading the chain here would place a confined seat by
+    // its walk and send it down the direct path, whose writes its sandbox refuses.
+    if (confinedBySeatbelt(lib.symbols.sandbox_check as (...a: unknown[]) => number)) return null;
     const short = new Uint8Array(SHORT_SIZE);
     const shortView = new DataView(short.buffer);
     const ownUid = typeof process.getuid === 'function' ? process.getuid() : -1;
