@@ -17,8 +17,8 @@ machine with no broker handler never falls back to a per-clone broker.
 ## Synopsis
 
     team daemon status [--json]
-    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--no-presence] [--no-watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon restart [--dry-run] [--json]
     team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
@@ -100,6 +100,17 @@ A Codex seat attaches only to the explicit endpoint its own state record carries
 that record's binding is the seat's current presence binding; a missing, malformed or
 earlier-incarnation record stays unproven. The hosted send server asks the same per-seat answer
 before typing in the last mile, so a seat that is not proven current is held, not typed into.
+
+`run --send-server` also starts the warm send host: a child process, started from the daemon's
+own program copy, that keeps the send graph loaded and runs `team send`, `team reply` and
+`team ack` lines for local clients over `~/.config/team/send-host.sock` (mode 0600), one at a
+time. The client is the ordinary CLI: it asks the host first and runs the line itself when no host
+answers or the host hands the line back; a line the host took and whose answer was lost ends with
+exit 1 and is never run again. The daemon starts the host again after it exits, waiting longer
+after each quick exit, from one second to thirty, and its stop ends the host with SIGTERM. Like
+the other opt-ins, `install --send-server` writes the flag into the unit, a plain `install` keeps
+it, and `--no-send-server` (install only) drops it. The host is described in
+[send host](../concepts/send-host.md).
 
 `run --watch` also hosts one watch per checkout on the daemon's existing heartbeat. Without the
 flag no checkout's watch is hosted, and the daemon reads no pane for one. The opt-in is the `run`
@@ -301,8 +312,10 @@ restart off and leaves the telling ([`team policy`](policy.md) carries the three
 | `--started-by` | `service-manager`, `manual` or `team-up` | the launcher recorded in the state; belongs to `run`, and defaults to `manual` |
 | `--presence` | — | host each checkout's presence pipeline; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
 | `--watch` | — | host one watch per checkout on the daemon's heartbeat; belongs to `run` and `install`, is written into the unit by `install`, is independent of `--presence`, and is off by default |
+| `--send-server` | — | start and supervise the warm send host; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
 | `--no-presence` | — | drop `--presence` from the installed unit; belongs to `install`, and is refused beside `--presence` |
 | `--no-watch` | — | drop `--watch` from the installed unit; belongs to `install`, and is refused beside `--watch` |
+| `--no-send-server` | — | drop `--send-server` from the installed unit; belongs to `install`, and is refused beside `--send-server` |
 | `--route` | a 32-character route id | the one hosted route to fault; belongs to `fault-watch`, where it is required |
 | `--dry-run` | — | print the install, restart or fault plan and write, stop or start nothing; belongs to `install`, `restart` and `fault-watch` |
 | `--request` | — | record the verb and its options for the owner seat to answer, and change nothing; belongs to `install` and `uninstall` |
