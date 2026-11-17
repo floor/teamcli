@@ -76,7 +76,14 @@ typed_wake: screen
 # Enter does not submit on this CLI. The wake asks herdr to prompt the agent, and still waits
 # for the working screen. Nothing is typed into the pane.
 wake: agent-prompt
-# This seat has no inbox_check tool. The wake tells it to read its drops.
+# The longest wake that carries the body inline. Measured 2026-11-17 on Antigravity CLI 1.5.10
+# through `herdr agent prompt` (herdr 0.9.5): one-line prompts of 600, 1500, 3000, 4000 and 8000
+# bytes each reached the model whole (it echoed the final token of each). The schema bound is
+# 4096; 4000 keeps a margin. Below the default 200, nearly every message went as a "read it with
+# team drops" hint, and the seat spent minutes reading its inbox before it could answer.
+typed_wake_max: 4000
+# The seat has the inbox MCP tools (inbox_check, inbox_read) and the team CLI. A wake too long to
+# carry inline tells it to read its drops.
 read_hint: 'Read it with: run team drops --read'
 login:
   check:
