@@ -78,6 +78,37 @@ export function confinedBySeatbelt(check: (...args: unknown[]) => number): boole
   }
 }
 
+let seatbelt: boolean | undefined;
+
+/**
+ * Whether this process runs under a Seatbelt profile, read once per process. False off macOS,
+ * outside Bun, and when the library cannot be opened: the answer only words a refusal (a walk
+ * that already failed), so it never places or refuses a caller by itself.
+ */
+export function runsInSeatbelt(): boolean {
+  if (seatbelt !== undefined) return seatbelt;
+  seatbelt = false;
+  if (process.platform !== 'darwin' || process.versions.bun === undefined) return seatbelt;
+  try {
+    const req = createRequire(import.meta.url);
+    const ffi = req('bun:ffi') as {
+      dlopen: (library: string, symbols: Record<string, { args: unknown[]; returns: unknown }>) => {
+        symbols: Record<string, (...args: unknown[]) => number>;
+      };
+      FFIType: Record<string, unknown>;
+    };
+    const T = ffi.FFIType;
+    const lib = ffi.dlopen('/usr/lib/libSystem.B.dylib', {
+      sandbox_check: { args: [T.i32, T.ptr, T.i32], returns: T.i32 },
+    });
+    const check = lib.symbols.sandbox_check as (...a: unknown[]) => number;
+    seatbelt = check(process.pid, null, 0) !== 0;
+  } catch {
+    seatbelt = false;
+  }
+  return seatbelt;
+}
+
 function bind(): Bound | null {
   if (process.platform !== 'darwin' || process.versions.bun === undefined) return null;
   try {
