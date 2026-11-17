@@ -119,6 +119,7 @@ import { blocksLaunch, doctorFindings, realSources as doctorSources, type Doctor
 import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
+import { codexThreadFreeFor, shippedCodexThreadWait } from '../launch/codex-thread-release.ts';
 
 export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
@@ -155,6 +156,7 @@ function aim(session: string): string | undefined {
 }
 
 const realUpLaunch: Launch = {
+  codexThreadWait: shippedCodexThreadWait,
   conversationExists: (cli, cwd, id, command) => conversationOnDisk(cli, cwd, id, process.env, command),
   sessionState,
   startServer,
@@ -2226,6 +2228,9 @@ function hostOf(input: {
     // The session's seat records, read fresh: the naming step declares a pane an agent only when
     // no other seat's record names it (`declarablePane`, src/launch/execute.ts).
     seatStates: () => readState(dir).sessions[session]?.seats ?? null,
+    ...(launch.codexThreadWait === undefined ? {} : {
+      codexThreadFree: codexThreadFreeFor({ home: input.home, dir, wait: launch.codexThreadWait }),
+    }),
     closeWorkspace: launch.closeWorkspace,
     stopSession: () => false,
     dialog: { mode: 'keep' },

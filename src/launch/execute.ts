@@ -47,6 +47,10 @@ import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { processStartOf } from '../watch/pane.ts';
 import { classifyComposer, readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
+import { codexThreadLockedScreen } from './codex-thread-release.ts';
+
+/** The conversation id a Codex line resumes (`codex … resume <id>`). */
+const CODEX_RESUME_ID = /\bresume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/;
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
@@ -211,6 +215,9 @@ export type Host = {
   /** The session's recorded seats, read fresh; null when unreadable. The waiting proof refuses a
    *  pane or workspace any other seat's record names. */
   seatStates?(session: string): Record<string, SeatState> | null;
+  /** Waits, bounded, until no Codex app-server this seat can collide with lists the
+   *  conversation as loaded. Read-only. Absent: no wait. */
+  codexThreadFree?(session: string, seat: string, threadId: string): Promise<{ free: true } | { free: false; why: string }>;
   /** The pane this command itself runs in, when the caller's placement or the environment names
    *  one. A sweep or a close-leftover never closes a workspace holding it. */
   callerPane?: string;
@@ -1744,10 +1751,21 @@ export async function executePlan(
         let channelCurrent = true;
         try { if (channel?.ok) channel.lease.check(); } catch { channelCurrent = false; }
         if (!guardRestore(op.seat)) break;
+        // A Codex line that resumes a conversation runs only once no app-server it can collide
+        // with still lists that conversation loaded: one that does (the TUI a relaunch or a
+        // restart just exited, the seat's previous endpoint) keeps it about a minute, and a
+        // resume inside that window opens on "This conversation is open in another app" and
+        // takes nothing (17 Nov). The wait only asks the app-servers what they hold.
+        const resumed = op.cli === 'codex' ? CODEX_RESUME_ID.exec(launch.command)?.[1] : undefined;
+        const threadHeld = here && resumed !== undefined && host.codexThreadFree !== undefined
+          ? await host.codexThreadFree(session, op.seat, resumed)
+          : { free: true as const };
         // Each way the line can fail to run is named: one sentence for three causes hid which
         // one a stale pane hit (the Kimi and DeepSeek testers, 2026-11-12).
         const notRun = !here
           ? 'no pane was found for it'
+          : !threadHeld.free
+            ? `its conversation is still held by another Codex app-server (${threadHeld.why})`
           : !channelCurrent
             ? 'its channel lease was no longer current'
             : !host.paneRun(session, here.pane, launch.command)
@@ -2819,10 +2837,15 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'holds unsent text; nothing typed' });
           break;
         }
+        // A Codex TUI that could not open the conversation because another app-server still
+        // held it ("This conversation is open in another app"): no composer, nothing to lose,
+        // and its own exit key leaves. Only that exact screen, read fresh before the key.
+        const lockedNow = (): boolean => op.cli === 'codex' && codexThreadLockedScreen(host.paneText?.(session, op.pane) ?? null);
+        const locked = kind !== 'idle' && lockedNow();
         // Allow-list: the profile idle prompt is the only screen that may be typed into. A
         // permission, trust, question, or unknown dialog that appeared after the plan holds
         // here, with nothing typed.
-        if (kind !== 'idle') {
+        if (kind !== 'idle' && !locked) {
           held = true;
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'is not at an idle prompt; nothing typed' });
@@ -2856,7 +2879,10 @@ export async function executePlan(
         // again before each further key: a dialog that appeared in between takes nothing.
         let refused: string | null = null;
         const idlePrompt = (): boolean => screenKind() === 'idle';
-        if (profile.exit !== null) {
+        if (locked) {
+          if (!lockedNow()) refused = 'its screen changed before the exit key; nothing typed';
+          else if (!(host.sendKey?.(session, op.pane, 'q') ?? false)) refused = 'its exit was not sent; left as it is';
+        } else if (profile.exit !== null) {
           const exitWord = profile.exit;
           if (!idlePrompt()) {
             refused = 'is not at an idle prompt; nothing typed';

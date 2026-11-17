@@ -91,6 +91,7 @@ import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/p
 import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsOnlyShell, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { codexThreadFreeFor, shippedCodexThreadWait, type ThreadWait } from '../launch/codex-thread-release.ts';
 import { CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS, liveConversationElsewhere, restoredBypassesLauncher, restorePaneBusy, restoreProof, restoreRelaunch, restoreWorktreeOf, unreadyRestoreProof, paneInOwnWorktree, type RestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
 import { featureDialogClose, restoredPaneByConversation } from '../launch/reboot.ts';
 import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
@@ -253,6 +254,10 @@ export type Launch = {
     managed(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }): Promise<ManagedEndpointRead>;
     stop(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   };
+  /** Waits, bounded and read-only, until none of these Codex app-servers lists the conversation
+   *  as loaded (src/launch/codex-thread-release.ts). Absent: no wait — a fake launch asks no
+   *  real app-server. */
+  codexThreadWait?(input: { sockets: string[]; threadId: string }): Promise<ThreadWait>;
   /** The secret store a seat's key word is looked up in (`{secret:<entry>}`, src/launch/secret-words.ts).
    *  Absent: the system's own store; a scene passes a fake so no launch reads the machine's store. */
   secretStore?: SecretStore | null;
@@ -383,6 +388,7 @@ const realLaunch: Launch = {
     managed: (input) => launchCodexEndpoint(input),
     stop: (input) => stopSeatCodexEndpoint(input),
   },
+  codexThreadWait: shippedCodexThreadWait,
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
     reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
@@ -4627,6 +4633,9 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       // The proof a waiting pane is asked for looks at the session's seat records (`pause.ts`,
       // `waitingProblem`): a record for a seat the file no longer declares names no pane of this
       // team's, and does not block the seat that now stands there (`seatOfFile`).
+      ...(launch.codexThreadWait === undefined ? {} : {
+        codexThreadFree: codexThreadFreeFor({ home: sources.home, dir, wait: launch.codexThreadWait }),
+      }),
       seatStates: () => {
         const seats = readState(dir).sessions[session]?.seats ?? null;
         if (seats === null) return null;

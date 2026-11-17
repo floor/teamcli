@@ -35,6 +35,7 @@ const IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.me
   .replace('gpt-5.6-terra', 'gpt-6.1-sol')
   .replace('GPT-5.6-Terra', 'GPT-6.1-Sol');
 const UNSENT = readFileSync(new URL('./fixtures/codex/0.161.0/unsent.txt', import.meta.url), 'utf8');
+const LOCKED = readFileSync(new URL('./fixtures/codex/0.167.0/thread-locked.txt', import.meta.url), 'utf8');
 
 let base: string;
 let root: string;
@@ -150,6 +151,8 @@ type Trace = {
   runs: { pane: string; command: string }[];
   renamed: { pane: string; name: string }[];
   managed: { dir: string; seat: string }[];
+  keys: string[];
+  waits: { sockets: string[]; threadId: string }[];
 };
 
 type Scene = {
@@ -163,11 +166,15 @@ type Scene = {
   startOf?: number | null;
   managed?: ManagedEndpointRead;
   cwd?: string;
+  /** The conversation wait's answers, in order; absent: no wait is wired. */
+  threadWait?: ({ free: true; waitedMs: number } | { free: false; heldBy: string; waitedMs: number })[];
 };
 
 function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
-  const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], managed: [] };
+  const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], managed: [], keys: [], waits: [] };
   let exited = false;
+  // After a relaunch the pane shows the fresh TUI's idle prompt.
+  let relaunched = false;
   let listedName = scene.name === undefined ? null : scene.name;
   const agents = (): HerdrAgent[] | null => [{
     name: listedName,
@@ -189,6 +196,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     paneRun(_session, pane, command) {
       trace.runs.push({ pane, command });
       exited = false;
+      relaunched = true;
       return true;
     },
     typeText(_session, pane, text) {
@@ -197,7 +205,18 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
       return true;
     },
     pressEnter: () => true,
-    sendKey: () => true,
+    sendKey(_session, pane, key) {
+      trace.keys.push(key);
+      // The lock screen's own exit key leaves the TUI.
+      if (pane === PANE && key === 'q' && scene.screen === LOCKED) exited = true;
+      return true;
+    },
+    ...(scene.threadWait === undefined ? {} : {
+      async codexThreadWait(input: { sockets: string[]; threadId: string }) {
+        trace.waits.push(input);
+        return scene.threadWait!.shift() ?? { free: true as const, waitedMs: 0 };
+      },
+    }),
     renameAgent(_session, pane, name) {
       trace.renamed.push({ pane, name });
       listedName = name;
@@ -210,7 +229,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     agentPanes: () => [PANE],
     agents,
     workspacePanes: (_session, workspace) => (workspace === SPACE ? [PANE] : null),
-    paneText: () => scene.screen ?? IDLE,
+    paneText: () => (relaunched ? IDLE : scene.screen ?? IDLE),
     foreground: () => (exited ? ['zsh'] : ['codex']),
     processInfo: (_session, pane) => {
       if (pane === PANE && scene.process !== undefined) return scene.process;
@@ -617,4 +636,45 @@ test('an unready record on a live endpoint is still adopted where it stands', as
   expect(made.trace.typed).toEqual([]);
   expect(seatRuns(made.trace)).toEqual([]);
   expect(made.trace.managed).toEqual([]);
+});
+
+// 17 Nov: the restored TUI could not open its conversation because another app-server still held
+// it ("This conversation is open in another app"). The relaunch leaves that screen by its own
+// exit key, waits until no app-server lists the conversation, then resumes it on a fresh endpoint.
+test('a lock screen is exited by its key, and the resume waits for the conversation to be free', async () => {
+  setup();
+  record();
+  const made = sources({ name: SEAT, screen: LOCKED, threadWait: [{ free: true, waitedMs: 42_000 }] });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual([]);
+  expect(made.trace.keys).toEqual(['q']);
+  expect(made.trace.waits).toHaveLength(1);
+  expect(made.trace.waits[0]?.threadId).toBe(THREAD);
+  expect(made.trace.waits[0]?.sockets.some((socket) => socket.endsWith('app-server-control.sock'))).toBe(true);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+});
+
+test('a conversation still held past the wait is not resumed into a lock', async () => {
+  setup();
+  record();
+  const made = sources({ name: SEAT, screen: LOCKED, threadWait: [{ free: false, heldBy: '/fixture/shared.sock', waitedMs: 120_000 }] });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources);
+  expect(made.trace.keys).toEqual(['q']);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(said(io)).toContain('its conversation is still held by another Codex app-server (/fixture/shared.sock still lists it after 120 s)');
+});
+
+test('an idle restored Codex seat is still exited with its exit word, not the lock key', async () => {
+  setup();
+  record();
+  const made = sources({ name: SEAT, threadWait: [{ free: true, waitedMs: 0 }] });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(made.trace.keys).toEqual([]);
+  expect(made.trace.waits).toHaveLength(1);
 });
