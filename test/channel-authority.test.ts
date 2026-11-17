@@ -14,6 +14,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { findAgent, registerAgent, type Agent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { MAIN_ORCHESTRATOR_REPLY_RULE, REPLY_RULE, senderHeader } from '../src/send/admit.ts';
+import { existingRecordIdsIn, readerLine } from '../src/send/frame.ts';
 import { namingFor } from '../src/send/names.ts';
 import { signClose, signRecord, writeClose, type RecordPayload } from '../src/send/record.ts';
 import { testIo } from './helpers.ts';
@@ -331,7 +332,7 @@ describe('channel admitted attribution preserves content', () => {
         const content = feed.replies.find((one) => one.method === 'notifications/claude/channel')!.params.content;
         // The header's stamp is the stored record's own time, not the reading session's clock:
         // the helper plants the record ten seconds before the world's now.
-        expect(content).toBe(`worker · worker@local · ${stampOf(new Date(sent.at))} · admitted: to orchestrator\n\n${userContent}`);
+        expect(content).toBe(`worker · worker@local · ${stampOf(new Date(sent.at))} · admitted: to orchestrator\n\n${userContent}\n\n${readerLine(sent.id, existingRecordIdsIn(drop(target, 'lead')))}`);
         expect(feed.replies.filter((one) => one.method === 'notifications/claude/channel')).toHaveLength(1);
       } finally {
         feed.end();
@@ -357,7 +358,7 @@ describe('channel admitted attribution preserves content', () => {
       await until(() => feed.replies.some((one) => one.method === 'notifications/claude/channel'));
       const notification = feed.replies.find((one) => one.method === 'notifications/claude/channel')!.params;
       expect(notification.meta.from).toBe('worker');
-      expect(notification.content).toBe(`worker@local · worker@local · ${stampOf(w.now)} · admitted: reply\n\n${literal}`);
+      expect(notification.content).toBe(`worker@local · worker@local · ${stampOf(w.now)} · admitted: reply\n\n${literal}\n\n${readerLine(payload.id, existingRecordIdsIn(drop(target, 'worker')))}`);
       expect(readFileSync(join(drop(target, 'worker'), payload.id), 'utf8')).toContain('a cross-team answer');
     } finally {
       feed.end();

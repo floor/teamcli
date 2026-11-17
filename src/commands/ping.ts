@@ -10,15 +10,17 @@
 // signing and delivery are exactly the ones a send has, and a refused send is a row with its
 // refusal, never a route around it. A seat of another team is named as `<seat>@<team>`; the rules
 // decide whether this caller may reach it. The answer is a `team reply` on the message's own
-// thread, admitted by the reply's own rule, never by this command.
+// thread, admitted by the reply's own rule, never by this command; a seat that answers with an
+// ordinary `team send` to the sender instead is counted too, the same checks without the thread.
 //
 // Nothing is counted that does not verify. The sent record is found by its id and verified with
 // the machine's message key; its signed fields (root, session, recipient, sender and their agent
 // ids) are where the receipt and the reply are looked for, not the folder the command runs in. A
 // receipt counts only when its signature verifies and it names that id, recipient, root and
-// session; a reply only when its record verifies, sits on that thread, comes from the recipient
-// to the sender (by name and agent id) and carries this run's token. A message the owner sent is
-// answered where `team reply` answers it: the entity's `owner-reply-to` endpoint.
+// session; an answer only when its record verifies, comes from the recipient to the sender (by
+// name and agent id) and carries this run's token, and is a reply on that thread or a send. A
+// message the owner sent is answered where `team reply` answers it: the entity's
+// `owner-reply-to` endpoint.
 import { spawn } from 'node:child_process';
 import type { KeyObject } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -40,7 +42,8 @@ export const USAGE = `Usage: team ping <seat> [--wait <seconds>] [--json]
 
 Sends the seat named (<seat>, or <seat>@<team> for a seat of another team), or
 with --all every seat of the caller's own team, one message asking it to answer
-with team reply, then waits up to --wait seconds (default 120). One row per
+with team reply on the message's id (an answer by team send counts too), then
+waits up to --wait seconds (default 120). One row per
 seat: the leg that took the send and how long the send took, when its read
 receipt landed, when its reply was sent and when it landed; or why the send was
 refused. Each message is an ordinary team send from this folder: the same
@@ -65,6 +68,8 @@ export type PingRow = {
   reply_sent_ms: number | null;
   /** From the same start to the verified reply landing in the sender's folder. */
   reply_landed_ms: number | null;
+  /** How the answer came: a `team reply` on the ping's thread, or an ordinary `team send`. */
+  reply_by: 'reply' | 'send' | null;
   status: 'replied' | 'read' | 'not read' | 'refused';
 };
 
@@ -217,11 +222,13 @@ export function replyDestinationOf(home: string, io: Io, sent: RecordPayload, te
   return place === null ? null : { folder: join(place.root, '.agents', 'send-drops', place.session, sent.from), to: sent.from, to_id: sent.from_id };
 }
 
-/** The recipient's verified reply to `sent` at its destination, newer than `since`: a record that
- *  verifies, sits on the sent record's thread, comes from its recipient (name and agent id) to the
- *  destination's recipient (name and agent id) and carries `pong <token>`. Its signed `at` (sent)
- *  and the file's time (landed), or null. */
-export function replyTo(destination: ReplyDestination, sent: RecordPayload, token: string, since: number, key: KeyObject): { sent: number; landed: number } | null {
+/** The recipient's verified answer to `sent` at its destination, newer than `since`: a record
+ *  that verifies, comes from its recipient (name and agent id) to the destination's recipient
+ *  (name and agent id) and carries `pong <token>`. On the sent record's thread it is a reply;
+ *  on a thread of its own, an ordinary send (a seat that answered with `team send`): either is
+ *  the seat acting on the ping, and its identity checks are the same. In one look a reply wins.
+ *  Its signed `at` (sent), the file's time (landed) and how it came, or null. */
+export function replyTo(destination: ReplyDestination, sent: RecordPayload, token: string, since: number, key: KeyObject): { sent: number; landed: number; by: 'reply' | 'send' } | null {
   const folder = destination.folder;
   let names: string[];
   try {
@@ -229,6 +236,7 @@ export function replyTo(destination: ReplyDestination, sent: RecordPayload, toke
   } catch {
     return null;
   }
+  let bySend: { sent: number; landed: number; by: 'send' } | null = null;
   for (const name of names) {
     if (name.includes('.') || name === sent.id) continue;
     const path = join(folder, name);
@@ -240,15 +248,17 @@ export function replyTo(destination: ReplyDestination, sent: RecordPayload, toke
     }
     if (landed < since) continue;
     const reply = verifiedRecordAt(path, name, key);
-    if (reply === null || reply.thread !== sent.thread) continue;
+    if (reply === null) continue;
     if (reply.from !== sent.to || reply.to !== destination.to) continue;
     if (sent.to_id !== null && reply.from_id !== sent.to_id) continue;
     if (destination.to_id !== null && reply.to_id !== destination.to_id) continue;
     if (!reply.body.includes(`pong ${token}`)) continue;
     const at = Date.parse(reply.at);
-    return { sent: Number.isNaN(at) ? landed : at, landed };
+    const answer = { sent: Number.isNaN(at) ? landed : at, landed };
+    if (reply.thread === sent.thread) return { ...answer, by: 'reply' };
+    if (bySend === null) bySend = { ...answer, by: 'send' };
   }
-  return null;
+  return bySend;
 }
 
 export async function runPing(argv: string[], io: Io, host: PingHost): Promise<number> {
@@ -299,7 +309,9 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
     const at = target.lastIndexOf('@');
     const seat = at < 0 ? target : target.slice(0, at);
     const started = host.now();
-    const body = `ping ${token}: answer now with team reply and the id on this message's reader line, text: pong ${token}. Nothing else.`;
+    // The token is not the record's id: the answer names the id from the reader line the
+    // message ends with (`↩ team reply <id> …`), never the token, which no record is named by.
+    const body = `ping ${token}: answer now with: team reply <id> "pong ${token}" — <id> is this message's id, from the ↩ team reply line under it (not ${token}). Nothing else.`;
     const result = await host.team(['send', target, body], io);
     const outcome = result.out.trim().split('\n').filter(Boolean).pop() ?? '';
     const id = idOf(outcome);
@@ -313,6 +325,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
       read_ms: null,
       reply_sent_ms: null,
       reply_landed_ms: null,
+      reply_by: null,
       status: id === null ? 'refused' : 'not read',
       started,
       sent: null,
@@ -342,6 +355,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
       if (reply !== null) {
         row.reply_sent_ms = Math.max(0, reply.sent - row.started);
         row.reply_landed_ms = Math.max(0, reply.landed - row.started);
+        row.reply_by = reply.by;
         row.status = 'replied';
       }
     }
@@ -360,7 +374,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
       const secs = (ms: number | null) => `${((ms ?? 0) / 1000).toFixed(1)} s`;
       const read = row.read_ms === null ? 'no read receipt' : `read ${secs(row.read_ms)}`;
       const tail = row.status === 'replied'
-        ? `${read}; reply sent ${secs(row.reply_sent_ms)}, landed ${secs(row.reply_landed_ms)}`
+        ? `${read}; ${row.reply_by === 'send' ? 'answer (team send, not on the thread)' : 'reply'} sent ${secs(row.reply_sent_ms)}, landed ${secs(row.reply_landed_ms)}`
         : row.status === 'refused'
           ? `refused: ${row.outcome.replace(/^team send: /, '')}`
           : `${read}; no reply within ${String(waitSeconds)} s (${row.outcome})`;

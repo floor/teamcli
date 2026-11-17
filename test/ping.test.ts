@@ -30,7 +30,8 @@ function io(cwd: string): Io & { out: string; err: string } {
   }) as Io & { out: string; err: string };
 }
 
-type Answer = 'reply' | 'unsigned-reply' | 'bad-signature' | 'wrong-sender' | 'wrong-recipient' | 'unsigned-receipt' | 'none';
+type Answer = 'reply' | 'unsigned-reply' | 'bad-signature' | 'wrong-sender' | 'wrong-recipient' | 'unsigned-receipt' | 'none'
+  | 'send' | 'send-other-token' | 'send-wrong-sender' | 'send-and-reply';
 
 /**
  * Team `alpha` is registry-only: no `.agents/team.yaml` anywhere. The caller runs from team
@@ -134,9 +135,20 @@ function scene(answers: Record<string, Answer>, owner = false) {
         ...(answer === 'wrong-recipient' ? { to_id: AGENT.quiet } : {}),
         body: `from ${seat} — admitted by: test\n\npong ${token}`,
       });
+      // An answer by `team send`: its own thread, no `in_reply_to`, the same identity and token.
+      if (answer === 'send' || answer === 'send-other-token' || answer === 'send-wrong-sender' || answer === 'send-and-reply') {
+        const sendId = `8${id.slice(1)}`;
+        writeFileSync(join(drop('lead'), sendId), recordTextOf(signRecord(record({
+          id: sendId, thread: sendId, at: new Date(clock + 2_000).toISOString(),
+          from: answer === 'send-wrong-sender' ? 'quiet' : seat,
+          from_id: answer === 'send-wrong-sender' ? AGENT.quiet : AGENT[seat as keyof typeof AGENT],
+          to: 'lead', to_id: AGENT.lead,
+          body: `from ${seat} — admitted by: test\n\npong ${answer === 'send-other-token' ? 'Pother' : token}`,
+        }), home)));
+      }
       if (owner && (answer === 'reply' || answer === 'wrong-sender' || answer === 'wrong-recipient')) {
         writeFileSync(join(endpointDrop(), replyId), recordTextOf(signRecord(reply, home)));
-      } else if (answer === 'reply' || answer === 'wrong-sender' || answer === 'wrong-recipient' || answer === 'unsigned-receipt') {
+      } else if (answer === 'reply' || answer === 'wrong-sender' || answer === 'wrong-recipient' || answer === 'unsigned-receipt' || answer === 'send-and-reply') {
         writeFileSync(join(drop('lead'), replyId), recordTextOf(signRecord(reply, home)));
       } else if (answer === 'unsigned-reply') {
         writeFileSync(join(drop('lead'), replyId), JSON.stringify({ payload: reply, signature: 'not a signature' }, null, 2));
@@ -155,7 +167,7 @@ async function rows(answers: Record<string, Answer>, argv: string[] = ['--all', 
   const { beta, host } = scene(answers, owner);
   const out = io(beta);
   const code = await runPing(argv, out, host);
-  const doc = JSON.parse(out.out) as { rows: { seat: string; status: string; read_ms: number | null; reply_sent_ms: number | null }[]; all_replied: boolean };
+  const doc = JSON.parse(out.out) as { rows: { seat: string; status: string; read_ms: number | null; reply_sent_ms: number | null; reply_by: string | null }[]; all_replied: boolean };
   return { code, doc, by: Object.fromEntries(doc.rows.map((row) => [row.seat, row])) };
 }
 
@@ -182,6 +194,33 @@ describe('team ping', () => {
       expect(code).toBe(1);
       expect(by.worker).toMatchObject({ status: 'read', reply_sent_ms: null });
     }
+  });
+
+  test('an answer by team send carrying the token counts as an answer by send; another token or another sender does not; a reply on the thread wins', async () => {
+    const sent = await rows({ worker: 'send' });
+    expect(sent.code).toBe(0);
+    expect(sent.by.worker).toMatchObject({ status: 'replied', reply_by: 'send' });
+    for (const answer of ['send-other-token', 'send-wrong-sender'] as const) {
+      const other = await rows({ worker: answer });
+      expect(other.code).toBe(1);
+      expect(other.by.worker).toMatchObject({ status: 'read', reply_sent_ms: null, reply_by: null });
+    }
+    const both = await rows({ worker: 'send-and-reply' });
+    expect(both.by.worker).toMatchObject({ status: 'replied', reply_by: 'reply' });
+    const replied = await rows({ worker: 'reply' });
+    expect(replied.by.worker).toMatchObject({ reply_by: 'reply' });
+  });
+
+  test('the ping names the answer as team reply on the message id, never on the token', async () => {
+    const { beta, host } = scene({ worker: 'reply' }, false);
+    const bodies: string[] = [];
+    const team = host.team;
+    host.team = async (args, io) => { if (args[0] === 'send') bodies.push(args[2]!); return team(args, io); };
+    await runPing(['worker', '--wait', '0', '--json'], io(beta), host);
+    expect(bodies).toHaveLength(1);
+    const token = /ping (P[0-9a-z]+)/.exec(bodies[0]!)![1]!;
+    expect(bodies[0]).toContain(`team reply <id> "pong ${token}"`);
+    expect(bodies[0]).not.toContain(`team reply ${token}`);
   });
 
   test('an owner ping: the reply at the owner-reply-to endpoint (another team\'s seat) counts; one from another seat or to another agent does not', async () => {

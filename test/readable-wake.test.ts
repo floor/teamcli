@@ -66,8 +66,14 @@ test('multiline read-back requires every row and refuses extra or partial text',
 });
 
 test('runtime wake retains all content and refuses an oversized body without truncating it', () => {
-  const payload = { body: 'One\nTwo', from: 'runtime', root: '/synthetic', at: '2026-11-10T00:00:00Z', rule: 'synthetic rule' } as RecordPayload;
+  const payload = { id: '0c0ffee0-0000-4000-8000-000000000001', body: 'One\nTwo', from: 'runtime', root: '/synthetic', at: '2026-11-10T00:00:00Z', rule: 'synthetic rule' } as RecordPayload;
   expect(inlineWake(payload, '/synthetic')).toContain('One\nTwo');
+  // A runtime report carries no reader line: no seat answers it. A seat's message ends with it,
+  // so the id `team reply` takes is on the screen.
+  expect(inlineWake(payload, '/synthetic')).not.toContain('↩ team reply');
+  expect(inlineWake({ ...payload, from: 'lead' }, '/synthetic')!.endsWith('\n\n↩ team reply 0c0ffee0 "…" · team ack 0c0ffee0')).toBe(true);
+  // A typed wake keeps the id on the last row: a paragraph of its own leaves a composer unreadable.
+  expect(inlineWake({ ...payload, from: 'lead' }, '/synthetic', 200, 'typed')!.endsWith('One\nTwo ↩ team reply 0c0ffee0')).toBe(true);
   expect(inlineWake({ ...payload, body: 'x'.repeat(RUNTIME_WAKE_MAX) }, '/synthetic')).toBeNull();
 });
 

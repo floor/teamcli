@@ -960,9 +960,11 @@ describe('team send: the typed wake', () => {
     // One wake, one Enter, and the wake is the readable body itself: the sender header, then the
     // message, drawn across the composer's rows. Muse has no MCP inbox, so a body within the
     // typed-wake bound is typed in full and the seat reads it without a drops call.
-    expect(pane.typed).toEqual([
-      'owner · 2026-10-05 04:00Z · admitted: owner\n\nfrom the owner — admitted by: the owner\n\nhello',
-    ]);
+    // It ends with the reader line: the record's id, which `team reply` and `team ack` take.
+    expect(pane.typed).toHaveLength(1);
+    // A typed wake keeps it on the body's last row: the composer draws a few rows only.
+    const id = /↩ team reply ([0-9a-f]{8})$/.exec(pane.typed[0]!)?.[1] ?? 'none';
+    expect(pane.typed[0]).toBe(`owner · 2026-10-05 04:00Z · admitted: owner\n\nfrom the owner — admitted by: the owner\n\nhello ↩ team reply ${id}`);
     expect(pane.enters).toBe(1);
     // The record was written under the seat lock before the line was typed.
     const drops = join(made.dir, 'send-drops', 'acme', 'muse');

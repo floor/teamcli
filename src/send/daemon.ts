@@ -1852,7 +1852,9 @@ async function executeSocketSend(
       : readerLine(msgId, existingIds);
   const bodyIncluded = Buffer.byteLength(content, 'utf8') <= RUNTIME_WAKE_MAX;
   if (!bodyIncluded) content = `${content.split('\n')[0]}\n\nBody too long for this wake; read it with: team drops --read.`;
-  const frame = frameFor(content, msgId, bodyIncluded ? null : reply);
+  // The reader line rides with the body too: a seat handed the whole body still needs the id
+  // to answer it on its thread.
+  const frame = frameFor(content, msgId, reply);
   if (frame.length > FRAME_LIMIT) {
     return {
       v: 1,

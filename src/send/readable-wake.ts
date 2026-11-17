@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { currentClaimIn, readMessage } from '../mcp/inbox.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { attributedBody } from './sender-claim.ts';
+import { bodyWithReaderLine, shortIdPrefix, takesReaderLine } from './frame.ts';
+import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { profileFor } from '../profiles/index.ts';
 import { verifiedRecordAt, type RecordPayload } from './record.ts';
 
@@ -19,8 +21,16 @@ export function oversizedWake(payload: RecordPayload): string {
   return `Message from ${payload.from}: body too long for this wake. Read it with: team drops --read --id ${payload.id} --seat ${payload.to}`;
 }
 
-export function inlineWake(payload: RecordPayload, home: string, limit = RUNTIME_WAKE_MAX): string | null {
-  const text = attributedBody(payload.body, payload.from, { record: payload, home, root: payload.root, compact: false });
+/** The body a wake carries, ending with the reader line when the record takes one. A typed wake
+ *  (`shape: 'typed'`) keeps the id on the body's last row instead (` ↩ team reply <prefix>`): a
+ *  composer draws a few rows only, and a paragraph of its own makes the box unreadable. */
+export function inlineWake(payload: RecordPayload, home: string, limit = RUNTIME_WAKE_MAX, shape: 'runtime' | 'typed' = 'runtime'): string | null {
+  const attributed = attributedBody(payload.body, payload.from, { record: payload, home, root: payload.root, compact: false });
+  const text = !takesReaderLine(payload, isGeneralBriefRecord(payload))
+    ? attributed
+    : shape === 'typed'
+      ? `${attributed} ↩ team reply ${shortIdPrefix(payload.id)}`
+      : bodyWithReaderLine(attributed, payload.id);
   return Buffer.byteLength(text, 'utf8') <= limit && !/[\x00-\x08\x0b-\x1f\x7f]/.test(text) ? text : null;
 }
 
@@ -34,7 +44,9 @@ export function recordDeliveredBody(input: {
     if (key.kind !== 'key') return false;
     const payload = verifiedRecordAt(join(input.dropDir, input.id), input.id, key.key);
     if (payload === null || payload.to !== input.seat || payload.session !== input.session) return false;
-    if (input.wake !== undefined && inlineWake(payload, input.home) !== input.wake) return false;
+    // The wake must be this record's own body, in either shape a wake carries it.
+    if (input.wake !== undefined && inlineWake(payload, input.home) !== input.wake
+      && inlineWake(payload, input.home, RUNTIME_WAKE_MAX, 'typed') !== input.wake) return false;
     const read = readMessage({ dropDir: input.dropDir, root: input.root, session: input.session, seat: input.seat }, input.id, input.home,
       { claim: () => currentClaimIn(input.root, input.session, input.seat) });
     return read.ok || read.served === 'already-served';

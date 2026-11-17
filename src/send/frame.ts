@@ -66,6 +66,24 @@ export function readerLine(msgId: string, existingIds: Iterable<string> = []): s
 }
 
 /**
+ * A served body followed by its reader line: what every reader that hands a seat a message's body
+ * (`team drops --read`, `inbox_read`, the channel, a typed wake carrying the body) ends with, so
+ * the id `team reply` and `team ack` take is on the screen however the message arrived
+ * (`takesReaderLine` says which records do).
+ */
+export function bodyWithReaderLine(body: string, msgId: string, existingIds: Iterable<string> = []): string {
+  return `${body}\n\n${readerLine(msgId, existingIds)}`;
+}
+
+/** Whether a served record ends with the reader line: not the seat's general brief, not a
+ *  report the runtime itself wrote (`from: runtime`, the watch's unread reports), which no seat
+ *  answers, and not a client's drop, whose delivery keeps its own text — every other record is a
+ *  message from a seat or the owner, which a reply reaches. */
+export function takesReaderLine(payload: { from: string; from_client?: unknown }, generalBrief: boolean): boolean {
+  return !generalBrief && payload.from !== 'runtime' && payload.from_client === undefined;
+}
+
+/**
  * The line a compact socket frame (`compact_delivery: true`) ends with. It adds `team show
  * <prefix>` in front of `team reply` and `team ack`, using the same shortest unique id prefix:
  * `↩ team show <prefix> · team reply <prefix> · team ack <prefix>`
