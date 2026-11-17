@@ -11,10 +11,12 @@
 // The name is never proof. A pane the host names with another seat's name is that seat's; a
 // recorded session the pane does not show, or one the pane shows that the record never named,
 // is refused rather than weakened into a guess.
-import type { Seat } from '../file/types.ts';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+import type { Seat, TeamFile } from '../file/types.ts';
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 import { channelLaunchEnabled } from '../mcp/channel.ts';
-import type { SeatState } from '../state.ts';
+import { worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { profileFor } from '../profiles/index.ts';
 import { readScreen } from '../watch/screen.ts';
 import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
@@ -23,8 +25,10 @@ import { usesLauncher } from './line.ts';
 import { featureDialog } from './reboot.ts';
 
 export type RestoreProof =
-  /** The pane runs the conversation the launch recorded: the strongest proof there is. */
-  | { kind: 'session'; pane: string; sentence: string }
+  /** The pane runs the conversation the launch recorded: the strongest proof there is. `rebound`
+   *  marks the one other strong reading: the pane's conversation is not the recorded one, but the
+   *  pane stands in the seat's own worktree (see `RestoreWorktree`); the re-tie records `to`. */
+  | { kind: 'session'; pane: string; sentence: string; rebound?: { from: string; to: string } }
   /** No session id on either side: the declared CLI, alone in its workspace, at an idle prompt. */
   | { kind: 'cli'; pane: string; sentence: string }
   /** A reported reason, never an adoption. `specific` marks a reason that names something a
@@ -50,7 +54,40 @@ export type RestoreProofInput = {
   /** Whether the recorded process itself (`verdict === 'same'`) is also accepted for an in-place
    *  dead-endpoint relaunch. */
   allowSame?: boolean;
+  /** The seat's own worktree, read where a conversation differs from the record. */
+  worktree?: RestoreWorktree;
 };
+
+/**
+ * The place evidence that lets a re-tie accept a conversation the launch did not record: a CLI
+ * resumed after a machine restart can come back in another conversation of the same seat. Every
+ * seat's worktree is its own (one path per seat), so a pane whose folder is inside this seat's
+ * worktree and inside no other seat's, that no other seat's record names, is this seat's pane
+ * whatever conversation it holds. Missing evidence keeps the refusal.
+ */
+export type RestoreWorktree = {
+  /** The seat's own worktree path. */
+  own: string;
+  /** Every other seat's worktree path in the team. */
+  others: readonly string[];
+  /** Another seat's record names this pane. */
+  paneClaimed: boolean;
+};
+
+/** Whether `folder` is `root` or inside it. Both are compared as written, without a trailing slash. */
+function within(folder: string, root: string): boolean {
+  const base = root.replace(/\/+$/, '');
+  return base !== '' && (folder === base || folder.startsWith(`${base}/`));
+}
+
+/** Whether the pane's folder proves it is the seat's own: inside its worktree, inside no other
+ *  seat's, and named by no other seat's record. */
+export function paneInOwnWorktree(cwd: string | null | undefined, worktree: RestoreWorktree | undefined): boolean {
+  if (worktree === undefined || cwd === null || cwd === undefined || cwd === '') return false;
+  if (worktree.paneClaimed) return false;
+  if (!within(cwd, worktree.own)) return false;
+  return !worktree.others.some((other) => within(cwd, other) || within(worktree.own, other));
+}
 
 const NONE_LISTED = 'the terminal host does not list the pane any more; team cannot re-tie it';
 const NONE_UNREAD = "the terminal host's agent list could not be read; team cannot re-tie it";
@@ -102,6 +139,14 @@ export function restoreProof(input: RestoreProofInput): RestoreProof {
   const liveSession = entry.session !== undefined && entry.session !== '' ? entry.session : undefined;
   if (input.recordedSession !== undefined && liveSession !== undefined) {
     if (input.recordedSession !== liveSession) {
+      if (paneInOwnWorktree(entry.cwd, input.worktree)) {
+        return {
+          kind: 'session',
+          pane: recorded.pane,
+          sentence: `its pane stands in the seat's own worktree and runs ${seat.cli}; its conversation moved from ${input.recordedSession} to ${liveSession}, and the record takes the new one`,
+          rebound: { from: input.recordedSession, to: liveSession },
+        };
+      }
       return {
         kind: 'none',
         why: `its pane holds another conversation (${liveSession}; the record's launch ran ${input.recordedSession})`,
@@ -128,7 +173,9 @@ export function restoreProof(input: RestoreProofInput): RestoreProof {
   if (input.screen !== null && input.screen !== '') {
     const kind = readScreen(seat.cli, input.screen).kind;
     if (kind === 'working') return { kind: 'none', why: workingWhy(seat.name), specific: true };
-    if (kind === 'unsent') return { kind: 'none', why: `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${seat.name})`, specific: true };
+    // Unsent text is the pane at its idle prompt with something typed: tying the pane types and
+    // closes nothing, so it does not block the re-tie. A relaunch reads the screen again and
+    // holds it (`restorePaneBusy`, `replacedScreenRefusal`).
   }
   return {
     kind: 'cli',
@@ -193,6 +240,28 @@ export function restorePaneBusy(cli: string, screen: string | null, status: stri
 export type RestoreRelaunch = 'launcher' | 'model' | 'channel';
 
 /**
+ * Whether a seat runs through something the host's own restore does not re-run: a launcher
+ * script in front of the CLI, a file that lets the launcher choose the model, or a Claude Code
+ * seat on the shipped launcher with a provider other than Anthropic (its endpoint and key are set
+ * in front of the CLI). A host restart resumes the bare CLI without them, and every turn then
+ * fails on the model ("There's an issue with the selected model (deepseek-flash)", material's and
+ * floor's DeepSeek seats after the 17 Nov restart). The launchers exec the CLI, so the process
+ * table cannot show them; the proof is the pane's process not being the one team launched, read
+ * with this. Such a seat is launched again from its own line, never adopted where it stands.
+ */
+export function restoredBypassesLauncher(
+  seat: Pick<Seat, 'cli'> & { launch?: string; modelFrom?: Seat['modelFrom']; launcher?: string; vendor?: string },
+): boolean {
+  const providerLaunch = seat.cli === 'claude-code' && seat.launcher === 'claude-code'
+    && seat.vendor !== undefined && seat.vendor !== 'anthropic';
+  return providerLaunch || seat.launch !== undefined && usesLauncher({
+    cli: seat.cli,
+    launch: seat.launch,
+    ...(seat.modelFrom === undefined ? {} : { modelFrom: seat.modelFrom }),
+  });
+}
+
+/**
  * Why a proven restored seat is launched again from its recorded line. A launcher or a model
  * that is not the record's is a mismatch even when the pane is busy: the caller holds it and
  * types nothing. A channel the record declares, with no live answer, is a mismatch only while
@@ -215,13 +284,7 @@ export function restoreRelaunch(input: {
   // the provider's endpoint and key set in front of the CLI. A host restart resumes the CLI
   // without them, and every turn then fails on the model (vlist's DeepSeek reviewer, 2026-11-12),
   // so it is launched again from its own line, as a wrapper-script seat is.
-  const providerLaunch = input.seat.cli === 'claude-code' && input.seat.launcher === 'claude-code'
-    && input.seat.vendor !== undefined && input.seat.vendor !== 'anthropic';
-  const launcher = providerLaunch || launch !== undefined && usesLauncher({
-    cli: input.seat.cli,
-    launch,
-    ...(input.seat.modelFrom === undefined ? {} : { modelFrom: input.seat.modelFrom }),
-  });
+  const launcher = restoredBypassesLauncher(input.seat);
   const channel = input.channelQuiet && (channelLaunchEnabled(launch) || channelLaunchEnabled(input.recordedLaunch));
   if (!launcher && !input.modelDiffers && !channel) return null;
   if (restorePaneBusy(input.seat.cli, input.screen, input.status)) {
@@ -279,4 +342,45 @@ export function liveConversationElsewhere(input: {
   const live = input.agents.find((agent) => agent.session === id && agent.pane !== input.inPlace
     && reportedAgentIsCli(agent.agent, input.cli, names));
   return live === undefined ? null : live.pane;
+}
+
+/** A folder compared as the file system names it: its real path where it exists. */
+function realFolder(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * The worktree evidence a re-tie reads when a restored pane holds another conversation than the
+ * record (`RestoreWorktree`): the seat's own folder — its recorded worktree, else the folder its
+ * file entry starts it in, never the shared root — every other seat's, and whether another seat's
+ * record names the pane. Undefined when the seat has no folder of its own.
+ */
+export function restoreWorktreeOf(
+  team: Pick<TeamFile, 'seats'>,
+  root: string,
+  held: Pick<SessionState, 'seats' | 'worktrees'> | undefined,
+  seatName: string,
+): RestoreWorktree | undefined {
+  const folderOf = (seat: Pick<Seat, 'name' | 'cwd'>): string | undefined => {
+    const recorded = worktreeOf(held, seat.name)?.path;
+    if (recorded !== undefined && recorded !== '') return realFolder(resolve(root, recorded));
+    if (seat.cwd === undefined || seat.cwd === '' || seat.cwd === '.') return undefined;
+    const folder = resolve(root, seat.cwd);
+    return folder === resolve(root) ? undefined : realFolder(folder);
+  };
+  const seat = team.seats.find((candidate) => candidate.name === seatName);
+  const own = seat === undefined ? undefined : folderOf(seat);
+  if (own === undefined) return undefined;
+  const others = team.seats
+    .filter((candidate) => candidate.name !== seatName)
+    .map(folderOf)
+    .filter((folder): folder is string => folder !== undefined);
+  const pane = held?.seats[seatName]?.pane;
+  const paneClaimed = pane !== undefined
+    && Object.entries(held?.seats ?? {}).some(([name, record]) => name !== seatName && record.pane === pane);
+  return { own, others, paneClaimed };
 }

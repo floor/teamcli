@@ -2549,9 +2549,11 @@ describe('team up, a session that was restored', () => {
     made.seed('synthetic-ws-92:p1', terra, true);
     made.seed('synthetic-ws-93:p1', IDLE, true);
     made.session = 'running';
+    // The deepseek pane goes back to its shell once its exit word is entered.
+    let deepseekExited = false;
     made.launch.processInfo = (_session, pane) => {
       if (pane === 'synthetic-ws-92:p1') return { shell: 800, foreground: [801] };
-      if (pane === 'synthetic-ws-93:p1') return { shell: 900, foreground: [901] };
+      if (pane === 'synthetic-ws-93:p1') return deepseekExited ? { shell: 900, foreground: [900] } : { shell: 900, foreground: [901] };
       return { shell: 700, foreground: [700, 701] };
     };
     // The repaired codex seat's rules arrive as a typed first message: the box holds the line
@@ -2569,6 +2571,8 @@ describe('team up, a session that was restored', () => {
     const read = made.launch.paneText;
     made.launch.paneText = (session, pane) => (pane === codexPane && holding ? boxed() : read(session, pane));
     made.launch.typeText = (_session, pane, text) => {
+      // The deepseek seat's exit word: its own pane, read back as typed below.
+      if (pane === 'synthetic-ws-93:p1') { keys.push(`type ${text}`); deepseekExited = text === '/exit'; return true; }
       codexPane = pane;
       typedLine = text;
       holding = true;
@@ -2588,10 +2592,8 @@ describe('team up, a session that was restored', () => {
     made.launch.agents = () => [
       ...(made.closes.includes('synthetic-ws-92')
         ? []
-        : [
-            { ...agent('codex-acme', recordedCodexPane, 'idle', 'codex'), session: 'kept' },
-            { ...agent('deepseek-acme', recordedDeepseekPane, 'idle'), session: 'kept' },
-          ]),
+        : [{ ...agent('codex-acme', recordedCodexPane, 'idle', 'codex'), session: 'kept' }]),
+      { ...agent('deepseek-acme', recordedDeepseekPane, 'idle'), session: 'kept' },
       ...liveNames(made),
     ];
     const io = testIo(root, { kind: 'owner' });
@@ -2611,7 +2613,7 @@ describe('team up, a session that was restored', () => {
         made,
       ),
     );
-    expect(code).toBe(0);
+    expect(code, io.err).toBe(0);
     // The codex seat's screen names another model: its recorded conversation is proven
     // (`kept`), so it is closed without input and relaunched through the file's line with
     // that conversation resumed — never a blank one.
@@ -2619,14 +2621,17 @@ describe('team up, a session that was restored', () => {
     const relaunched = made.runs.filter(({ command }) => command.includes('codex -m gpt-6-sol'));
     expect(relaunched).toHaveLength(1);
     expect(relaunched[0]?.command).toContain('resume kept');
-    expect(keys).toEqual([]);
-    // The deepseek seat's own model is not readable from a Claude Code screen: nothing is
-    // closed and the record takes the pids the pane holds now.
-    expect(io.err).toContain('  restored; left as it is\n');
+    // The deepseek seat runs through a launcher (`team-deepseek`) that the host's restore did not
+    // re-run (its pids are not the ones team launched): it is exited in place and launched again
+    // through its own line, its conversation resumed (17 Nov restart; review round 3).
+    const deepseek = made.runs.filter(({ pane, command }) => pane === 'synthetic-ws-93:p1' && command.includes('team-deepseek'));
+    expect(deepseek).toHaveLength(1);
+    expect(deepseek[0]?.command).toContain('--resume kept');
+    expect(io.err).not.toContain('  restored; left as it is\n');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['codex-acme']).toMatchObject({ stage: 'ready' });
     expect(seats['codex-acme']?.pane).not.toBe('synthetic-ws-92:p1');
-    expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'synthetic-ws-93:p1', launched: { shell: 900, cli: [901] }, agent_session: 'kept' });
+    expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'synthetic-ws-93:p1', agent_session: 'kept' });
   });
 
   test('a different agent session is not closed', async () => {

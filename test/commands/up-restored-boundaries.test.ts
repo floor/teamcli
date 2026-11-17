@@ -539,11 +539,12 @@ describe('team up, a restored session: boundaries', () => {
   });
 
   // The launch that proves a wrapper is the one the record holds, never the line the file was
-  // edited to since: the file now names the bare CLI, and the pane still shows the wrapper's
-  // banner naming the signed model above the CLI family its footer always prints. The restored
-  // seat runs what it signs, so it is left as it is — not cycled on a family its launch never
-  // selected.
-  test('a restored seat is compared with the launch the record proves, not the launch line the file carries now', async () => {
+  // edited to since. Review round 3 (17 Nov restart): the proof that the wrapper's settings are
+  // gone is structural — the pane's process is not the one team launched through that wrapper —
+  // and screen text is never the authority either way, so a banner naming the signed model does
+  // not keep a host-restored wrapper seat. It is exited in place and launched again, its
+  // conversation resumed.
+  test('a restored seat whose record proves a wrapper launch is relaunched, whatever its banner shows', async () => {
     writeFileSync(
       join(root, '.agents/team.yaml'),
       makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n').replace('launch: team-deepseek', 'launch: claude')),
@@ -552,13 +553,14 @@ describe('team up, a restored session: boundaries', () => {
     writeState('kept', true);
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === RECORDED_PANE ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    let exited = false;
+    made.launch.processInfo = (_session, pane) => (pane === RECORDED_PANE ? (exited ? { shell: 900, foreground: [900] } : { shell: 900, foreground: [901] }) : sameProcess(pane));
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     made.launch.agents = live;
     made.launch.paneText = (_session, pane) =>
       pane === RECORDED_PANE ? IDLE.replace('Opus 5.5 · Acme billing', 'deepseek-v4.1-flash · API Usage Billing') : IDLE;
     const keys: string[] = [];
-    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.typeText = (_session, pane, text) => { keys.push(`type ${text}`); if (pane === RECORDED_PANE && text === '/exit') exited = true; return true; };
     made.launch.pressEnter = () => { keys.push('enter'); return true; };
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
@@ -566,23 +568,16 @@ describe('team up, a restored session: boundaries', () => {
       io,
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
-    expect(code).toBe(0);
+    expect(code, io.err).toBe(0);
     expect(made.closes).toEqual([]);
-    expect(keys).toEqual([]);
-    expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
-    expect(io.err).toContain('  restored; left as it is\n');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({
-      stage: 'ready',
-      pane: RECORDED_PANE,
-      launched: { shell: 900, cli: [901] },
-      agent_session: 'kept',
-    });
+    expect(keys.slice(0, 2)).toEqual(['type /exit', 'enter']);
+    const relaunched = made.runs.filter((run) => run.pane === RECORDED_PANE);
+    expect(relaunched).toHaveLength(1);
+    expect(relaunched[0]?.command).toContain('--resume kept');
+    expect(io.err).not.toContain('  restored; left as it is\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: RECORDED_PANE, agent_session: 'kept' });
   });
 
-  // The release's recognition gap, closed through `up`: the state copy names no session (an
-  // older record, or one written before the id was known), and the registry's binding is the
-  // only proof the pane is the seat. The pane is adopted, nothing is closed or typed, and the
-  // state heals to the conversation the record holds.
   test('a restored seat is recognized from the registry record when the state names no session', async () => {
     await approve();
     writeSeats();

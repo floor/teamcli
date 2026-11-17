@@ -19,7 +19,7 @@ import { ownStartFolderProblem } from '../worktree/place.ts';
 import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { writeCursorCommandDeny } from './grok-command-deny.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
-import { restoreProof } from './restore-proof.ts';
+import { restoreProof, type RestoreWorktree } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
 import { appendOnLaunchLine } from './cli-scope.ts';
 import { codexCommandHasFlag, codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
@@ -46,7 +46,7 @@ import { featureDialog, featureDialogClose } from './reboot.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { processStartOf } from '../watch/pane.ts';
-import { readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
+import { classifyComposer, readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
@@ -661,6 +661,10 @@ export type ExecuteOptions = {
   isClosing?: () => boolean;
   /** Recheck original-pane absence before automatic restore mutates a seat. */
   restoreGuard?(seat: string): string | null;
+  /** A fresh read of a seat's worktree evidence (its folder, every other seat's, and whether
+   *  another seat's record names its pane), for an adoption that changes the seat's conversation:
+   *  the evidence that authorized the change is read again before the record is written. */
+  restoreWorktree?(seat: string): RestoreWorktree | undefined;
 };
 
 /** Runs a plan. Steps carry the operation beside the command the dry run prints. */
@@ -2245,15 +2249,32 @@ export async function executePlan(
         // adoption: no rename, no record.
         const agentsNow = host.agentList?.(session) ?? null;
         const processNow = host.processInfo?.(session, op.pane) ?? null;
+        // A conversation change is proved again from the binding the records hold, with the
+        // worktree and claim evidence read again now: a folder or a competing record that moved
+        // since the plan refuses the adoption, never an exact-id proof on the new id.
+        const rebound = op.rebound;
+        const worktreeNow = rebound === undefined ? undefined : options?.restoreWorktree?.(op.seat);
         const proof = restoreProof({
           seat: { name: op.seat, cli: op.cli },
           recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.recordedLaunched },
           agents: agentsNow,
           process: processNow,
           foreground: host.foreground?.(session, op.pane) ?? null,
-          recordedSession: op.session,
+          recordedSession: rebound === undefined ? op.session : rebound.from,
           screen: host.paneText?.(session, op.pane) ?? null,
+          ...(worktreeNow === undefined ? {} : { worktree: worktreeNow }),
         });
+        if (rebound !== undefined && (proof.kind !== 'session' || proof.rebound?.to !== rebound.to)) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, {
+            kind: 'left out',
+            reason: proof.kind === 'none'
+              ? proof.why
+              : `its conversation no longer proves the change the plan read (${rebound.from} to ${rebound.to}); left as the host restored it`,
+          });
+          break;
+        }
         if (proof.kind === 'none') {
           held = true;
           dropped.add(op.seat);
@@ -2317,7 +2338,12 @@ export async function executePlan(
         }, true);
         provedRestored.add(op.seat);
         dropped.add(op.seat);
-        final(op.seat, { kind: 'ready' }, `  restored and re-tied: ${proof.sentence}\n`);
+        // The audit line for a conversation the record did not hold: the plan proved the pane by
+        // the seat's own worktree, and the record now names the conversation the pane runs.
+        const reboundLine = op.rebound === undefined
+          ? ''
+          : `  its conversation moved from ${op.rebound.from} to ${op.rebound.to} in the seat's own worktree; the record now names ${op.rebound.to}\n`;
+        final(op.seat, { kind: 'ready' }, `  restored and re-tied: ${proof.sentence}\n${reboundLine}`);
         break;
       }
       case 'rename': {
@@ -2696,16 +2722,32 @@ export async function executePlan(
         // screen is left where it stands, and nothing is typed.
         const agentsNow = host.agentList?.(session) ?? null;
         const processNow = host.processInfo?.(session, op.pane) ?? null;
+        // A conversation change is proved again exactly as an adoption proves it: from the
+        // recorded binding, with the worktree and claim evidence read again now.
+        const rebound = op.rebound;
+        const worktreeNow = rebound === undefined ? undefined : options?.restoreWorktree?.(op.seat);
         const proof = restoreProof({
           seat: { name: op.seat, cli: op.cli },
           recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.launched },
           agents: agentsNow,
           process: processNow,
           foreground: host.foreground?.(session, op.pane) ?? null,
-          recordedSession: op.session,
+          recordedSession: rebound === undefined ? op.session : rebound.from,
           screen: host.paneText?.(session, op.pane) ?? null,
           ...(op.endpoint === true ? { allowSame: true } : {}),
+          ...(worktreeNow === undefined ? {} : { worktree: worktreeNow }),
         });
+        if (rebound !== undefined && (proof.kind !== 'session' || proof.rebound?.to !== rebound.to)) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, {
+            kind: 'left out',
+            reason: proof.kind === 'none'
+              ? proof.why
+              : `its conversation no longer proves the change the plan read (${rebound.from} to ${rebound.to}); nothing typed`,
+          });
+          break;
+        }
         // A dead-endpoint relaunch (`op.endpoint`) exists to give the seat a fresh managed
         // server, not to carry a conversation: the weak proof — the CLI alone at an idle
         // prompt — is enough there. A model or channel relaunch whose record has no
@@ -2725,7 +2767,28 @@ export async function executePlan(
           break;
         }
         const listedNow = agentsNow?.find((agent) => agent.pane === op.pane && (agent.name === null || agent.name === op.seat));
-        const screenKind = (): ScreenKind => host.classify(session, op.pane, op.cli);
+        // A launcher-bypass relaunch is authorised by structure, never by screen text, and the
+        // structure is proven again here, right before any key: the seat's record still names the
+        // launch the plan read (nothing launched it since), and the pane still holds a process
+        // team did not launch. Either changed: nothing is typed.
+        if (op.launcherBypass === true) {
+          const storedNow = host.seatStates?.(session)?.[op.seat]?.launched;
+          const sameRecord = storedNow !== undefined && JSON.stringify(storedNow) === JSON.stringify(op.launched);
+          if (!sameRecord || seatProcessVerdict(storedNow, processNow) !== 'replaced') {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: 'its record or its process changed since the plan; nothing typed' });
+            break;
+          }
+        }
+        // That relaunch may also exit a provider-error screen (a turn that failed on the model),
+        // but only while the composer itself is empty: a draft, a dialog or a working turn is
+        // still refused below, and no other repair widens.
+        const composerEmpty = (frame: string | null | undefined): boolean =>
+          frame != null && frame !== '' && classifyComposer(op.cli, frame.split('\n')).kind === 'idle';
+        const screenKind = (): ScreenKind => {
+          const read = host.classify(session, op.pane, op.cli);
+          return read === 'provider error' && op.launcherBypass === true && composerEmpty(host.paneText?.(session, op.pane)) ? 'idle' : read;
+        };
         const kind = screenKind();
         if (listedNow?.status === 'working' || kind === 'working') {
           // A seat that came back working is left to finish its turn: nothing is typed and the
@@ -2791,7 +2854,12 @@ export async function executePlan(
               // composer rows are exactly the exit word. A working turn, a transcript mention,
               // or any other draft does not get Enter.
               const frame = host.paneText?.(session, op.pane) ?? undefined;
-              const beforeEnter = launchKind(readScreen(op.cli, frame).kind);
+              const frameKind = launchKind(readScreen(op.cli, frame).kind);
+              // The exit word not drawn yet on a provider-error screen reads as that error; only a
+              // launcher-bypass repair, and only with an empty composer, counts it as idle.
+              const beforeEnter = frameKind === 'provider error' && op.launcherBypass === true && composerEmpty(frame)
+                ? 'idle'
+                : frameKind;
               const composerIsExit = beforeEnter === 'unsent' && boxHoldsText(op.cli, exitWord, frame);
               const pressed = (beforeEnter === 'idle' || composerIsExit) && (await host.pressEnter?.(session, op.pane)) === true;
               if (!pressed) {

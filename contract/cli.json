@@ -5452,6 +5452,70 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--wait",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "ping",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team ping <seat> [--wait <seconds>] [--json]",
+        "team ping --all [--wait <seconds>] [--json]"
+      ],
+      "who": {
+        "gate": "admission",
+        "why": "each message is an ordinary team send from the caller's own folder, decided by the send admission; the acknowledgement is the seat's own read receipt, so this map admits no one to it"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--general",
           "repeatable": false,
           "takesValue": true

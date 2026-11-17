@@ -165,8 +165,34 @@ export function placedCallerTeam(home: string, io: BindingIo): TeamRecord | null
   } catch {
     return null;
   }
-  const placed = Object.values(teams).filter((team) => callerStandsIn(io, team));
+  const placed = candidateTeams(io, Object.values(teams)).filter((team) => callerStandsIn(io, team));
   return placed.length === 1 ? placed[0]! : null;
+}
+
+/** The herdr session a pane belongs to, read from the socket path herdr hands every pane
+ *  (`HERDR_SOCKET_PATH`, `…/sessions/<name>/herdr.sock`), or null when it is absent or not that
+ *  shape. A hint only: it never places anyone. */
+export function hintedHerdrSession(env: Record<string, string | undefined> | undefined): string | null {
+  const path = env?.HERDR_SOCKET_PATH;
+  if (path === undefined || path === '') return null;
+  const match = /[\\/]sessions[\\/]([^\\/]+)[\\/]herdr\.sock$/.exec(path);
+  return match ? match[1]! : null;
+}
+
+/** The teams worth running the placement proof for. Each proof reads that team's herdr session
+ *  (one child process per pane it lists), so a caller checked against every registered team paid
+ *  for every running session on the machine (about 0.2 s of a 0.9 s send, 2026-11-17). A pane's
+ *  root process is a child of exactly one herdr server, so a caller can stand only in teams of
+ *  its own pane's session: when the socket hint names a session some team uses, only those teams
+ *  are proved. The narrowing can only drop placements, never make one: a wrong or forged hint
+ *  leaves the caller unplaced (refused), and a missing hint, a hint no team uses, or a caller
+ *  handed in whole keep the full scan. */
+function candidateTeams(io: BindingIo, teams: TeamRecord[]): TeamRecord[] {
+  if (io.caller !== undefined) return teams;
+  const session = hintedHerdrSession(io.env);
+  if (session === null) return teams;
+  const own = teams.filter((team) => team.session === session);
+  return own.length > 0 ? own : teams;
 }
 
 /** Whether the caller stands on the pane `team`'s state records for it, in that team's session. */
@@ -238,7 +264,7 @@ export function teamBinding(home: string, cwd: string, seat?: string, io?: Bindi
   const named = seat !== undefined && seat !== '';
   const holders = named ? listed.filter((team) => teamHoldsSeat(team, seat)) : listed;
   if (io !== undefined) {
-    const placed = holders.filter((team) => callerStandsIn(io, team));
+    const placed = candidateTeams(io, holders).filter((team) => callerStandsIn(io, team));
     if (placed.length === 1) return { kind: 'bound', team: placed[0]!, by: 'caller' };
   }
   if (!named || holders.length < 2) return { kind: 'unbound' };

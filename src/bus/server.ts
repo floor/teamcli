@@ -1560,6 +1560,55 @@ export async function nudgeBus(
   return { kind: 'nudged', event: answer.event, duplicate: answer.duplicate };
 }
 
+/** How a nudge that does not wait for the bus's answer ended: `sent` once the request line was
+ *  handed to the bus's socket, `unavailable` when nothing listens there, `deadline` when the
+ *  connect or the write did not finish in time. */
+export type BusNudgeSent = { kind: 'sent' } | { kind: 'unavailable' } | { kind: 'deadline' };
+
+/**
+ * The same nudge as `nudgeBus`, without waiting for the bus's answer. A sender that only
+ * announces its record (`announceArrival`) never reads the answer, yet waited for it: on a bus
+ * busy with its first pass the answer came after the 250 ms bound, so every send paid the whole
+ * bound (2026-11-17: 252 ms of a 0.68 s send). The bus serves a request as soon as its line is
+ * read, synchronously for a nudge, and a closed client does not stop that: it re-reads and
+ * verifies the record exactly as before. This waits only until the line is written to the socket,
+ * then closes it.
+ */
+export function nudgeBusNoWait(
+  root: string,
+  record: { session: string; seat: string; record_id: string },
+  options: { deadlineMs?: number } = {},
+): Promise<BusNudgeSent> {
+  return new Promise((done) => {
+    let settled = false;
+    let connected = false;
+    const socket = connect(busSocket(root));
+    const finish = (outcome: BusNudgeSent) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // A unix socket hands written bytes straight to the bus's receive queue, so closing at
+      // once loses nothing; `end` would keep this process alive until the busy bus answered.
+      socket.destroy();
+      done(outcome);
+    };
+    const timer = setTimeout(
+      () => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }),
+      options.deadlineMs ?? BUS_DEADLINE_MS,
+    );
+    socket.once('connect', () => {
+      connected = true;
+      socket.write(
+        encodeBusLine({ op: 'nudge', session: record.session, seat: record.seat, record_id: record.record_id }),
+        (error) => finish(error ? { kind: 'deadline' } : { kind: 'sent' }),
+      );
+    });
+    // The bus's answer, if it comes before the socket closes, is not read.
+    socket.on('data', () => {});
+    socket.once('error', () => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }));
+  });
+}
+
 export type BusSubscribeOutcome =
   | { kind: 'events'; events: SignedEventRecord[]; cursor: number }
   | {

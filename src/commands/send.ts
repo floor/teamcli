@@ -11,7 +11,7 @@ import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { nudgeBus } from '../bus/server.ts';
+import { nudgeBusNoWait } from '../bus/server.ts';
 import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
@@ -955,7 +955,12 @@ export function selfAddressed(caller: Caller, seatName: string, to: { seat: stri
 function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   const caller = callerOf(io);
   if (caller.kind !== 'owner') {
-    return { ended: 'refused', dir: null, who: describeCaller(caller), reason: 'a send from outside a team\'s folder is the owner\'s; run it inside a team\'s folder' };
+    // An unplaced caller is most often a seat team could not place by its pane (no folder of its
+    // own team to fall back on): the placement's reason is the cause to name, not the folder.
+    const reason = caller.kind === 'unplaced'
+      ? `this call is ${describeCaller(caller)}, and it runs outside a team's folder; a send from there is the owner's`
+      : 'a send from outside a team\'s folder is the owner\'s; run it inside a team\'s folder';
+    return { ended: 'refused', dir: null, who: describeCaller(caller), reason };
   }
   const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
   if ('error' in resolved) {
@@ -4005,7 +4010,8 @@ export const ARRIVAL_NUDGE_MS = 250;
  */
 export async function announceArrival(payload: RecordPayload): Promise<void> {
   try {
-    await nudgeBus(
+    // Only the line has to reach the bus; its answer is never read here (`nudgeBusNoWait`).
+    await nudgeBusNoWait(
       payload.root,
       { session: payload.session, seat: payload.to, record_id: payload.id },
       { deadlineMs: ARRIVAL_NUDGE_MS },
