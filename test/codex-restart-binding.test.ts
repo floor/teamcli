@@ -4,7 +4,7 @@
 // endpoint from starting is read before the old CLI is exited, never after (the seat must not be
 // left a bare shell). Folders are scratch, processes and panes synthetic.
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { codexEndpointPreflight, launchCodexEndpoint } from '../src/launch/codex-endpoint.ts';
 import { executePlan, type Host } from '../src/launch/execute.ts';
@@ -161,6 +161,37 @@ test('the preflight refuses a runtime root that is a regular file when the socke
     writeFileSync(runtime, '');
     expect(codexEndpointPreflight({ dir, session: SESSION, seat: SEAT, runtimeRoot: runtime })).toBe('the runtime folder is not a plain directory');
   } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('the preflight fails closed on an endpoint path it cannot read (not absent)', () => {
+  const dir = seeded();
+  const locked = join(dir, 'run', SESSION);
+  try {
+    mkdirSync(locked, { recursive: true });
+    chmodSync(locked, 0o000);
+    expect(codexEndpointPreflight({ dir, session: SESSION, seat: SEAT, runtimeRoot: dir })).toBe('the endpoint folder cannot be read');
+  } finally {
+    chmodSync(locked, 0o700);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the preflight fails closed on a runtime root it cannot read', () => {
+  const base = scratch();
+  const locked = join(base, 'locked');
+  try {
+    const dir = join(base, 'd'.repeat(90));
+    mkdirSync(dir, { recursive: true });
+    updateState(dir, (state) => {
+      state.sessions[SESSION] ??= emptySession();
+    });
+    mkdirSync(locked);
+    chmodSync(locked, 0o000);
+    expect(codexEndpointPreflight({ dir, session: SESSION, seat: SEAT, runtimeRoot: join(locked, 'rt') })).toBe('the runtime folder cannot be read');
+  } finally {
+    chmodSync(locked, 0o700);
     rmSync(base, { recursive: true, force: true });
   }
 });

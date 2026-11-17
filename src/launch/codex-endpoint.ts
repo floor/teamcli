@@ -1096,6 +1096,7 @@ export function codexEndpointPreflight(
   if (socket.runtime) {
     const at = lstatOrNull(socket.root);
     if (at === null) return null;
+    if (at === 'unreadable') return 'the runtime folder cannot be read';
     if (!at.isDirectory()) return 'the runtime folder is not a plain directory';
     const uid = process.getuid?.();
     if (uid !== undefined && at.uid !== uid) return 'the runtime folder is not this user’s own';
@@ -1103,18 +1104,27 @@ export function codexEndpointPreflight(
   }
   const folder = endpointFolder(input.dir, input.session, input.seat);
   if (folder === null) return 'the session or seat cannot name an endpoint folder';
-  for (let path = folder; path.length > input.dir.length && path.startsWith(input.dir); path = dirname(path)) {
+  // From the state folder down: the first component that is not a plain directory is named as
+  // such, and the first absent one ends the walk (nothing below it can stand).
+  const components: string[] = [];
+  for (let path = folder; path.length > input.dir.length && path.startsWith(input.dir); path = dirname(path)) components.unshift(path);
+  for (const path of components) {
     const at = lstatOrNull(path);
-    if (at !== null && !at.isDirectory()) return 'the endpoint folder is not a plain directory';
+    if (at === null) return null;
+    if (at === 'unreadable') return 'the endpoint folder cannot be read';
+    if (!at.isDirectory()) return 'the endpoint folder is not a plain directory';
   }
   return null;
 }
 
-function lstatOrNull(path: string): import('node:fs').Stats | null {
+/** The entry at `path`; null only when nothing is there (ENOENT). Any other failure to read it
+ *  (a permission, a component that is not a folder, an I/O error) is the string `'unreadable'`:
+ *  the preflight fails closed rather than calling an unreadable path absent. */
+function lstatOrNull(path: string): import('node:fs').Stats | null | 'unreadable' {
   try {
     return lstatSync(path);
-  } catch {
-    return null;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? null : 'unreadable';
   }
 }
 
