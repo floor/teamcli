@@ -74,3 +74,42 @@ test('the audit: the send path\'s one fire-and-forget continuation is registered
   expect(source).toContain('deferHosted(posted.late.then(');
   expect(source).not.toMatch(/void posted\.late\.then/);
 });
+
+test('deferred work drains inside the request: the hosted scope and the guard still hold, and a write after a fallback is blocked', async () => {
+  const { hostedCommit, hostedFallbackPoint, hostedRequest } = await import('../../src/host/request-scope.ts');
+  let scoped: unknown = 'unset';
+  let wrote = false;
+  const result = await runHostedLine(request(ownEnv()), peer, {
+    cliEntry: 'cli.js',
+    ownEnv: ownEnv(),
+    callerSources: sources,
+    main: async () => {
+      try { hostedFallbackPoint('owner rule'); } catch { /* the command swallowed it */ }
+      deferHosted(new Promise<void>((settle) => setTimeout(() => {
+        scoped = hostedRequest();
+        try { hostedCommit('late write'); wrote = true; } catch { /* blocked */ }
+        settle();
+      }, 10)));
+      return 0;
+    },
+  });
+  expect(scoped).not.toBeNull();
+  expect(wrote).toBe(false);
+  expect(result.answer).toEqual({ v: 1, kind: 'fallback', why: 'owner rule' });
+});
+
+test('a stop a command caught is still reported as a stopped line with exit 1', async () => {
+  const { hostedCommit, hostedFallbackPoint } = await import('../../src/host/request-scope.ts');
+  const result = await runHostedLine(request(ownEnv()), peer, {
+    cliEntry: 'cli.js',
+    ownEnv: ownEnv(),
+    callerSources: sources,
+    main: async () => {
+      hostedCommit('record write');
+      try { hostedFallbackPoint('owner rule'); } catch { /* swallowed */ }
+      return 0;
+    },
+  });
+  expect(result.answer).toMatchObject({ kind: 'ran', code: 1 });
+  if (result.answer.kind === 'ran') expect(result.answer.stderr).toContain('after it began (record write)');
+});

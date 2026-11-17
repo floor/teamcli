@@ -94,4 +94,15 @@ describe('the git-root hold and the git environment', () => {
     });
     expect(findRoot(plain)).toBeNull();
   });
+
+  test('under an unchanged GIT_DIR naming a missing repository, creating it is seen at once (nothing was held)', () => {
+    const target = join(base, 'external');
+    withGit({ GIT_DIR: join(target, '.git') }, () => {
+      expect(findRoot(plain)).toBe(fresh(plain, { ...process.env }));
+      expect(findRoot(plain)).toBeNull();
+      execFileSync('git', ['init', '-q', target]);
+      expect(findRoot(plain)).toBe(fresh(plain, { ...process.env }));
+      expect(findRoot(plain)).not.toBeNull();
+    });
+  });
 });

@@ -1,3 +1,4 @@
+import { currentRunMemo } from './run-memo.ts';
 import { hostedCommit } from './host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -1104,6 +1105,8 @@ function writeTemporary(path: string, text: string, random: () => string, mode?:
  */
 export function writeAtomic(path: string, text: string, options: { random?: () => string } = {}): void {
   hostedCommit('writeAtomic');
+  // A policy, state or config file written in this run may change what a team text validates to.
+  currentRunMemo()?.teamLoads.clear();
   const random = options.random ?? (() => randomBytes(10).toString('hex'));
   const temporary = writeTemporary(path, text, random, 0o600);
   try {

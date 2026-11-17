@@ -4,7 +4,7 @@
 // memoised, and outside a run nothing is kept.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTeamText } from '../src/file/load.ts';
@@ -75,6 +75,33 @@ test('a failed load is not kept, a custom reader is not memoised, and outside a 
   expect(currentRunMemo()!.teamLoads.size).toBe(0);
   const fs = { lstat: (p: string) => require('node:fs').lstatSync(p), realpath: (p: string) => realpathSync(p) };
   loadTeamText(TEXT, root, path, { home, fs: fs as never });
+  expect(currentRunMemo()!.teamLoads.size).toBe(0);
+  leaveRunMemo();
+});
+
+test('placement is checked again on every load: a folder replaced by a link within the run is refused', () => {
+  const { home, root, path } = scene();
+  const text = TEXT.replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: worktree\n  base: main\n  path: wt/{task}\n');
+  mkdirSync(join(root, 'wt'));
+  enterRunMemo();
+  const first = loadTeamText(text, root, path, { home });
+  expect(first.ok, JSON.stringify(first)).toBe(true);
+  // The worktree folder becomes a link to the project's parent, inside the same run.
+  renameSync(join(root, 'wt'), join(root, 'wt-old'));
+  symlinkSync(join(root, '..'), join(root, 'wt'));
+  const second = loadTeamText(text, root, path, { home });
+  expect(second.ok).toBe(false);
+  if (!second.ok) expect(second.errors.map((e) => e.message).join('\n')).toContain("the project's parent");
+  leaveRunMemo();
+});
+
+test('a write in the run drops the kept validations', async () => {
+  const { home, root, path } = scene();
+  const { writeAtomic } = await import('../src/state.ts');
+  enterRunMemo();
+  loadTeamText(TEXT, root, path, { home });
+  expect(currentRunMemo()!.teamLoads.size).toBe(1);
+  writeAtomic(join(home, 'any.json'), '{}\n');
   expect(currentRunMemo()!.teamLoads.size).toBe(0);
   leaveRunMemo();
 });

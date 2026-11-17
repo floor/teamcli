@@ -69,6 +69,7 @@ export function lockedEntities<T>(home: string, work: () => T): T {
     // The writer re-reads the file under this lock, so whatever the run memoised before the
     // write is stale from here on, for this home: drop it before the work runs.
     currentRunMemo()?.entityRules.delete(home);
+    currentRunMemo()?.teamLoads.clear();
     return work();
   } finally {
     try {

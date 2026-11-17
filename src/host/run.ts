@@ -151,6 +151,7 @@ export async function runHostedLine(request: HostRequest, peer: HostPeer, deps: 
   let fellBack: string | null = null;
   let first: string | null = null;
   let lateCallbacks = 0;
+  let stopped: HostedStoppedAfterEffect | null = null;
   try {
     replaceEnv(request.env);
     process.chdir(request.cwd);
@@ -175,16 +176,21 @@ export async function runHostedLine(request: HostRequest, peer: HostPeer, deps: 
         const caller = callerOf(io);
         if (caller.kind !== 'seat') throw new HostedFallback(`the caller is placed as ${caller.kind}, not a seat`);
         if (caller.confined === true) throw new HostedFallback('the caller is a confined seat');
-        return deps.main([...request.argv], io);
+        try {
+          return await deps.main([...request.argv], io);
+        } finally {
+          // Work the line left running is drained inside the request: the hosted scope, the armed
+          // guard and the request's environment all still hold, so a deferred effect is checked
+          // and blocked exactly as the line's own (rfc-bus-send-server §2.4).
+          lateCallbacks = await settleHostedDeferred(DEFERRED_WAIT_MS);
+        }
       },
     );
   } catch (error) {
     thrown = error;
   } finally {
-    // Work the line left running reads its own captured values; it still sees the request's
-    // environment while the host waits for it, bounded (rfc-bus-send-server §2.4).
-    lateCallbacks = await settleHostedDeferred(DEFERRED_WAIT_MS);
     const guard = disarmHostedGuard();
+    stopped = guard.stopped ?? null;
     process.stdout.write = savedOut;
     process.stderr.write = savedErr;
     Object.assign(console, savedConsole);
@@ -202,8 +208,11 @@ export async function runHostedLine(request: HostRequest, peer: HostPeer, deps: 
   if ((thrown instanceof HostedFallback || fellBack !== null) && first === null) {
     return { answer: { v: 1, kind: 'fallback', why: thrown instanceof HostedFallback ? thrown.why : fellBack ?? 'handed back' }, recycle };
   }
-  if (thrown instanceof HostedStoppedAfterEffect) {
-    captured.stderr.push(`team: ${thrown.message}\n`);
+  // A stop is latched in the guard: a command that caught it and returned normally is still a
+  // stopped line, reported with exit 1.
+  const stop = thrown instanceof HostedStoppedAfterEffect ? thrown : stopped;
+  if (stop !== null) {
+    captured.stderr.push(`team: ${stop.message}\n`);
     return { answer: { v: 1, kind: 'ran', code: 1, stdout: captured.stdout.join(''), stderr: captured.stderr.join('') }, recycle };
   }
   if (thrown !== null) {

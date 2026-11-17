@@ -337,6 +337,7 @@ export function noteStoppedTeamRunning(home: string, id: string, root: string, s
     const memo = currentRunMemo();
     memo?.teamsTolerant.delete(home);
     memo?.teamsStrict.delete(home);
+    memo?.teamLoads.clear();
     let record: TeamRecord | null;
     try {
       record = getTeam(home, id);
@@ -517,6 +518,7 @@ export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: 
       // the membership update must both use the records now held under the locks.
       const memo = currentRunMemo();
       memo?.teamsStrict.clear();
+      memo?.teamLoads.clear();
       memo?.teamsTolerant.clear();
       memo?.projects.delete(home);
       memo?.projectsRaw.delete(home);
@@ -606,6 +608,7 @@ function write(home: string, teams: Record<string, TeamRecord>): void {
   const memo = currentRunMemo();
   if (memo !== null) {
     memo.teamsStrict.clear();
+    memo.teamLoads.clear();
     memo.teamsTolerant.clear();
   }
 }

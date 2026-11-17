@@ -57,6 +57,21 @@ describe('the hosted guard', () => {
     expect(run.guard).toEqual({ first: null, fellBack: 'caught' });
   });
 
+  test('a caught stop after the first effect is latched: no later effect, and the line still reads stopped', async () => {
+    let second = false;
+    const run = await hosted(() => {
+      hostedCommit('record write');
+      try { hostedFallbackPoint('owner rule'); } catch { /* a command that swallows errors */ }
+      try { hostedCommit('delivery'); second = true; } catch { /* blocked */ }
+      try { hostedFallbackPoint('another'); } catch { /* still the same stop */ }
+      return 'returned normally';
+    });
+    expect(second).toBe(false);
+    expect(run.value).toBe('returned normally');
+    expect(run.guard.stopped).toBeInstanceOf(HostedStoppedAfterEffect);
+    expect(run.guard.stopped?.why).toBe('owner rule');
+  });
+
   test('the first effect checks the client again and fails closed when it changed', async () => {
     let checks = 0;
     const run = await hosted(() => {

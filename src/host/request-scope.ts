@@ -61,20 +61,27 @@ export class HostedStoppedAfterEffect extends Error {
   }
 }
 
-type GuardState = { first: string | null; fellBack: string | null; check: () => string | null };
+type GuardState = {
+  first: string | null;
+  fellBack: string | null;
+  /** Set once a fallback point fired after the first effect: the line is stopped for good. */
+  stopped: HostedStoppedAfterEffect | null;
+  check: () => string | null;
+};
 let guard: GuardState | null = null;
 
 /** Arms the effect guard for the running request; `check` re-reads the peer's identity and names
  *  what changed, or null when it still holds. */
 export function armHostedGuard(check: () => string | null): void {
-  guard = { first: null, fellBack: null, check };
+  guard = { first: null, fellBack: null, stopped: null, check };
 }
 
 /** Disarms the guard: the first effect's name (null when the line did nothing) and the fallback
  *  point that fired (null when none did). A fallback point a command caught and went past still
  *  counts: the line is handed back, and no effect was let through after it. */
-export function disarmHostedGuard(): { first: string | null; fellBack: string | null } {
-  const out = { first: guard?.first ?? null, fellBack: guard?.fellBack ?? null };
+export function disarmHostedGuard(): { first: string | null; fellBack: string | null; stopped?: HostedStoppedAfterEffect } {
+  const out: { first: string | null; fellBack: string | null; stopped?: HostedStoppedAfterEffect } = { first: guard?.first ?? null, fellBack: guard?.fellBack ?? null };
+  if (guard?.stopped) out.stopped = guard.stopped;
   guard = null;
   return out;
 }
@@ -83,11 +90,15 @@ export function disarmHostedGuard(): { first: string | null; fellBack: string | 
  *  stops it after. A no-op outside the host. */
 export function hostedFallbackPoint(why: string): void {
   if (active === null || guard === null) return;
+  if (guard.stopped !== null) throw guard.stopped;
   if (guard.first === null) {
     guard.fellBack ??= why;
     throw new HostedFallback(why);
   }
-  throw new HostedStoppedAfterEffect(why, guard.first);
+  // Latched: a command that catches this stop still cannot do anything more, and the host reports
+  // the line stopped (exit 1) even when the command went on to return normally.
+  guard.stopped = new HostedStoppedAfterEffect(why, guard.first);
+  throw guard.stopped;
 }
 
 /** Called by an effect funnel before it acts. The first call checks the peer again and fails
@@ -95,6 +106,7 @@ export function hostedFallbackPoint(why: string): void {
 export function hostedCommit(what: string): void {
   if (active === null || guard === null) return;
   // A fallback point fired and the command went on (it caught the throw): no effect may follow.
+  if (guard.stopped !== null) throw guard.stopped;
   if (guard.fellBack !== null) throw new HostedFallback(guard.fellBack);
   if (guard.first !== null) return;
   const changed = guard.check();

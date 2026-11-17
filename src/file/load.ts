@@ -380,6 +380,12 @@ export function findRoot(cwd: string): string | null {
   }
 }
 
+/** Variables that move git's repository discovery away from the folder it runs in. */
+const REPOSITORY_LOCATION_VARIABLES = [
+  'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+  'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_NAMESPACE', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT',
+] as const;
+
 /** Holds git's "not a repository" answer for a folder with no `.git` entry anywhere above it,
  *  read the same before and after git ran, and only when git itself said so (exit status 128): a
  *  timeout or a missing git is never held. The entry sits in the run's git-environment partition
@@ -389,6 +395,10 @@ export function findRoot(cwd: string): string | null {
 function keepNoRoot(holdKey: string, key: string, before: GitWitness | null, error: unknown): void {
   const hold = gitRootHold;
   if (hold === null || before === null || before.bound !== null) return;
+  // Only ordinary discovery from the folder is witnessed: a variable that points git at a
+  // repository elsewhere (or bounds its search) names files the folder witness never sees, so a
+  // "no repository" answer under one is asked again every time.
+  if (REPOSITORY_LOCATION_VARIABLES.some((name) => process.env[name] !== undefined)) return;
   if ((error as { status?: unknown } | null)?.status !== 128) return;
   const after = gitWitness(key);
   if (after === null || after.bound !== null || after.text !== before.text) return;
@@ -601,20 +611,31 @@ export function loadTeamText(
   options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string; unfilled?: 'strict' | 'keep' } = {},
   reread?: () => string,
 ): LoadResult {
-  // One command run validates the same team text several times (the prologue, the charter
-  // targets, the session and the leads admission each load it). Within one run, a text already
-  // validated and placed for the same root, path and options is the same result: the key is the
-  // text's own digest, so a write in the run that changes the file is a new key. Only a load with
-  // the real filesystem and a successful result is kept; the copy handed out is the caller's own.
+  return loadTeamTextOnce(text, root, path, options, reread);
+}
+
+// One command run validates the same team text several times (the prologue, the charter targets,
+// the session and the leads admission each load it). The text's own validation is pure for a
+// given text, root and options, so within one run it is kept, keyed by the text's digest: a write
+// in the run that changes the file is a new key, and each caller gets its own copy. The placement
+// checks that read the live filesystem (realpath and symbolic links of trust entries, seat folders
+// and the workspace path) are never kept: every load runs them again. Validation also reads the
+// policy chain, the lead chain and the project registry; every atomic write (state, policy,
+// config) and every registry or entity write in the run drops the kept results.
+function validatedText(
+  text: string,
+  root: string,
+  options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string; unfilled?: 'strict' | 'keep' },
+): ReturnType<typeof validateWithWorkspaceMode> {
+  // A custom filesystem reader is a test's or a dry plan's own view: never memoised.
   const memo = options.fs === undefined ? currentRunMemo() : null;
-  const key = memo === null ? null : `${createHash('sha256').update(text).digest('hex')}\0${root}\0${path}\0${options.home ?? ''}\0${options.checkOnly === true ? '1' : '0'}\0${options.session ?? ''}\0${options.unfilled ?? ''}`;
-  if (memo !== null && key !== null) {
-    const hit = memo.teamLoads.get(key);
-    if (hit !== undefined) return structuredClone(hit as LoadResult);
-  }
-  const loaded = loadTeamTextOnce(text, root, path, options, reread);
-  if (memo !== null && key !== null && loaded.ok) memo.teamLoads.set(key, structuredClone(loaded));
-  return loaded;
+  if (memo === null) return validateWithWorkspaceMode(text, root, options);
+  const key = `${createHash('sha256').update(text).digest('hex')}\0${root}\0${options.home ?? ''}\0${options.session ?? ''}\0${options.unfilled ?? ''}`;
+  const hit = memo.teamLoads.get(key);
+  if (hit !== undefined) return structuredClone(hit as ReturnType<typeof validateWithWorkspaceMode>);
+  const result = validateWithWorkspaceMode(text, root, options);
+  if (result.ok) memo.teamLoads.set(key, structuredClone(result));
+  return result;
 }
 
 function loadTeamTextOnce(
@@ -624,7 +645,7 @@ function loadTeamTextOnce(
   options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string; unfilled?: 'strict' | 'keep' },
   reread?: () => string,
 ): LoadResult {
-  let result = validateWithWorkspaceMode(text, root, options);
+  let result = validatedText(text, root, options);
   if (!result.ok && result.parse === true && reread !== undefined) {
     // The parse itself failed, which a file replaced under this reader can do transiently
     // (a writer that is not the atomic one): read and validate the settled file once more,
@@ -635,7 +656,7 @@ function loadTeamTextOnce(
     } catch {
       return { ok: false, path, errors: [{ line: 0, message: `the team file at ${path} could not be read`, unreadable: true }] };
     }
-    result = validateWithWorkspaceMode(text, root, options);
+    result = validatedText(text, root, options);
   }
   if (!result.ok) return { ...result, path };
   if (options.checkOnly) return { ...result, root, path, text };

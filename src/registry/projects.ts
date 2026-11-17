@@ -397,6 +397,7 @@ function write(home: string, projects: Record<string, ProjectRecord>): void {
   const memo = currentRunMemo();
   if (memo !== null) {
     memo.projects.clear();
+    memo.teamLoads.clear();
     memo.projectsRaw.clear();
     memo.projectRules.clear();
   }
@@ -878,6 +879,8 @@ export function setProjectRules(
     const memo = currentRunMemo();
     if (memo !== null) {
       memo.projects.clear();
+      memo.teamLoads.clear();
+    memo.teamLoads.clear();
       memo.projectsRaw.clear();
       memo.projectRules.clear();
     }
