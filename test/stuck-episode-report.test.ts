@@ -404,32 +404,39 @@ test('a recognised idle screen with mail past 2N is named, not excused', () => {
   expect(one.enters).toBe(0);
 });
 
-test('a typed wake the send already delivered is named, not reported as never typed', () => {
-  const made = world();
-  const team = teamOf(made);
-  fourHeld(made);
-  const wokenAt = new Date(NOW.getTime() - 119 * MIN).toISOString();
-  const wrote = appendHistory(team.project, made.root, made.home, {
-    ts: wokenAt,
-    from: 'owner',
-    to: 'worker',
-    body: `message ${OLD_1}`,
-    id: OLD_1,
-    outcome: 'delivered (typed wake)',
-    via: 'typed',
-  });
-  expect(wrote.ok).toBe(true);
-  const one = pane(ANTIGRAVITY_IDLE);
-  const said: string[] = [];
-  report(made, team, one, said);
+for (const [label, screen, seen] of [
+  ['an idle screen', ANTIGRAVITY_IDLE, 'screen idle;'],
+  ['no screen this pass', null, 'no wake read the pane this pass;'],
+] as const) {
+  test(`a typed wake the send already delivered is named, not denied (${label})`, () => {
+    const made = world();
+    const team = teamOf(made);
+    fourHeld(made);
+    const wokenAt = new Date(NOW.getTime() - 119 * MIN).toISOString();
+    const wrote = appendHistory(team.project, made.root, made.home, {
+      ts: wokenAt,
+      from: 'owner',
+      to: 'worker',
+      body: `message ${OLD_1}`,
+      id: OLD_1,
+      outcome: 'delivered (typed wake)',
+      via: 'typed',
+    });
+    expect(wrote.ok).toBe(true);
+    const one = pane(screen);
+    const said: string[] = [];
+    report(made, team, one, said);
 
-  const first = leadNotices(made);
-  expect(first).toHaveLength(1);
-  expect(first[0]).toContain(`a typed wake was delivered at ${wokenAt} and the seat has not read it since`);
-  expect(first[0]).not.toContain('no wake line was typed');
-  expect(one.typed).toEqual([]);
-  expect(one.enters).toBe(0);
-});
+    const first = leadNotices(made);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toContain(seen);
+    expect(first[0]).toContain(`a typed wake was delivered at ${wokenAt} and the seat has not read it since`);
+    expect(first[0]).not.toContain('no wake line was typed');
+    expect(first[0]).not.toContain('no wake reached it');
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+  });
+}
 
 test('an unhealthy presence channel is named with its reason and the state it last showed', () => {
   const made = world();

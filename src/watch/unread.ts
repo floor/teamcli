@@ -1666,9 +1666,12 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
     const typedWord = woken === undefined
       ? 'no wake line was typed'
       : `a typed wake was delivered at ${woken} and the seat has not read it since; this report typed nothing`;
+    // The screen words end in "no wake reached it": true of this pass, false of the message once
+    // a delivered wake is known, so the clause goes and only what the pass saw stays.
+    const word = woken === undefined ? reason.word : reason.word.replace(/, no wake reached it$/, '');
     const body = reason.ageMin === undefined
-      ? `${seat.name}: ${reason.word}; ${waits} - ${typedWord}; ${where}`
-      : `${seat.name}: ${reason.word}; ${waits} - the word has stood for ${String(reason.ageMin)} min; ${typedWord}; ${where}`;
+      ? `${seat.name}: ${word}; ${waits} - ${typedWord}; ${where}`
+      : `${seat.name}: ${word}; ${waits} - the word has stood for ${String(reason.ageMin)} min; ${typedWord}; ${where}`;
     // An episode whose named messages no longer all stand (one was read) is over: its marker was
     // given back above, and this pass claims the new one. The claim comes before the notice it
     // covers, so a crash between the two leaves a marker with nothing said rather than a notice

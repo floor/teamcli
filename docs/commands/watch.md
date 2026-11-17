@@ -461,7 +461,8 @@ took says `its webhook adapter took the wake at <at>`, one whose post's answer w
 says `a webhook wake was posted at <at> and its answer was not read`, and one that was sent says
 when. The stuck-seat notice to the lead types nothing itself; when the history records a typed
 wake delivered for the oldest message, it says `a typed wake was delivered at <at> and the seat
-has not read it since`, not that no wake line was typed.
+has not read it since`, and drops the screen word's `no wake reached it`, which that delivery
+contradicts.
 `--no-nudge` skips the wake but still writes the report.
 
 The report's sender mailbox is resolved through the signed record's agent id and the agent and
