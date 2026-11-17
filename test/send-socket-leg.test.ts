@@ -597,9 +597,10 @@ test('a signed team order shadows the file’s word, and its socket dials for an
   expect(frames.length).toBe(1);
 });
 
-test('a seat this build launched is dialed though its team file declares no inbound word', async () => {
-  // The launch is the authorization: the generated settings file is on the launch line, and its
-  // `accept` is what a seat TeamCLI launched attests. No per-seat team-file word is needed.
+test('a seat this build launched is not dialed when its team file declares no inbound word', async () => {
+  // The socket is an opt-in the team file declares (comms roadmap, 2026-11-17): the receiving CLI
+  // frames a socket frame as a message from another Claude session, so the launch's own accept
+  // authorizes nothing by itself and the send keeps the record in the inbox.
   const made = world(['socket', 'typed'], [{ name: 'plain', role: 'implementer' }]);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
@@ -607,10 +608,34 @@ test('a seat this build launched is dialed though its team file declares no inbo
   const pane = scripted(['idle', 'working']);
   const frames: string[] = [];
   const host = fake(made, {
-    // The CLI herdr reports on the pane, as the real host reads it: the placement proof
-    // refuses a live read that does not name one.
     agents: () => [{ name: 'plain', pane: 'pane-plain-1', cli: 'claude' }],
     native: pane,
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const io = owner(made.root);
+  const code = await runSend(['plain', 'hello'], io, host);
+
+  expect(frames).toEqual([]);
+  expect(pane.typed).toEqual([]);
+  expect(code).toBe(1);
+  expect(io.err).toContain("kept in plain's inbox");
+});
+
+test('a team-file inbound accept still opts the seat in to the socket', async () => {
+  const made = world(['socket', 'typed'], [{ name: 'plain', role: 'implementer' }]);
+  cleanup = made.cleanup;
+  const file = join(made.dir, 'team.yaml');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('    name: plain\n', '    name: plain\n    inbound: accept\n'));
+  declareEntity(made, 'floor');
+  declareSeat(made, 'plain', 'accept');
+  const frames: string[] = [];
+  const host = fake(made, {
+    agents: () => [{ name: 'plain', pane: 'pane-plain-1', cli: 'claude' }],
+    native: scripted(['idle', 'working']),
     deliver: async (_path: string, frame: string) => {
       frames.push(frame);
       return { ok: true };
@@ -621,9 +646,6 @@ test('a seat this build launched is dialed though its team file declares no inbo
 
   expect(code).toBe(0);
   expect(frames.length).toBe(1);
-  expect(frames[0]).toContain('hello');
-  expect(pane.typed).toEqual([]);
-  expect(host.frames).toEqual([]);
 });
 
 test('an explicit team-file hold keeps the socket out though the launch accepts', async () => {
@@ -770,6 +792,9 @@ test('a socket recorded for a seat that no longer exists is reported under its r
   // message where that turn reads it.
   const made = world(['socket', 'typed'], [{ name: 'plain', role: 'implementer' }]);
   cleanup = made.cleanup;
+  // The seat opts in to the socket in its team file, so the walk reaches the socket leg at all.
+  const teamFile = join(made.dir, 'team.yaml');
+  writeFileSync(teamFile, readFileSync(teamFile, 'utf8').replace('    name: plain\n', '    name: plain\n    inbound: accept\n'));
   declareEntity(made, 'floor');
   declareSeat(made, 'plain', 'accept');
   const gone = join(made.sockets, '424242.sock');

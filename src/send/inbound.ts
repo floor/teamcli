@@ -165,17 +165,18 @@ export function inboundSkipReason(policy: CrossSessionInbound | null): string {
  * and a session this build did not launch some other way still needs it. On top of that:
  *   - an explicit team-file `inbound: accept` authorizes any launch;
  *   - an explicit team-file `hold` or `refuse` always keeps the socket out, the documented opt-out;
- *   - with no team-file word at all, only a launch over this build's generated settings file is
- *     authorized by default: TeamCLI launched that seat, and the launch word is its attestation.
+ *   - with no team-file word at all the socket is never walked, whatever the launch declares
+ *     (comms roadmap, 2026-11-17): the receiving CLI frames a socket frame as a message from "another Claude
+ *     session … very likely working on their behalf", which is false for most senders, so the
+ *     socket is an opt-in a team declares and never an implied default. A Claude seat receives
+ *     through its development channel.
  */
 export function socketEligible(
   teamWord: CrossSessionInbound | undefined,
   declaration: InboundDeclaration,
 ): boolean {
   if (declaration.policy !== 'accept') return false;
-  if (teamWord === 'hold' || teamWord === 'refuse') return false;
-  if (teamWord === 'accept') return true;
-  return teamWord === undefined && declaration.generated === true;
+  return teamWord === 'accept';
 }
 
 /** The line a walk records instead of dialing, by both words: the team file's explicit opt-out

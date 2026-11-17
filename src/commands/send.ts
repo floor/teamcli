@@ -1133,9 +1133,11 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // declaration and the development channel are what that argv carries, and the file's row is
   // only what a later launch would run. Without a runtime record the row stands, as before.
   const runtimeLaunch = seatStateOf(input.dir, input.session, input.seat)?.launch_line ?? input.declared?.launch ?? '';
-  // A receiving seat whose launch declares `crossSessionInbound: "accept"` takes the frame
-  // first: the socket is the fastest channel and the owner asked for it ahead of the rest of the
-  // order. A receiver keeps the order its files declare — hold, refuse and unset in the launch
+  // The cross-session socket is an opt-in: a receiving seat is dialed only when its team file
+  // declares `inbound: accept` and its launch declares `crossSessionInbound: "accept"`, and then
+  // only after a development channel that is not connected or did not complete (comms roadmap,
+  // 2026-11-17: the receiving CLI frames a socket frame as a message from another Claude
+  // session, which mislabels the sender). A receiver keeps the order its files declare — hold, refuse and unset in the launch
   // are never dialed, since a held frame would block the seat's box — and another CLI has no
   // cross-session socket at all.
   const inbound = declaredInboundOf({
@@ -1145,12 +1147,11 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     seat: input.seat,
     ...(runtimeLaunch === '' ? {} : { launch: runtimeLaunch }),
   });
-  // The one implied default that names the socket: a receiving Claude session whose launch
-  // declares `crossSessionInbound: accept`, with no level of its chain declaring an order, walks
-  // socket first. A seat this build launched (its generated settings file is on the line) is
-  // authorized by that launch alone; an explicit team-file `inbound: hold` or `refuse` keeps the
-  // socket out, and a session launched some other way still needs the team file's
-  // `inbound: accept`. The launch word is always what the receiving CLI needs to take the frame.
+  // The one implied default that names the socket: a receiving Claude session whose team file
+  // declares `inbound: accept` and whose launch declares `crossSessionInbound: accept`, with no
+  // level of its chain declaring an order, keeps the socket in its walk, behind a connected
+  // channel. A launch's own accept authorizes nothing without the team-file word; an explicit
+  // `inbound: hold` or `refuse` keeps the socket out. The launch word is always what the receiving CLI needs to take the frame.
   // A word the chain declares — team, seat, project — is walked as written: it may place `socket`
   // anywhere or leave it out, and this build never force-prepends it. A seat whose box held a
   // frame keeps the socket out until its declaration is re-confirmed.
@@ -1259,11 +1260,14 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     const connected = probe.live === true && probe.listener.channel === true;
     if (connected && !declaredWithWake.includes('channel')) declaredWithWake.unshift('channel');
   }
-  // A permitted Claude session socket leads every model and role. Explicit route
-  // exclusions and inbound refusal still stand; a channel is the socket's fallback.
-  if (input.cli === 'claude-code' && !human && socketNow && declaredWithWake.includes('socket')) {
+  // The development channel leads a Claude seat's walk (comms roadmap, 2026-11-17: the socket
+  // frame mislabels every sender as a Claude session). A socket the team
+  // declared (`inbound: accept`) is walked only after a channel that is not connected or did not
+  // complete; it never goes ahead of the channel.
+  if (input.cli === 'claude-code' && !human && declaredWithWake.includes('channel') && declaredWithWake.includes('socket')
+    && declaredWithWake.indexOf('socket') < declaredWithWake.indexOf('channel')) {
     declaredWithWake.splice(declaredWithWake.indexOf('socket'), 1);
-    declaredWithWake.unshift('socket');
+    declaredWithWake.splice(declaredWithWake.indexOf('channel') + 1, 0, 'socket');
   }
   const ordered: readonly DeliveryLeg[] = declaredWithWake;
   // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked,

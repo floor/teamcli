@@ -400,8 +400,8 @@ never retried at all: it waits for the seat's own signed receipt, and thirty min
 send it is given up on with the drop file's path and `no receipt within 30m`. A `channel` marker
 waits for the handling turn's `ack` receipt the same way: a receipt promotes it once — one
 `delivered (read)` history line with `via: channel`, nothing typed — and a push still without one
-three minutes after it was written is redelivered exactly once, the socket first; when the socket
-is not taken the line says so and the message waits in the bus inbox, with
+three minutes after it was written is redelivered exactly once, on the socket when the seat's team
+file opted in to it; when the socket is not declared or not taken the line says so and the message waits in the bus inbox, with
 `redelivered: channel unconfirmed` written on the marker before the attempt so no later pass
 repeats it. A channel marker whose own three-minute window has not ended is left alone, and a
 channel push goes before an inbox message's ten-minute fallback. `--no-nudge` runs no retry

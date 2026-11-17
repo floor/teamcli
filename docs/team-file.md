@@ -675,11 +675,12 @@ digest it had.
 
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
 authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the
-explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the
-seat's own launch to declare `crossSessionInbound: accept`; with no `inbound` word, a seat
-TeamCLI launched is authorized by that launch alone (its generated settings file carries the
-attestation), while a session launched some other way is dialed only when the record says
-`accept`. A frame the socket takes is `delivered (socket)` at the frame; a frame the receiver's
+explicit opt-out — and an omitted key keeps the socket out. A send also needs the seat's own
+launch to declare `crossSessionInbound: accept`; a launch's accept alone authorizes nothing. The
+socket is an opt-in because the receiving CLI frames every socket frame as a message from another
+Claude session, which mislabels senders on other CLIs. A Claude seat receives through its
+development channel; a declared socket is walked only after a channel that is not connected or
+did not complete. A frame the socket takes is `delivered (socket)` at the frame; a frame the receiver's
 box then holds at its dialog is recorded once as `held` by the daemon's presence pass, which
 looks at the receiving pane after a socket delivery — the sender never waits on the box. The
 socket is not dialed again until the declaration the hold sat under is re-confirmed, by its
@@ -750,8 +751,7 @@ delivery_order: [typed]
 - The seven legs: `socket` is this build's own frame on the receiving Claude session's
   cross-session socket, a signed copy written first, dialed only for a seat whose launch
   declares `crossSessionInbound: accept` — an `inbound: accept` here authorizes any launch, an
-  explicit `hold` or `refuse` opts out, and with no word a seat TeamCLI launched is authorized
-  by its launch; `native` is the sender's own cross-session SendMessage, recorded by the sender
+  explicit `hold` or `refuse` opts out, and with no word the socket is never dialed; `native` is the sender's own cross-session SendMessage, recorded by the sender
   with `--confirm`; `mcp-inbox` is no longer one of the legs — the MCP inbox is
   the store's reader, so the name is retired: a word that still names it is read as an alias
   and dropped from the order, and the walk never sees it;

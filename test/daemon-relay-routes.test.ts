@@ -1228,7 +1228,8 @@ describe('daemon relay send handler and fallback walk (handleDaemonRelaySend)', 
     });
 
     // 4. The launch attests accept (the generated settings file is on its line) and team.yaml
-    //    omits inbound -> the launch is the authorization; the socket is eligible.
+    //    omits inbound -> the socket is an opt-in the team file declares (comms roadmap,
+    //    2026-11-17), so the launch alone authorizes nothing and the socket is not eligible.
     const missingTeamWordScene = createScene({
       claudeTeamInbound: null,
       claudeInbound: 'accept',
@@ -1242,8 +1243,8 @@ describe('daemon relay send handler and fallback walk (handleDaemonRelaySend)', 
     });
     expect(missingTeamSelect.ok).toBe(true);
     if (!missingTeamSelect.ok) return;
-    expect(missingTeamSelect.plan.socketEligible).toBe(true);
-    expect(missingTeamSelect.plan.socketIneligibleReason).toBeNull();
+    expect(missingTeamSelect.plan.socketEligible).toBe(false);
+    expect(missingTeamSelect.plan.socketIneligibleReason).toBe("the receiving seat's team file does not declare inbound accept");
 
     // 5. A launch this build did not write (a wrapper's own --settings, no generated file) is
     //    not attested: with team.yaml omitting inbound, the team file's word is still required.
