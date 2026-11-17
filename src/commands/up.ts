@@ -2914,6 +2914,11 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   }
   const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
   const caller = internal?.caller ?? judged?.caller ?? callerOf(io);
+  // The pane this run's command stands in (its placement, else the terminal host's own hint):
+  // no repair exits or closes it.
+  const restoreCallerPane = 'pane' in caller && caller.pane !== undefined && caller.pane !== ''
+    ? caller.pane
+    : (io.env.HERDR_PANE_ID !== undefined && io.env.HERDR_PANE_ID !== '' ? io.env.HERDR_PANE_ID : undefined);
   // The two fallbacks are used only where the map refused. A gate refusal replaces the ordinary
   // caller refusal; a passed one makes the run the gate's, and its audit line is written where
   // the run has effects — never beside the map's own admission.
@@ -3553,6 +3558,29 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         delete kept.sweep;
         delete kept.closeLeftover;
         seats.push({ ...kept, stopped: true, retieSkip: 'not named in this run; left as it is' });
+        continue;
+      }
+    }
+    // A repair that exits or closes a live pane never runs on the pane this run's own command
+    // stands in (it would end the run), and never on the orchestrator's live pane unless this run
+    // names that seat: the orchestrator's pane is where the owner talks to the team, so an
+    // unattended restore leaves it and says how to cycle it. A repair that only
+    // launches into a pane already back at its shell (`reuse`) closes nothing and stays.
+    if (planned.repair !== undefined && planned.repair.reuse !== true) {
+      const holdsCaller = restoreCallerPane !== undefined && planned.repair.pane === restoreCallerPane;
+      const leadUnnamed = seat.name === team.orchestrator && !scopedSeats.has(seat.name);
+      if (holdsCaller || leadUnnamed) {
+        const kept: UpSeat = { ...planned };
+        delete kept.sweep;
+        delete kept.closeLeftover;
+        delete kept.repair;
+        seats.push({
+          ...kept,
+          stopped: true,
+          retieSkip: holdsCaller
+            ? 'its pane is the one this command runs in; nothing exited or closed (run team restart for it from another pane)'
+            : `the orchestrator's live pane is not exited by a restore that does not name it; left as it is (team restart ${seat.name}, or team up ${seat.name})`,
+        });
         continue;
       }
     }

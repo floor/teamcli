@@ -574,3 +574,43 @@ test('a working restored channel seat is left, and the log names the one step', 
   expect(seatRuns(made.trace)).toEqual([]);
   expect(`${io.out}\n${io.err}`).toContain('its channel did not reconnect; the one step is to open /mcp in its pane');
 });
+
+// Reboot 2026-11-17: a restore run from a background shell of the orchestrator's own pane typed
+// the exit into that pane. A repair never exits the pane its own command stands in, and never the
+// orchestrator's pane unless the run names that seat.
+test('a restore never exits the pane its own command runs in', async () => {
+  setup(WRAPPER);
+  record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
+  const made = sources();
+  const io = testIo(root, { kind: 'owner' });
+  io.env = { HERDR_PANE_ID: PANE };
+  await runUp([], io, made.sources);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.closed).toEqual([]);
+  expect(io.out + io.err).toContain('its pane is the one this command runs in; nothing exited or closed');
+  expect(seatState()?.launched).toEqual(RECORD.launched);
+});
+
+test("the orchestrator's restored pane is left unless the run names it", async () => {
+  setup(WRAPPER);
+  // The seat under test is the team's orchestrator; the human pane keeps the operator role.
+  const text = teamText(WRAPPER).replace('coordinator: lead\n', `coordinator: ${SEAT}\n`);
+  writeFileSync(join(dir, 'team.yaml'), text);
+  const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  writeApproval(storePath(loaded.team.project, loaded.root, home), { approval: approvalOf(loaded.team, loaded.root, NOW), file: text }, loaded.team.seats, home);
+  record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
+  const unnamed = sources();
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, unnamed.sources);
+  expect(unnamed.trace.typed).toEqual([]);
+  expect(seatRuns(unnamed.trace)).toEqual([]);
+  expect(io.out + io.err).toContain("the orchestrator's live pane is not exited by a restore that does not name it");
+  // Named, the same repair runs: the exit is typed and the seat's own line runs in its pane.
+  const named = sources();
+  const io2 = testIo(root, { kind: 'owner' });
+  await runUp([SEAT], io2, named.sources);
+  expect(named.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(named.trace)[0]?.pane).toBe(PANE);
+});

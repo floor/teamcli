@@ -26,7 +26,8 @@ import { lobbyOf } from '../lobby/recorded.ts';
 import { getTeam, noteStoppedTeamRunning, readTeams, teamIdOf } from '../registry/teams.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import type { TeamFile } from '../file/types.ts';
-import { paneProcessesAsync, sessionListAsync, sessionRunningAsync, type PaneProcesses } from '../herdr.ts';
+import { paneProcessesAsync, sessionListAsync, sessionRunningAsync, startStoppedServer, type PaneProcesses } from '../herdr.ts';
+import { bootSessionsToStart, bootTimeMs, loadPerCore, readSessionsRunning, writeSessionsRunning } from './restore/boot-sessions.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
@@ -87,6 +88,14 @@ import { sweepCountsAreNews } from './sweep-said.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 
 /** One checkout as hosted by this process; the state record keeps the same shape. */
+/** How long a load-held restore keeps retrying (60 s apart at most) before it says "run team up --all".
+ *  Measured 2026-11-17: after a machine restart the load stayed over the guard for about six minutes. */
+export const RESTORE_RETRY_BUDGET_MS = 30 * 60_000;
+/** The load per core under which the first daemon after a restart starts the next stopped session. */
+export const BOOT_SESSION_LOAD_PER_CORE = 3;
+/** The wait after one restarted session before the next is started. */
+export const BOOT_SESSION_GAP_MS = 20_000;
+
 export type MachineRootStatus = DaemonRootState;
 
 export type MachineDaemon = {
@@ -300,9 +309,13 @@ export type StartMachineDaemonInput = {
    * its seats was refused on a timeout (retried once):
    * `restoreRetryInitialDelayMs` (5 s default) doubles each retry
    * up to `restoreRetryMaxDelayMs` (60 s default) over a total bound of `restoreRetryBudgetMs`
-   * (315 s / 5m 15s default). A test shortens these to observe the retry schedule without
+   * (`RESTORE_RETRY_BUDGET_MS`, 30 min: a machine restart holds the load guard well past five
+   * minutes while every session resumes at once). A test shortens these to observe the retry schedule without
    * waiting the production window.
    */
+  /** False: the first daemon after a machine restart does not start the sessions that ran
+   *  before it (`./restore/boot-sessions.ts`). On by default in production. */
+  bootSessions?: boolean;
   restoreRetryInitialDelayMs?: number;
   restoreRetryMaxDelayMs?: number;
   restoreRetryBudgetMs?: number;
@@ -3095,7 +3108,54 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       if (loaded.team.project !== route.team) return `the team is now "${loaded.team.project}", not the watched "${route.team}"`;
       return null;
     };
+    // Production only: an injected runner (a test) never starts a terminal-host server.
+    const bootSessionsEnabled = input.bootSessions !== false && typeof input.restoreSweep !== 'function';
+    const startBootSessions = async (): Promise<void> => {
+      let names: string[];
+      try {
+        names = bootSessionsToStart(readSessionsRunning(home), bootTimeMs());
+      } catch (error) {
+        logLine(`restore: the sessions that ran before the restart could not be read: ${messageOf(error)}`);
+        return;
+      }
+      if (names.length === 0) return;
+      logLine(`restore: machine restart: ${String(names.length)} session${names.length === 1 ? '' : 's'} ran before it (${names.join(', ')}); each stopped one is started again under the load guard`);
+      const startedAt = Date.now();
+      for (const name of names) {
+        if (closed || restoreAbort.signal.aborted) return;
+        const listed = await sessionListAsync({ signal: restoreAbort.signal });
+        const found = listed?.find((one) => one.name === name);
+        if (found === undefined || found.running) continue;
+        while (loadPerCore() > BOOT_SESSION_LOAD_PER_CORE) {
+          if (Date.now() - startedAt > RESTORE_RETRY_BUDGET_MS) {
+            logLine(`restore: session ${name} not started: the load stayed over ${String(BOOT_SESSION_LOAD_PER_CORE)} per core; attach it to restore it`);
+            return;
+          }
+          if (!(await waitAbortable(15_000))) return;
+        }
+        const started = startStoppedServer(name);
+        logLine(started
+          ? `restore: session ${name} started again after the machine restart`
+          : `restore: session ${name} was not started (it no longer reads stopped, or its server could not start)`);
+        // One session's seats resume together; the next waits for that burst to begin.
+        if (!(await waitAbortable(BOOT_SESSION_GAP_MS))) return;
+      }
+    };
+    const recordRunningSessions = async (): Promise<void> => {
+      // The first record waits one gap, so a daemon that dies during the boot start has not yet
+      // replaced the pre-restart list.
+      while (await waitAbortable(60_000)) {
+        const listed = await sessionListAsync({ signal: restoreAbort.signal });
+        if (listed === null) continue;
+        writeSessionsRunning(home, listed.filter((one) => one.running).map((one) => one.name), Date.now());
+      }
+    };
     restoreSweepRun = (async (): Promise<void> => {
+      // A machine restart: the sessions that ran when it went down come back first, one at a time
+      // under the load guard, and the attach watch below restores each once it reads running.
+      // Then the running-sessions record is kept current, so the next restart knows its list.
+      const bootRun = bootSessionsEnabled ? startBootSessions() : Promise.resolve();
+      const recordRun = bootSessionsEnabled ? recordRunningSessions() : Promise.resolve();
       let pendingRoutes: HostedRoute[] = [];
       const loadReasons = new Map<string, string>();
       /** Routes whose pass refused a seat on a timeout: retried once on the retry schedule. */
@@ -3119,7 +3179,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       };
       const watch = createRestoreAttachWatch({
         pollMs: Math.max(1, input.restoreAttachPollMs ?? 30_000),
-        loadBudgetMs: Math.max(0, input.restoreRetryBudgetMs ?? 315_000),
+        loadBudgetMs: Math.max(0, input.restoreRetryBudgetMs ?? RESTORE_RETRY_BUDGET_MS),
         // Without a session reader (an injected test runner), the runner answers for the session.
         sessionsRunning: restoreSessions
           ?? (async () => new Map(watch.roots().flatMap((root) => {
@@ -3156,8 +3216,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             logLine(`restore ${route.root}: a seat timed out; one more pass at the next poll`);
             return 'retry';
           }
-          if (result.kind === 'lock-held') logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
-          else if (result.kind === 'unreadable') logLine(`restore ${route.root}: ${result.reason}`);
+          // Another run holding the session (a hand-run `team up`) is not a settled answer: the
+          // pass is tried again on a later poll, inside the same bounded budget.
+          if (result.kind === 'lock-held') {
+            logLine(`restore ${route.root}: another session-mutating run holds the session; tried again at a later poll`);
+            return 'load';
+          }
+          if (result.kind === 'unreadable') logLine(`restore ${route.root}: ${result.reason}`);
           else if (result.kind === 'refused') {
             const detail = result.detail === undefined ? '' : `: ${result.detail}`;
             logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
@@ -3197,7 +3262,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             notePending(route, null);
             if (timedOut(route, result)) return true;
           } else if (result.kind === 'lock-held') {
-            logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
+            logLine(`restore ${route.root}: another session-mutating run holds the session; tried again on the retry schedule`);
+            return true;
           } else if (result.kind === 'not-running') {
             if (!retrying) logLine(`restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`);
             loadReasons.delete(route.root);
@@ -3224,7 +3290,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // and wait budget for load-held routes too; no new timeout or threshold is introduced.
       const initialDelayMs = Math.max(1, input.restoreRetryInitialDelayMs ?? 5_000);
       const maxDelayMs = Math.max(initialDelayMs, input.restoreRetryMaxDelayMs ?? 60_000);
-      const budgetMs = Math.max(0, input.restoreRetryBudgetMs ?? 315_000);
+      const budgetMs = Math.max(0, input.restoreRetryBudgetMs ?? RESTORE_RETRY_BUDGET_MS);
       let currentDelayMs = initialDelayMs;
       let elapsedMs = 0;
       let attempt = 1;
@@ -3270,8 +3336,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           `restore: pending (${loadHeldRoutes.length} session${loadHeldRoutes.length === 1 ? '' : 's'}, ${loadHeldRoutes.length} still load-held after ${formatWait(elapsedMs)}; retry wait bound reached; run "team up --all" once the load guard clears)`,
         );
       }
+      await bootRun;
       watch.seal();
       await watchRun;
+      await recordRun;
     })().catch((error: unknown) => {
       // The loop above already logs each route's failure; this catches the log write itself (or
       // anything outside the loop), so the tracked run never rejects into an unhandled rejection

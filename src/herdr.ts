@@ -782,6 +782,29 @@ export function startServer(session: string): boolean {
   }
 }
 
+// Starts the server of a session the terminal host lists as stopped (a machine restart left it
+// down), detached, in the same clean environment as `startServer`. The server restores the
+// session's saved panes. Refuses unless the session reads stopped: never a second server for a
+// running session, and never a session that does not exist.
+export function startStoppedServer(session: string): boolean {
+  hostedCommit('herdr startStoppedServer');
+  if (session === '' || sessionState(session) !== 'stopped') return false;
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = seatServerEnv(process.env, homedir());
+  } catch {
+    return false;
+  }
+  const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
+  try {
+    const child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Sets a workspace's label, which herdr draws as sidebar line 1. `herdr workspace rename --help`
 // names the two arguments and no flags. False when herdr doesn't answer or reports an error.
 export function workspaceRename(workspace: string, label: string, session?: string): boolean {
