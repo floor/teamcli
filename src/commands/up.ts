@@ -148,6 +148,7 @@ import { placedStartFolders, seatCwdRefusal, seatStart } from '../worktree/place
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 import { hostedCommit } from '../host/request-scope.ts';
+import { callerPaneIdentity, isCallerPane } from '../launch/caller-pane.ts';
 
 // What `up` reads from outside the file, so tests can stand in for it.
 export type UpSources = {
@@ -2914,6 +2915,10 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   }
   const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
   const caller = internal?.caller ?? judged?.caller ?? callerOf(io);
+  // The pane this run's command stands in, with the session it belongs to (pane ids are per
+  // session): its placement, else the terminal host's own hints. No repair exits or closes it.
+  // A pane whose session cannot be told is `session: null`, and held as possibly this one.
+  const restoreCaller = callerPaneIdentity(caller, io.env);
   // The two fallbacks are used only where the map refused. A gate refusal replaces the ordinary
   // caller refusal; a passed one makes the run the gate's, and its audit line is written where
   // the run has effects — never beside the map's own admission.
@@ -3553,6 +3558,31 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         delete kept.sweep;
         delete kept.closeLeftover;
         seats.push({ ...kept, stopped: true, retieSkip: 'not named in this run; left as it is' });
+        continue;
+      }
+    }
+    // A repair that exits or closes a live pane never runs on the pane this run's own command
+    // stands in (it would end the run), and never on the orchestrator's live pane unless this run
+    // names that seat: the orchestrator's pane is where the owner talks to the team, so an
+    // unattended restore leaves it and says how to cycle it. A repair that only
+    // launches into a pane already back at its shell (`reuse`) closes nothing and stays.
+    if (planned.repair !== undefined && planned.repair.reuse !== true) {
+      const holdsCaller = isCallerPane(restoreCaller, planned.repair.pane, session);
+      const leadUnnamed = seat.name === team.orchestrator && !scopedSeats.has(seat.name);
+      if (holdsCaller || leadUnnamed) {
+        const kept: UpSeat = { ...planned };
+        delete kept.sweep;
+        delete kept.closeLeftover;
+        delete kept.repair;
+        seats.push({
+          ...kept,
+          stopped: true,
+          retieSkip: holdsCaller
+            ? restoreCaller?.session === null
+              ? 'its pane may be the one this command runs in (that pane\'s session could not be told); nothing exited or closed (run team restart for it from another pane)'
+              : 'its pane is the one this command runs in; nothing exited or closed (run team restart for it from another pane)'
+            : `the orchestrator's live pane is not exited by a restore that does not name it; left as it is (team restart ${seat.name}, or team up ${seat.name})`,
+        });
         continue;
       }
     }

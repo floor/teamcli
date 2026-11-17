@@ -14,6 +14,7 @@ export const READS: Record<string, string> = {
   'packages/relay/index.js#dial node:net.createConnection': 'package internal; reached through deliver/dial, whose closure call sites are guarded',
   // Process-starting runners: their own body, listed through each call of the runner.
   'src/child.ts#run node:child_process.execFile': 'the body of the execText runner; every execText call is listed',
+  'src/daemon/restore/boot-sessions.ts#bootId runner.execText(-n kern.bootsessionuuid)': 'a read: `sysctl -n kern.bootsessionuuid` (this boot\'s id), awaited, daemon-side only',
   'src/herdr.ts#runMeasured node:child_process.execFileSync': 'the body of the run runner; every run call is listed (reads by subcommand, or guarded)',
   'src/herdr.ts#shellCaptureExec node:child_process.execFileSync': 'the body of the captureExec runner; every capture call is listed',
   'src/herdr.ts#shellPaneExec node:child_process.execFileSync': 'the body of the paneExec runner (herdr pane read)',

@@ -1,0 +1,208 @@
+// The registered team sessions a machine restart took down, brought back by the daemon.
+//
+// The terminal host resumes only the sessions the owner attaches, so after a restart every other
+// team's session stays stopped until he opens it: its seats get no restore and no mail.
+//
+// Two records, kept apart:
+// - `sessions-running.json`, the observation: every few seconds the daemon writes which of its
+//   hosted, registered team routes (root, team, session) have their session running, stamped
+//   with this boot's id (macOS `kern.bootsessionuuid`, a fresh id each boot; never a clock).
+// - `boot-restore.json`, the work: when a daemon starts and the observation carries another
+//   boot's id, the machine restarted since it was written. Its routes become this boot's queue,
+//   written durably before anything is started or observed again. A daemon restarted later in
+//   the same boot resumes that queue; it never re-derives one from a newer observation.
+//
+// Each queued route is started only after a fresh check, right before the start, that it is
+// still a hosted route with the same root, team and session, that the registered team is not
+// stopped (`team down` invalidates it), and that its session reads stopped (not deleted, not
+// already running). A start that fails for a passing reason stays queued; a route that fails
+// the check is settled as invalidated. What the observation cannot know is a session stopped by
+// hand in the few seconds between its last sample and the power-off: that window is the sample
+// interval, and it is stated, not hidden.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { execText } from '../../child.ts';
+import { renameSync, unlinkSync, writeFileSync } from '../../host/guarded-fs.ts';
+import { machineConfigDir } from '../paths.ts';
+
+export const SESSIONS_RUNNING_FILE = 'sessions-running.json';
+export const BOOT_RESTORE_FILE = 'boot-restore.json';
+
+/** One hosted, registered team route, as the daemon routes it. */
+export type BootRoute = { root: string; team: string; session: string };
+/** The observation: this boot's id, when, and the routes whose session read running. */
+export type SessionsRunning = { boot: string; at: number; running: BootRoute[] };
+/** One queued route, with the record of its last refused or failed attempt (retryable). */
+export type QueueEntry = BootRoute & {
+  tries?: number;
+  last?: string;
+  /** A start in flight or not yet up: `pid: null` is the reservation written before the spawn
+   *  (its outcome unknown if nothing replaced it); otherwise the spawned server's identity.
+   *  No other server is spawned while it lives or cannot be told to be gone. */
+  child?: { pid: number | null; start: number | null };
+};
+/** The work for one boot: built from the observation of boot `from`; routes still to start
+ *  (each with its last failure, if any), and those settled (started or invalidated). */
+export type BootQueue = { boot: string; from: string; pending: QueueEntry[]; settled: { route: BootRoute; outcome: string }[] };
+
+const sameRoute = (a: BootRoute, b: BootRoute): boolean => a.root === b.root && a.team === b.team && a.session === b.session;
+
+function isRoute(value: unknown): value is BootRoute {
+  if (typeof value !== 'object' || value === null) return false;
+  const { root, team, session } = value as Record<string, unknown>;
+  return typeof root === 'string' && root.startsWith('/') && typeof team === 'string' && team !== ''
+    && typeof session === 'string' && /^[A-Za-z0-9._-]+$/.test(session) && session !== '.' && session !== '..';
+}
+
+function uniqueRoutes(routes: readonly BootRoute[]): BootRoute[] {
+  const out: BootRoute[] = [];
+  for (const route of routes) if (!out.some((one) => sameRoute(one, route))) out.push({ root: route.root, team: route.team, session: route.session });
+  return out;
+}
+
+function readJson(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Writes a record whole (temp file, then rename). False when it could not be written. */
+function writeJson(path: string, value: unknown): boolean {
+  const temp = `${path}.${String(process.pid)}.tmp`;
+  try {
+    writeFileSync(temp, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+    renameSync(temp, path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const sessionsRunningPath = (home: string): string => join(machineConfigDir(home), SESSIONS_RUNNING_FILE);
+export const bootQueuePath = (home: string): string => join(machineConfigDir(home), BOOT_RESTORE_FILE);
+
+/** The observation, or null when it is absent or not one this version wrote. */
+export function readSessionsRunning(home: string): SessionsRunning | null {
+  const value = readJson(sessionsRunningPath(home));
+  if (typeof value !== 'object' || value === null) return null;
+  const { boot, at, running } = value as Record<string, unknown>;
+  if (typeof boot !== 'string' || boot === '' || typeof at !== 'number' || !Number.isFinite(at)) return null;
+  if (!Array.isArray(running) || !running.every(isRoute)) return null;
+  return { boot, at, running: uniqueRoutes(running) };
+}
+
+/** Removes the observation. True when it is gone (or was never there). */
+export function dropSessionsRunning(home: string): boolean {
+  try {
+    unlinkSync(sessionsRunningPath(home));
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
+export function writeSessionsRunning(home: string, record: SessionsRunning): boolean {
+  return writeJson(sessionsRunningPath(home), { boot: record.boot, at: record.at, running: uniqueRoutes(record.running) });
+}
+
+/** The queue, or null when it is absent or not one this version wrote. */
+export function readBootQueue(home: string): BootQueue | null {
+  const value = readJson(bootQueuePath(home));
+  if (typeof value !== 'object' || value === null) return null;
+  const { boot, from, pending, settled } = value as Record<string, unknown>;
+  if (typeof boot !== 'string' || boot === '' || typeof from !== 'string' || from === '') return null;
+  if (!Array.isArray(pending) || !pending.every(isRoute)) return null;
+  if (!Array.isArray(settled)) return null;
+  const settledOk = settled.every((one) => typeof one === 'object' && one !== null
+    && isRoute((one as Record<string, unknown>).route) && typeof (one as Record<string, unknown>).outcome === 'string');
+  if (!settledOk) return null;
+  const entries = (pending as Record<string, unknown>[]).map((one): QueueEntry => ({
+    root: one.root as string,
+    team: one.team as string,
+    session: one.session as string,
+    ...(typeof one.tries === 'number' && Number.isInteger(one.tries) && one.tries > 0 ? { tries: one.tries } : {}),
+    ...(typeof one.last === 'string' && one.last !== '' ? { last: one.last } : {}),
+    // A child record that does not read is kept as an unresolved reservation (fail closed).
+    ...(one.child === undefined ? {} : { child: childOf(one.child) ?? { pid: null, start: null } }),
+  }));
+  return { boot, from, pending: entries, settled: settled as BootQueue['settled'] };
+}
+
+function childOf(value: unknown): QueueEntry['child'] | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { pid, start } = value as Record<string, unknown>;
+  if (pid !== null && (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 1)) return null;
+  if (start !== null && (typeof start !== 'number' || !Number.isFinite(start))) return null;
+  return { pid: pid as number | null, start: start as number | null };
+}
+
+export function writeBootQueue(home: string, queue: BootQueue): boolean {
+  return writeJson(bootQueuePath(home), queue);
+}
+
+
+/** This boot's id: `kern.bootsessionuuid`, fresh on every boot and independent of the clock.
+ *  Null when it cannot be read (then no boot work is derived and nothing is started). */
+export async function bootId(read: () => Promise<string> = () => execText('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { timeoutMs: 5_000 })): Promise<string | null> {
+  let text: string;
+  try {
+    text = await read();
+  } catch {
+    return null;
+  }
+  const id = text.trim();
+  return /^[0-9A-Fa-f-]{16,64}$/.test(id) ? id.toUpperCase() : null;
+}
+
+/**
+ * The queue this daemon works on:
+ * - the stored queue when it is this boot's (a daemon restarted in the same boot resumes it);
+ * - a new queue from the observation when the observation is another boot's (the machine
+ *   restarted since); its `isNew` tells the caller to write it before anything else;
+ * - null otherwise: no boot id, no observation, the observation is already this boot's, or it
+ *   is the very observation a stored queue was built from (already consumed by an earlier boot,
+ *   whose observer could not replace it): an observation is turned into work once only.
+ */
+export function planBootQueue(
+  observed: SessionsRunning | null,
+  stored: BootQueue | null,
+  boot: string | null,
+): { queue: BootQueue; isNew: boolean } | null {
+  if (boot === null) return null;
+  if (stored !== null && stored.boot === boot) return { queue: stored, isNew: false };
+  if (observed === null || observed.boot === boot) return null;
+  if (stored !== null && stored.from === observed.boot) return null;
+  // Every route is queued: routes that share a terminal session are each a candidate (one may
+  // fail its proof where another passes). The worker makes it one start per session: ownership
+  // is looked up across every entry of the session, and a start settles them all.
+  return { queue: { boot, from: observed.boot, pending: uniqueRoutes(observed.running), settled: [] }, isNew: true };
+}
+
+/** The live facts a start is proven against, read fresh at the moment of the start. */
+export type StartFacts = {
+  /** This boot's id now. */
+  boot: string | null;
+  /** The route the daemon hosts at this root now (from its current team file), or why none. */
+  hosted: BootRoute | { problem: string };
+  /** The registry's entry for this root now, or null when there is none. */
+  registry: { root: string; team: string; session: string; lifecycle: string } | null;
+};
+
+/** The positive proof a start needs, or why it is refused: the boot is the queue's, the root is
+ *  still hosted with the same team and session (its file read now), and the registry has an
+ *  entry for that root with the same team and session whose lifecycle is running. */
+export function startProblem(route: BootRoute, queueBoot: string, facts: StartFacts): string | null {
+  if (facts.boot === null) return 'this boot\'s id cannot be read now';
+  if (facts.boot !== queueBoot) return 'the boot id changed since the queue was planned';
+  if ('problem' in facts.hosted) return facts.hosted.problem;
+  if (facts.hosted.team !== route.team) return `the root now hosts team "${facts.hosted.team}", not "${route.team}"`;
+  if (facts.hosted.session !== route.session) return `the team's session is now "${facts.hosted.session}", not "${route.session}"`;
+  const entry = facts.registry;
+  if (entry === null) return 'the registry has no team for this root';
+  if (entry.team !== route.team) return `the registry names team "${entry.team}" for this root, not "${route.team}"`;
+  if (entry.session !== route.session) return `the registry names session "${entry.session}", not "${route.session}"`;
+  if (entry.lifecycle !== 'running') return `the registry team is ${entry.lifecycle}`;
+  return null;
+}

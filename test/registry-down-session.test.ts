@@ -171,6 +171,20 @@ describe('team down --session and the team record', () => {
     expect(getTeam(fixture.home, teamIdOf(fixture.root))).toMatchObject({ session: 'alternate', lifecycle: 'stopped' });
   });
 
+  test('an idle down whose session starts before it holds the lock records nothing and says so', async () => {
+    // The daemon's boot start can take the run lock, spawn the server and release it between the
+    // idle reading and this run's own lock: the reading under the lock decides.
+    const fixture = makeFixture();
+    registerBoth(fixture, 'alternate');
+    let readings = 0;
+    const raced: DownSources = { ...downSources(fixture), sessionRunning: () => (readings++ === 0 ? false : true) };
+    const io = testIo(fixture.root, owner);
+    expect(await runDown(['--session', 'alternate'], io, raced)).toBe(1);
+    expect(io.err).toContain('session alternate started while this run waited for its lock; nothing was recorded');
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))).toMatchObject({ session: 'alternate', lifecycle: 'running' });
+    expect(io.out).not.toContain('nothing to stop');
+  });
+
   test('a stop of the file\'s session leaves a team addressed in another session running', async () => {
     const fixture = makeFixture();
     const ids = registerBoth(fixture, 'alternate');

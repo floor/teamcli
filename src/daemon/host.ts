@@ -15,7 +15,7 @@ import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, 
 import { appendFileSync, chmodSync, fchmodSync, ftruncateSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { connect } from 'node:net';
-import { homedir } from 'node:os';
+import { cpus, homedir, loadavg } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
@@ -26,7 +26,9 @@ import { lobbyOf } from '../lobby/recorded.ts';
 import { getTeam, noteStoppedTeamRunning, readTeams, teamIdOf } from '../registry/teams.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import type { TeamFile } from '../file/types.ts';
-import { paneProcessesAsync, sessionListAsync, sessionRunningAsync, type PaneProcesses } from '../herdr.ts';
+import { paneProcessesAsync, sessionListAsync, sessionRunningAsync, startStoppedServer, type PaneProcesses } from '../herdr.ts';
+import { bootId, dropSessionsRunning, readBootQueue, readSessionsRunning, writeBootQueue, writeSessionsRunning, type StartFacts } from './restore/boot-sessions.ts';
+import { runBootWork, type BootRunDeps } from './restore/boot-run.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
@@ -35,6 +37,8 @@ import { createRestoreAttachWatch, sessionsRunningMap, type RestorePending } fro
 import { restoreLifecycleProblem } from '../launch/restore-lifecycle.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive, readState, type State } from '../state.ts';
+import { processStartOf } from '../launch/codex-endpoint.ts';
+import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { probeDaemonSocket, probeDaemonSocketReading, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
@@ -85,6 +89,17 @@ import {
 import type { ReaperRecord } from '../orphan-reaper.ts';
 import { sweepCountsAreNews } from './sweep-said.ts';
 import { hostedCommit } from '../host/request-scope.ts';
+
+/** How long a load-held restore keeps retrying (60 s apart at most) before it says "run team up --all".
+ *  Measured 2026-11-17: after a machine restart the load stayed over the guard for about six minutes. */
+export const RESTORE_RETRY_BUDGET_MS = 30 * 60_000;
+/** The load per core under which the daemon starts the next session a restart stopped. */
+export const BOOT_SESSION_LOAD_PER_CORE = 3;
+/** The wait after one restarted session before the next is started. */
+export const BOOT_SESSION_GAP_MS = 20_000;
+/** How often the running-routes record is rewritten: the window in which a session stopped by
+ *  hand just before a power-off is not yet seen as stopped. */
+export const BOOT_OBSERVE_EVERY_MS = 10_000;
 
 /** One checkout as hosted by this process; the state record keeps the same shape. */
 export type MachineRootStatus = DaemonRootState;
@@ -300,9 +315,13 @@ export type StartMachineDaemonInput = {
    * its seats was refused on a timeout (retried once):
    * `restoreRetryInitialDelayMs` (5 s default) doubles each retry
    * up to `restoreRetryMaxDelayMs` (60 s default) over a total bound of `restoreRetryBudgetMs`
-   * (315 s / 5m 15s default). A test shortens these to observe the retry schedule without
+   * (`RESTORE_RETRY_BUDGET_MS`, 30 min: a machine restart holds the load guard well past five
+   * minutes while every session resumes at once). A test shortens these to observe the retry schedule without
    * waiting the production window.
    */
+  /** False: the first daemon after a machine restart does not start the sessions that ran
+   *  before it (`./restore/boot-sessions.ts`). On by default in production. */
+  bootSessions?: boolean;
   restoreRetryInitialDelayMs?: number;
   restoreRetryMaxDelayMs?: number;
   restoreRetryBudgetMs?: number;
@@ -3095,7 +3114,82 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       if (loaded.team.project !== route.team) return `the team is now "${loaded.team.project}", not the watched "${route.team}"`;
       return null;
     };
+    // Production only: an injected runner (a test) never starts a terminal-host server.
+    const bootSessionsEnabled = input.bootSessions !== false && typeof input.restoreSweep !== 'function';
+    // The root's hosted route with its team file read again now, and the registry's entry for
+    // that root read again now. Synchronous, so the start's last proof awaits nothing.
+    const factsNow = (root: string, boot: string | null): StartFacts => {
+      const route = routes.find((one) => one.root === root);
+      let hosted: StartFacts['hosted'];
+      if (route === undefined) hosted = { problem: 'the root is no longer hosted' };
+      else {
+        const change = hostedRouteChange(route);
+        hosted = change === null ? { root: route.root, team: route.team, session: route.session } : { problem: change };
+      }
+      let registry: StartFacts['registry'] = null;
+      try {
+        const canonical = realpathSync(root);
+        const memo = currentRunMemo();
+        memo?.teamsTolerant.delete(home);
+        memo?.teamsStrict.delete(home);
+        const record = getTeam(home, teamIdOf(canonical));
+        if (record !== null && realpathSync(record.root) === canonical) {
+          registry = { root: canonical, team: record.project, session: record.session, lifecycle: record.lifecycle };
+        }
+      } catch {
+        registry = null;
+      }
+      return { boot, hosted, registry };
+    };
+    const bootDeps = (): BootRunDeps => ({
+      bootId: () => bootId(),
+      readObserved: () => readSessionsRunning(home),
+      readQueue: () => readBootQueue(home),
+      writeQueue: (queue) => writeBootQueue(home, queue),
+      writeObserved: (record) => writeSessionsRunning(home, record),
+      dropObserved: () => dropSessionsRunning(home),
+      sessions: () => sessionsRunningMap(() => sessionListAsync({ signal: restoreAbort.signal })),
+      start: (session, hooks) => startStoppedServer(session, { signal: restoreAbort.signal }, hooks, processStartOf),
+      // Gone only on proof: no such process, or a different start time read (a reused pid). A
+      // live pid whose start time does not read, or was never read, is not gone.
+      childState: (child) => {
+        if (!pidAlive(child.pid)) return 'gone';
+        if (child.start === null) return 'unknown';
+        const now = processStartOf(child.pid);
+        if (now === null) return 'unknown';
+        return now === child.start ? 'alive' : 'gone';
+      },
+      // The session's run lock, from the route's own team folder, taken without waiting.
+      lock: (root, session) => {
+        const entry = routeTeams.get(root);
+        if (entry === undefined) return { held: 'the root is no longer hosted' };
+        let loaded: ReturnType<typeof readTeamConfig>;
+        try { loaded = readRouteTeam(entry, home); }
+        catch (error) { return { held: `the team could not be read: ${messageOf(error)}` }; }
+        if (!loaded.ok) return { held: 'the team could not be read' };
+        const taken = acquireRunLock(dirname(loaded.path), session);
+        return 'held' in taken ? { held: runLockText(taken.held, session, dirname(loaded.path), taken.startedAt) } : taken;
+      },
+      // Read at the moment of each start: this boot's id, then the synchronous facts.
+      facts: async (root): Promise<StartFacts> => factsNow(root, await bootId()),
+      factsNow: (root, boot) => factsNow(root, boot),
+      hosted: () => routes.map((route) => ({ root: route.root, team: route.team, session: route.session })),
+      lifecycleProblem: (root, team) => restoreLifecycleProblem(home, root, team),
+      loadPerCore: () => (loadavg()[0] ?? 0) / Math.max(1, cpus().length),
+      wait: (ms) => waitAbortable(ms),
+      now: () => Date.now(),
+      log: logLine,
+      loadMaxPerCore: BOOT_SESSION_LOAD_PER_CORE,
+      gapMs: BOOT_SESSION_GAP_MS,
+      retryMs: 15_000,
+      budgetMs: RESTORE_RETRY_BUDGET_MS,
+      observeEveryMs: BOOT_OBSERVE_EVERY_MS,
+    });
     restoreSweepRun = (async (): Promise<void> => {
+      // A machine restart: the registered sessions that ran when it went down come back first,
+      // one at a time under the load guard, and the attach watch below restores each once it
+      // reads running. The running-routes record is kept current for the next restart.
+      const bootRun = bootSessionsEnabled ? runBootWork(bootDeps()) : Promise.resolve();
       let pendingRoutes: HostedRoute[] = [];
       const loadReasons = new Map<string, string>();
       /** Routes whose pass refused a seat on a timeout: retried once on the retry schedule. */
@@ -3119,7 +3213,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       };
       const watch = createRestoreAttachWatch({
         pollMs: Math.max(1, input.restoreAttachPollMs ?? 30_000),
-        loadBudgetMs: Math.max(0, input.restoreRetryBudgetMs ?? 315_000),
+        loadBudgetMs: Math.max(0, input.restoreRetryBudgetMs ?? RESTORE_RETRY_BUDGET_MS),
         // Without a session reader (an injected test runner), the runner answers for the session.
         sessionsRunning: restoreSessions
           ?? (async () => new Map(watch.roots().flatMap((root) => {
@@ -3156,8 +3250,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             logLine(`restore ${route.root}: a seat timed out; one more pass at the next poll`);
             return 'retry';
           }
-          if (result.kind === 'lock-held') logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
-          else if (result.kind === 'unreadable') logLine(`restore ${route.root}: ${result.reason}`);
+          // Another run holding the session (a hand-run `team up`) is not a settled answer: the
+          // pass is tried again on a later poll, inside the same bounded budget.
+          if (result.kind === 'lock-held') {
+            logLine(`restore ${route.root}: another session-mutating run holds the session; tried again at a later poll`);
+            return 'load';
+          }
+          if (result.kind === 'unreadable') logLine(`restore ${route.root}: ${result.reason}`);
           else if (result.kind === 'refused') {
             const detail = result.detail === undefined ? '' : `: ${result.detail}`;
             logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
@@ -3197,7 +3296,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             notePending(route, null);
             if (timedOut(route, result)) return true;
           } else if (result.kind === 'lock-held') {
-            logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
+            logLine(`restore ${route.root}: another session-mutating run holds the session; tried again on the retry schedule`);
+            return true;
           } else if (result.kind === 'not-running') {
             if (!retrying) logLine(`restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`);
             loadReasons.delete(route.root);
@@ -3224,7 +3324,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // and wait budget for load-held routes too; no new timeout or threshold is introduced.
       const initialDelayMs = Math.max(1, input.restoreRetryInitialDelayMs ?? 5_000);
       const maxDelayMs = Math.max(initialDelayMs, input.restoreRetryMaxDelayMs ?? 60_000);
-      const budgetMs = Math.max(0, input.restoreRetryBudgetMs ?? 315_000);
+      const budgetMs = Math.max(0, input.restoreRetryBudgetMs ?? RESTORE_RETRY_BUDGET_MS);
       let currentDelayMs = initialDelayMs;
       let elapsedMs = 0;
       let attempt = 1;
@@ -3272,6 +3372,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
       watch.seal();
       await watchRun;
+      // The boot work's observer runs for the daemon's life; it ends when the daemon closes.
+      await bootRun;
     })().catch((error: unknown) => {
       // The loop above already logs each route's failure; this catches the log write itself (or
       // anything outside the loop), so the tracked run never rejects into an unhandled rejection

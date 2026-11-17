@@ -216,6 +216,87 @@ export function herdrDirect(args: readonly string[], session: string | undefined
   return { result: record.result };
 }
 
+/** The connect-only probe's raw outcome: 'absent' only for a connect refused with ENOENT (no
+ *  socket file) or ECONNREFUSED (a socket file nothing listens on: a server a restart killed);
+ *  'listening' when the connect succeeds; 'unknown' for every other failure. */
+type Probe = (socketPath: string) => 'absent' | 'listening' | 'unknown';
+let probing: Probe | null | undefined;
+
+const ENOENT = 2;
+const ECONNREFUSED = 61;
+
+function bindProbe(): Probe | null {
+  if (process.platform !== 'darwin' || process.versions.bun === undefined) return null;
+  try {
+    const req = createRequire(import.meta.url);
+    const ffi = req('bun:ffi') as {
+      dlopen: (library: string, symbols: Record<string, { args: unknown[]; returns: unknown }>) => { symbols: Record<string, (...args: unknown[]) => number> };
+      FFIType: Record<string, unknown>;
+      ptr: (view: ArrayBufferView) => unknown;
+      toArrayBuffer: (at: number, offset: number, length: number) => ArrayBuffer;
+    };
+    const T = ffi.FFIType;
+    const lib = ffi.dlopen('/usr/lib/libSystem.B.dylib', {
+      socket: { args: [T.i32, T.i32, T.i32], returns: T.i32 },
+      connect: { args: [T.i32, T.ptr, T.u32], returns: T.i32 },
+      close: { args: [T.i32], returns: T.i32 },
+      __error: { args: [], returns: T.ptr },
+    });
+    const s = lib.symbols;
+    const errno = (): number => {
+      const at = s.__error!() as unknown as number;
+      return new Int32Array(ffi.toArrayBuffer(at, 0, 4))[0] ?? 0;
+    };
+    return (socketPath) => {
+      const path = Buffer.from(socketPath, 'utf8');
+      if (path.length >= SUN_PATH_MAX) return 'unknown';
+      const fd = s.socket!(AF_UNIX, SOCK_STREAM, 0);
+      if (fd < 0) return 'unknown';
+      try {
+        const addr = new Uint8Array(2 + SUN_PATH_MAX);
+        addr[0] = addr.length;
+        addr[1] = AF_UNIX;
+        addr.set(path, 2);
+        // A unix-socket connect to a local listener completes at once or is refused at once.
+        if (s.connect!(fd, ffi.ptr(addr), addr.length) === 0) return 'listening';
+        const code = errno();
+        return code === ENOENT || code === ECONNREFUSED ? 'absent' : 'unknown';
+      } finally {
+        s.close!(fd);
+      }
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a session's server is listening on its own socket right now, read synchronously (a
+ * boot start's last look before its spawn). 'silent' only on proven absence: no socket file, or
+ * a connect refused with nothing listening. 'answers' when a connect succeeds (a listener exists,
+ * whatever it would answer). 'unknown' for anything else: no reader, an uncertain socket path, a
+ * socket that could not be made, or any other connect error. A caller that must not start a
+ * second server spawns only on 'silent'.
+ */
+export function sessionAnswersNow(session: string, probe?: Probe): 'answers' | 'silent' | 'unknown' {
+  const socketPath = directSocketOf(session);
+  if (socketPath === null) return 'unknown';
+  let look = probe;
+  if (look === undefined) {
+    if (probing === undefined) probing = bindProbe();
+    if (probing === null) return 'unknown';
+    look = probing;
+  }
+  const seen = look(socketPath);
+  return seen === 'absent' ? 'silent' : seen === 'listening' ? 'answers' : 'unknown';
+}
+
+/** The probe this process binds, for a test that runs it against a real socket. */
+export function socketProbe(): Probe | null {
+  if (probing === undefined) probing = bindProbe();
+  return probing;
+}
+
 /** Whether the socket reader is bound in this process (for tests). */
 export function herdrDirectBound(): boolean {
   if (bound === undefined) bound = bind();

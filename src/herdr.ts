@@ -1,6 +1,6 @@
 import { hostedCommit } from './host/request-scope.ts';
 import { traceChildStep } from './diagnostics/child-steps.ts';
-import { herdrDirect } from './herdr-direct.ts';
+import { herdrDirect, sessionAnswersNow } from './herdr-direct.ts';
 import { traceBeatWork } from './diagnostics/beat-work.ts';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -780,6 +780,81 @@ export function startServer(session: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Starts the server of a session the terminal host lists as stopped (a machine restart left it
+// down), detached, in the same clean environment as `startServer`. The server restores the
+// session's saved panes. Refuses unless the session reads stopped: never a second server for a
+// running session, and never a session that does not exist. The check is the awaited session
+// list (bounded, abortable), read immediately before the spawn: the daemon's loop never blocks
+// on it. 'not-stopped' when the session is absent or running; 'unread' when herdr did not answer.
+// The caller holds the session's run lock for the whole call (the observation below is the one
+// taken under it). After the awaited session list, with nothing awaited before the spawn:
+// `proveNow` (the caller's proof), a synchronous look at the session's own socket (only proven
+// absence goes on), then `reserve` (the caller's durable in-flight record, written before the
+// spawn: false refuses). `spawned` gets the child's pid and start time as soon as it exists, so a
+// daemon that dies at any point still leaves a record that blocks a second server. A server not
+// up within the bound returns 'failed' with that child; its caller must not spawn another while
+// it lives.
+export type StoppedServerStart =
+  | { kind: 'started' | 'not-stopped' | 'unread' | 'refused' }
+  | { kind: 'failed'; child?: { pid: number; start: number | null } };
+export type StoppedServerHooks = {
+  proveNow?: () => boolean;
+  reserve?: () => boolean;
+  spawned?: (child: { pid: number; start: number | null }) => void;
+};
+export async function startStoppedServer(
+  session: string,
+  options: HerdrReadOptions = {},
+  hooks: StoppedServerHooks = {},
+  startOf: (pid: number) => number | null = () => null,
+): Promise<StoppedServerStart> {
+  hostedCommit('herdr startStoppedServer');
+  if (session === '') return { kind: 'not-stopped' };
+  const sessions = await sessionListAsync(options);
+  if (sessions === null) return { kind: 'unread' };
+  const found = sessions.find((one) => one.name === session);
+  if (found === undefined || found.running) return { kind: 'not-stopped' };
+  // From here to the spawn nothing is awaited.
+  if (hooks.proveNow !== undefined && !hooks.proveNow()) return { kind: 'refused' };
+  const answers = sessionAnswersNow(session);
+  if (answers === 'answers') return { kind: 'not-stopped' };
+  if (answers === 'unknown') return { kind: 'unread' };
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = seatServerEnv(process.env, homedir());
+  } catch {
+    return { kind: 'failed' };
+  }
+  const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
+  if (hooks.reserve !== undefined && !hooks.reserve()) return { kind: 'refused' };
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
+  } catch {
+    return { kind: 'failed' };
+  }
+  if (child.pid !== undefined) hooks.spawned?.({ pid: child.pid, start: startOf(child.pid) });
+  // The spawn's own outcome is awaited (an error event is handled, never left unhandled), then
+  // the session must read running within the bound: only then is the server up.
+  const spawned = await new Promise<boolean>((resolve) => {
+    child.once('error', () => resolve(false));
+    child.once('spawn', () => {
+      child.unref();
+      resolve(true);
+    });
+  });
+  if (!spawned || child.pid === undefined) return { kind: 'failed' };
+  const pid = child.pid;
+  const until = Date.now() + (options.timeoutMs ?? 15_000);
+  while (Date.now() < until) {
+    if (options.signal?.aborted === true) break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const now = await sessionListAsync(options);
+    if (now?.find((one) => one.name === session)?.running === true) return { kind: 'started' };
+  }
+  return { kind: 'failed', child: { pid, start: startOf(pid) } };
 }
 
 // Sets a workspace's label, which herdr draws as sidebar line 1. `herdr workspace rename --help`

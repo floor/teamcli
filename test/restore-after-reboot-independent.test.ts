@@ -737,8 +737,13 @@ test('an idle channel seat with no live channel is relaunched from its recorded 
   const host = channelHost(made, now, false);
   const drop = join(made.dir, 'send-drops', SESSION, 'pebble');
   expect(inboxLive(drop, made.root, SESSION, 'pebble').live).toBe(false);
+  // pebble is the orchestrator: a restore that does not name it leaves its pane (reboot
+  // 2026-11-17), so the relaunch is the named run's.
+  const unnamedIo = testIo(made.root, { kind: 'owner' });
+  await runUp([], unnamedIo, channelHost(made, now, false).sources);
+  expect(`${unnamedIo.out}${unnamedIo.err}`).toContain("the orchestrator's live pane is not exited by a restore that does not name it");
   const io = testIo(made.root, { kind: 'owner' });
-  expect(await runUp([], io, host.sources), `${io.out}\n${io.err}`).toBe(0);
+  expect(await runUp(['pebble'], io, host.sources), `${io.out}\n${io.err}`).toBe(0);
   const launched = host.runs.filter((command) => command.includes(CHANNEL_FLAG));
   expect(launched).toHaveLength(1);
   expect(launched[0]).toContain(CHANNEL_LAUNCH);
