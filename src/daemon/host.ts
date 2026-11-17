@@ -97,6 +97,7 @@ import {
   type DaemonStuckRequest,
 } from './state.ts';
 import type { ReaperRecord } from '../orphan-reaper.ts';
+import { sweepCountsAreNews } from './sweep-said.ts';
 
 /** One checkout as hosted by this process; the state record keeps the same shape. */
 export type MachineRootStatus = DaemonRootState;
@@ -2500,7 +2501,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         );
       }
       const report = entry.report;
-      if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
+      if (report !== null && sweepCountsAreNews('beat', entry.root, report)) {
         logLine(
           `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
         );
