@@ -617,3 +617,4 @@ test('an unready record on a live endpoint is still adopted where it stands', as
   expect(made.trace.typed).toEqual([]);
   expect(seatRuns(made.trace)).toEqual([]);
   expect(made.trace.managed).toEqual([]);
+});
