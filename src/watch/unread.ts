@@ -123,6 +123,11 @@ export type UnreadOptions = UnreadWindow & {
   /** Seats this pass already rang with their message-display line: the ring and the unread wake
    *  now type the same line, so a seat rung this pass is not woken a second time. */
   rung?: ReadonlySet<string>;
+  /** Whether the held-drop retry runs beside this pass (`retryHeldDrops`). A `.pending` marker
+   *  is that retry's to act on, so this pass leaves it alone while the retry runs. A watch whose
+   *  retry does not run — the daemon-hosted watch never runs it — leaves no one else to wake a
+   *  message the marker holds, so here the marker does not stand in the way. Absent: true. */
+  heldDropRetry?: boolean;
 };
 
 /** What the wake reservation says, when it can be read; null otherwise. */
@@ -227,10 +232,10 @@ const EVENT_REOFFER_PER_PASS = 5;
 
 /** Whether a message is due on the event ladder: past its unread window, younger than the slow
  *  ladder's last day, not held by the held-drop retry, and past the next attempt its ledger set. */
-function eventLadderDue(dropDir: string, message: { id: string; ts: string }, nowMs: number, unreadAfter: number): boolean {
+function eventLadderDue(dropDir: string, message: { id: string; ts: string }, nowMs: number, unreadAfter: number, pendingOwned = true): boolean {
   const age = nowMs - Date.parse(message.ts);
   if (!(age >= unreadAfter * 1000) || !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
-  if (existsSync(pendingDropPath(dropDir, message.id))) return false;
+  if (pendingOwned && existsSync(pendingDropPath(dropDir, message.id))) return false;
   const ledger = wakeTryOf(dropDir, message.id);
   if (ledger === null) return true;
   const next = Date.parse(ledger.next_at);
@@ -261,6 +266,7 @@ async function reofferOnEventLegs(
   nowMs: number,
   unreadAfter: number,
   home: string,
+  pendingOwned = true,
 ): Promise<boolean> {
   // The routes are the ones the seat's own resolved order permits, exclusions included: a seat
   // whose order keeps the socket or the channel out (a drop-only word, a human) is never offered
@@ -271,7 +277,7 @@ async function reofferOnEventLegs(
   if (key.kind !== 'key') return false;
   const due = [...candidates]
     .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
-    .filter((one) => eventLadderDue(dropDir, one, nowMs, unreadAfter))
+    .filter((one) => eventLadderDue(dropDir, one, nowMs, unreadAfter, pendingOwned))
     .slice(0, EVENT_REOFFER_PER_PASS);
   const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
   let offered = false;
@@ -374,7 +380,9 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
  * Whether this message is the unread pass's to wake now. A message read has left the listing
  * already (`listUnread` omits a verified receipt); what remains is waited on:
  * - younger than the window: not yet;
- * - a `.pending` marker: the retry pass owns it, and a second trigger would be one too many;
+ * - a `.pending` marker, while the held-drop retry runs beside this pass: that retry owns it,
+ *   and a second trigger would be one too many (a watch that runs no such retry passes
+ *   `pendingOwned` false, and the marker is then nobody's but this pass's);
  * - `.wake` or `.reported`: the one wake was sent, or the word has already gone out.
  *
  * A seat whose typed wake retry is on (`watch_wake`) also reads its ledger: an attempt inside
@@ -390,15 +398,25 @@ function dueForWake(
   nowMs: number,
   unreadAfter: number,
   retryTries: number | null,
+  pendingOwned = true,
 ): boolean {
   const age = nowMs - Date.parse(message.ts);
   if (!(age >= unreadAfter * 1000)) return false;
-  if (existsSync(pendingDropPath(dropDir, message.id))) return false;
+  if (pendingOwned && existsSync(pendingDropPath(dropDir, message.id))) return false;
   if (existsSync(wakePath(dropDir, message.id))) return false;
-  if (retryTries === null) return !existsSync(reportedPath(dropDir, message.id));
+  // A held drop under a watch that runs no held-drop retry was kept from every wake by its
+  // marker, while the report still went out at twice the window: its report is no word that a
+  // wake was tried, so it does not stand in the way of the first one. The report marker still
+  // keeps the report from going out twice, and a wake younger than the slow ladder's last day
+  // is the only one it lets through.
+  const neverWoken = !pendingOwned
+    && age < WAKE_SLOW_MAX_AGE_MS
+    && existsSync(pendingDropPath(dropDir, message.id));
+  const reported = existsSync(reportedPath(dropDir, message.id)) && !neverWoken;
+  if (retryTries === null) return !reported;
   const ledger = wakeTryOf(dropDir, message.id);
   // Before any typed attempt, a report already written is the word that stands.
-  if (ledger === null) return !existsSync(reportedPath(dropDir, message.id));
+  if (ledger === null) return !reported;
   if (ledger.tries >= retryTries && !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
   const next = Date.parse(ledger.next_at);
   if (Number.isFinite(next) && nowMs < next) return false;
@@ -628,6 +646,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   const home = scene.home;
   if (home === undefined) return;
   if (options.noNudge === true) return;
+  const pendingOwned = options.heldDropRetry !== false;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
   // The pass's own mail reading: this reader and the report that follows share the pass's lists,
@@ -679,12 +698,12 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const unreadAfter = leadSeat && typeof leadWindow === 'number' ? leadWindow : windowForSeat(options, seat);
     const scanned = new Set(unread.map((one) => one.id));
     const due = unread
-      .filter((message) => dueForWake(dropDir, message, nowMs, unreadAfter, retry === null ? null : retry.tries));
+      .filter((message) => dueForWake(dropDir, message, nowMs, unreadAfter, retry === null ? null : retry.tries, pendingOwned));
     // A message the scan did not list is new here, and it is due now if its window has passed.
     // One the cascade would take by webhook waits for the pass that reaches the webhook first:
     // this pass types no line ahead of a leg it has not walked for the message.
     const arrived = fresh.filter((one) => !scanned.has(one.id)
-      && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+      && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries, pendingOwned)
       && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
     if (leadSeat) {
       const pending = [...unread];
@@ -703,7 +722,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     if (seat.cli === 'claude-code' && retry === null) {
       const candidates = [...unread];
       for (const one of fresh) if (!candidates.some((item) => item.id === one.id)) candidates.push(one);
-      const reoffered = await reofferOnEventLegs(scene, seat, dropDir, candidates, nowMs, unreadAfter, home);
+      const reoffered = await reofferOnEventLegs(scene, seat, dropDir, candidates, nowMs, unreadAfter, home, pendingOwned);
       if (reoffered) continue;
     }
     if (due.length === 0 && arrived.length === 0) continue;
@@ -757,7 +776,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       if (typedDue.length === 0) {
         const after = listUnread(dropDir, context, home, mail.recordAt);
         const late = after.filter((one) => !scanned.has(one.id)
-          && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+          && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries, pendingOwned)
           && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
         if (late.length === 0) continue;
       }
@@ -823,7 +842,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const freshNow = listUnread(dropDir, context, home, mail.recordAt);
       const unreadNow = new Set(freshNow.map((one) => one.id));
       const arrivedNow = freshNow.filter((one) => !scanned.has(one.id)
-        && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+        && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries, pendingOwned)
         && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
       const wakeable = [
         ...typedDue.filter((one) => unreadNow.has(one.id) && !existsSync(wakePath(dropDir, one.id))),

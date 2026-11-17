@@ -30,6 +30,10 @@ const WAKE_SCREEN = { working: 'cluster' as const };
  *  changing it, or the guard below would press while the row was still rendering. */
 export const WAKE_ENTER_SETTLE_MS = 250;
 
+/** The wait before the one second look a wake takes when its first read showed no screen it can
+ *  place (`unknown` or unreadable). */
+export const WAKE_FIRST_REREAD_MS = 500;
+
 /** How many times the wake will look again for two identical reads of its own line. Past this
  *  the line has not settled, and no Enter is pressed. */
 const LINE_SETTLE_LOOKS = 4;
@@ -106,6 +110,9 @@ export type TypedWakeOptions = {
   settleMs?: number;
   /** The gap between typing the line and reading the box before Enter. */
   enterSettleMs?: number;
+  /** The wait before the one second look after a first read showed no screen it can place.
+   *  Defaults to `WAKE_FIRST_REREAD_MS`. */
+  rereadMs?: number;
   /** The poll interval while waiting for the working screen. */
   pollMs?: number;
   /** The settle between an Enter and the first look at what it did. Never a read at zero delay:
@@ -417,7 +424,18 @@ async function walkTypedWake(
   const verifyMs = options.verifyMs ?? WAKE_VERIFY_MS;
   const clock = options.now ?? Date.now;
   let firstScreen = await host.read(pane);
-  const first = seenOf(cli, firstScreen);
+  let first = seenOf(cli, firstScreen);
+  // A first read the classifier cannot place — no screen at all, or a frame that matches no
+  // screen — is read once more before the wake refuses. A loaded terminal host has been seen to
+  // answer a first read slowly with a frame that is not the pane's settled screen, and the wake
+  // then refused a seat sitting at its empty idle prompt (2026-11-17: an idle Grok seat, the
+  // second wake 10 s later landed). The second look types nothing; the two idle reads below
+  // still stand between any look and a key.
+  if (first === 'unknown' || first === 'unreadable') {
+    await host.wait(options.rereadMs ?? WAKE_FIRST_REREAD_MS);
+    firstScreen = await host.read(pane);
+    first = seenOf(cli, firstScreen);
+  }
   // The line may already be in the box — a wake child killed after typing, a wake asked twice,
   // an Enter that did not submit. That wake presses Enter into exactly this line and never types
   // it again; the two-look guard below still stands between the look and the key.

@@ -323,6 +323,43 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
   });
 });
 
+describe('a first read the wake cannot place is looked at once more (2026-11-17)', () => {
+  // A loaded terminal host answered a wake's first read with a frame that was not the pane's
+  // settled screen; the wake refused a Grok seat sitting at its empty idle prompt, and the next
+  // wake 10 s later landed. The second look types nothing; the two idle reads still gate a key.
+  test('a blank first read, then the idle box: the wake lands', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read === 0 ? '' : IDLE));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out.delivered).toBe(true);
+    expect(pane.prompts).toEqual([LINE]);
+  });
+
+  test('an unreadable first read, then the idle box: the wake lands', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read === 0 ? null : IDLE));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out.delivered).toBe(true);
+  });
+
+  test('two unplaceable reads refuse with nothing typed, after exactly two reads', async () => {
+    const pane = wakeFake(() => '');
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out).toMatchObject({ delivered: false, typed: false, tries: 0 });
+    expect(out.reason).toContain('the first read showed unknown');
+    expect(pane.reads).toBe(2);
+    expect(pane.prompts).toEqual([]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('a placed screen that is not idle (the answer widget) is refused on its one read', async () => {
+    const pane = wakeFake(() => QUESTION);
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out.delivered).toBe(false);
+    expect(pane.reads).toBe(1);
+    expect(pane.prompts).toEqual([]);
+  });
+});
+
 describe('team send: the Grok typed wake', () => {
   const cleanups: (() => void)[] = [];
   afterEach(() => {

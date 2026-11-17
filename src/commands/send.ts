@@ -33,9 +33,13 @@ import { LOG_FILE, readState, updateState, type SeatState } from '../state.ts';
 import { wakeMarkAt, wakePath } from '../send/wake-marker.ts';
 import { cliHookStatePath, reportedModel } from '../launch/cli-hook.ts';
 
-/** How long a real send waits for the daemon's typed-wake child to report: a walk that types and
- *  sees the working screen takes a few seconds; one the guards refuse answers at once. */
-const HANDED_WAIT_MS = 20_000;
+/** How long a real send waits for the daemon's typed-wake child to report. Zero: the send returns
+ *  once the daemon has accepted the handoff and staged its copy, and says the outcome is pending.
+ *  Waiting held every send to a typed seat for up to 20 s, more while the machine was loaded
+ *  (2026-11-17: 22 s for a wake whose first read refused at once, measured after a reboot). The
+ *  child still records its ending in the history, the trace and the team log, and the watch's
+ *  unread pass wakes the seat again when the wake did not land. */
+const HANDED_WAIT_MS = 0;
 import { logLine } from '../log.ts';
 import { tokenMark } from '../quota/out-of-tokens.ts';
 import { messageKeyOf } from '../store/keys.ts';
