@@ -17,7 +17,7 @@
 // The run is the ordinary command with its ordinary admission: the relay changes who wrote the
 // files, never what the seat may send. This guards against a mistaken agent, as placement does:
 // every seat runs as the owner's user.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { readNoFollow } from './history.ts';
 import { readOwn, writeAll } from '../queue/append.ts';
@@ -277,10 +277,12 @@ export type RelaySources = {
   /** Runs the seat's command as that seat; returns what it said. `persist` is the command's stdout
    *  made durable in the seat's outbox as it is written: a read hands its bodies over through it
    *  before it seals their receipts, so a run cut off after the hand-over still answers with them. */
-  run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller, persist: (text: string) => void, owner: string): Promise<{ code: number; out: string; err: string }>;
+  run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller, persist: (text: string, ids?: readonly string[]) => void, owner: string): Promise<{ code: number; out: string; err: string }>;
   /** Seals the seat's read receipts for ids a cut-off relayed read already handed over (its saved
-   *  output holds their bodies): true once every one is read, false when any cannot be sealed now. */
-  seal(seat: string, ids: readonly string[]): boolean;
+   *  output holds their bodies), as the live read would have: the seat's reader, adopting the
+   *  claim `owner` left, brief binding included. True once every one is read, false when any
+   *  cannot be sealed now. */
+  seal(seat: string, ids: readonly string[], owner: string): boolean;
   now(): Date;
   log(line: string): void;
   /** Test seam: the metadata read of saved output. */
@@ -417,7 +419,7 @@ function recoverTaken(dropDir: string, seat: string, folder: string, names: read
     // A take whose result already stands is finished: its claims are settled by what that result
     // published, and then only its marker is left to remove.
     if (names.includes(`${id}${RESULT_SUFFIX}`)) {
-      if (!settleClaims(dropDir, seat, owner, () => publishedOut(folder, id), sources)) continue;
+      if (settleClaims(dropDir, seat, owner, () => readPartial(folder, id, sources.stat), sources) === false) continue;
       try { unlinkSync(path); } catch { /* gone already */ }
       continue;
     }
@@ -433,14 +435,19 @@ function recoverTaken(dropDir: string, seat: string, folder: string, names: read
       sources.log(`outbox request ${id}: its saved output cannot be read now; kept for a later pass`);
       continue;
     }
-    // Saved bodies are sealed before they are published, so the result that carries them is the
-    // one exposure; with nothing saved the claims are voided first, so no body is ever published.
-    if (!settleClaims(dropDir, seat, owner, () => handed, sources)) continue;
+    // Bodies saved whole are sealed before they are published, so the result that carries them
+    // is their one exposure; a claim whose body was not saved whole is voided first, and its
+    // message stays unread for the next reader.
+    const settled = settleClaims(dropDir, seat, owner, () => handed, sources);
+    if (settled === false) continue;
+    // An earlier build's unframed output proves no body whole: beside claims of this request it is
+    // withheld, so a voided claim's body is never published.
+    const out = settled === 'claims' ? handed.text.slice(handed.legacy.length) : handed.text;
     if (publishResult(folder, id, {
       id,
       code: 1,
-      out: handed,
-      err: handed === ''
+      out,
+      err: out === ''
         ? 'team: the relay stopped while running this request; whether it was sent is unknown — check before sending again\n'
         : 'team: the relay stopped after this output was handed over; what it read is above\n',
       at: new Date(nowMs).toISOString(),
@@ -450,36 +457,30 @@ function recoverTaken(dropDir: string, seat: string, folder: string, names: read
   }
 }
 
-/** The `out` a standing result published: '' for none, null when the result cannot be read now. */
-function publishedOut(folder: string, id: string): string | null {
-  const text = readOwn(join(folder, `${id}${RESULT_SUFFIX}`));
-  if (text === null || text === '') return null;
-  try {
-    const parsed = JSON.parse(text) as { out?: unknown };
-    return typeof parsed.out === 'string' ? parsed.out : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Settles the read claims `owner` still holds. With output (the bodies went out, or go out in the
- *  result that follows) each id's receipt is sealed first; with none the claims are voided and the
- *  messages stay unread. False keeps everything for a later pass: unknown output, or a seal that
- *  could not be made now. */
-function settleClaims(dropDir: string, seat: string, owner: string, output: () => string | null, sources: RelaySources): boolean {
+/** Settles the read claims `owner` still holds. An id whose body the saved output holds whole
+ *  has its receipt sealed (it goes out in the result); every other owned id is voided, so its
+ *  message stays unread and no part of its body is published. 'none' when it held no claims,
+ *  'claims' when it settled some; false keeps everything for a later pass: claims or saved output
+ *  that cannot be read now, or a seal that could not be made. */
+function settleClaims(dropDir: string, seat: string, owner: string, output: () => Saved | null, sources: RelaySources): false | 'none' | 'claims' {
   const owned = claimsOwnedBy(dropDir, owner);
-  if (owned.length === 0) return true;
-  const out = output();
-  if (out === null) {
+  if (owned === null) {
+    sources.log(`${seat}: the read claims cannot be read now; the cut-off request is kept for a later pass`);
+    return false;
+  }
+  if (owned.length === 0) return 'none';
+  const saved = output();
+  if (saved === null) {
     sources.log(`${seat}: a cut-off read's output cannot be read now; its claims are kept for a later pass`);
     return false;
   }
-  if (out !== '' && !sources.seal(seat, owned)) {
+  const handed = owned.filter((one) => saved.ids.includes(one));
+  if (handed.length > 0 && !sources.seal(seat, handed, owner)) {
     sources.log(`${seat}: a cut-off read's receipts could not be sealed now; its claims are kept for a later pass`);
     return false;
   }
-  for (const id of owned) settleOwnedClaim(dropDir, id, owner);
-  return true;
+  for (const one of owned) settleOwnedClaim(dropDir, one, owner);
+  return 'claims';
 }
 
 function identityOf(folder: string): string | null {
@@ -500,30 +501,53 @@ async function runRequest(dir: string, path: string, id: string, seat: string, s
     // Saved output that cannot be read now is kept, never replaced: the take stays for recovery.
     if (handed === null) throw new SavedOutputUnreadable();
     const result = refusal(id, seat, sources, `it could not be run (${(error as Error).message})`);
-    return handed === '' ? result : { ...result, out: handed };
+    return handed.text === '' ? result : { ...result, out: handed.text };
   }
 }
 
 const PARTIAL_SUFFIX = '.partial';
+const CHUNK = /^(.+)\.partial\.(\d{6})$/;
 
 class SavedOutputUnreadable extends Error {}
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
-/** Appends a run's stdout to `<id>.partial` in the outbox, flushed before it returns. A write that
- *  fails throws into the command's own stdout, which then keeps its messages unread. */
-function appendPartial(folder: string, id: string, text: string, trace?: RelaySources['trace']): void {
-  const fd = openSync(join(folder, `${id}${PARTIAL_SUFFIX}`), constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | NOFOLLOW, 0o600);
+/** What a run handed over and saved: the text, and the ids of the messages whose bodies that text
+ *  holds whole. A chunk is published only whole (a temp file renamed into place), and carries the
+ *  sha256 and length of its text, so a body cut short is never counted as handed over. */
+type Saved = { text: string; ids: string[]; legacy: string };
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/** Saves one stdout write of a run as the next numbered chunk `<id>.partial.<nnnnnn>`: a private
+ *  temp file with a header line ({ids, sha256, length}) and the text, fsynced, renamed into place,
+ *  and the folder fsynced, before it returns. A write that fails throws into the command's own
+ *  stdout, which then keeps its messages unread. */
+function appendPartial(folder: string, id: string, text: string, ids: readonly string[], trace?: RelaySources['trace']): void {
+  const seq = chunkNames(folder, id).length;
+  const name = `${id}${PARTIAL_SUFFIX}.${String(seq).padStart(6, '0')}`;
+  const temp = join(folder, `.${name}.${String(process.pid)}.tmp`);
+  const header = `${JSON.stringify({ v: 1, ids: [...ids], sha256: sha256(text), length: Buffer.byteLength(text, 'utf8') })}\n`;
+  const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
   try {
     if (!fstatSync(fd).isFile()) throw new Error('the outbox output is not a plain file');
-    writeAll(fd, text);
+    writeAll(fd, header + text);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
   trace?.('partial-fsync');
+  renameSync(temp, join(folder, name));
   // Its name is durable too before the command goes on to seal anything.
   fsyncFolder(folder);
   trace?.('partial-folder-fsync');
+}
+
+function chunkNames(folder: string, id: string): string[] {
+  return readdirSync(folder)
+    .filter((name) => { const match = CHUNK.exec(name); return match !== null && match[1] === id; })
+    .sort();
 }
 
 function fsyncFolder(folder: string): void {
@@ -535,13 +559,48 @@ function fsyncFolder(folder: string): void {
   }
 }
 
-/** The saved output: '' when none was saved, null when one exists and cannot be read now. */
-function readPartial(folder: string, id: string, stat?: RelaySources['stat']): string | null {
-  return readOwn(join(folder, `${id}${PARTIAL_SUFFIX}`), stat);
+/** The saved output: empty when none was saved, null when any of it exists and cannot be read
+ *  now. A chunk whose text does not match its header is not counted, its text not published and
+ *  its ids not taken as handed over. An earlier build's single `<id>.partial` file is read as text
+ *  that proves no id handed over. */
+function readPartial(folder: string, id: string, stat?: RelaySources['stat']): Saved | null {
+  const legacy = readOwn(join(folder, `${id}${PARTIAL_SUFFIX}`), stat);
+  if (legacy === null) return null;
+  let names: string[];
+  try {
+    names = chunkNames(folder, id);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+    names = [];
+  }
+  const saved: Saved = { text: legacy, ids: [], legacy };
+  for (const name of names) {
+    const raw = readOwn(join(folder, name), stat);
+    if (raw === null) return null;
+    const cut = raw.indexOf('\n');
+    if (cut < 0) continue;
+    let header: { v?: unknown; ids?: unknown; sha256?: unknown; length?: unknown };
+    try {
+      header = JSON.parse(raw.slice(0, cut)) as typeof header;
+    } catch {
+      continue;
+    }
+    const text = raw.slice(cut + 1);
+    if (header.v !== 1 || !Array.isArray(header.ids) || !header.ids.every((one) => typeof one === 'string')) continue;
+    if (header.length !== Buffer.byteLength(text, 'utf8') || header.sha256 !== sha256(text)) continue;
+    saved.text += text;
+    saved.ids.push(...(header.ids as string[]));
+  }
+  return saved;
 }
 
 function dropPartial(folder: string, id: string, trace?: RelaySources['trace']): void {
   try { unlinkSync(join(folder, `${id}${PARTIAL_SUFFIX}`)); } catch { /* none was written */ }
+  let names: string[] = [];
+  try { names = chunkNames(folder, id); } catch { /* none */ }
+  for (const name of names) {
+    try { unlinkSync(join(folder, name)); } catch { /* gone */ }
+  }
   trace?.('partial-removed');
 }
 
@@ -586,7 +645,7 @@ async function checkedRun(dir: string, path: string, id: string, seat: string, s
     cwd = '';
   }
   if (cwd === '') return refuse('its working folder is not a folder');
-  const persist = (text: string): void => appendPartial(dirname(path), id, text, sources.trace);
+  const persist = (text: string, ids: readonly string[] = []): void => appendPartial(dirname(path), id, text, ids, sources.trace);
   const ran = await sources.run(request.command, bound.argv, cwd, { kind: 'seat', name: seat, pane: request.pane, session }, persist, relayClaimOwner(dirname(path), id));
   sources.log(`${seat}: outbox request ${id} (${request.command}) ran, exit ${String(ran.code)}`);
   return { id, code: ran.code, out: ran.out, err: ran.err, at: at.toISOString() };

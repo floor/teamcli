@@ -6,18 +6,18 @@
 // the saved bodies' receipts and publishes them once. With nothing saved, the claim is voided: no
 // body is published and the message is read once afterwards. Every reader that serves a body goes
 // through the one claim function, and the inventory below fails on one that does not.
+import { createHash } from 'node:crypto';
 import { afterEach, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { generalBriefRecord, GENERAL_BRIEF_SHA256 } from '../src/launch/general-brief.ts';
 import { dirname, join } from 'node:path';
 import { recordDir, runMessages } from '../src/commands/messages.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { readMessage } from '../src/mcp/inbox.ts';
+import { currentClaimIn, readMessage, sealRecoveredRead } from '../src/mcp/inbox.ts';
 import { outboxFolder, relayOutboxes, type RelaySources } from '../src/send/confined-outbox.ts';
-import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { claimRead, claimsOwnedBy, READ_CLAIMS, relayClaimOwner } from '../src/send/read-claim.ts';
-import { RECORD_KIND, signRecord, writeRecord, type RecordPayload } from '../src/send/record.ts';
+import { RECORD_KIND, receiptFile, signRecord, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { messageKeyState } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { world, type World } from './send-native-fixtures.ts';
@@ -79,19 +79,23 @@ function recovery(made: World): RelaySources {
     run: async () => ({ code: 0, out: '', err: '' }),
     now: () => new Date(),
     log: () => {},
-    // The watch's seal: the seat's own read receipts, through the one receipt act.
-    seal: (seat, ids) => {
-      const key = messageKeyState(made.home);
-      if (key.kind !== 'key') return false;
-      return ids.every((id) => {
-        const outcome = publishRecordRead({
-          dropDir: recordDir(made.root, SESSION, seat), id, to: seat, root: made.root, session: SESSION,
-          home: made.home, key: key.key, at: new Date().toISOString(), lead: SEAT,
-        });
-        return outcome.kind === 'published' || outcome.kind === 'served';
-      });
-    },
+    // The watch's seal: the seat's own reader, adopting the claim its cut-off request left, so a
+    // recovered read seals the receipt a live read would (src/commands/watch.ts).
+    seal: (seat, ids, owner) => ids.every((id) =>
+      sealRecoveredRead(target(made), id, made.home, { claim: () => currentClaimIn(made.root, SESSION, seat) }, owner)),
   };
+}
+
+/** One whole saved chunk, as the relay writes it: a header line ({ids, sha256, length}), then the
+ *  text. `cut` drops bytes from the text after the header was written, as a torn write would. */
+function saveChunk(folder: string, request: string, seq: number, text: string, ids: string[], cut = 0): void {
+  const header = JSON.stringify({ v: 1, ids, sha256: createHash('sha256').update(text, 'utf8').digest('hex'), length: Buffer.byteLength(text, 'utf8') });
+  writeFileSync(join(folder, `${request}.partial.${String(seq).padStart(6, '0')}`), `${header}\n${text.slice(0, text.length - cut)}`);
+}
+
+/** The read's process dies: its claim file now names a pid that is gone (taken over as stale). */
+function holderDies(made: World, ids: string[]): void {
+  for (const id of ids) writeFileSync(join(target(made).dropDir, READ_CLAIMS, id), '999999 dead 1\n');
 }
 
 function bodiesIn(text: string, id: string): number {
@@ -111,8 +115,9 @@ test('a crash between the saved output and the seal: a new reader gets no body, 
   const first = readMessage(target(made), id, made.home, undefined, undefined, { receipt: 'after', owner });
   expect(first.ok).toBe(true);
   if (!first.ok) return;
-  writeFileSync(join(folder, `${request}.partial`), `${first.body}\n`);
+  saveChunk(folder, request, 0, `${first.body}\n`, [id]);
   // ... and is cut off before its seal: neither seal nor release runs. Its owner file stands.
+  holderDies(made, [id]);
   expect(existsSync(join(target(made).dropDir, READ_CLAIMS, `${id}.owner`))).toBe(true);
 
   // A new reader finds the claim its recovery owns: no body, whether the holder lives or not.
@@ -146,6 +151,7 @@ test('a voided claim: nothing was saved, recovery publishes no body, and the mes
   const first = readMessage(target(made), id, made.home, undefined, undefined, { receipt: 'after', owner });
   expect(first.ok).toBe(true);
   // Cut off before anything was saved: no partial.
+  holderDies(made, [id]);
 
   await relayOutboxes(made.dir, SESSION, [SEAT], recovery(made));
   const result = JSON.parse(readFileSync(join(folder, `${request}.result.json`), 'utf8')) as { out: string };
@@ -171,6 +177,99 @@ test('a claim whose owner file stands is never taken over by a reader, even with
   expect(claimRead(dropDir, id)).toEqual({ ok: false, why: 'recovering' });
   if (taken.ok) taken.release();
   expect(claimRead(dropDir, id).ok).toBe(true);
+});
+
+// Hermes and Hestia, round 5: a recovered read of the launch brief seals the same bound receipt
+// the live read would (digest, incarnation, epoch), so the brief reader finds it served.
+test('a recovered launch-brief read seals the bound brief receipt', async () => {
+  const made = open();
+  const incarnation = 'inc_000000000077';
+  const record = generalBriefRecord({ to: SEAT, root: made.root, session: SESSION, at: new Date().toISOString(), incarnation });
+  const wrote = writeRecord(recordDir(made.root, SESSION, SEAT), signRecord(record, made.home));
+  if (!wrote.ok) throw new Error(wrote.reason);
+  updateState(made.dir, (state) => {
+    const session = state.sessions[SESSION] ?? (state.sessions[SESSION] = emptySession());
+    session.briefs = {
+      [SEAT]: { id: record.id, at: record.at, incarnation, epoch: 'run_000000000077', sha256: GENERAL_BRIEF_SHA256, attempt: 0, stage: 'ready', superseded: [] },
+    } as never;
+  });
+  const request = 'c1a1aaaa-0000-4000-8000-000000000005';
+  const folder = cutOffTake(made, request);
+  const owner = relayClaimOwner(folder, request);
+  const brief = { claim: () => currentClaimIn(made.root, SESSION, SEAT) };
+  const first = readMessage(target(made), record.id, made.home, brief, undefined, { receipt: 'after', owner });
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  saveChunk(folder, request, 0, `${first.body}\n`, [record.id]);
+  holderDies(made, [record.id]);
+  await relayOutboxes(made.dir, SESSION, [SEAT], recovery(made));
+  const receipt = readFileSync(receiptFile(target(made).dropDir, record.id, 'read'), 'utf8');
+  expect(receipt).toContain(GENERAL_BRIEF_SHA256);
+  expect(receipt).toContain(incarnation);
+  expect(receipt).toContain('run_000000000077');
+  const again = readMessage(target(made), record.id, made.home, brief);
+  expect(again.ok).toBe(false);
+  if (!again.ok) expect(again.served).toBe('already-served');
+});
+
+// Hestia, round 5: a torn batch settles only the ids whose bodies were saved whole. The whole one
+// is sealed and published; the torn one is voided, none of its text is published, and it is read
+// once by the next reader.
+test('a truncated saved body is not counted: only whole bodies are sealed and published', async () => {
+  const made = open();
+  const whole = 'c1a10000-0000-4000-8000-000000000006';
+  const torn = 'c1a10000-0000-4000-8000-000000000007';
+  plant(made, whole);
+  plant(made, torn);
+  const request = 'c1a1aaaa-0000-4000-8000-000000000006';
+  const folder = cutOffTake(made, request);
+  const owner = relayClaimOwner(folder, request);
+  const a = readMessage(target(made), whole, made.home, undefined, undefined, { receipt: 'after', owner });
+  const b = readMessage(target(made), torn, made.home, undefined, undefined, { receipt: 'after', owner });
+  expect(a.ok && b.ok).toBe(true);
+  if (!a.ok || !b.ok) return;
+  saveChunk(folder, request, 0, `${a.body}\n`, [whole]);
+  saveChunk(folder, request, 1, `${b.body}\n`, [torn], 9);
+  holderDies(made, [whole, torn]);
+  await relayOutboxes(made.dir, SESSION, [SEAT], recovery(made));
+  const out = (JSON.parse(readFileSync(join(folder, `${request}.result.json`), 'utf8')) as { out: string }).out;
+  expect(bodiesIn(out, whole)).toBe(1);
+  expect(out).not.toContain(torn);
+  expect(claimsOwnedBy(target(made).dropDir, owner)).toEqual([]);
+  const servedWhole = readMessage(target(made), whole, made.home);
+  expect(servedWhole.ok).toBe(false);
+  const next = readMessage(target(made), torn, made.home);
+  expect(next.ok).toBe(true);
+  if (next.ok) expect(bodiesIn(next.body, torn)).toBe(1);
+});
+
+// Hermes and Hestia, round 5: claims that cannot be read are never taken as none. The take, its
+// saved output and its claims all stay until the claims read again.
+test('an unreadable claim folder keeps the cut-off take: nothing is published or retired', async () => {
+  const made = open();
+  const id = 'c1a10000-0000-4000-8000-000000000008';
+  plant(made, id);
+  const request = 'c1a1aaaa-0000-4000-8000-000000000008';
+  const folder = cutOffTake(made, request);
+  const owner = relayClaimOwner(folder, request);
+  const first = readMessage(target(made), id, made.home, undefined, undefined, { receipt: 'after', owner });
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  saveChunk(folder, request, 0, `${first.body}\n`, [id]);
+  holderDies(made, [id]);
+  const claims = join(target(made).dropDir, READ_CLAIMS);
+  chmodSync(claims, 0o000);
+  try {
+    await relayOutboxes(made.dir, SESSION, [SEAT], recovery(made));
+    expect(existsSync(join(folder, `${request}.taking`))).toBe(true);
+    expect(existsSync(join(folder, `${request}.result.json`))).toBe(false);
+  } finally {
+    chmodSync(claims, 0o700);
+  }
+  await relayOutboxes(made.dir, SESSION, [SEAT], recovery(made));
+  const out = (JSON.parse(readFileSync(join(folder, `${request}.result.json`), 'utf8')) as { out: string }).out;
+  expect(bodiesIn(out, id)).toBe(1);
+  expect(readMessage(target(made), id, made.home).ok).toBe(false);
 });
 
 // Hestia, round 4: `team messages` serves the seat's own mail through its own receipt act. It

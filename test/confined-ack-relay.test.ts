@@ -217,13 +217,16 @@ describe('E5 round 1: binding and hand-over', () => {
     const result = plant(dir, { v: 1, id, command: 'drops', argv: ['--read', '--seat', 'keeper'], cwd: root, seat: 'keeper', session: 's', pane: 'pane-k', at: new Date().toISOString() });
     mkdirSync(result);
     await relayOutboxes(dir, 's', ['keeper'], sources);
-    expect(readFileSync(join(folder, `${id}.partial`), 'utf8')).toBe('BODY OF MINE\n');
+    // The hand-over is saved as a whole chunk: a header line naming its ids, sha256 and length,
+    // then the text.
+    const chunk = readFileSync(join(folder, `${id}.partial.000000`), 'utf8');
+    expect(chunk.slice(chunk.indexOf('\n') + 1)).toBe('BODY OF MINE\n');
     rmdirSync(result);
     const old = new Date(Date.now() - 6 * 60_000);
     utimesSync(join(folder, `${id}.taking`), old, old);
     await relayOutboxes(dir, 's', ['keeper'], sources);
     expect(JSON.parse(readFileSync(result, 'utf8')).out).toBe('BODY OF MINE\n');
-    expect(existsSync(join(folder, `${id}.partial`))).toBe(false);
+    expect(existsSync(join(folder, `${id}.partial.000000`))).toBe(false);
   });
 });
 

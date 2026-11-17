@@ -30,6 +30,9 @@ export type Io = {
    *  under it makes its claim durable and names this owner, so a cut-off run's messages belong to
    *  its recovery alone. Never set from the environment or a command line. */
   handoverOwner?: string;
+  /** Set with `handoverOwner`: a read run under it names, just before each stdout write, the ids
+   *  of the messages whose bodies that write holds whole, so the relay saves them with it. */
+  handedIds?: (ids: readonly string[]) => void;
   // Set by tests only. A command asks `callerOf(io)`, which otherwise reads the processes.
   caller?: Caller;
   // Set by tests only. A command asks `callerOf(io, session)`, which otherwise reads the

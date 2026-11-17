@@ -107,11 +107,17 @@ function settle(dropDir: string, id: string, owner: string | undefined): void {
  * body over (a relayed read), and is made durable before this returns. A reader with no owner holds
  * the claim only while it lives.
  */
-export function claimRead(dropDir: string, id: string, owner?: string): ReadClaim {
+export function claimRead(dropDir: string, id: string, owner?: string, adopt = false): ReadClaim {
   const folder = join(dropDir, READ_CLAIMS);
   const standing = ownerOf(dropDir, id);
   if (standing === 'unknown') return { ok: false, why: 'unknown' };
-  if (standing !== null) return { ok: false, why: 'recovering' };
+  // Recovery adopts the claim its own cut-off request left: the owner file stays, names `owner`,
+  // and is settled by this claim's seal or release like a live one's.
+  if (adopt) {
+    if (owner === undefined || standing !== owner) return { ok: false, why: 'recovering' };
+  } else if (standing !== null) {
+    return { ok: false, why: 'recovering' };
+  }
   let lock: ReturnType<typeof acquireLockAt>;
   try {
     lock = acquireLockAt(join(folder, id), folder);
@@ -123,11 +129,11 @@ export function claimRead(dropDir: string, id: string, owner?: string): ReadClai
   // An owner file published while this reader waited (its holder died, the lock was taken over)
   // still belongs to that operation's recovery.
   const after = ownerOf(dropDir, id);
-  if (after !== null) {
+  if (adopt ? after !== owner : after !== null) {
     lock.release();
     return { ok: false, why: after === 'unknown' ? 'unknown' : 'recovering' };
   }
-  if (owner !== undefined && !writeOwner(dropDir, id, owner)) {
+  if (owner !== undefined && !adopt && !writeOwner(dropDir, id, owner)) {
     lock.release();
     return { ok: false, why: 'durable' };
   }
@@ -143,19 +149,25 @@ export function claimRead(dropDir: string, id: string, owner?: string): ReadClai
   };
 }
 
-/** The ids whose standing claim names `owner`: a cut-off relayed read's, found by its recovery. */
-export function claimsOwnedBy(dropDir: string, owner: string): string[] {
+/** The ids whose standing claim names `owner`: a cut-off relayed read's, found by its recovery.
+ *  [] only when the claim folder is proven absent; null when it, or any owner file in it, cannot
+ *  be read now, since an unread owner file may be this request's. Unknown is never read as none. */
+export function claimsOwnedBy(dropDir: string, owner: string, list: (folder: string) => string[] = readdirSync): string[] | null {
   let names: string[];
   try {
-    names = readdirSync(join(dropDir, READ_CLAIMS));
-  } catch {
-    return [];
+    names = list(join(dropDir, READ_CLAIMS));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
   }
-  return names
-    .filter((name) => name.endsWith(OWNER_SUFFIX))
-    .map((name) => name.slice(0, -OWNER_SUFFIX.length))
-    .filter((id) => ownerOf(dropDir, id) === owner)
-    .sort();
+  const ids: string[] = [];
+  for (const name of names) {
+    if (!name.endsWith(OWNER_SUFFIX)) continue;
+    const id = name.slice(0, -OWNER_SUFFIX.length);
+    const standing = ownerOf(dropDir, id);
+    if (standing === 'unknown') return null;
+    if (standing === owner) ids.push(id);
+  }
+  return ids.sort();
 }
 
 /** Recovery's end of a cut-off claim. The dead holder's claim file goes first, while the owner file

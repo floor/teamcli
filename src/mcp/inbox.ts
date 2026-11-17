@@ -767,7 +767,10 @@ export function readMessage(
   guard?: () => string | null,
   /** `after` writes no receipt before the body is returned. The caller seals once the body has
    *  been handed over, and a hand-over that never returns leaves the message unread. */
-  handover?: { receipt: 'after'; owner?: string },
+  /** `owner` names the relayed operation that will hand the body over; `adopt` is that
+   *  operation's recovery taking back the claim it left (src/send/read-claim.ts), so a recovered
+   *  read seals the same receipt, brief binding included, that the live read would have. */
+  handover?: { receipt: 'after'; owner?: string; adopt?: boolean },
 ): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = recordFile(target.dropDir, id);
@@ -895,7 +898,7 @@ export function readMessage(
   // live claim gets no body; a claim whose holder died is taken over (the seat lock's rule).
   // A relayed hand-over names its owning operation: the claim is then durable before any output,
   // and a cut-off run's claim belongs to its recovery alone (src/send/read-claim.ts).
-  const claim = claimRead(target.dropDir, id, handover?.receipt === 'after' ? handover.owner : undefined);
+  const claim = claimRead(target.dropDir, id, handover?.receipt === 'after' ? handover.owner : undefined, handover?.adopt === true);
   if (!claim.ok) {
     const reason = claim.why === 'recovering'
       ? `message ${JSON.stringify(id)} is being recovered from an interrupted read`
@@ -944,6 +947,18 @@ export function readMessage(
   const lostAfterReceipt = guard?.();
   if (lostAfterReceipt !== undefined && lostAfterReceipt !== null) return { ok: false, reason: lostAfterReceipt };
   return { ok: true, body };
+}
+
+/**
+ * A cut-off relayed read's recovery sealing one id whose body its saved output holds whole: the
+ * seat's own reader, adopting the claim `owner` left, so the receipt is the one the live read
+ * would have sealed, a launch brief's binding included. The body it returns is not shown again.
+ * True once the id is read (sealed now, or already served).
+ */
+export function sealRecoveredRead(target: InboxTarget, id: string, home: string, brief: BriefRead, owner: string): boolean {
+  const got = readMessage(target, id, home, brief, undefined, { receipt: 'after', owner, adopt: true });
+  if (!got.ok) return got.served === 'already-served';
+  return got.seal?.() === true;
 }
 
 /**

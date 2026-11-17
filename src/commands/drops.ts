@@ -783,6 +783,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
       if (got.ok) {
         try {
+          if (!peek) io.handedIds?.([asked]);
           io.stdout(`${got.body}\n`);
           if (got.seal !== undefined && !got.seal()) {
             io.stderr(`team drops: ${asked}: the read receipt could not be written after the body was handed over\n`);
@@ -833,6 +834,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const newestFirst = [...waiting].reverse();
     // The messages this run never reached: the rest of the backlog, counted below.
     let reached = 0;
+    // The ids whose bodies this run hands over, named to a relay before the one stdout write.
+    const handedIds: string[] = [];
     for (const message of newestFirst) {
       if (bodies.length >= DROP_READ_BATCH) break;
       reached += 1;
@@ -847,6 +850,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after', ...(io.handoverOwner === undefined ? {} : { owner: io.handoverOwner }) });
       if (got.ok) {
         bodies.push(got.body);
+        if (!peek) handedIds.push(message.id);
         if (got.seal !== undefined) seals.push(got.seal);
         if (got.release !== undefined) releases.push(got.release);
         if (peek) peeked.push(message.id);
@@ -890,6 +894,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         ? `\n\n${String(older)} older unread message(s) wait in this inbox; inbox_check or team drops --read lists them`
         : '';
       try {
+        io.handedIds?.(handedIds);
         io.stdout(`${bodies.join('\n\n')}${tail}\n`);
       } catch (error) {
         for (const release of releases) release();

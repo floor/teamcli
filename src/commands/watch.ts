@@ -1,4 +1,4 @@
-import { currentClaimIn } from '../mcp/inbox.ts';
+import { currentClaimIn, sealRecoveredRead } from '../mcp/inbox.ts';
 import { realHost as realAckHost, runAck } from './ack.ts';
 import { runDrops } from './drops.ts';
 import { messageFile } from './messages.ts';
@@ -108,8 +108,6 @@ import { rulesOriginOf } from '../launch/rules.ts';
 import { runDueSwaps, type SwapRunResult } from '../swap/run.ts';
 import { realSources as restartSources, type RestartSources } from './restart.ts';
 import { legacyArchivedRecordExists } from '../send/legacy-inbox-retention.ts';
-import { messageKeyState } from '../store/keys.ts';
-import { publishRecordRead } from '../send/read-receipt.ts';
 import {
   classifyPromptKind,
   createSeatStatusEngine,
@@ -2919,24 +2917,20 @@ async function relayConfinedOutboxes(
     log: (line) => logLine(dir, 'watch', 'watch', line, now()),
     // A cut-off relayed read's saved bodies are the seat's: their receipts are sealed as the seat's
     // own reads, through the one receipt act every reader uses.
-    seal: (seat, ids) => {
-      const key = messageKeyState(home);
-      if (key.kind !== 'key') return false;
-      const dropDir = join(dir, 'send-drops', session, seat);
-      return ids.every((id) => {
-        const outcome = publishRecordRead({
-          dropDir, id, to: seat, root, session, home, key: key.key, at: now().toISOString(),
-          ...(team.orchestrator === undefined ? {} : { lead: team.orchestrator }),
-        });
-        return outcome.kind === 'published' || outcome.kind === 'served';
-      });
+    seal: (seat, ids, owner) => {
+      const target = { dropDir: join(dir, 'send-drops', session, seat), root, seat, session, ...(team.orchestrator === undefined ? {} : { lead: team.orchestrator }) };
+      const brief = { claim: () => currentClaimIn(root, session, seat) };
+      return ids.every((id) => sealRecoveredRead(target, id, home, brief, owner));
     },
     run: async (command, argv, cwd, caller, persist, owner) => {
       let out = '';
       let err = '';
+      let handed: readonly string[] = [];
       const io: Io = {
-        // Durable before the command goes on: a read seals its receipts only after this returns.
-        stdout: (text) => { persist(text); out += text; },
+        // Durable before the command goes on: a read seals its receipts only after this returns,
+        // and the ids it names are saved with the text that holds their bodies.
+        stdout: (text) => { persist(text, handed); handed = []; out += text; },
+        handedIds: (ids) => { handed = [...ids]; },
         stderr: (text) => { err += text; },
         cwd,
         env: process.env,
