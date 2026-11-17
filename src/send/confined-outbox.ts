@@ -30,6 +30,7 @@ import type { Io } from '../io.ts';
 import { cliHookStatePath } from '../launch/cli-hook.ts';
 import { confinedSeatAt } from '../placement/confined.ts';
 import { isRecordSidecarName, recordNameOk } from './record.ts';
+import { claimsOwnedBy, relayClaimOwner, settleOwnedClaim } from './read-claim.ts';
 
 export type OutboxCommand = 'send' | 'reply' | 'ack' | 'drops';
 
@@ -276,7 +277,10 @@ export type RelaySources = {
   /** Runs the seat's command as that seat; returns what it said. `persist` is the command's stdout
    *  made durable in the seat's outbox as it is written: a read hands its bodies over through it
    *  before it seals their receipts, so a run cut off after the hand-over still answers with them. */
-  run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller, persist: (text: string) => void): Promise<{ code: number; out: string; err: string }>;
+  run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller, persist: (text: string) => void, owner: string): Promise<{ code: number; out: string; err: string }>;
+  /** Seals the seat's read receipts for ids a cut-off relayed read already handed over (its saved
+   *  output holds their bodies): true once every one is read, false when any cannot be sealed now. */
+  seal(seat: string, ids: readonly string[]): boolean;
   now(): Date;
   log(line: string): void;
   /** Test seam: the metadata read of saved output. */
@@ -315,7 +319,7 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
     }
     const nowMs = sources.now().getTime();
     // Unanswered takes are answered first: the sweep only removes what has its result.
-    recoverTaken(folder, names, nowMs, sources);
+    recoverTaken(join(dir, 'send-drops', session, seat), seat, folder, names, nowMs, sources);
     sweepResults(folder, readdirSafe(folder), nowMs);
     for (const name of names) {
       if (ran >= RELAY_PER_PASS) return ran;
@@ -399,15 +403,21 @@ function readdirSafe(folder: string): string[] {
   }
 }
 
-/** A request taken by a pass that never finished it: the seat gets a result that says so. */
-function recoverTaken(folder: string, names: readonly string[], nowMs: number, sources: RelaySources): void {
+/** A request taken by a pass that never finished it: the seat gets a result that says so. A read
+ *  the run had claimed (src/send/read-claim.ts) is settled here and nowhere else: when its saved
+ *  output holds the bodies, their receipts are sealed and that output is the result; when nothing
+ *  was saved, the claim is voided, the messages stay unread, and no body is published. */
+function recoverTaken(dropDir: string, seat: string, folder: string, names: readonly string[], nowMs: number, sources: RelaySources): void {
   for (const name of names) {
     if (!name.endsWith('.taking')) continue;
     const id = name.slice(0, -'.taking'.length);
     if (!/^[0-9a-f-]{36}$/.test(id)) continue;
     const path = join(folder, name);
-    // A take whose result already stands is finished: only its marker is left to remove.
+    const owner = relayClaimOwner(folder, id);
+    // A take whose result already stands is finished: its claims are settled by what that result
+    // published, and then only its marker is left to remove.
     if (names.includes(`${id}${RESULT_SUFFIX}`)) {
+      if (!settleClaims(dropDir, seat, owner, () => publishedOut(folder, id), sources)) continue;
       try { unlinkSync(path); } catch { /* gone already */ }
       continue;
     }
@@ -423,6 +433,9 @@ function recoverTaken(folder: string, names: readonly string[], nowMs: number, s
       sources.log(`outbox request ${id}: its saved output cannot be read now; kept for a later pass`);
       continue;
     }
+    // Saved bodies are sealed before they are published, so the result that carries them is the
+    // one exposure; with nothing saved the claims are voided first, so no body is ever published.
+    if (!settleClaims(dropDir, seat, owner, () => handed, sources)) continue;
     if (publishResult(folder, id, {
       id,
       code: 1,
@@ -435,6 +448,38 @@ function recoverTaken(folder: string, names: readonly string[], nowMs: number, s
     dropPartial(folder, id, sources.trace);
     try { unlinkSync(path); } catch { /* the sweep removes it */ }
   }
+}
+
+/** The `out` a standing result published: '' for none, null when the result cannot be read now. */
+function publishedOut(folder: string, id: string): string | null {
+  const text = readOwn(join(folder, `${id}${RESULT_SUFFIX}`));
+  if (text === null || text === '') return null;
+  try {
+    const parsed = JSON.parse(text) as { out?: unknown };
+    return typeof parsed.out === 'string' ? parsed.out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Settles the read claims `owner` still holds. With output (the bodies went out, or go out in the
+ *  result that follows) each id's receipt is sealed first; with none the claims are voided and the
+ *  messages stay unread. False keeps everything for a later pass: unknown output, or a seal that
+ *  could not be made now. */
+function settleClaims(dropDir: string, seat: string, owner: string, output: () => string | null, sources: RelaySources): boolean {
+  const owned = claimsOwnedBy(dropDir, owner);
+  if (owned.length === 0) return true;
+  const out = output();
+  if (out === null) {
+    sources.log(`${seat}: a cut-off read's output cannot be read now; its claims are kept for a later pass`);
+    return false;
+  }
+  if (out !== '' && !sources.seal(seat, owned)) {
+    sources.log(`${seat}: a cut-off read's receipts could not be sealed now; its claims are kept for a later pass`);
+    return false;
+  }
+  for (const id of owned) settleOwnedClaim(dropDir, id, owner);
+  return true;
 }
 
 function identityOf(folder: string): string | null {
@@ -542,7 +587,7 @@ async function checkedRun(dir: string, path: string, id: string, seat: string, s
   }
   if (cwd === '') return refuse('its working folder is not a folder');
   const persist = (text: string): void => appendPartial(dirname(path), id, text, sources.trace);
-  const ran = await sources.run(request.command, bound.argv, cwd, { kind: 'seat', name: seat, pane: request.pane, session }, persist);
+  const ran = await sources.run(request.command, bound.argv, cwd, { kind: 'seat', name: seat, pane: request.pane, session }, persist, relayClaimOwner(dirname(path), id));
   sources.log(`${seat}: outbox request ${id} (${request.command}) ran, exit ${String(ran.code)}`);
   return { id, code: ran.code, out: ran.out, err: ran.err, at: at.toISOString() };
 }

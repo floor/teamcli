@@ -46,6 +46,7 @@ function relay(): { sources: RelaySources; ran: Ran[] } {
     sources: {
       recordedPane: (seat) => (seat === 'keeper' ? 'pane-k' : undefined),
       agents: () => [{ name: 'keeper', pane: 'pane-k' }],
+      seal: () => true,
       run: async (command, argv, _cwd, caller) => {
         ran.push({ command, argv, caller });
         return { code: 0, out: `${command} ${argv.join(' ')}\n`, err: '' };
@@ -167,6 +168,7 @@ function relayWith(run: RunFn): RelaySources {
     run,
     now: () => new Date(),
     log: () => {},
+    seal: () => true,
   };
 }
 

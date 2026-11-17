@@ -39,6 +39,7 @@ function relay(overrides: Partial<RelaySources> = {}): { sources: RelaySources; 
     },
     now: () => new Date(),
     log: (line) => logged.push(line),
+    seal: () => true,
     ...overrides,
   };
   return { sources, ran, logged };

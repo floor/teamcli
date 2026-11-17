@@ -12,6 +12,7 @@
 //   `↩ team reply <id> "…" · team ack <id>`
 // Re-running `team show <id>` on an already-read or already-replied record in the caller's own
 // mailbox still prints the full message idempotently.
+import { claimRead } from '../send/read-claim.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -197,17 +198,35 @@ export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<n
 
   const dropDir = recordDir(root, session, found.seat);
   const at = host.now().toISOString();
-  const outcome = publishRecordRead({
-    dropDir,
-    id: resolvedId,
-    to: found.seat,
-    root,
-    session,
-    home: host.home,
-    key,
-    at,
-    lead: loaded.team.orchestrator,
-  });
+  // The one read claim every body-serving reader takes (src/send/read-claim.ts).
+  const claim = claimRead(dropDir, resolvedId);
+  if (!claim.ok) {
+    return refused(
+      io,
+      json,
+      `${resolvedId}: not shown: ${claim.why === 'recovering'
+        ? 'it is being recovered from an interrupted read'
+        : claim.why === 'busy' ? 'another reader is handing it over'
+          : claim.why === 'unwritable' ? 'the read receipt could not be written (its read claim could not be taken)'
+            : 'its read claim cannot be taken now'}; run team show again in a moment`,
+    );
+  }
+  let outcome: ReturnType<typeof publishRecordRead>;
+  try {
+    outcome = publishRecordRead({
+      dropDir,
+      id: resolvedId,
+      to: found.seat,
+      root,
+      session,
+      home: host.home,
+      key,
+      at,
+      lead: loaded.team.orchestrator,
+    });
+  } finally {
+    claim.release();
+  }
   if (outcome.kind === 'held') {
     const where = receiptPath(session, found.seat, resolvedId, outcome.status);
     const what =

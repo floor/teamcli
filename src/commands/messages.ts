@@ -14,6 +14,7 @@
 // it there. The older `.agents/messages/<seat>/<id>.json` store is still read, read-only, so a
 // record a previous build left verifies the same way; nothing writes it any more. The signature
 // is integrity: every seat runs as the owner-user, so it is not proof of who sent it.
+import { claimRead } from '../send/read-claim.ts';
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { mkdirSync } from '../host/guarded-fs.ts';
@@ -622,17 +623,36 @@ function openRecord(
   lead?: string,
 ): ReadGate {
   const recordSession = candidate.session ?? session;
-  const outcome = publishRecordRead({
-    dropDir: recordDir(root, recordSession, candidate.seat),
-    id: candidate.id,
-    to: candidate.seat,
-    root,
-    session: recordSession,
-    home,
-    key,
-    at,
-    ...(lead === undefined ? {} : { lead }),
-  });
+  // The one read claim every body-serving reader takes (src/send/read-claim.ts): a reader that is
+  // handing this id over, or a cut-off read its recovery owns, keeps this run from serving it too.
+  const claim = claimRead(recordDir(root, recordSession, candidate.seat), candidate.id);
+  if (!claim.ok) {
+    return {
+      kind: 'refused',
+      what: `${candidate.seat}/${candidate.id} was not shown: ${claim.why === 'recovering'
+        ? 'it is being recovered from an interrupted read'
+        : claim.why === 'busy' ? 'another reader is handing it over'
+          : claim.why === 'unwritable' ? 'the read receipt could not be written (its read claim could not be taken)'
+            : 'its read claim cannot be taken now'}`,
+      repair: 'run team messages again in a moment',
+    };
+  }
+  let outcome: ReturnType<typeof publishRecordRead>;
+  try {
+    outcome = publishRecordRead({
+      dropDir: recordDir(root, recordSession, candidate.seat),
+      id: candidate.id,
+      to: candidate.seat,
+      root,
+      session: recordSession,
+      home,
+      key,
+      at,
+      ...(lead === undefined ? {} : { lead }),
+    });
+  } finally {
+    claim.release();
+  }
   if (outcome.kind === 'published') return { kind: 'shown' };
   if (outcome.kind === 'served') return { kind: 'served' };
   if (outcome.kind === 'held') return heldReceipt(candidate, outcome.status, outcome.entry);

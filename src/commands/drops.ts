@@ -776,7 +776,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         ? peekMessage(target, asked, sources.home, seatNames, brief)
         // The receipt follows the hand-over, as the batch read's does: a stdout that throws (a
         // relayed read whose output could not be saved) leaves the message unread.
-        : readMessage(target, asked, sources.home, brief, undefined, { receipt: 'after' });
+        : readMessage(target, asked, sources.home, brief, undefined, { receipt: 'after', ...(io.handoverOwner === undefined ? {} : { owner: io.handoverOwner }) });
       if (!got.ok && got.served === 'already-served') {
         io.stdout(`${settled === null ? got.reason : alreadyReadSentence(asked, settled.at, settled.readBy, seatNames)}\n`);
         return readOk();
@@ -844,7 +844,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const got = peek
         ? peekMessage(target, message.id, sources.home, seatNames, brief)
-        : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after' });
+        : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after', ...(io.handoverOwner === undefined ? {} : { owner: io.handoverOwner }) });
       if (got.ok) {
         bodies.push(got.body);
         if (got.seal !== undefined) seals.push(got.seal);

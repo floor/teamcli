@@ -21,7 +21,7 @@ import type { KeyObject } from 'node:crypto';
 // path; a drop or receipt that is a link is refused, never followed.
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
-import { acquireLockAt } from '../launch/seat-lock.ts';
+import { claimRead, READ_CLAIMS } from '../send/read-claim.ts';
 import { join } from 'node:path';
 import {
   briefBindingOf,
@@ -597,8 +597,8 @@ export type InboxRefusal = {
   path: string;
 };
 
-/** The folder of exclusive read claims inside a seat's drop folder: a dot name, never a message. */
-export const READ_CLAIMS = '.read-claims';
+/** The folder of exclusive read claims inside a seat's drop folder (src/send/read-claim.ts). */
+export { READ_CLAIMS };
 
 export type InboxRead =
   | { ok: true; body: string; seal?: () => boolean; release?: () => void }
@@ -767,7 +767,7 @@ export function readMessage(
   guard?: () => string | null,
   /** `after` writes no receipt before the body is returned. The caller seals once the body has
    *  been handed over, and a hand-over that never returns leaves the message unread. */
-  handover?: { receipt: 'after' },
+  handover?: { receipt: 'after'; owner?: string },
 ): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = recordFile(target.dropDir, id);
@@ -893,9 +893,18 @@ export function readMessage(
   // The exclusive read claim (rfc-event-comms E5, review round 3): one reader holds the id from
   // before its body is handed over until its receipt is sealed or it gives up. A rival that finds a
   // live claim gets no body; a claim whose holder died is taken over (the seat lock's rule).
-  const claim = acquireLockAt(join(target.dropDir, READ_CLAIMS, id), join(target.dropDir, READ_CLAIMS));
-  if (!('release' in claim)) {
-    return { ok: false, reason: `message ${JSON.stringify(id)} is being read by another reader`, served: 'busy' };
+  // A relayed hand-over names its owning operation: the claim is then durable before any output,
+  // and a cut-off run's claim belongs to its recovery alone (src/send/read-claim.ts).
+  const claim = claimRead(target.dropDir, id, handover?.receipt === 'after' ? handover.owner : undefined);
+  if (!claim.ok) {
+    const reason = claim.why === 'recovering'
+      ? `message ${JSON.stringify(id)} is being recovered from an interrupted read`
+      : claim.why === 'busy'
+        ? `message ${JSON.stringify(id)} is being read by another reader`
+        : claim.why === 'durable' || claim.why === 'unwritable'
+          ? `message ${JSON.stringify(id)} was not read: its read claim could not be written`
+          : `message ${JSON.stringify(id)} was not read: its read claim cannot be read now`;
+    return { ok: false, reason, served: 'busy' };
   }
   let released = false;
   const release = (): void => {

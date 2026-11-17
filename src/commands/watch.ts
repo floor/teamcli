@@ -108,6 +108,8 @@ import { rulesOriginOf } from '../launch/rules.ts';
 import { runDueSwaps, type SwapRunResult } from '../swap/run.ts';
 import { realSources as restartSources, type RestartSources } from './restart.ts';
 import { legacyArchivedRecordExists } from '../send/legacy-inbox-retention.ts';
+import { messageKeyState } from '../store/keys.ts';
+import { publishRecordRead } from '../send/read-receipt.ts';
 import {
   classifyPromptKind,
   createSeatStatusEngine,
@@ -1097,7 +1099,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     const context = relayContext;
     if (relayStopped || hosted?.signal.aborted === true || context === null || relayRunning.has(dir)) return;
     relayRunning.add(dir);
-    void relayConfinedOutboxes(dir, session, context.team, context.agents, sources.now)
+    void relayConfinedOutboxes(dir, first.root, sources.home ?? homedir(), session, context.team, context.agents, sources.now)
       .catch((error: unknown) => logLine(dir, 'watch', 'watch', `the outbox relay failed: ${(error as Error).message}`, sources.now()))
       .finally(() => relayRunning.delete(dir));
   }, RELAY_EVERY_MS);
@@ -2901,6 +2903,8 @@ const RELAY_EVERY_MS = 3_000;
 
 async function relayConfinedOutboxes(
   dir: string,
+  root: string,
+  home: string,
   session: string,
   team: TeamFile,
   agents: readonly { name: string | null; pane: string }[] | null,
@@ -2913,7 +2917,21 @@ async function relayConfinedOutboxes(
     agents: () => (agents === null ? null : agents.map((agent) => ({ name: agent.name, pane: agent.pane }))),
     now,
     log: (line) => logLine(dir, 'watch', 'watch', line, now()),
-    run: async (command, argv, cwd, caller, persist) => {
+    // A cut-off relayed read's saved bodies are the seat's: their receipts are sealed as the seat's
+    // own reads, through the one receipt act every reader uses.
+    seal: (seat, ids) => {
+      const key = messageKeyState(home);
+      if (key.kind !== 'key') return false;
+      const dropDir = join(dir, 'send-drops', session, seat);
+      return ids.every((id) => {
+        const outcome = publishRecordRead({
+          dropDir, id, to: seat, root, session, home, key: key.key, at: now().toISOString(),
+          ...(team.orchestrator === undefined ? {} : { lead: team.orchestrator }),
+        });
+        return outcome.kind === 'published' || outcome.kind === 'served';
+      });
+    },
+    run: async (command, argv, cwd, caller, persist, owner) => {
       let out = '';
       let err = '';
       const io: Io = {
@@ -2926,6 +2944,7 @@ async function relayConfinedOutboxes(
         stdoutIsTTY: false,
         stderrIsTTY: false,
         caller,
+        handoverOwner: owner,
       };
       let code: number;
       try {
