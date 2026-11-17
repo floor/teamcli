@@ -13,7 +13,7 @@ import { runDrops } from '../src/commands/drops.ts';
 import { recordDir } from '../src/commands/messages.ts';
 import { recordHits, runReply } from '../src/commands/reply.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { peekMessage, writeListener } from '../src/mcp/inbox.ts';
+import { peekMessage, readMessage, writeListener } from '../src/mcp/inbox.ts';
 import { runInboxRetention } from '../src/send/inbox-retention.ts';
 import {
   receiptFile,
@@ -343,4 +343,41 @@ test('team drops --read --id: a hand-over that throws leaves the message unread 
   expect(await runDrops(['--read', '--seat', SEAT, '--session', SESSION, '--id', id], next, { home: made.home })).toBe(0);
   expect(next.out).toContain(id);
   expect(statusOf(drop(made), id, { to: SEAT, root: made.root, session: SESSION }, key.key)).toBe('read');
+});
+
+// Review round 3 (Hermes, Hestia): the deferred exact-id read keeps the exclusive gate. Reader A
+// takes the id's claim with its deferred read and pauses before its hand-over; reader B (an
+// ordinary inbox read) gets no body; A hands over and seals; B then finds it already served.
+// Across both readers the body is shown once.
+test('a deferred read holds the id: a rival reader gets no body until it is sealed, then finds it served', () => {
+  const made = open();
+  const id = '5ea1ed00-0000-4000-8000-0000000000f2';
+  plant(made, id, '2026-11-08T14:00:00.000Z');
+  const target = { dropDir: drop(made), root: made.root, seat: SEAT, session: SESSION, lead: 'lead' };
+  const shown: string[] = [];
+  const a = readMessage(target, id, made.home, undefined, undefined, { receipt: 'after' });
+  expect(a.ok).toBe(true);
+  const b = readMessage(target, id, made.home);
+  expect(b.ok).toBe(false);
+  if (!b.ok) expect(b.reason).toContain('being read');
+  if (a.ok) {
+    shown.push(a.body);
+    expect(a.seal?.()).toBe(true);
+  }
+  const again = readMessage(target, id, made.home);
+  expect(again.ok).toBe(false);
+  if (!again.ok) expect(again.served).toBe('already-served');
+  expect(shown.filter((body) => body.includes(id))).toHaveLength(1);
+});
+
+test('a deferred read that gives up releases the id for the next reader', () => {
+  const made = open();
+  const id = '5ea1ed00-0000-4000-8000-0000000000f3';
+  plant(made, id, '2026-11-08T14:00:00.000Z');
+  const target = { dropDir: drop(made), root: made.root, seat: SEAT, session: SESSION, lead: 'lead' };
+  const a = readMessage(target, id, made.home, undefined, undefined, { receipt: 'after' });
+  expect(a.ok).toBe(true);
+  if (a.ok) a.release?.();
+  const b = readMessage(target, id, made.home);
+  expect(b.ok).toBe(true);
 });

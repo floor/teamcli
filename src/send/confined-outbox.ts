@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { readNoFollow } from './history.ts';
-import { writeAll } from '../queue/append.ts';
+import { readOwn, writeAll } from '../queue/append.ts';
 import { mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -279,6 +279,8 @@ export type RelaySources = {
   run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller, persist: (text: string) => void): Promise<{ code: number; out: string; err: string }>;
   now(): Date;
   log(line: string): void;
+  /** Test seam: the metadata read of saved output. */
+  stat?: (path: string) => { isFile(): boolean; isSymbolicLink(): boolean };
   /** Test seam: each durability point of the hand-over, in order. */
   trace?: (point: 'partial-fsync' | 'partial-folder-fsync' | 'result-fsync' | 'result-folder-fsync' | 'partial-removed') => void;
 };
@@ -416,7 +418,7 @@ function recoverTaken(folder: string, names: readonly string[], nowMs: number, s
     }
     sources.log(`outbox request ${id} was cut off while it ran; its outcome is unknown`);
     // What the run had already handed over is answered with it, never replaced by an empty result.
-    const handed = readPartial(folder, id);
+    const handed = readPartial(folder, id, sources.stat);
     if (handed === null) {
       sources.log(`outbox request ${id}: its saved output cannot be read now; kept for a later pass`);
       continue;
@@ -449,7 +451,7 @@ async function runRequest(dir: string, path: string, id: string, seat: string, s
     return await checkedRun(dir, path, id, seat, session, sources);
   } catch (error) {
     // What the command already handed over stays the seat's: its durable output is the result's.
-    const handed = readPartial(dirname(path), id);
+    const handed = readPartial(dirname(path), id, sources.stat);
     // Saved output that cannot be read now is kept, never replaced: the take stays for recovery.
     if (handed === null) throw new SavedOutputUnreadable();
     const result = refusal(id, seat, sources, `it could not be run (${(error as Error).message})`);
@@ -489,8 +491,8 @@ function fsyncFolder(folder: string): void {
 }
 
 /** The saved output: '' when none was saved, null when one exists and cannot be read now. */
-function readPartial(folder: string, id: string): string | null {
-  return readNoFollow(join(folder, `${id}${PARTIAL_SUFFIX}`));
+function readPartial(folder: string, id: string, stat?: RelaySources['stat']): string | null {
+  return readOwn(join(folder, `${id}${PARTIAL_SUFFIX}`), stat);
 }
 
 function dropPartial(folder: string, id: string, trace?: RelaySources['trace']): void {

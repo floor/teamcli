@@ -782,9 +782,14 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         return readOk();
       }
       if (got.ok) {
-        io.stdout(`${got.body}\n`);
-        if (got.seal !== undefined && !got.seal()) {
-          io.stderr(`team drops: ${asked}: the read receipt could not be written after the body was handed over\n`);
+        try {
+          io.stdout(`${got.body}\n`);
+          if (got.seal !== undefined && !got.seal()) {
+            io.stderr(`team drops: ${asked}: the read receipt could not be written after the body was handed over\n`);
+          }
+        } finally {
+          // A hand-over that throws leaves the message unread and its claim released.
+          got.release?.();
         }
         if (peek) logLine(dir, 'peek', logTag(shown), `${seatName}: ${asked}`);
         return readOk();
@@ -808,6 +813,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const waiting = listUnread(dropDir, context, sources.home, undefined, undefined, { legacy: 'include' });
     const bodies: string[] = [];
     const seals: Array<() => boolean> = [];
+    // Each deferred read holds the id's exclusive claim until its seal, or until this run gives up.
+    const releases: Array<() => void> = [];
     // The ids a peek showed: a peek writes no receipt, so the log line below is its only trace.
     const peeked: string[] = [];
     let superseded = 0;
@@ -841,6 +848,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       if (got.ok) {
         bodies.push(got.body);
         if (got.seal !== undefined) seals.push(got.seal);
+        if (got.release !== undefined) releases.push(got.release);
         if (peek) peeked.push(message.id);
       } else if (got.served !== undefined) {
         // Another reader won the receipt name and served this message: there is no body for this
@@ -881,7 +889,12 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       const tail = older > 0
         ? `\n\n${String(older)} older unread message(s) wait in this inbox; inbox_check or team drops --read lists them`
         : '';
-      io.stdout(`${bodies.join('\n\n')}${tail}\n`);
+      try {
+        io.stdout(`${bodies.join('\n\n')}${tail}\n`);
+      } catch (error) {
+        for (const release of releases) release();
+        throw error;
+      }
     }
     // The receipt follows the hand-over. A stdout that throws never reaches here, so the message
     // stays unread. A seal that loses the name, or cannot be flushed, is said with the other
@@ -889,6 +902,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     for (const seal of seals) {
       if (!seal()) receiptRefusals.push('the read receipt could not be written after the body was handed over');
     }
+    for (const release of releases) release();
     if (peeked.length > 0) {
       // The peek's one trace: who looked, whose mail, and the ids shown — names only, never a
       // body. A read needs none: its signed receipt is the record of what was served.

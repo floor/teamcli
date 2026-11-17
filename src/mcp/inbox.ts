@@ -21,6 +21,7 @@ import type { KeyObject } from 'node:crypto';
 // path; a drop or receipt that is a link is refused, never followed.
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
+import { acquireLockAt } from '../launch/seat-lock.ts';
 import { join } from 'node:path';
 import {
   briefBindingOf,
@@ -596,8 +597,11 @@ export type InboxRefusal = {
   path: string;
 };
 
+/** The folder of exclusive read claims inside a seat's drop folder: a dot name, never a message. */
+export const READ_CLAIMS = '.read-claims';
+
 export type InboxRead =
-  | { ok: true; body: string; seal?: () => boolean }
+  | { ok: true; body: string; seal?: () => boolean; release?: () => void }
   // `served` marks a race the gate decided without a body: `already-served` when a verifiable
   // receipt won the name. `busy` stays in the union for callers and fixtures that predate the
   // receipt-only gate; this version never emits it.
@@ -886,14 +890,44 @@ export function readMessage(
     }
     return true;
   };
+  // The exclusive read claim (rfc-event-comms E5, review round 3): one reader holds the id from
+  // before its body is handed over until its receipt is sealed or it gives up. A rival that finds a
+  // live claim gets no body; a claim whose holder died is taken over (the seat lock's rule).
+  const claim = acquireLockAt(join(target.dropDir, READ_CLAIMS, id), join(target.dropDir, READ_CLAIMS));
+  if (!('release' in claim)) {
+    return { ok: false, reason: `message ${JSON.stringify(id)} is being read by another reader`, served: 'busy' };
+  }
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    claim.release();
+  };
+  // A rival that sealed while this reader waited for the claim already served the id.
+  if (receiptHeldNow()) {
+    release();
+    return alreadyServed();
+  }
   if (handover?.receipt === 'after') {
     return {
       ok: true,
       body,
-      seal: () => publish() === true,
+      seal: () => {
+        try {
+          return publish() === true;
+        } finally {
+          release();
+        }
+      },
+      release,
     };
   }
-  const wrote = publish();
+  let wrote: InboxRead | true;
+  try {
+    wrote = publish();
+  } finally {
+    release();
+  }
   if (wrote !== true) return wrote;
   // The declaration is looked at once more after the receipt is durable and before the body is
   // handed back: a seat that lost its place during the write shows nothing. The receipt stands —

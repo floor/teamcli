@@ -3,7 +3,7 @@
 // the folder, seat, session and pane (the existing relay) and the binding E5 adds: the read names
 // that seat (and that session), the acknowledgement names exactly one record in that seat's own
 // drop folder. Nothing is granted to the sandbox; every refusal writes only the seat's own result.
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
@@ -261,4 +261,26 @@ describe('E5 round 2: the hand-over is durable in order, and unreadable saved ou
     await relayOutboxes(dir, 's', ['keeper'], sources);
     expect(JSON.parse(readFileSync(join(folder, `${id}.result.json`), 'utf8')).out).toBe('SAVED BODY\n');
   });
+});
+
+test('E5 round 3: saved output whose stat fails with EIO is kept with its take, and answered once it reads', async () => {
+  const { dir } = team();
+  const folder = outboxFolder(dir, 's', 'keeper')!;
+  mkdirSync(folder, { recursive: true });
+  const id = '00000000-0000-4000-8000-0000000000f2';
+  const taking = join(folder, `${id}.taking`);
+  writeFileSync(taking, '{}');
+  const old = new Date(Date.now() - 6 * 60_000);
+  utimesSync(taking, old, old);
+  const partial = join(folder, `${id}.partial`);
+  writeFileSync(partial, 'SAVED BODY\n');
+  const failing = (path: string) => {
+    if (path === partial) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    return lstatSync(path);
+  };
+  await relayOutboxes(dir, 's', ['keeper'], { ...relayWith(async () => ({ code: 0, out: '', err: '' })), stat: failing });
+  expect(existsSync(taking)).toBe(true);
+  expect(readFileSync(partial, 'utf8')).toBe('SAVED BODY\n');
+  await relayOutboxes(dir, 's', ['keeper'], relayWith(async () => ({ code: 0, out: '', err: '' })));
+  expect(JSON.parse(readFileSync(join(folder, `${id}.result.json`), 'utf8')).out).toBe('SAVED BODY\n');
 });

@@ -25,7 +25,7 @@
 // reconcile pass finds a record with no committed entry and appends it as `recovered`
 // (`appendRecovered`), so the index converges without the writer.
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { ftruncateSync, mkdirSync, openSync, renameSync, writeSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join } from 'node:path';
 import { acquireLockAt, type LockSteps } from '../launch/seat-lock.ts';
@@ -82,6 +82,8 @@ export type QueueOptions = {
   trace?: (point: 'record-fsync' | 'record-folder-fsync' | 'entry' | 'committed') => void;
   /** Test seam: a failing record flush. */
   syncRecord?: (path: string) => void;
+  /** Test seam: the metadata read of the queue's own files (journal, pointer). */
+  stat?: (path: string) => { isFile(): boolean; isSymbolicLink(): boolean };
   lock?: Partial<LockSteps>;
   /** How long an append waits for the receiver's lock. */
   lockWaitMs?: number;
@@ -109,6 +111,39 @@ function seqName(seq: number): string {
 }
 
 /** Writes `text` whole: a private temp file in the same folder, fsynced, renamed, folder fsynced. */
+/** Reads a file of its own: '' only when lstat proves it absent (ENOENT); null for any other
+ *  metadata or read fault, a link or a non-file. Unknown is never read as missing. */
+export function readOwn(path: string, stat: (path: string) => { isFile(): boolean; isSymbolicLink(): boolean } = lstatSync): string | null {
+  try {
+    const held = stat(path);
+    if (held.isSymbolicLink() || !held.isFile()) return null;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? '' : null;
+  }
+  // The file itself, opened without following a link: any fault from here on is unknown, never ''.
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch {
+    return null;
+  }
+  try {
+    if (!fstatSync(fd).isFile()) return null;
+    const chunks: Buffer[] = [];
+    const buffer = Buffer.alloc(8192);
+    for (;;) {
+      const read = readSync(fd, buffer, 0, buffer.length, null);
+      if (read === 0) break;
+      chunks.push(Buffer.from(buffer.subarray(0, read)));
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Writes every byte: a short write is continued, never taken for the whole text. */
 export function writeAll(fd: number, text: string): void {
   const bytes = Buffer.from(text);
@@ -191,10 +226,10 @@ function isLine(value: unknown): value is JournalLine {
 
 /** The journal's whole lines. A last line with no newline, or one that does not parse, is a torn
  *  tail (`tornAt` is the byte where it starts); a bad line before the tail is corruption. */
-function readJournal(path: string): Journal {
+function readJournal(path: string, stat?: QueueOptions['stat']): Journal {
   // `readNoFollow` answers '' for a missing file and null for every fault or refused kind (a link,
   // a folder, an unreadable file): only a missing journal is a new one.
-  const text = readNoFollow(path);
+  const text = readOwn(path, stat);
   if (text === null) return { lines: [], tornAt: null, corrupt: false, unreadable: true };
   const lines: JournalLine[] = [];
   let offset = 0;
@@ -242,10 +277,10 @@ type Generation = { name: string; folder: string };
 
 /** The current generation, created on first use. A `current` that does not name a generation
  *  this build reads starts a new one: state bound to the old one never applies to it. */
-function currentGeneration(base: string, log: (line: string) => void): Generation {
+function currentGeneration(base: string, log: (line: string) => void, stat?: QueueOptions['stat']): Generation {
   ensureFolder(base);
   const pointer = join(base, 'current');
-  const text = readNoFollow(pointer);
+  const text = readOwn(pointer, stat);
   // A pointer that cannot be read is not a missing one: the queue is not used this time.
   if (text === null) throw new Error('the generation pointer cannot be read');
   const named = text.trim();
@@ -467,9 +502,9 @@ function open(dropDir: string, target: Omit<Target, 'dropDir'>, options: QueueOp
   const lock = takeQueueLock(base, options);
   if (!('release' in lock)) return { skipped: `the queue lock is held (pid ${String(lock.held)})` };
   try {
-    let generation = currentGeneration(base, log);
+    let generation = currentGeneration(base, log, options.stat);
     let journalPath = join(generation.folder, 'journal.jsonl');
-    let journal = readJournal(journalPath);
+    let journal = readJournal(journalPath, options.stat);
     if (journal.unreadable === true) {
       // Unknown is never empty: a journal that cannot be read is not appended to with a reset
       // head. The append skips the queue (the shadow rule); the next opener tries again.

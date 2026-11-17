@@ -9,7 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
 import { messageKeyPath } from '../src/store/keys.ts';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendDeliverySync, appendRecovered, currentGenerationName, entriesOf, journalOf, queueBaseOf, queuedHint, recoverSessionQueues } from '../src/queue/append.ts';
@@ -441,5 +441,42 @@ describe('round 2: uncertainty stays reserved, then commits at its own seq', () 
     renameSync(aside, keyPath);
     recoverSessionQueues(s.root, SESSION, { home: s.home });
     expect(lastStates(s.dropDir).get(1)).toBe('committed');
+  });
+});
+
+describe('round 3: a metadata fault on the queue\'s own files is never read as missing', () => {
+  const eio = (target: string) => (path: string) => {
+    if (path === target) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    return lstatSync(path);
+  };
+
+  test('journal: a stat EIO skips the queue, the record is written once, no seq is reused; the next open goes on at seq 2', () => {
+    const s = scene();
+    append(s, id(1));
+    const journal = join(genFolder(s.dropDir), 'journal.jsonl');
+    let writes = 0;
+    const record = recordOf(s.root, s.home, id(2));
+    const out = appendDeliverySync({ dropDir: s.dropDir, record }, () => {
+      writes += 1;
+      const result = writeRecord(s.dropDir, record);
+      return { ok: result.ok, value: result };
+    }, { home: s.home, stat: eio(journal) });
+    expect(writes).toBe(1);
+    expect(out.queue).toEqual({ kind: 'skipped', reason: 'the journal cannot be read' });
+    expect(append(s, id(3)).queue).toMatchObject({ kind: 'committed', seq: 2 });
+  });
+
+  test('pointer: a stat EIO skips the queue and never starts a new generation', () => {
+    const s = scene();
+    append(s, id(1));
+    const before = currentGenerationName(s.dropDir);
+    const pointer = join(queueBaseOf(s.dropDir)!, 'current');
+    const record = recordOf(s.root, s.home, id(2));
+    const out = appendDeliverySync({ dropDir: s.dropDir, record }, () => {
+      const result = writeRecord(s.dropDir, record);
+      return { ok: result.ok, value: result };
+    }, { home: s.home, stat: eio(pointer) });
+    expect(out.queue.kind).toBe('skipped');
+    expect(currentGenerationName(s.dropDir)).toBe(before);
   });
 });
