@@ -583,13 +583,35 @@ test('a restore never exits the pane its own command runs in', async () => {
   record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
   const made = sources();
   const io = testIo(root, { kind: 'owner' });
-  io.env = { HERDR_PANE_ID: PANE };
+  io.env = { HERDR_PANE_ID: PANE, HERDR_SOCKET_PATH: `/Users/x/.config/herdr/sessions/${SESSION}/herdr.sock` };
   await runUp([], io, made.sources);
   expect(made.trace.typed).toEqual([]);
   expect(seatRuns(made.trace)).toEqual([]);
   expect(made.trace.closed).toEqual([]);
   expect(io.out + io.err).toContain('its pane is the one this command runs in; nothing exited or closed');
   expect(seatState()?.launched).toEqual(RECORD.launched);
+});
+
+test('the same pane id in another session is not the caller\'s pane: the repair runs', async () => {
+  setup(WRAPPER);
+  record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
+  const made = sources();
+  const io = testIo(root, { kind: 'owner' });
+  io.env = { HERDR_PANE_ID: PANE, HERDR_SOCKET_PATH: '/Users/x/.config/herdr/sessions/elsewhere/herdr.sock' };
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
+});
+
+test('a pane hint whose session cannot be told is held as possibly the caller\'s', async () => {
+  setup(WRAPPER);
+  record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
+  const made = sources();
+  const io = testIo(root, { kind: 'owner' });
+  io.env = { HERDR_PANE_ID: PANE };
+  await runUp([], io, made.sources);
+  expect(made.trace.typed).toEqual([]);
+  expect(io.out + io.err).toContain('its pane may be the one this command runs in');
 });
 
 test("the orchestrator's restored pane is left unless the run names it", async () => {

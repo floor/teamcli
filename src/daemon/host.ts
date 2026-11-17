@@ -15,7 +15,7 @@ import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, 
 import { appendFileSync, chmodSync, fchmodSync, ftruncateSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { connect } from 'node:net';
-import { homedir } from 'node:os';
+import { cpus, homedir, loadavg } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
@@ -27,7 +27,8 @@ import { getTeam, noteStoppedTeamRunning, readTeams, teamIdOf } from '../registr
 import { currentRunMemo } from '../run-memo.ts';
 import type { TeamFile } from '../file/types.ts';
 import { paneProcessesAsync, sessionListAsync, sessionRunningAsync, startStoppedServer, type PaneProcesses } from '../herdr.ts';
-import { bootSessionsToStart, bootTimeMs, loadPerCore, readSessionsRunning, writeSessionsRunning } from './restore/boot-sessions.ts';
+import { bootId, readBootQueue, readSessionsRunning, writeBootQueue, writeSessionsRunning } from './restore/boot-sessions.ts';
+import { runBootWork, type BootRunDeps } from './restore/boot-run.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
@@ -87,15 +88,18 @@ import type { ReaperRecord } from '../orphan-reaper.ts';
 import { sweepCountsAreNews } from './sweep-said.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 
-/** One checkout as hosted by this process; the state record keeps the same shape. */
 /** How long a load-held restore keeps retrying (60 s apart at most) before it says "run team up --all".
  *  Measured 2026-11-17: after a machine restart the load stayed over the guard for about six minutes. */
 export const RESTORE_RETRY_BUDGET_MS = 30 * 60_000;
-/** The load per core under which the first daemon after a restart starts the next stopped session. */
+/** The load per core under which the daemon starts the next session a restart stopped. */
 export const BOOT_SESSION_LOAD_PER_CORE = 3;
 /** The wait after one restarted session before the next is started. */
 export const BOOT_SESSION_GAP_MS = 20_000;
+/** How often the running-routes record is rewritten: the window in which a session stopped by
+ *  hand just before a power-off is not yet seen as stopped. */
+export const BOOT_OBSERVE_EVERY_MS = 10_000;
 
+/** One checkout as hosted by this process; the state record keeps the same shape. */
 export type MachineRootStatus = DaemonRootState;
 
 export type MachineDaemon = {
@@ -3110,52 +3114,31 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     };
     // Production only: an injected runner (a test) never starts a terminal-host server.
     const bootSessionsEnabled = input.bootSessions !== false && typeof input.restoreSweep !== 'function';
-    const startBootSessions = async (): Promise<void> => {
-      let names: string[];
-      try {
-        names = bootSessionsToStart(readSessionsRunning(home), bootTimeMs());
-      } catch (error) {
-        logLine(`restore: the sessions that ran before the restart could not be read: ${messageOf(error)}`);
-        return;
-      }
-      if (names.length === 0) return;
-      logLine(`restore: machine restart: ${String(names.length)} session${names.length === 1 ? '' : 's'} ran before it (${names.join(', ')}); each stopped one is started again under the load guard`);
-      const startedAt = Date.now();
-      for (const name of names) {
-        if (closed || restoreAbort.signal.aborted) return;
-        const listed = await sessionListAsync({ signal: restoreAbort.signal });
-        const found = listed?.find((one) => one.name === name);
-        if (found === undefined || found.running) continue;
-        while (loadPerCore() > BOOT_SESSION_LOAD_PER_CORE) {
-          if (Date.now() - startedAt > RESTORE_RETRY_BUDGET_MS) {
-            logLine(`restore: session ${name} not started: the load stayed over ${String(BOOT_SESSION_LOAD_PER_CORE)} per core; attach it to restore it`);
-            return;
-          }
-          if (!(await waitAbortable(15_000))) return;
-        }
-        const started = startStoppedServer(name);
-        logLine(started
-          ? `restore: session ${name} started again after the machine restart`
-          : `restore: session ${name} was not started (it no longer reads stopped, or its server could not start)`);
-        // One session's seats resume together; the next waits for that burst to begin.
-        if (!(await waitAbortable(BOOT_SESSION_GAP_MS))) return;
-      }
-    };
-    const recordRunningSessions = async (): Promise<void> => {
-      // The first record waits one gap, so a daemon that dies during the boot start has not yet
-      // replaced the pre-restart list.
-      while (await waitAbortable(60_000)) {
-        const listed = await sessionListAsync({ signal: restoreAbort.signal });
-        if (listed === null) continue;
-        writeSessionsRunning(home, listed.filter((one) => one.running).map((one) => one.name), Date.now());
-      }
-    };
+    const bootDeps = (): BootRunDeps => ({
+      bootId: () => bootId(),
+      readObserved: () => readSessionsRunning(home),
+      readQueue: () => readBootQueue(home),
+      writeQueue: (queue) => writeBootQueue(home, queue),
+      writeObserved: (record) => writeSessionsRunning(home, record),
+      sessions: () => sessionsRunningMap(() => sessionListAsync({ signal: restoreAbort.signal })),
+      start: (session) => startStoppedServer(session, { signal: restoreAbort.signal }),
+      hosted: () => routes.map((route) => ({ root: route.root, team: route.team, session: route.session })),
+      lifecycleProblem: (root, team) => restoreLifecycleProblem(home, root, team),
+      loadPerCore: () => (loadavg()[0] ?? 0) / Math.max(1, cpus().length),
+      wait: (ms) => waitAbortable(ms),
+      now: () => Date.now(),
+      log: logLine,
+      loadMaxPerCore: BOOT_SESSION_LOAD_PER_CORE,
+      gapMs: BOOT_SESSION_GAP_MS,
+      retryMs: 15_000,
+      budgetMs: RESTORE_RETRY_BUDGET_MS,
+      observeEveryMs: BOOT_OBSERVE_EVERY_MS,
+    });
     restoreSweepRun = (async (): Promise<void> => {
-      // A machine restart: the sessions that ran when it went down come back first, one at a time
-      // under the load guard, and the attach watch below restores each once it reads running.
-      // Then the running-sessions record is kept current, so the next restart knows its list.
-      const bootRun = bootSessionsEnabled ? startBootSessions() : Promise.resolve();
-      const recordRun = bootSessionsEnabled ? recordRunningSessions() : Promise.resolve();
+      // A machine restart: the registered sessions that ran when it went down come back first,
+      // one at a time under the load guard, and the attach watch below restores each once it
+      // reads running. The running-routes record is kept current for the next restart.
+      const bootRun = bootSessionsEnabled ? runBootWork(bootDeps()) : Promise.resolve();
       let pendingRoutes: HostedRoute[] = [];
       const loadReasons = new Map<string, string>();
       /** Routes whose pass refused a seat on a timeout: retried once on the retry schedule. */
@@ -3336,10 +3319,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           `restore: pending (${loadHeldRoutes.length} session${loadHeldRoutes.length === 1 ? '' : 's'}, ${loadHeldRoutes.length} still load-held after ${formatWait(elapsedMs)}; retry wait bound reached; run "team up --all" once the load guard clears)`,
         );
       }
-      await bootRun;
       watch.seal();
       await watchRun;
-      await recordRun;
+      // The boot work's observer runs for the daemon's life; it ends when the daemon closes.
+      await bootRun;
     })().catch((error: unknown) => {
       // The loop above already logs each route's failure; this catches the log write itself (or
       // anything outside the loop), so the tracked run never rejects into an unhandled rejection

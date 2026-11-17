@@ -785,23 +785,32 @@ export function startServer(session: string): boolean {
 // Starts the server of a session the terminal host lists as stopped (a machine restart left it
 // down), detached, in the same clean environment as `startServer`. The server restores the
 // session's saved panes. Refuses unless the session reads stopped: never a second server for a
-// running session, and never a session that does not exist.
-export function startStoppedServer(session: string): boolean {
+// running session, and never a session that does not exist. The check is the awaited session
+// list (bounded, abortable), read immediately before the spawn: the daemon's loop never blocks
+// on it. 'not-stopped' when the session is absent or running; 'unread' when herdr did not answer.
+export async function startStoppedServer(
+  session: string,
+  options: HerdrReadOptions = {},
+): Promise<'started' | 'not-stopped' | 'unread' | 'failed'> {
   hostedCommit('herdr startStoppedServer');
-  if (session === '' || sessionState(session) !== 'stopped') return false;
+  if (session === '') return 'not-stopped';
+  const sessions = await sessionListAsync(options);
+  if (sessions === null) return 'unread';
+  const found = sessions.find((one) => one.name === session);
+  if (found === undefined || found.running) return 'not-stopped';
   let env: NodeJS.ProcessEnv;
   try {
     env = seatServerEnv(process.env, homedir());
   } catch {
-    return false;
+    return 'failed';
   }
   const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
   try {
     const child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
     child.unref();
-    return true;
+    return 'started';
   } catch {
-    return false;
+    return 'failed';
   }
 }
 
