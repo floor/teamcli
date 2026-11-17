@@ -873,6 +873,8 @@ export function auditRuleAdmission(home: string, rule: OwnerActionRule, action: 
 }
 
 function audit(home: string, name: string, entry: Record<string, unknown>): void {
+  // The audit folder and its line are effects (a leads admission writes one in the host).
+  hostedCommit('owner-action audit');
   try {
     mkdirSync(actionAuditFolder(home), { recursive: true, mode: 0o700 });
     writeExclusive(join(actionAuditFolder(home), `${name}.json`), `${JSON.stringify(entry, null, 2)}\n`);

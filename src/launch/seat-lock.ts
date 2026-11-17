@@ -1,3 +1,4 @@
+import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
 import { accessSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -194,6 +195,8 @@ export function acquireSeatLock(
   overrides?: Partial<LockSteps>,
   budget: LockBudget = {},
 ): SeatLock {
+  // Taking the lock creates folders, stages a token and may clear a stale lock: an effect.
+  hostedCommit('seat lock');
   const steps: LockSteps = { ...lockSteps, ...overrides };
   const path = seatLockPath(dir, session, seat);
   const claimPath = `${path}.steal`;

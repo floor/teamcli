@@ -9,7 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
-import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
+import { deliver as relayDeliver } from '../../packages/relay/index.js';
+import { relayStage } from '../send/relay-stage.ts';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { nudgeBusNoWait } from '../bus/server.ts';
@@ -6382,6 +6383,8 @@ function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: 
  *  The leaf alone would leave the parents at the umask, so other users could list
  *  session ids and seat names. `.agents` itself is not changed. */
 export function sealDropTree(dir: string, session: string, seat: string): void {
+  // Creates the drop folders and narrows their modes: an effect.
+  hostedCommit('drop tree');
   const root = join(dir, 'send-drops');
   const sessionDir = join(root, session);
   const leaf = join(sessionDir, seat);

@@ -30,7 +30,7 @@ import {
 import { connect } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { stage as relayStage } from '../../packages/relay/index.js';
+import { relayStage } from './relay-stage.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { seatNickname } from '../file/sections/seats.ts';
 import type { TeamFile } from '../file/types.ts';
