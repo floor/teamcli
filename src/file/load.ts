@@ -601,6 +601,29 @@ export function loadTeamText(
   options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string; unfilled?: 'strict' | 'keep' } = {},
   reread?: () => string,
 ): LoadResult {
+  // One command run validates the same team text several times (the prologue, the charter
+  // targets, the session and the leads admission each load it). Within one run, a text already
+  // validated and placed for the same root, path and options is the same result: the key is the
+  // text's own digest, so a write in the run that changes the file is a new key. Only a load with
+  // the real filesystem and a successful result is kept; the copy handed out is the caller's own.
+  const memo = options.fs === undefined ? currentRunMemo() : null;
+  const key = memo === null ? null : `${createHash('sha256').update(text).digest('hex')}\0${root}\0${path}\0${options.home ?? ''}\0${options.checkOnly === true ? '1' : '0'}\0${options.session ?? ''}\0${options.unfilled ?? ''}`;
+  if (memo !== null && key !== null) {
+    const hit = memo.teamLoads.get(key);
+    if (hit !== undefined) return structuredClone(hit as LoadResult);
+  }
+  const loaded = loadTeamTextOnce(text, root, path, options, reread);
+  if (memo !== null && key !== null && loaded.ok) memo.teamLoads.set(key, structuredClone(loaded));
+  return loaded;
+}
+
+function loadTeamTextOnce(
+  text: string,
+  root: string,
+  path: string,
+  options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string; unfilled?: 'strict' | 'keep' },
+  reread?: () => string,
+): LoadResult {
   let result = validateWithWorkspaceMode(text, root, options);
   if (!result.ok && result.parse === true && reread !== undefined) {
     // The parse itself failed, which a file replaced under this reader can do transiently
