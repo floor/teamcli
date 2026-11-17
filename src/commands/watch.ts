@@ -1,4 +1,6 @@
-import { currentClaimIn } from '../mcp/inbox.ts';
+import { currentClaimIn, sealRecoveredRead } from '../mcp/inbox.ts';
+import { realHost as realAckHost, runAck } from './ack.ts';
+import { runDrops } from './drops.ts';
 import { messageFile } from './messages.ts';
 import { traceChildStep } from '../diagnostics/child-steps.ts';
 import { captureModelDriftFences, clearRepairedModelDrifts } from '../send/model-drift.ts';
@@ -1095,7 +1097,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     const context = relayContext;
     if (relayStopped || hosted?.signal.aborted === true || context === null || relayRunning.has(dir)) return;
     relayRunning.add(dir);
-    void relayConfinedOutboxes(dir, session, context.team, context.agents, sources.now)
+    void relayConfinedOutboxes(dir, first.root, sources.home ?? homedir(), session, context.team, context.agents, sources.now)
       .catch((error: unknown) => logLine(dir, 'watch', 'watch', `the outbox relay failed: ${(error as Error).message}`, sources.now()))
       .finally(() => relayRunning.delete(dir));
   }, RELAY_EVERY_MS);
@@ -2899,6 +2901,8 @@ const RELAY_EVERY_MS = 3_000;
 
 async function relayConfinedOutboxes(
   dir: string,
+  root: string,
+  home: string,
   session: string,
   team: TeamFile,
   agents: readonly { name: string | null; pane: string }[] | null,
@@ -2911,11 +2915,22 @@ async function relayConfinedOutboxes(
     agents: () => (agents === null ? null : agents.map((agent) => ({ name: agent.name, pane: agent.pane }))),
     now,
     log: (line) => logLine(dir, 'watch', 'watch', line, now()),
-    run: async (command, argv, cwd, caller) => {
+    // A cut-off relayed read's saved bodies are the seat's: their receipts are sealed as the seat's
+    // own reads, through the one receipt act every reader uses.
+    seal: (seat, ids, owner) => {
+      const target = { dropDir: join(dir, 'send-drops', session, seat), root, seat, session, ...(team.orchestrator === undefined ? {} : { lead: team.orchestrator }) };
+      const brief = { claim: () => currentClaimIn(root, session, seat) };
+      return ids.every((id) => sealRecoveredRead(target, id, home, brief, owner));
+    },
+    run: async (command, argv, cwd, caller, persist, owner) => {
       let out = '';
       let err = '';
+      let handed: readonly string[] = [];
       const io: Io = {
-        stdout: (text) => { out += text; },
+        // Durable before the command goes on: a read seals its receipts only after this returns,
+        // and the ids it names are saved with the text that holds their bodies.
+        stdout: (text) => { persist(text, handed); handed = []; out += text; },
+        handedIds: (ids) => { handed = [...ids]; },
         stderr: (text) => { err += text; },
         cwd,
         env: process.env,
@@ -2923,12 +2938,17 @@ async function relayConfinedOutboxes(
         stdoutIsTTY: false,
         stderrIsTTY: false,
         caller,
+        handoverOwner: owner,
       };
       let code: number;
       try {
         code = command === 'send'
           ? await runSend(argv, io, realHost)
-          : await runReply(argv, io, realReplyHost);
+          : command === 'reply'
+            ? await runReply(argv, io, realReplyHost)
+            : command === 'ack'
+              ? await runAck(argv, io, realAckHost)
+              : await runDrops(argv, io);
       } catch (error) {
         code = 1;
         err += `team ${command}: ${(error as Error).message}\n`;

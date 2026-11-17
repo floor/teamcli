@@ -22,6 +22,8 @@
 // the owner and a lead peek, shown the body with nothing written, so the message still waits for
 // its seat, and the peek is logged with the reader, the seat and the ids. Any other caller is
 // refused before a record is read, so nothing is receipted for it.
+import { relayIfConfined } from '../send/confined-outbox.ts';
+import { DROPS_FLAG_OPTIONS, DROPS_VALUED_OPTIONS } from '../send/command-grammar.ts';
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
@@ -636,7 +638,13 @@ function listUnreadArchive(io: Io, json: boolean, root: string, session: string,
 }
 
 export async function runDrops(argv: string[], io: Io, sources: DropsSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read', 'dry-run', 'unread']);
+  const args = readArgs(argv, [...DROPS_VALUED_OPTIONS], [...DROPS_FLAG_OPTIONS]);
+  // `--read` writes the read receipts beside the records: a seat its sandbox confines hands it to
+  // its watch, which reads for it as that seat (rfc-event-comms E5, src/send/confined-outbox.ts).
+  if (args.flags.has('read') && args.error === undefined) {
+    const relayed = await relayIfConfined('drops', argv, io);
+    if (relayed !== null) return relayed;
+  }
   const verb = args.rest[0];
   if (verb === 'archive') return runArchive(args, io, sources, hasJsonFlag(argv) || args.flags.has('json'));
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
@@ -766,13 +774,24 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
       const got = peek
         ? peekMessage(target, asked, sources.home, seatNames, brief)
-        : readMessage(target, asked, sources.home, brief);
+        // The receipt follows the hand-over, as the batch read's does: a stdout that throws (a
+        // relayed read whose output could not be saved) leaves the message unread.
+        : readMessage(target, asked, sources.home, brief, undefined, { receipt: 'after', ...(io.handoverOwner === undefined ? {} : { owner: io.handoverOwner }) });
       if (!got.ok && got.served === 'already-served') {
         io.stdout(`${settled === null ? got.reason : alreadyReadSentence(asked, settled.at, settled.readBy, seatNames)}\n`);
         return readOk();
       }
       if (got.ok) {
-        io.stdout(`${got.body}\n`);
+        try {
+          if (!peek) io.handedIds?.([asked]);
+          io.stdout(`${got.body}\n`);
+          if (got.seal !== undefined && !got.seal()) {
+            io.stderr(`team drops: ${asked}: the read receipt could not be written after the body was handed over\n`);
+          }
+        } finally {
+          // A hand-over that throws leaves the message unread and its claim released.
+          got.release?.();
+        }
         if (peek) logLine(dir, 'peek', logTag(shown), `${seatName}: ${asked}`);
         return readOk();
       }
@@ -795,6 +814,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const waiting = listUnread(dropDir, context, sources.home, undefined, undefined, { legacy: 'include' });
     const bodies: string[] = [];
     const seals: Array<() => boolean> = [];
+    // Each deferred read holds the id's exclusive claim until its seal, or until this run gives up.
+    const releases: Array<() => void> = [];
     // The ids a peek showed: a peek writes no receipt, so the log line below is its only trace.
     const peeked: string[] = [];
     let superseded = 0;
@@ -813,6 +834,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const newestFirst = [...waiting].reverse();
     // The messages this run never reached: the rest of the backlog, counted below.
     let reached = 0;
+    // The ids whose bodies this run hands over, named to a relay before the one stdout write.
+    const handedIds: string[] = [];
     for (const message of newestFirst) {
       if (bodies.length >= DROP_READ_BATCH) break;
       reached += 1;
@@ -824,10 +847,12 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const got = peek
         ? peekMessage(target, message.id, sources.home, seatNames, brief)
-        : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after' });
+        : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after', ...(io.handoverOwner === undefined ? {} : { owner: io.handoverOwner }) });
       if (got.ok) {
         bodies.push(got.body);
+        if (!peek) handedIds.push(message.id);
         if (got.seal !== undefined) seals.push(got.seal);
+        if (got.release !== undefined) releases.push(got.release);
         if (peek) peeked.push(message.id);
       } else if (got.served !== undefined) {
         // Another reader won the receipt name and served this message: there is no body for this
@@ -868,7 +893,13 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       const tail = older > 0
         ? `\n\n${String(older)} older unread message(s) wait in this inbox; inbox_check or team drops --read lists them`
         : '';
-      io.stdout(`${bodies.join('\n\n')}${tail}\n`);
+      try {
+        io.handedIds?.(handedIds);
+        io.stdout(`${bodies.join('\n\n')}${tail}\n`);
+      } catch (error) {
+        for (const release of releases) release();
+        throw error;
+      }
     }
     // The receipt follows the hand-over. A stdout that throws never reaches here, so the message
     // stays unread. A seal that loses the name, or cannot be flushed, is said with the other
@@ -876,6 +907,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     for (const seal of seals) {
       if (!seal()) receiptRefusals.push('the read receipt could not be written after the body was handed over');
     }
+    for (const release of releases) release();
     if (peeked.length > 0) {
       // The peek's one trace: who looked, whose mail, and the ids shown — names only, never a
       // body. A read needs none: its signed receipt is the record of what was served.

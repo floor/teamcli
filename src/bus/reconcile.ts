@@ -20,6 +20,9 @@ import { traceBeatWork } from '../diagnostics/beat-work.ts';
 // unchanged, and so is the parsed history. Correctness does not move: every record is still
 // raised on every pass (the dedupe set decides), read-once receipts keep their sender, and a
 // receipt that arrives in a later pass than its record still carries that record's sender.
+import { appendRecovered, currentGenerationName, recoverSessionQueues } from '../queue/append.ts';
+import { logLine } from '../log.ts';
+import { queueLog } from '../queue/log.ts';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -106,6 +109,9 @@ export type ReconcileOptions = {
    *  reason is a fixed sentence about the file's kind or signature, never its content. The bus
    *  prints it; a caller that does not listen leaves it out. */
   onRefused?: (refusal: { where: string; reason: string }) => void;
+  /** False leaves the queue's orphan source off for this pass (a scene that tests the log alone).
+   *  Absent or true, a verified record with no committed queue entry is appended as recovered. */
+  queueOrphans?: boolean;
 };
 
 export type ReconcileResult =
@@ -146,7 +152,7 @@ export type ReconcileStats = {
  *  signed fields, so a refused record can never contribute to an event; a refusal is cached by
  *  the same stat stamp as a verification, so an unchanged refused record is not read again. */
 type DropEntry =
-  | { kind: 'drop'; verified: true; event: EventAppendInput }
+  | { kind: 'drop'; verified: true; event: EventAppendInput; queued?: string }
   | { kind: 'drop'; verified: false };
 type ReceiptEntry = {
   kind: 'receipt';
@@ -201,6 +207,8 @@ type DeferredAppend =
  *  and a new bus process starts with an empty one, which only costs it one full first pass. */
 export type ReconcileState = {
   dirs: Map<string, DirCache>;
+  /** Whether this bus's first pass already ran the queue's recovery on start. */
+  queuesRecovered?: boolean;
   /** Per drop folder, the sender each record id carried when the pass saw it. Held across passes
    *  so a receipt that arrives after its record was taken still names the sender; pruned to the
    *  ids the current listing still holds on every pass. When that is not enough — a quiet pass
@@ -618,6 +626,14 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   }
   // Deferred appends belong to the previous pass's async retry; a new pass starts its own list.
   state.deferred = [];
+  // The queue's recovery on start (rfc-event-comms §1, E4): the bus's first pass settles every
+  // seat queue a crashed writer left mid-commit, before any record is looked at.
+  // It never waits for a queue lock: a held or unusable queue leaves recovery pending, and every
+  // later pass tries again until every seat queue has been opened once.
+  if (!state.queuesRecovered && options.queueOrphans !== false) {
+    const failed = recoverSessionQueues(root, session, { home, lockWaitMs: 0, log: (line) => logLine(join(root, '.agents'), 'queue', 'queue', line) });
+    state.queuesRecovered = failed.length === 0;
+  }
   const visited = new Set<string>();
   const nowDate = options.now ?? new Date();
   const nowIso = nowDate.toISOString();
@@ -823,6 +839,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       const previousSenders = state.senders.get(seatDir);
 
       let skippedDrops = 0;
+      // This seat's queue generation, read once per pass when a record asks for it.
+      let queueGeneration: string | null | undefined;
       for (const file of files) {
         if (file.startsWith('.') || isSideFile(file)) {
           skippedDrops += 1;
@@ -869,6 +887,21 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           if (entry.kind === 'drop' && entry.verified) {
             if (entry.event.from !== undefined) sendersById.set(id, entry.event.from);
             raise(entry.event);
+            // The queue's orphan source (rfc-event-comms §1, E4): a verified record with no
+            // committed entry is appended at the next seq, flagged recovered. The answer comes
+            // from the queue under its lock, never from a hint, and is kept bound to the
+            // generation that gave it: a replaced generation asks again. The lock is never
+            // waited for here (the pass is sliced); a held queue is asked on a later pass.
+            if (options.queueOrphans !== false) {
+              if (queueGeneration === undefined) queueGeneration = currentGenerationName(seatDir);
+              if (entry.queued === undefined || entry.queued !== queueGeneration) {
+                const queued = appendRecovered(seatDir, { root, session, seat }, id, { home, log: queueLog(seatDir), lockWaitMs: 0 });
+                if (queued.kind === 'committed' || queued.kind === 'existing') {
+                  entry.queued = queued.generation;
+                  queueGeneration = queued.generation;
+                }
+              }
+            }
           }
         }
         yield;

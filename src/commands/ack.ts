@@ -15,6 +15,8 @@
 // bundle grant let a client write is refused too, unless that grant's signed op list carries
 // `ack`: then the seat the team places, in the one team and session the grant signs, acknowledges
 // it here, under the same verified bound a reply to the same thread is admitted by.
+import { relayIfConfined } from '../send/confined-outbox.ts';
+import { ACK_FLAG_OPTIONS } from '../send/command-grammar.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -149,7 +151,11 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   const json = hasJsonFlag(argv);
   if (io.general !== undefined && scopedAck(argv)) return refused(io, json, 'a client acknowledgement needs an exact UUID; scoped acknowledgement is for seats and the owner');
   if (scopedAck(argv)) return await runScopedAck(argv, io, host, json);
-  const args = readArgs(argv, [], ['json']);
+  // A seat its sandbox confines cannot write the receipt beside the record: its watch writes it
+  // for it, as that seat (rfc-event-comms E5, src/send/confined-outbox.ts).
+  const relayed = await relayIfConfined('ack', argv, io);
+  if (relayed !== null) return relayed;
+  const args = readArgs(argv, [], [...ACK_FLAG_OPTIONS]);
   if (args.error) return usage(io, json, args.error);
   const id = args.rest[0];
   if (id === undefined) return usage(io, json, '<id> is required');

@@ -25,6 +25,14 @@ export type Io = {
    *  not the owner whose place the door stands in. Never set from the environment or a command
    *  line. */
   general?: { grant: string; key: string; grantId: string; clientId: string };
+  /** Set only by the watch's outbox relay on the run it makes for a confined seat: the operation
+   *  that owns a relayed read's hand-over (src/send/read-claim.ts `relayClaimOwner`). A read run
+   *  under it makes its claim durable and names this owner, so a cut-off run's messages belong to
+   *  its recovery alone. Never set from the environment or a command line. */
+  handoverOwner?: string;
+  /** Set with `handoverOwner`: a read run under it names, just before each stdout write, the ids
+   *  of the messages whose bodies that write holds whole, so the relay saves them with it. */
+  handedIds?: (ids: readonly string[]) => void;
   // Set by tests only. A command asks `callerOf(io)`, which otherwise reads the processes.
   caller?: Caller;
   // Set by tests only. A command asks `callerOf(io, session)`, which otherwise reads the

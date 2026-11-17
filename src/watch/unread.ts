@@ -46,6 +46,8 @@
 // over and never reported over. A delivery the seam itself says took nothing (`held`,
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
 import { createHash } from 'node:crypto';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
 import { openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
@@ -1346,7 +1348,11 @@ function writeLeadBlockedDrop(
       kind: 'message', id, to: target.to, to_id: null, root: sceneRoot(target.root), session: target.session,
       at, body: text, from: 'runtime', from_id: null, rule: LEAD_REPORT_RULE, thread: id,
     }, home);
-    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+    const signed = record;
+    appendDeliverySync({ dropDir, record: signed }, () => {
+      dropMessage(dropDir, id, `${JSON.stringify(signed, null, 2)}\n`);
+      return { ok: true, value: null };
+    }, { home, log: queueLog(dropDir) });
   } catch (error) {
     return { ok: false, error: String(error) };
   }
@@ -1852,7 +1858,11 @@ function writeLeadReportDrop(
       kind: 'message', id, to: target.to, to_id: null, root: sceneRoot(target.root), session: target.session,
       at, body: text, from: 'runtime', from_id: null, rule: LEAD_REPORT_RULE, thread: id,
     }, home);
-    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+    const signed = record;
+    appendDeliverySync({ dropDir, record: signed }, () => {
+      dropMessage(dropDir, id, `${JSON.stringify(signed, null, 2)}\n`);
+      return { ok: true, value: null };
+    }, { home, log: queueLog(dropDir) });
   } catch (error) {
     return { ok: false, error: String(error) };
   }

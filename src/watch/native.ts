@@ -18,6 +18,8 @@ import { NO_PANE_MESSAGING } from '../send/no-pane-messaging.ts';
 //   records `mcp-inbox: no longer a leg` and continues to the next leg;
 // - for `typed`: writes the 0600 drop file, delivers the trigger when the seat is free (or marks
 //   the drop pending for `retryHeldDrops`), and appends the history line.
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
 import { chmodSync, mkdirSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -125,7 +127,11 @@ function writeRecordFile(record: PendingNative, home: string): string {
     rule: record.rule,
     thread: record.thread ?? record.id,
   };
-  const written = ensureRecord(dropDir, signRecord(payload, home));
+  const signed = signRecord(payload, home);
+  const { value: written } = appendDeliverySync({ dropDir, record: signed }, () => {
+    const result = ensureRecord(dropDir, signed);
+    return { ok: result.ok, value: result };
+  }, { home, log: queueLog(dropDir) });
   if (!written.ok) throw new Error(written.reason);
   return written.path;
 }

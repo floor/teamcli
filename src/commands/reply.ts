@@ -34,6 +34,8 @@
 // (`landsWhereRead`), and a write that cannot be confirmed says where it wrote and that the
 // reader was not confirmed. The reply rules themselves — who may answer, the thread, and the
 // read an answer marks — are decided before the walk and are untouched by it.
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
@@ -1086,7 +1088,11 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
       return refused(io, json, 'no message key; nothing was written');
     }
     const folder = recordDir(toRoot, toSession, targetSeat);
-    const written = writeRecord(folder, signed);
+    // The receiver's queue (rfc-event-comms §1, E4, shadow) wraps the write; it never changes it.
+    const { value: written } = appendDeliverySync({ dropDir: folder, record: signed }, () => {
+      const result = writeRecord(folder, signed);
+      return { ok: result.ok, value: result };
+    }, { home: host.home, log: queueLog(folder) });
     if (!written.ok) return refused(io, json, `${targetSeat}: the record could not be written (${written.reason}); nothing was written`);
     // The recipient's unread index names this record as its sender's newest. A caller that holds
     // the lock writes the hint inside it; a queued write hands the hint its own best-effort lock,

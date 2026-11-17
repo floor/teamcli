@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { outboxFolder, relayOutboxes, relayRefusal, relayThroughOutbox, type OutboxCommand, type RelayCaller, type RelaySources } from '../src/send/confined-outbox.ts';
+import { consumeResult, outboxFolder, relayOutboxes, relayRefusal, relayThroughOutbox, type OutboxCommand, type RelayCaller, type RelaySources } from '../src/send/confined-outbox.ts';
 import { REPLY_FLAG_OPTIONS, SEND_FLAG_OPTIONS, SEND_VALUED_OPTIONS } from '../src/send/command-grammar.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
@@ -39,6 +39,7 @@ function relay(overrides: Partial<RelaySources> = {}): { sources: RelaySources; 
     },
     now: () => new Date(),
     log: (line) => logged.push(line),
+    seal: () => true,
     ...overrides,
   };
   return { sources, ran, logged };
@@ -66,7 +67,8 @@ describe('the confined seat outbox', () => {
     expect(code).toBe(0);
     expect(out).toBe('sent lead hello\n');
     expect(ran).toEqual([{ command: 'send', argv: ['lead', 'hello'], cwd: root, caller: { kind: 'seat', name: 'keeper', pane: 'pane-k', session: 's' } }]);
-    // Nothing is left behind: the request was taken and the result collected.
+    // The seat marked its result consumed; the next pass retires the take, and nothing is left.
+    await relayOutboxes(dir, 's', ['keeper'], sources);
     expect(readdirSync(outboxFolder(dir, 's', 'keeper')!)).toEqual([]);
   });
 
@@ -185,8 +187,12 @@ describe('the confined seat outbox', () => {
     const later = new Date(Date.now() + 6 * 60_000);
     const { sources } = relay({ now: () => later });
     await relayOutboxes(dir, 's', ['keeper'], sources);
-    expect(existsSync(join(folder, `${id}.taking`))).toBe(false);
     expect(readFileSync(join(folder, `${id}.result.json`), 'utf8')).toContain('whether it was sent is unknown');
+    // The take is retired once the seat has consumed its result.
+    expect(consumeResult(folder, id)).toBe(true);
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(existsSync(join(folder, `${id}.taking`))).toBe(false);
+    expect(existsSync(join(folder, `${id}.result.json`))).toBe(false);
   });
 
   test('a take older than a day is still answered, and a temporary file a crash left does not block it', async () => {
@@ -202,6 +208,8 @@ describe('the confined seat outbox', () => {
     const { sources } = relay();
     await relayOutboxes(dir, 's', ['keeper'], sources);
     expect(readFileSync(join(folder, `${id}.result.json`), 'utf8')).toContain('whether it was sent is unknown');
+    expect(consumeResult(folder, id)).toBe(true);
+    await relayOutboxes(dir, 's', ['keeper'], sources);
     expect(existsSync(join(folder, `${id}.taking`))).toBe(false);
   });
 
