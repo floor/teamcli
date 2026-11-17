@@ -3,7 +3,7 @@
 // status the pass cannot read keeps the legacy clock. The episode marker beside the drop is the
 // observable: `climbed: true` once the alarm went out.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync as trashRename, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { noteLeadEpisode, rearmLeadEpisodes } from '../src/watch/unread.ts';
@@ -108,5 +108,27 @@ describe('E3: lead episode files are this seat\'s own plain files only', () => {
     rearmLeadEpisodes(base, 7 * MIN);
     expect(JSON.parse(readFileSync(join(base, 'm1.lead-episode'), 'utf8'))).toEqual({ at: 7 * MIN, climbed: false });
     expect(JSON.parse(readFileSync(join(base, 'm2.lead-episode'), 'utf8'))).toEqual({ at: 1, climbed: true });
+  });
+});
+
+describe('E3: an episode name swapped for a link is never written through', () => {
+  test('a link put at the name after the check is replaced, not followed (rename over the entry)', () => {
+    const base = mkdtempSync(join(tmpdir(), 'e3-swap-'));
+    made.push(base);
+    const mine = join(base, 'lead');
+    mkdirSync(mine);
+    const outside = join(base, 'outside.json');
+    writeFileSync(outside, `${JSON.stringify({ keep: 'me' })}\n`);
+    // A plain clock, then the name swapped for a link between passes: the next write must
+    // replace the entry and leave the target untouched.
+    writeFileSync(join(mine, 'm1.lead-episode'), `${JSON.stringify({ at: 0, climbed: false })}\n`);
+    const { scene: s } = scene();
+    noteLeadEpisode(s, 'lead', mine, 'm1', 2 * MIN, false, true);
+    expect(JSON.parse(readFileSync(join(mine, 'm1.lead-episode'), 'utf8'))).toEqual({ at: 2 * MIN, climbed: false });
+    trashRename(join(mine, 'm1.lead-episode'), join(base, 'moved-aside'));
+    symlinkSync(outside, join(mine, 'm1.lead-episode'));
+    noteLeadEpisode(s, 'lead', mine, 'm1', 9 * MIN, false);
+    rearmLeadEpisodes(mine, 10 * MIN);
+    expect(JSON.parse(readFileSync(outside, 'utf8'))).toEqual({ keep: 'me' });
   });
 });

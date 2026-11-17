@@ -89,8 +89,7 @@ import { isSocketFile, codexEndpointPreflight, launchCodexEndpoint, processStart
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
 import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
-import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries, type BriefDeliveryReport } from '../launch/general-brief.ts';
-import { offerBriefsAtReady } from '../launch/brief-at-ready.ts';
+import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsOnlyShell, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { codexThreadFreeFor, shippedCodexThreadWait, type ThreadWait } from '../launch/codex-thread-release.ts';
 import { CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS, liveConversationElsewhere, restoredBypassesLauncher, restorePaneBusy, restoreProof, restoreRelaunch, restoreWorktreeOf, unreadyRestoreProof, paneInOwnWorktree, type RestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
@@ -4485,11 +4484,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       }
     }
     // `--no-launch` delivers no brief at all: not to the launched seats, not to a seat behind.
-    // The report is kept: a brief whose walk took no leg is offered again once its seat is ready
-    // (RFC event-comms E2), after the registry below points at the seat's live route.
-    let briefReport: BriefDeliveryReport | undefined;
     if (!noLaunch) {
-      const briefs = briefReport = deliverBriefForAttribution({
+      const briefs = deliverBriefForAttribution({
         dir,
         root,
         session,
@@ -5206,13 +5202,6 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     )) logLine(dir, 'up', callerLabel(caller), note, now());
     // Newly launched sockets use the same proof and guarded write as the entry refresh.
     refreshAddresses();
-    // RFC event-comms E2: a launch brief kept in its inbox (no live route when it was written) is
-    // offered once more now that its seat is ready, bound to the seat's current claim. A note is
-    // logged either way; a brief not taken here is still offered by the unread sweep.
-    for (const note of await offerBriefsAtReady({ report: briefReport, ready: new Set(Object.entries(readState(dir).sessions[session]?.seats ?? {}).filter(([, held]) => held?.stage === 'ready').map(([name]) => name)), dir, team, root, session, home: sources.home })) {
-      logLine(dir, 'up', callerLabel(caller), note.said, now());
-      if (note.offered) stderrLine(`team up: ${note.said}\n`);
-    }
     const pending = team.seats.filter((seat) => {
       // A human's pane is left as it is: nothing this run could have made ready, nothing pending.
       if (seat.stopped || seat.human || !profileFor(seat.cli)) return false;
