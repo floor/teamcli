@@ -363,7 +363,7 @@ describe('the machine daemon on a machine whose owner seat is pinned', () => {
     expect(asked.code, asked.io.err).toBe(0);
     const id = idOf(asked.io.out);
     const record = readOwnerActionRecord(s.server.home, id) as OwnerActionRecord;
-    expect(record.params.words?.['team-daemon']).toEqual(['install', `home=${realpathSync(s.server.home)}`, `registered=${realpathSync(repo)}`, 'presence']);
+    expect(record.params.words?.['team-daemon']).toEqual(['install', `home=${realpathSync(s.server.home)}`, `registered=${realpathSync(repo)}`, 'presence', 'effective-presence=on', 'effective-watch=off']);
     const carried = await carry(s, [id]);
     expect(carried.signIo.err).toContain(`hosting the teams registered for this account (now "${realpathSync(repo)}"), with presence`);
     expect((await answerOn(s, carried.answer)).code).toBe(0);
@@ -385,6 +385,63 @@ describe('the machine daemon on a machine whose owner seat is pinned', () => {
     expect(words).not.toContain('--root');
     expect(words.some((word) => word.includes(repo) || word.includes(realpathSync(repo)))).toBe(false);
     expect((await run(['install', '--presence', '--approval', id])).code).toBe(1);
+  });
+
+  test('an answer binds the opt-ins the install takes from the unit: a unit changed since admits nothing', async () => {
+    const s = scene();
+    const service = fakeService();
+    let unitWords: string[] = ['/runtime/bin/node', '/app/dist/cli.js', 'daemon', 'run', '--started-by', 'service-manager'];
+    service.unit = () => ({ programArguments: unitWords }) as ReturnType<ServiceManager['unit']>;
+    const repo = teamCheckout(s.server.home, 'checkout');
+    upsertTeam(s.server.home, teamIdOf(repo), { root: repo, lobby: repo, project: 'checkout', session: 'checkout', entity: null, lifecycle: 'running' });
+    writeFileSync(join(s.server.home, 'cli.js'), '');
+    const sources = { home: s.server.home, accountHome: s.server.home, service, now: () => NOW, program: { execPath: process.execPath, entry: join(s.server.home, 'cli.js') }, health: async () => ANSWERING };
+    const run = async (argv: string[]) => { const io = testIo(s.server.home, SEAT); const code = await runDaemon(argv, io, sources); return { code, io }; };
+    // A plain install asked while the unit carries no opt-in: the plan binds both off.
+    const asked = await run(['install', '--request']);
+    expect(asked.code, asked.io.err).toBe(0);
+    const id = idOf(asked.io.out);
+    const record = readOwnerActionRecord(s.server.home, id) as OwnerActionRecord;
+    expect(record.params.words?.['team-daemon']).toContain('effective-presence=off');
+    expect(record.params.words?.['team-daemon']).toContain('effective-watch=off');
+    const carried = await carry(s, [id]);
+    expect(carried.signIo.err).not.toContain('with presence');
+    expect((await answerOn(s, carried.answer)).code).toBe(0);
+    // The unit gains both opt-ins before the answer is redeemed: the same plain install would now
+    // keep them, which is not the install the owner read, so the answer admits nothing.
+    unitWords = [...unitWords, '--presence', '--watch'];
+    expect((await run(['install', '--approval', id])).code).toBe(1);
+    expect(service.calls).toEqual([]);
+    // Back as it was when asked: the answer runs, and the unit it writes carries neither.
+    unitWords = unitWords.filter((word) => word !== '--presence' && word !== '--watch');
+    const installed = await run(['install', '--approval', id]);
+    expect(installed.code, installed.io.err).toBe(0);
+    expect(service.calls).toEqual(['install']);
+    const words = serviceRunWords(service.programs.at(-1)!);
+    expect(words).not.toContain('--presence');
+    expect(words).not.toContain('--watch');
+  });
+
+  test('a plain install asked while the unit runs with both binds and shows them kept', async () => {
+    const s = scene();
+    const service = fakeService();
+    service.unit = () => ({ programArguments: ['/runtime/bin/node', '/app/dist/cli.js', 'daemon', 'run', '--presence', '--watch'] }) as ReturnType<ServiceManager['unit']>;
+    const repo = teamCheckout(s.server.home, 'checkout');
+    upsertTeam(s.server.home, teamIdOf(repo), { root: repo, lobby: repo, project: 'checkout', session: 'checkout', entity: null, lifecycle: 'running' });
+    writeFileSync(join(s.server.home, 'cli.js'), '');
+    const sources = { home: s.server.home, accountHome: s.server.home, service, now: () => NOW, program: { execPath: process.execPath, entry: join(s.server.home, 'cli.js') }, health: async () => ANSWERING };
+    const run = async (argv: string[]) => { const io = testIo(s.server.home, SEAT); const code = await runDaemon(argv, io, sources); return { code, io }; };
+    const asked = await run(['install', '--request']);
+    expect(asked.code, asked.io.err).toBe(0);
+    const id = idOf(asked.io.out);
+    const carried = await carry(s, [id]);
+    expect(carried.signIo.err).toContain('with presence and watch');
+    expect((await answerOn(s, carried.answer)).code).toBe(0);
+    const installed = await run(['install', '--approval', id]);
+    expect(installed.code, installed.io.err).toBe(0);
+    const words = serviceRunWords(service.programs.at(-1)!);
+    expect(words).toContain('--presence');
+    expect(words).toContain('--watch');
   });
 
   test('the request options belong to install and uninstall only', async () => {

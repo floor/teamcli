@@ -458,7 +458,7 @@ function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSourc
     return ownerAllows(io, sources, parsed.json, parsed.verb) ? { kind: 'allowed', spend: () => true, plan: null } : { kind: 'refused' };
   }
   const home = sources.home ?? homedir();
-  const plan = daemonPlan(io, parsed, home);
+  const plan = daemonPlan(io, parsed, home, (targetHome) => installedOptIns(managerOf(sources), targetHome));
   if ('why' in plan) {
     refuse(io, parsed.json, 'daemon', { id: 'daemon.approval-refused', message: `${plan.why}; nothing was recorded or run`, repair: null });
     return { kind: 'refused' };
@@ -487,9 +487,45 @@ function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSourc
  * nothing. A folder that does not resolve refuses the plan. `--dry-run` is not bound: a dry run
  * spends nothing.
  */
-type DaemonPlan = { targetHome: string; realTargetHome: string | null; roots: string[] | null; words: string[] };
+type DaemonPlan = {
+  targetHome: string;
+  realTargetHome: string | null;
+  roots: string[] | null;
+  words: string[];
+  /** For an install: the opt-ins the unit will run with, the explicit flags over the installed
+   *  unit's own. Bound into `words`, so an answer to one effective install never runs another. */
+  optIns?: OptIns;
+};
 
-function daemonPlan(io: Io, parsed: Parsed, home: string): DaemonPlan | { why: string } {
+type OptIns = { presence: boolean; watch: boolean };
+
+/** The opt-ins the unit installed for `targetHome` runs with; none when it cannot be read. */
+function installedOptIns(manager: ServiceManager | null, targetHome: string): OptIns {
+  let words: readonly string[] = [];
+  try {
+    words = manager?.unit(targetHome)?.programArguments ?? [];
+  } catch {
+    // An unreadable unit keeps nothing: the install writes the opt-ins it names.
+  }
+  return { presence: words.includes('--presence'), watch: words.includes('--watch') };
+}
+
+/** An install keeps the opt-ins the installed unit already runs with and adds the ones it names;
+ *  only `--no-presence` / `--no-watch` drop one. */
+function effectiveOptIns(parsed: Parsed, installed: OptIns): OptIns {
+  return {
+    presence: parsed.presence || (!parsed.noPresence && installed.presence),
+    watch: parsed.watch || (!parsed.noWatch && installed.watch),
+  };
+}
+
+function managerOf(sources: DaemonCommandSources): ServiceManager | null {
+  return sources.service !== undefined
+    ? sources.service
+    : systemServiceManager(sources.accountHome !== undefined ? { accountHome: sources.accountHome } : {});
+}
+
+function daemonPlan(io: Io, parsed: Parsed, home: string, installedFor?: (targetHome: string) => OptIns): DaemonPlan | { why: string } {
   let targetHome: string;
   let realTargetHome: string | null = null;
   if (parsed.home !== undefined) {
@@ -526,6 +562,11 @@ function daemonPlan(io: Io, parsed: Parsed, home: string): DaemonPlan | { why: s
     if (parsed.watch) words.push('watch');
     if (parsed.noPresence) words.push('no-presence');
     if (parsed.noWatch) words.push('no-watch');
+    // What the unit will run with, read from the installed unit now: an answer to this plan
+    // admits only this effective install, and a unit whose opt-ins changed since admits nothing.
+    const optIns = effectiveOptIns(parsed, installedFor === undefined ? { presence: false, watch: false } : installedFor(targetHome));
+    words.push(`effective-presence=${optIns.presence ? 'on' : 'off'}`, `effective-watch=${optIns.watch ? 'on' : 'off'}`);
+    return { targetHome, realTargetHome, roots, words, optIns };
   }
   return { targetHome, realTargetHome, roots, words };
 }
@@ -1774,27 +1815,24 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   // names; only `--no-presence` / `--no-watch` drop one. A plain install that dropped them
   // silently stopped presence hosting for three hours (2026-11-12) and every team's watch, and
   // with it every confined seat's relayed send, for the rest of a day (2026-11-17).
-  let installedWords: readonly string[] = [];
-  try {
-    installedWords = manager.unit(targetHome)?.programArguments ?? [];
-  } catch {
-    // An unreadable unit keeps nothing: the install writes the opt-ins it names.
-  }
-  const keepPresence = !parsed.presence && !parsed.noPresence && installedWords.includes('--presence');
-  const keepWatch = !parsed.watch && !parsed.noWatch && installedWords.includes('--watch');
-  const kept = [keepPresence ? '--presence' : null, keepWatch ? '--watch' : null].filter((word) => word !== null);
+  // An answered request runs the opt-ins its plan bound (checked against the unit at the gate);
+  // every other install reads them from the unit now.
+  const unitOptIns = installedOptIns(manager, targetHome);
+  const { presence, watch } = answeredPlan?.optIns ?? effectiveOptIns(parsed, unitOptIns);
+  const kept = [
+    !parsed.presence && presence && unitOptIns.presence ? '--presence' : null,
+    !parsed.watch && watch && unitOptIns.watch ? '--watch' : null,
+  ].filter((word) => word !== null);
   if (kept.length > 0) {
     io.stderr(`team daemon: kept ${kept.join(' and ')} from the installed unit (drop with ${kept.map((word) => word.replace('--', '--no-')).join(' or ')})\n`);
   }
   const dropped = [
-    parsed.noPresence && installedWords.includes('--presence') ? '--presence' : null,
-    parsed.noWatch && installedWords.includes('--watch') ? '--watch' : null,
+    !presence && unitOptIns.presence ? '--presence' : null,
+    !watch && unitOptIns.watch ? '--watch' : null,
   ].filter((word) => word !== null);
   if (dropped.length > 0) {
     io.stderr(`team daemon: dropped ${dropped.join(' and ')} from the installed unit, as asked\n`);
   }
-  const presence = parsed.presence || keepPresence;
-  const watch = parsed.watch || keepWatch;
   const fullProgram: ServiceProgram = {
     ...program,
     roots: named.roots,

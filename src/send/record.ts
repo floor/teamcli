@@ -21,7 +21,7 @@
 // beside a message. It is not a message and carries no body: it names the record, the thread and
 // the side that closed it, and `team reply` reads it before a reply is admitted.
 import { type KeyObject } from 'node:crypto';
-import { lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
@@ -980,26 +980,37 @@ export function readClose(path: string, expectedId?: string): CloseRead {
   return { ok: true, close };
 }
 
-/** How long one checkout's resolved folder is reused by the receipt check. A pass over a busy
+/** One checkout's resolved folder, reused across the receipts of a pass. A pass over a busy
  *  inbox checks thousands of receipts against the same checkout, and resolving it each time was
  *  a third of the pass (measured 2026-11-17: 4,400 resolutions, 52 ms of a 140 ms pass). The
- *  resolved folder only scopes the cache key below; the receipt's own checkout is still compared
- *  with `sameFolder` on every uncached read. */
-const REAL_ROOT_KEEP_MS = 5_000;
-const realRootCache = new Map<string, { real: string; at: number }>();
+ *  resolved folder scopes the cache key below, so a reuse must still name the same directory:
+ *  every reuse stats the root (following links) and compares the directory's device and inode
+ *  with the ones recorded when it was resolved. A link retargeted to another checkout names
+ *  another directory, so the folder is resolved again and the old checkout's cached receipt
+ *  never matches the new scope. One stat is much cheaper than a resolve of every component. */
+const realRootCache = new Map<string, { real: string; dev: number; ino: number }>();
 
 function realRootOf(root: string): string {
-  const now = Date.now();
+  let now: { dev: number; ino: number };
+  try {
+    const stat = statSync(root);
+    now = { dev: stat.dev, ino: stat.ino };
+  } catch {
+    return root;
+  }
   const cached = realRootCache.get(root);
-  if (cached !== undefined && now - cached.at >= 0 && now - cached.at < REAL_ROOT_KEEP_MS) return cached.real;
+  if (cached !== undefined && cached.dev === now.dev && cached.ino === now.ino) return cached.real;
   let real: string;
   try {
     real = realpathSync(root);
+    const resolved = statSync(real);
+    // The folder resolved is the one just stat'ed: a retarget between the two reads is not kept.
+    if (resolved.dev !== now.dev || resolved.ino !== now.ino) return real;
   } catch {
     return root;
   }
   if (realRootCache.size >= 64) realRootCache.clear();
-  realRootCache.set(root, { real, at: now });
+  realRootCache.set(root, { real, ...now });
   return real;
 }
 
