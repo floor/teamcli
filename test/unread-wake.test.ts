@@ -24,6 +24,7 @@ import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { CLIENT_RULE } from '../src/client/send.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { generalBriefRecord } from '../src/launch/general-brief.ts';
+import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { listUnread, MESSAGE_ID, readMessage, receiptPath } from '../src/mcp/inbox.ts';
 import { registerAgent } from '../src/registry/agents.ts';
@@ -3308,5 +3309,76 @@ describe('the event ladder for a Claude seat with no typed wake', () => {
     await wakeUnreadDrops(scene, { unreadAfter: N });
     expect(dials).toEqual([HELPER_ID]);
     expect(existsSync(wakeTryPath(dropDir, SECOND_ID))).toBe(false);
+  });
+});
+
+describe('RFC event-comms E2: a ready seat\'s current launch brief is offered on the first pass, through this same guarded wake', () => {
+  function seedBrief(made: ReturnType<typeof world>, at: Date, stage: 'ready' | 'claimed'): { dropDir: string; id: string; body: string } {
+    const incarnation = 'inc_aaaaaaaaaaaa';
+    const record = generalBriefRecord({ to: 'lead', root: realpathSync(made.root), session: 'acme', at: at.toISOString(), incarnation });
+    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    dropMessage(dropDir, record.id, `${JSON.stringify(signRecord(record, made.home), null, 2)}\n`);
+    utimesSync(join(dropDir, record.id), new Date(), at);
+    updateState(made.dir, (state) => {
+      const one = (state.sessions['acme'] ??= emptySession());
+      (one.briefs ??= {})['lead'] = {
+        id: record.id, at: record.at, incarnation, epoch: 'run_bbbbbbbbbbbb',
+        sha256: record.brief_sha256 as string, attempt: 0, stage, superseded: [],
+      };
+    });
+    return { dropDir, id: record.id, body: String(record.body) };
+  }
+
+  test('a brief younger than the window is woken at once when the claim says ready; the line is the pointer, never the body', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const brief = seedBrief(made, NOW, 'ready');
+    const one = pane(claudeBox(''));
+    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+    expect(one.typed.some((line) => line.includes('team drops --read'))).toBe(true);
+    expect(one.typed.join('\n')).not.toContain(brief.body.slice(0, 40));
+    expect(existsSync(wakePath(brief.dropDir, brief.id))).toBe(true);
+  });
+
+  test('a brief whose claim is not ready yet waits for the window, as before', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const brief = seedBrief(made, NOW, 'claimed');
+    const one = pane(claudeBox(''));
+    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+    expect(one.typed).toEqual([]);
+    expect(existsSync(wakePath(brief.dropDir, brief.id))).toBe(false);
+  });
+
+  test('the seat lock held by another writer: no wake, nothing typed, no reservation', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const brief = seedBrief(made, NOW, 'ready');
+    const lock = acquireSeatLock(made.dir, 'acme', 'lead');
+    try {
+      const one = pane(claudeBox(''));
+      await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+      expect(one.typed).toEqual([]);
+      expect(one.enters).toBe(0);
+      expect(existsSync(wakePath(brief.dropDir, brief.id))).toBe(false);
+    } finally {
+      if ('release' in lock) lock.release();
+    }
+  });
+
+  test('a stale saved pane (the live snapshot shows no pane for the seat): no wake, nothing typed', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const brief = seedBrief(made, NOW, 'ready');
+    updateState(made.dir, (state) => {
+      const one = (state.sessions['acme'] ??= emptySession());
+      one.seats['lead'] = { ...(one.seats['lead'] ?? {}), stage: 'ready', pane: 'w9:p9' } as never;
+    });
+    const one = pane(claudeBox(''));
+    const live: Live = { running: true, agents: [], workspaces: [], screens: {} };
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { live }), { unreadAfter: N });
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(existsSync(wakePath(brief.dropDir, brief.id))).toBe(false);
   });
 });

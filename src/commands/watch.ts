@@ -1965,7 +1965,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           );
           await wakeUnreadDrops(
             {
-              dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow,
+              dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, nativeWorking: new Set(workingSinceNow.keys()),
               ...(mail === undefined ? {} : { mail }),
               socketRedeliver,
               eventLegs: (seat: string) => permittedEventLegs({ dir, root, home: sources.home ?? realHost.home, session, seat, team, now: sources.now }),

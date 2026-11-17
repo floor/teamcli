@@ -794,6 +794,73 @@ describe('the operator seat takes the team lead unread window', () => {
     }
   });
 
+  test('RFC event-comms E3: a lead working past the window gets no alarm and no keys; the clock restarts at that turn', async () => {
+    const { made, team } = world('', 'helper');
+    const dropDir = seed(made, 200 / 60, 'helper');
+    const first = leadSources([SCROLL_BACK, SCROLL_BACK, SCROLL_BACK, IDLE, IDLE, holding(WAKE_LINE), holding(WAKE_LINE), WORKING, WORKING]);
+    await wakeUnreadDrops(scene(made, team, [], first.sources, NOW, 'idle'), { unreadAfter: N });
+    expect(first.typed).toEqual([WAKE_LINE]);
+
+    // Six minutes on, the lead is mid-turn: no alarm, no key, and the clock restarts here.
+    const busy = leadSources([WORKING, WORKING]);
+    await wakeUnreadDrops(scene(made, team, [], busy.sources, new Date(NOW.getTime() + 6 * MIN), 'working'), { unreadAfter: N });
+    expect(busy.keys).toEqual([]);
+    expect(busy.typed).toEqual([]);
+    const held = JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { at?: unknown; climbed?: unknown };
+    expect(held).toEqual({ at: NOW.getTime() + 6 * MIN, climbed: false });
+
+    // Four minutes after that turn the lead is idle: still inside its new window, no alarm.
+    await wakeUnreadDrops(scene(made, team, [], leadSources([]).sources, new Date(NOW.getTime() + 10 * MIN), 'idle'), { unreadAfter: N });
+    expect((JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { climbed?: unknown }).climbed).toBe(false);
+
+    // Five minutes after that turn, idle and still unread: the alarm climbs once.
+    await wakeUnreadDrops(scene(made, team, [], leadSources([]).sources, new Date(NOW.getTime() + 11 * MIN), 'idle'), { unreadAfter: N });
+    expect((JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { climbed?: unknown }).climbed).toBe(true);
+  });
+
+  test('RFC event-comms E3: a lead held by its native presence across the deadline gets no alarm and no keys; the window restarts at the end of the hold', async () => {
+    const { made, team } = world('', 'helper');
+    const dropDir = seed(made, 200 / 60, 'helper');
+    const first = leadSources([SCROLL_BACK, SCROLL_BACK, SCROLL_BACK, IDLE, IDLE, holding(WAKE_LINE), holding(WAKE_LINE), WORKING, WORKING]);
+    await wakeUnreadDrops(scene(made, team, [], first.sources, NOW, 'idle'), { unreadAfter: N });
+    expect(first.typed).toEqual([WAKE_LINE]);
+    const episodeOf = (): { at?: unknown; climbed?: unknown } => JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { at?: unknown; climbed?: unknown };
+    const startedAt = episodeOf().at;
+
+    // The production hold: the qualified presence snapshot proves the lead's turn (nativeHeld),
+    // while the screen-level live status still reads idle. Across the old deadline: no keys, no climb.
+    for (const minutes of [4, 6, 8]) {
+      const held = leadSources([]);
+      await wakeUnreadDrops({ ...scene(made, team, [], held.sources, new Date(NOW.getTime() + minutes * MIN), 'idle'), nativeHeld: new Set(['helper']), nativeWorking: new Set(['helper']) }, { unreadAfter: N });
+      expect(held.keys).toEqual([]);
+      expect(held.typed).toEqual([]);
+      expect(episodeOf()).toEqual({ at: NOW.getTime() + minutes * MIN, climbed: false });
+    }
+    expect(startedAt).not.toBe(NOW.getTime() + 8 * MIN);
+
+    // The hold clears at +8: the first idle pass right after it does not alarm.
+    await wakeUnreadDrops(scene(made, team, [], leadSources([]).sources, new Date(NOW.getTime() + 9 * MIN), 'idle'), { unreadAfter: N });
+    expect(episodeOf().climbed).toBe(false);
+    await wakeUnreadDrops(scene(made, team, [], leadSources([]).sources, new Date(NOW.getTime() + 12 * MIN), 'idle'), { unreadAfter: N });
+    expect(episodeOf().climbed).toBe(false);
+    // Five minutes after the end of the hold, idle and unread: one climb.
+    await wakeUnreadDrops(scene(made, team, [], leadSources([]).sources, new Date(NOW.getTime() + 13 * MIN), 'idle'), { unreadAfter: N });
+    expect(episodeOf().climbed).toBe(true);
+  });
+
+  test('RFC event-comms E3: a lead held for another reason (a person wait) keeps the legacy clock and is not typed into', async () => {
+    const { made, team } = world('', 'helper');
+    const dropDir = seed(made, 200 / 60, 'helper');
+    const first = leadSources([SCROLL_BACK, SCROLL_BACK, SCROLL_BACK, IDLE, IDLE, holding(WAKE_LINE), holding(WAKE_LINE), WORKING, WORKING]);
+    await wakeUnreadDrops(scene(made, team, [], first.sources, NOW, 'idle'), { unreadAfter: N });
+    const startedAt = (JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { at?: unknown }).at;
+    const held = leadSources([]);
+    await wakeUnreadDrops({ ...scene(made, team, [], held.sources, new Date(NOW.getTime() + 6 * MIN), 'idle'), nativeHeld: new Set(['helper']) }, { unreadAfter: N });
+    expect(held.keys).toEqual([]);
+    expect(held.typed).toEqual([]);
+    expect(JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8'))).toEqual({ at: startedAt, climbed: false });
+  });
+
   test('five minutes after the first wake with no receipt, the episode climbs once and nothing more is typed', async () => {
     // The lead's receipt clock: the first wake starts it, a later pass with the message still
     // unread and unspent-of-nothing — its one wake is sent — climbs the episode marker once and

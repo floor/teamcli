@@ -255,6 +255,15 @@ screen:
     # attribute, so a draft stays text. A plain read has no styling: the equals list
     # below is the only fallback, and an unlisted sentence on that read stays a draft.
     placeholder_style: dim
+    # Grok Build 1.0.88 draws its empty-box hint `Build anything` in this grey with no faint
+    # attribute (floor's tester-grok-build, 2026-11-17, an unfocused pane): the prompt glyph in
+    # 38;2;65;65;65, the hint in 38;2;78;78;78, the row's padding in the text pen 38;2;155;155;155.
+    # A typed draft of the same words is drawn in the text pen (a scratch 1.0.88 pane, focused and
+    # unfocused: 38;2;225;225;225), never this grey, so a draft stays text. Only this measured grey
+    # is the empty box; the hint words are deliberately not in the equals list, so a plain read of
+    # them stays a draft and nothing is typed (fail closed).
+    placeholder_fg:
+      - '38;2;78;78;78'
     # The status row under the closing rule, from the same 1.0.60 run as the quota block above:
     # the footer's quota cell `Weekly limit left: 0% · `, painted under the rule in a session.
     # The grammar pins the row by its own words; the read takes the last row under the rule that

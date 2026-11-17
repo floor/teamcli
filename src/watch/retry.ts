@@ -108,6 +108,10 @@ export type RetryScene = {
   /** The pass's native hold by seat: nothing is typed at a seat whose presence proves a turn, a
    *  person wait, a session end, or cannot be trusted. Absent, the retry is exactly today's. */
   nativeHeld?: ReadonlySet<string>;
+  /** The seats this pass's qualified presence proves mid-turn (`presenceWorkingSince`), a subset
+   *  of the hold. The lead-unread alarm re-arms its clock for these only (RFC event-comms E3);
+   *  nothing is typed for them either way. Absent, no seat is proven working. */
+  nativeWorking?: ReadonlySet<string>;
   /** The channel's one redelivery over the socket: a push no receipt confirmed is written as a
    *  frame to the receiving session. Absent, the redelivery goes straight to the typed leg. */
   socketRedeliver?(dropDir: string, drop: PendingDrop): Promise<{ ok: true } | { ok: false; reason: string }>;

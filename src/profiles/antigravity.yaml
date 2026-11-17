@@ -368,11 +368,19 @@ screen:
       - '>\s*/exit\s+Exit'
     # The empty box draws one of these hint rows. The same words with more text stay
     # text, and so does a draft that only starts with `/tasks`.
+    # agy 1.5.10 draws its hint after a blue prompt glyph (38;5;12) in grey 38;5;8 with no faint
+    # attribute, and a typed draft of the same words in the default pen with no SGR at all
+    # (a scratch 1.5.10 pane, 2026-11-17). A styled read therefore decides by colour: only the
+    # declared grey is the empty box, and a draft equal to a listed hint stays text. A plain read
+    # (no styling at all) still falls back to the list.
+    placeholder_style: dim
+    placeholder_fg:
+      - '38;5;8'
     placeholders:
       - equals: ''
       - equals: '/tasks shows your open tasks'
       - equals: '/tasks shows workflows, subagents and terminals in one place'
-      # agy 1.5.10 draws the permission mode in the empty box after shift+tab (seen on floor's
-      # tester-gemini, 2026-11-17): `> Auto mode: edits & safe commands auto-approved (shift+tab
-      # to cycle)`. The same words with more text stay text.
-      - equals: 'Auto mode: edits & safe commands auto-approved (shift+tab to cycle)'
+      # agy 1.5.10 also draws the permission mode in the empty box (`Auto mode: edits & safe
+      # commands auto-approved (shift+tab to cycle)`). Those words are deliberately not listed:
+      # only the declared grey above makes them the empty box, so a typed draft of the same
+      # words, or a plain read of them, stays text and nothing is typed.

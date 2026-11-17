@@ -47,9 +47,9 @@
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
-import { writeFileSync } from '../host/guarded-fs.ts';
-import { join } from 'node:path';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
+import { openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { dirname, join } from 'node:path';
 import { appendEvent } from '../bus/log.ts';
 import { nudgeBus } from '../bus/server.ts';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
@@ -58,7 +58,7 @@ import { strayWebhookOf } from '../send/webhook.ts';
 import type { Seat, SeatWebhook } from '../file/types.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
-import { claimBindingIn, listUnread, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, currentClaimIn, listUnread, receiptHeld } from '../mcp/inbox.ts';
 import { channelPushPath } from '../mcp/channel.ts';
 import { herdrUnreliable, profileFor } from '../profiles/profile.ts';
 import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
@@ -586,35 +586,144 @@ async function wakeByWebhook(
   return { outcome: 'next' };
 }
 
+/** Whether the seat is one of the team's leads (orchestrator or operator). */
+function isLeadSeat(scene: RetryScene, seat: string): boolean {
+  return (scene.team.orchestrator !== '' && seat === scene.team.orchestrator)
+    || (scene.team.operator !== '' && seat === scene.team.operator);
+}
+
+/** Whether `path` is a plain file (not a link, not any other kind) whose real path lies directly
+ *  in `folder` (already a real path). Any read error is a no. */
+/** Writes an episode entry by creating a fresh file in the same folder and renaming it over the
+ *  name. A rename replaces the directory entry itself and never follows a link that a concurrent
+ *  writer may have put at the name, so nothing outside the folder is ever written through. */
+function replaceEpisode(path: string, text: string): void {
+  const temp = `${path}.${String(process.pid)}.${String(Date.now())}.tmp`;
+  writeFileSync(temp, text, { mode: 0o600, flag: 'wx' });
+  try {
+    renameSync(temp, path);
+  } catch (error) {
+    try {
+      unlinkSync(temp);
+    } catch {
+      // The temporary is ours; a later pass ignores names that are not `.lead-episode`.
+    }
+    throw error;
+  }
+}
+
+/** Reads an episode entry without following a link at the name: opened with O_NOFOLLOW, the
+ *  open descriptor must be a plain file. Anything else throws, like an unreadable file. */
+function readEpisode(path: string): string {
+  const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error('not a plain file');
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function ownPlainFile(path: string, folder: string): boolean {
+  try {
+    if (!lstatSync(path).isFile()) return false;
+    return dirname(realpathSync(path)) === folder;
+  } catch {
+    return false;
+  }
+}
+
+/** Re-arms every lead-alarm clock in the seat's drop folder that has not climbed: the clock
+ *  restarts at `nowMs`. A folder or marker that cannot be read or written is left as it is. */
+export function rearmLeadEpisodes(dropDir: string, nowMs: number): void {
+  let names: string[];
+  let folder: string;
+  try {
+    folder = realpathSync(dropDir);
+    names = readdirSync(dropDir).filter((name) => name.endsWith('.lead-episode'));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const path = join(dropDir, name);
+    // Only a plain file that is this seat's own: a link (to another seat's episode or anywhere
+    // else) or any other kind of entry is left untouched, and so is a file whose real path is not
+    // directly inside the seat's own folder.
+    if (!ownPlainFile(path, folder)) continue;
+    try {
+      const parsed = JSON.parse(readEpisode(path)) as { at?: unknown; climbed?: unknown };
+      if (parsed.climbed === true || typeof parsed.at !== 'number') continue;
+      replaceEpisode(path, `${JSON.stringify({ at: nowMs, climbed: false })}\n`);
+    } catch {
+      // Unreadable or unwritable: the marker stays as it is.
+    }
+  }
+}
+
 /** Five minutes after a lead's first wake, with no read receipt, the parent is told once. */
 const LEAD_RECEIPT_MS = 5 * 60 * 1000;
 
 /** Starts the lead's receipt clock the first time a wake is due, and climbs once it expires
- *  while the drop is still unread. The mailbox write is the lead climb in status-events. */
-function noteLeadEpisode(
+ *  while the drop is still unread. The mailbox write is the lead climb in status-events.
+ *  RFC event-comms E3: the alarm never fires while the lead is working. A pass that sees the lead
+ *  `working` re-arms the clock instead (the clock restarts at the end of the turn it saw), so the
+ *  climb needs five minutes with no turn observed. A status the pass cannot read is not treated
+ *  as working: the legacy clock stands. */
+export function noteLeadEpisode(
   scene: RetryScene,
   seat: string,
   dropDir: string,
   id: string,
   nowMs: number,
   waking: boolean,
+  working = false,
 ): void {
   const path = join(dropDir, `${id}.lead-episode`);
+  // An episode entry that is a link, or not a plain file of this seat's own folder, is never read
+  // or written through (a missing one is created below as a plain file).
+  if (existsSync(path) || isLink(path)) {
+    let folder: string;
+    try {
+      folder = realpathSync(dropDir);
+    } catch {
+      return;
+    }
+    if (!ownPlainFile(path, folder)) return;
+  }
   let at: number | undefined;
   let climbed = false;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { at?: unknown; climbed?: unknown };
+    const parsed = JSON.parse(readEpisode(path)) as { at?: unknown; climbed?: unknown };
     if (typeof parsed.at === 'number') at = parsed.at;
     climbed = parsed.climbed === true;
   } catch {
     at = undefined;
   }
   if (climbed) return;
+  if (working) {
+    // Mid-turn: no alarm, and the clock restarts so it counts from the end of this turn. An
+    // episode with no clock yet stays without one until a wake is due.
+    if (at === undefined) return;
+    try {
+      replaceEpisode(path, `${JSON.stringify({ at: nowMs, climbed: false })}\n`);
+    } catch {
+      // A clock that cannot be re-armed still never climbs on this pass.
+    }
+    return;
+  }
   if (at === undefined) {
     if (!waking) return;
     at = nowMs;
     try {
-      writeFileSync(path, `${JSON.stringify({ at, climbed: false })}\n`, { mode: 0o600 });
+      replaceEpisode(path, `${JSON.stringify({ at, climbed: false })}\n`);
     } catch {
       return;
     }
@@ -637,7 +746,7 @@ function noteLeadEpisode(
     return;
   }
   try {
-    writeFileSync(path, `${JSON.stringify({ at, climbed: true })}\n`, { mode: 0o600 });
+    replaceEpisode(path, `${JSON.stringify({ at, climbed: true })}\n`);
   } catch {
     // The mailbox id is the episode, so a later pass writes the same record.
   }
@@ -688,7 +797,16 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // A held seat is not woken: its native presence proves a turn, a person wait, a session end,
     // or a projection this pass cannot trust. The message stays unread and the later report
     // still speaks; no reservation is taken and nothing is typed.
-    if (scene.nativeHeld?.has(seat.name) === true) continue;
+    if (scene.nativeHeld?.has(seat.name) === true) {
+      // RFC event-comms E3: a lead the presence proves mid-turn is not idle. Every running
+      // lead-alarm clock is re-armed here, so the alarm counts from the end of the turn, never
+      // from the wake before it. Other holds (a person wait, a gone or untrusted projection) keep
+      // the legacy clock. Nothing else happens for a held seat: no wake, no reservation, no key.
+      if (isLeadSeat(scene, seat.name) && scene.nativeWorking?.has(seat.name) === true) {
+        rearmLeadEpisodes(join(scene.dir, 'send-drops', scene.session, seat.name), scene.now.getTime());
+      }
+      continue;
+    }
     if (options.rung?.has(seat.name) === true) continue;
     // The seat's own retry, read from its profile and its file word. Off keeps today's
     // drop-file typed leg, whose writer refuses in every real binding.
@@ -710,14 +828,24 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       || (scene.team.operator !== '' && seat.name === scene.team.operator);
     const leadWindow = scene.team.watch.leadUnreadAfter;
     const unreadAfter = leadSeat && typeof leadWindow === 'number' ? leadWindow : windowForSeat(options, seat);
+    // RFC event-comms E2: the seat's current launch brief, once its claim says the seat is ready,
+    // is offered on the first pass that sees it unread: no unread window. It goes through this
+    // same guarded wake below (live pane, seat lock, delivery order, human and policy rules) and
+    // its pointer trigger, never a body of its own; a lost ready changes nothing, the window
+    // applies again to every other message.
+    const readyBrief = (() => {
+      const claim = currentClaimIn(scene.root, scene.session, seat.name);
+      return claim !== null && claim.stage === 'ready' ? claim.id : null;
+    })();
+    const windowOf = (id: string): number => (id === readyBrief ? 0 : unreadAfter);
     const scanned = new Set(unread.map((one) => one.id));
     const due = unread
-      .filter((message) => dueForWake(dropDir, message, nowMs, unreadAfter, retry === null ? null : retry.tries, pendingOwned));
+      .filter((message) => dueForWake(dropDir, message, nowMs, windowOf(message.id), retry === null ? null : retry.tries, pendingOwned));
     // A message the scan did not list is new here, and it is due now if its window has passed.
     // One the cascade would take by webhook waits for the pass that reaches the webhook first:
     // this pass types no line ahead of a leg it has not walked for the message.
     const arrived = fresh.filter((one) => !scanned.has(one.id)
-      && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries, pendingOwned)
+      && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
       && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
     if (leadSeat) {
       const pending = [...unread];
@@ -727,7 +855,12 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       pending.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
       const oldest = pending[0];
       if (oldest !== undefined) {
-        noteLeadEpisode(scene, seat.name, dropDir, oldest.id, nowMs, false);
+        // The lead's own status in this pass's live snapshot: a lead seen working is mid-turn, and
+        // its alarm waits. Only the snapshot is read here (no extra pane or status read), so the
+        // wake below takes exactly the reads it took before.
+        const leadAgents = scene.live.agents.filter((agent) => agent.name === seat.name);
+        const leadWorking = leadAgents.length === 1 && leadAgents[0]?.status === 'working';
+        noteLeadEpisode(scene, seat.name, dropDir, oldest.id, nowMs, false, leadWorking);
       }
     }
     // A Claude seat has no typed wake of its own, so without this a message its channel push or
@@ -790,7 +923,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       if (typedDue.length === 0) {
         const after = listUnread(dropDir, context, home, mail.recordAt);
         const late = after.filter((one) => !scanned.has(one.id)
-          && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries, pendingOwned)
+          && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
           && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
         if (late.length === 0) continue;
       }
@@ -856,7 +989,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const freshNow = listUnread(dropDir, context, home, mail.recordAt);
       const unreadNow = new Set(freshNow.map((one) => one.id));
       const arrivedNow = freshNow.filter((one) => !scanned.has(one.id)
-        && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries, pendingOwned)
+        && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
         && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
       const wakeable = [
         ...typedDue.filter((one) => unreadNow.has(one.id) && !existsSync(wakePath(dropDir, one.id))),
