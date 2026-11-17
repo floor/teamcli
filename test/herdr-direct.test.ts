@@ -72,6 +72,23 @@ createServer((socket) => {
     const req = JSON.parse(buf);
     const pane = req.params.pane_id;
     if (pane === 'silent') return;
+    if (pane === 'late') {
+      // Two early pieces, the last one past a 400 ms deadline but inside one fresh 400 ms read.
+      const text = JSON.stringify({ id: req.id, result: { late: true } }) + '\\n';
+      socket.write(text.slice(0, 5));
+      setTimeout(() => socket.write(text.slice(5, 10)), 300);
+      setTimeout(() => socket.end(text.slice(10)), 650);
+      return;
+    }
+    if (pane === 'drip') {
+      // A full answer, a few bytes every 150 ms: each read waits less than the limit, the whole
+      // answer takes longer than it.
+      const text = JSON.stringify({ id: req.id, result: { late: true } }) + '\\n';
+      let at = 0;
+      const step = () => { if (at >= text.length) { socket.end(); return; } socket.write(text.slice(at, at + 8)); at += 8; setTimeout(step, 150); };
+      step();
+      return;
+    }
     if (pane === 'close') { socket.end(); return; }
     if (pane === 'err') { socket.end(JSON.stringify({ id: req.id, error: { code: 'pane_not_found', message: 'pane err not found' } }) + '\\n'); return; }
     if (pane === 'other-id') { socket.end(JSON.stringify({ id: 'x', result: {} }) + '\\n'); return; }
@@ -129,6 +146,35 @@ describe.if(live)('against a host on a scratch socket', () => {
   test('no socket for the session, or a call not answered here, goes back to the CLI', () => {
     expect(herdrDirect(['agent', 'list'], 'no-such-session')).toBeUndefined();
     expect(herdrDirect(['pane', 'read', 'w1:p1'], 'fixture')).toBeUndefined();
+  });
+
+  test('an answer dripped past the deadline is refused as late, whatever each read waits', () => {
+    const started = Date.now();
+    let code: unknown;
+    let answer: unknown;
+    try {
+      answer = herdrDirect(['pane', 'get', 'drip'], 'fixture', 400);
+    } catch (error) {
+      code = (error as { code?: unknown }).code;
+    }
+    expect(answer).toBeUndefined();
+    expect(code).toBe('ETIMEDOUT');
+    // The deadline, plus at most one bounded wait: never the whole drip (~1 s).
+    expect(Date.now() - started).toBeLessThan(700);
+  });
+
+  test('the last piece landing after the deadline is late, even inside one read wait', () => {
+    const started = Date.now();
+    let code: unknown;
+    let answer: unknown;
+    try {
+      answer = herdrDirect(['pane', 'get', 'late'], 'fixture', 400);
+    } catch (error) {
+      code = (error as { code?: unknown }).code;
+    }
+    expect(answer).toBeUndefined();
+    expect(code).toBe('ETIMEDOUT');
+    expect(Date.now() - started).toBeLessThan(600);
   });
 
   test('a host that never answers is a timeout, not a second try', () => {

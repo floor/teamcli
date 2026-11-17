@@ -117,13 +117,20 @@ function bind(): Call | null {
       const fd = s.socket!(AF_UNIX, SOCK_STREAM, 0);
       if (fd < 0) return undefined;
       try {
+        // One deadline for the whole call: every send and receive wait is bounded by the time
+        // left before it, and an answer that completes after it is refused as late.
+        const deadline = Date.now() + timeoutMs;
         // struct timeval on arm64 and x86_64 macOS: an 8-byte tv_sec, a 4-byte tv_usec, padded to 16.
         const tvBytes = new Uint8Array(16);
         const tv = new DataView(tvBytes.buffer);
-        tv.setBigInt64(0, BigInt(Math.floor(timeoutMs / 1000)), true);
-        tv.setInt32(8, (timeoutMs % 1000) * 1000, true);
-        if (s.setsockopt!(fd, SOL_SOCKET, SO_RCVTIMEO, ffi.ptr(tvBytes), 16) !== 0) return undefined;
-        if (s.setsockopt!(fd, SOL_SOCKET, SO_SNDTIMEO, ffi.ptr(tvBytes), 16) !== 0) return undefined;
+        const bound = (option: number): boolean => {
+          const left = Math.max(1, deadline - Date.now());
+          tv.setBigInt64(0, BigInt(Math.floor(left / 1000)), true);
+          tv.setInt32(8, (left % 1000) * 1000, true);
+          tv.setInt32(12, 0, true);
+          return s.setsockopt!(fd, SOL_SOCKET, option, ffi.ptr(tvBytes), 16) === 0;
+        };
+        if (!bound(SO_RCVTIMEO) || !bound(SO_SNDTIMEO)) return undefined;
         const addr = new Uint8Array(2 + SUN_PATH_MAX);
         addr[0] = addr.length; // sun_len
         addr[1] = AF_UNIX; // sun_family
@@ -132,6 +139,8 @@ function bind(): Call | null {
         const out = Buffer.from(line, 'utf8');
         let sent = 0;
         while (sent < out.length) {
+          if (Date.now() >= deadline) throw new HerdrDirectTimeout();
+          if (!bound(SO_SNDTIMEO)) return undefined;
           const n = Number(s.write!(fd, ffi.ptr(out.subarray(sent)), out.length - sent));
           if (n > 0) { sent += n; continue; }
           if (n < 0 && errno() === EINTR) continue;
@@ -140,10 +149,11 @@ function bind(): Call | null {
         const chunks: Buffer[] = [];
         let total = 0;
         const page = new Uint8Array(1 << 16);
-        const deadline = Date.now() + timeoutMs;
         for (;;) {
-          if (Date.now() > deadline) throw new HerdrDirectTimeout();
+          if (Date.now() >= deadline) throw new HerdrDirectTimeout();
+          if (!bound(SO_RCVTIMEO)) return undefined;
           const n = Number(s.read!(fd, ffi.ptr(page), page.length));
+          if (Date.now() > deadline) throw new HerdrDirectTimeout();
           if (n > 0) {
             const chunk = Buffer.from(page.subarray(0, n));
             chunks.push(chunk);
