@@ -106,7 +106,8 @@ describe('dialog provenance through the quota reader', () => {
     const raw = limit + '\n❯ ';
     expect(classifyData(screenData('claude-code')!, raw.split('\n')).kind).toBe('unknown'); // no shipped rule carries it
     const rawRead = readScreen('claude-code', raw);
-    expect(rawRead.kind).toBe('rate limit'); // the tail fallback converts what no rule recognized
-    expect((rawRead as { reason?: string }).reason).toBe('out of tokens');
+    // The tail fallback converts what no rule recognized: this sentence is a model fault (17 Nov),
+    // never out of tokens.
+    expect(rawRead).toEqual({ kind: 'provider error', reason: 'model' });
   });
 });

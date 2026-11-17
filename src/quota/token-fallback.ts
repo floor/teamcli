@@ -18,12 +18,27 @@ const TAIL_LINES = 6;
 
 const PHRASES: readonly RegExp[] = [
   /usage limit reached/i,
-  /issue with the selected model/i,
   /\b429\b/,
   /\brate limit\b/i,
   /weekly quota exhausted/i,
   /weekly limit reached/i,
 ];
+
+// Not a limit: the CLI's turn failed on the model itself. On the 17 Nov restart every DeepSeek
+// seat showed this sentence because the terminal host resumed the bare CLI without the endpoint
+// and key its launcher sets; a provider refusing the model id reads the same. It is a launch or
+// model fault, never quota: reading it as out of tokens marked the seats unavailable and told
+// the lead to wait for a reset that would never fix them. `team up` relaunches a restored
+// launcher seat that shows it (src/launch/restore-proof.ts restoredModelFailure).
+const MODEL_FAULT = /issue with the selected model/i;
+
+/** The live tail of a shipped CLI's pane shows the turn failing on the model (a launch or model
+ *  fault, not a limit). */
+export function modelFaultTail(cli: string, text: string): boolean {
+  if (!(CLIS as readonly string[]).includes(cli)) return false;
+  const lines = stripSgr(text).split('\n').map((line) => line.trimEnd());
+  return MODEL_FAULT.test(lines.slice(-TAIL_LINES).join('\n'));
+}
 
 /** Weekly quota left, in percent, under which the lead is warned. The file does not set another. */
 export const TOKEN_WARN_PERCENT = 20;
