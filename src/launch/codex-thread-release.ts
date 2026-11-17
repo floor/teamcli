@@ -19,6 +19,7 @@ import { createConnection } from 'node:net';
 import { decodeServerWsFrames, encodeMaskedWsTextFrame, resolveCodexControlSocketPath } from '../send/push-adapters/codex-relay.ts';
 import { readState } from '../state.ts';
 import { stripSgr } from '../ansi.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export type RpcCall = { method: string; params: Record<string, unknown> };
 export type RpcReply = { ok: true; result: unknown } | { ok: false; error: string };
@@ -35,6 +36,7 @@ export function codexRpcSession(socketPath: string, calls: RpcCall[], timeoutMs 
   const replies: RpcReply[] = [];
   if (!existsSync(socketPath)) return Promise.resolve({ ok: false, why: 'the app-server socket is not there', replies, absent: true });
   return new Promise((resolve) => {
+    hostedCommit('node:net.createConnection');
     const socket = createConnection({ path: socketPath });
     const key = randomBytes(16).toString('base64');
     const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');

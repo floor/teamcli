@@ -17,7 +17,8 @@
 //    from any file in the machine folder as the anchor ensures that a same-user seat forging its
 //    own token file and descriptor 3 is refused and spends nothing.
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, fstatSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { claimOneUseToken, pidAlive, sweepSpentClaims, type WriteTokenOptions } from '../one-use-token.ts';
 import { machineConfigDir, restoreInheritPath } from '../paths.ts';
 import { systemServiceManager, type ServiceManager } from '../service.ts';

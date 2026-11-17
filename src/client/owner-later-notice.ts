@@ -6,7 +6,7 @@
 // the owner page because that is the record's `from`, exactly as a seat's message names its seat.
 
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { recordDir } from '../commands/messages.ts';
 import { findTeam } from '../registry/teams.ts';

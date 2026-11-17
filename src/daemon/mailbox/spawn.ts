@@ -3,11 +3,13 @@ import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // left, so the supervisor's restart path decides it and the beat does not throw.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { MailboxChild, MailboxChildEvent, MailboxChildMessage } from './supervisor.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 const KILL_GRACE_MS = 2_000;
 
@@ -62,6 +64,7 @@ export function spawnMailboxChild(): MailboxChild {
 
   let child: ReturnType<typeof spawn>;
   try {
+    hostedCommit('node:child_process.spawn');
     child = spawn(process.execPath, [entry, token], {
       cwd: dirname(entry),
       stdio: ['pipe', 'pipe', 'pipe'],

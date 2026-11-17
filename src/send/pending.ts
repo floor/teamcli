@@ -32,7 +32,8 @@
 // 0600, one file per id, written whole by rename; a file that cannot be written refuses the
 // handoff, so an unrecorded native send is never the easy path.
 import { hostedCommit } from '../host/request-scope.ts';
-import { chmodSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { storePath } from '../store/store.ts';

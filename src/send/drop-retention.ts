@@ -30,18 +30,10 @@
 // 5. `.unread.json` stays in the live seat folder: unread ids stay untouched, and any stale entry
 //    naming a drop that was just archived is pruned atomically.
 import { createHash, type KeyObject } from 'node:crypto';
-import {
-  closeSync,
-  constants,
-  fchmodSync,
-  fstatSync,
-  lstatSync,
-  opendirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, opendirSync, readdirSync, readFileSync } from 'node:fs';
+import { fchmodSync, openSync, writeSync } from '../host/guarded-fs.ts';
+import { hostedCommit } from '../host/request-scope.ts';
+import { openWrites } from '../host/guarded-fs.ts';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import type { SweepSlices } from '../daemon/fallback-sweep.ts';
@@ -384,12 +376,31 @@ function loadNodeDirOps(req: NodeRequire): RelativeDirOps {
  * Returns the relative directory-descriptor operations for the current runtime (`bun:ffi` or
  * `node:ffi`), or `null` when unavailable.
  */
+/** The operations behind the warm send host's effect guard (review round 1, finding 1): every
+ *  change through a directory descriptor passes `hostedCommit` first; an `openat` passes it only
+ *  when its flags can change a file. A no-op outside the host. */
+function guardedDirOps(raw: RelativeDirOps): RelativeDirOps {
+  const out: RelativeDirOps = {
+    openat: (dirfd, name, flags, mode) => {
+      if (openWrites(flags)) hostedCommit('ffi openat');
+      return raw.openat(dirfd, name, flags, mode);
+    },
+    mkdirat: (dirfd, name, mode) => { hostedCommit('ffi mkdirat'); return raw.mkdirat(dirfd, name, mode); },
+    renameatExcl: (a, b, c, d) => { hostedCommit('ffi renameat'); return raw.renameatExcl(a, b, c, d); },
+    renameatReplace: (a, b, c, d) => { hostedCommit('ffi renameat'); return raw.renameatReplace(a, b, c, d); },
+    unlinkat: (dirfd, name) => { hostedCommit('ffi unlinkat'); return raw.unlinkat(dirfd, name); },
+  };
+  const rmdirat = raw.rmdirat;
+  if (rmdirat !== undefined) out.rmdirat = (dirfd, name) => { hostedCommit('ffi rmdirat'); return rmdirat(dirfd, name); };
+  return out;
+}
+
 export function getRelativeDirOps(): RelativeDirOps | null {
   if (cachedDirOps !== undefined) return cachedDirOps;
   const req = createRequire(import.meta.url);
   try {
-    cachedDirOps =
-      process.versions.bun !== undefined ? loadBunDirOps(req) : loadNodeDirOps(req);
+    const raw = process.versions.bun !== undefined ? loadBunDirOps(req) : loadNodeDirOps(req);
+    cachedDirOps = raw === null ? null : guardedDirOps(raw);
   } catch {
     cachedDirOps = null;
   }

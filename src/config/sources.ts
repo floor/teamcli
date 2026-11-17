@@ -18,7 +18,8 @@
 // file stays hand-written in this release.
 
 import type { KeyObject } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { entitiesPath } from '../entities.ts';

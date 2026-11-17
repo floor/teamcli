@@ -1,7 +1,8 @@
 import { currentRunMemo } from './run-memo.ts';
 import { hostedCommit } from './host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { linkSync, mkdirSync, openSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from './host/guarded-fs.ts';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';

@@ -20,7 +20,8 @@
 // next take clears the lock and takes it. A holder with no recorded pid, a live pid, or a
 // missing or unreadable holder file is never cleared and never guessed, including for the owner.
 import { randomBytes } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { callerOf, describeCaller } from '../caller.ts';

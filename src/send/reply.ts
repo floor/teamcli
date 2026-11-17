@@ -9,10 +9,12 @@
 // connection; a line that is not this channel's frame is kept whole as the reply.
 //
 // The socket is a measured observation, not a stable API (see uds.ts).
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { unlinkSync } from '../host/guarded-fs.ts';
 import { createConnection, createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { FRAME_LIMIT } from './uds.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** The wait's ending: a reply line came back, or the window closed. */
 export type ReplyWait = { kind: 'answered'; line: string } | { kind: 'timeout' };
@@ -46,6 +48,7 @@ export async function openReplyListener(dir: string, pid: number): Promise<OpenR
       return { ok: false, reason: `${path} holds a dead socket file that cannot be removed; nothing was sent` };
     }
   }
+  hostedCommit('node:net.createServer');
   const server = createServer();
   const sockets = new Set<Socket>();
   let line: string | null = null;
@@ -126,6 +129,7 @@ export async function openReplyListener(dir: string, pid: number): Promise<OpenR
 /** Whether a socket at `path` answers a connection. Used before displacing anything. */
 function answers(path: string): Promise<boolean> {
   return new Promise((resolve) => {
+    hostedCommit('node:net.createConnection');
     const socket = createConnection({ path });
     const done = (live: boolean): void => {
       socket.destroy();

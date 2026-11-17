@@ -36,15 +36,14 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   capabilities as packageRelayCapabilities,
-  deliver as packageRelayDeliver,
   SEND_TIMEOUT_MS,
-  stage as packageRelayStage,
   type CopyTarget,
   type Dial,
   type RelayCapabilities as PackageRelayCapabilities,
   type RelayReceipt as PackageRelayReceipt,
   type RelayStage,
 } from '../../../packages/relay/index.js';
+import { relayDeliver as packageRelayDeliver, relayStage as packageRelayStage } from '../relay-stage.ts';
 import type {
   DeliveryEscalationDelay,
   DeliveryTimeoutInForce,

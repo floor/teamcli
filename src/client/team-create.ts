@@ -9,7 +9,8 @@
 // never covers a grant: its signed `kind` is `team-create`.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { answerCard, cardPrompt, teamCreateCard } from './approval-card.ts';

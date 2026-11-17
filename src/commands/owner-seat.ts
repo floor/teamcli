@@ -17,7 +17,7 @@
 //   team owner-seat install --account <a,b> [--dry-run]        on a Linux machine whose accounts share one
 //                                                              owner: the system owner state and its helper
 import { verify as cryptoVerify } from 'node:crypto';
-import { renameSync } from 'node:fs';
+import { renameSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';

@@ -16,7 +16,8 @@
 // (`KEY_ISOLATION_LINE`); it is never called isolation or enforcement.
 
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, fstatSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, openSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { declaredEntityClients, declaredRoots } from '../entities.ts';

@@ -6,7 +6,8 @@
 import { hostedCommit } from '../host/request-scope.ts';
 import { randomUUID } from 'node:crypto';
 import { readStateFile, writeStateFile } from '../file-write.ts';
-import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import { join, dirname } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { dropMessage } from './native.ts';

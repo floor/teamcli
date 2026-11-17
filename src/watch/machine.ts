@@ -3,6 +3,7 @@ import { readFileSync, statfsSync } from 'node:fs';
 import { cpus, loadavg } from 'node:os';
 import { execText, type ChildOptions } from '../child.ts';
 import type { TeamFile } from '../file/types.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 // The OS's own memory-pressure level, where it offers one: macOS's kernel level, and Linux's PSI
 // stalls mapped to the same three names.
@@ -30,6 +31,7 @@ export function unreadMachine(): Machine {
 
 function command(name: string, args: string[]): string | null {
   try {
+    hostedCommit('node:child_process.execFileSync');
     return execFileSync(name, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 });
   } catch {
     return null;
@@ -38,6 +40,7 @@ function command(name: string, args: string[]): string | null {
 
 async function commandAsync(name: string, args: string[], options: ChildOptions): Promise<string | null> {
   try {
+    hostedCommit('runner.execText');
     return await execText(name, args, options);
   } catch {
     return null;

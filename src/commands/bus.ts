@@ -5,7 +5,8 @@
 // `team broker`. The daemon's heartbeat and `team up` start it again when the socket is dead
 // (src/bus/supervise.ts); when no bus is running, `team watch` and `team send` fall back cleanly
 // to their record-polling and direct paths.
-import { lstatSync, readFileSync, unlinkSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
+import { unlinkSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';

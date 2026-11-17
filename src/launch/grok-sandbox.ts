@@ -16,7 +16,8 @@
 // `~/.grok/sandbox.toml`): a project `.grok/sandbox.toml` would put a machine-specific map
 // inside a repository, and the user-level file is read when the project has none.
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, type Stats } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
+import { chmodSync, mkdirSync } from '../host/guarded-fs.ts';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
 import { cliHookStatePath } from './cli-hook.ts';

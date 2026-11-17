@@ -18,7 +18,8 @@
 //
 // `webhookRouteOf` is the one reader both halves of a send share: the dry run names the route it
 // would take and the delivery class reads it as push evidence, so the two can never disagree.
-import { closeSync, constants, fstatSync, openSync, readFileSync, type Stats } from 'node:fs';
+import { closeSync, constants, fstatSync, readFileSync, type Stats } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import type { SeatWebhook, WebhookBodyShape } from '../file/types.ts';
 
 /** The most a URL or secret file may hold; both are one line of text, not documents. */

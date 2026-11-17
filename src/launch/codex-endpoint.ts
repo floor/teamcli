@@ -59,7 +59,8 @@ import { execProcessToolSync } from '../process-tools-adapter.ts';
 import { syncChildTimeout } from '../child.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { sessionList } from '../herdr.ts';
-import { chmodSync, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, fstatSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { chmodSync, fchmodSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { isPresenceBinding, isPresenceTime, mintPresenceBinding } from '../daemon/presence/contract.ts';
@@ -72,6 +73,7 @@ import {
 import { isPresenceSeatName, presenceSessionFolder } from '../daemon/presence/spool.ts';
 import { emptySession, readState, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import type { Seat } from '../file/types.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** The longest unix socket path this build will ask Codex to bind: macOS refuses paths over 104
  *  bytes, and a shorter bound leaves room for the OS's own accounting. */
@@ -558,6 +560,7 @@ export function herdrHookEnv(session: string, pane: string): Record<string, stri
 function spawnAppServer(input: { url: string; cwd?: string; config?: string[]; env?: Record<string, string> }): { pid: number } | null {
   // The seat's configuration follows the listen words, so the ownership proof's exact
   // `app-server --listen <url>` still reads from the command line.
+  hostedCommit('node:child_process.spawn');
   const child = nodeSpawn('codex', ['app-server', '--listen', input.url, ...(input.config ?? [])], {
     detached: true,
     stdio: 'ignore',
@@ -708,7 +711,7 @@ export function stopRecordedCodexEndpoint(
   const alive = deps.alive ?? pidAlive;
   const commandOf = deps.commandOf ?? codexCommandOf;
   const startOf = deps.startOf ?? processStartOf;
-  const terminate = deps.terminate ?? ((pid: number) => { try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } });
+  const terminate = deps.terminate ?? ((pid: number) => { try { hostedCommit('process.kill'); process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } });
   const plainDir = deps.isPlainDir ?? isPlainDir;
   const socket = deps.isSocket ?? isSocketFile;
   const drop = deps.drop ?? dropFile;
@@ -820,7 +823,7 @@ export async function ensureCodexEndpoint(
   const alive = deps.alive ?? pidAlive;
   const commandOf = deps.commandOf ?? codexCommandOf;
   const startOf = deps.startOf ?? processStartOf;
-  const terminate = deps.terminate ?? ((pid: number) => { try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } });
+  const terminate = deps.terminate ?? ((pid: number) => { try { hostedCommit('process.kill'); process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } });
   const plainDir = deps.isPlainDir ?? isPlainDir;
   const socket = deps.isSocket ?? isSocketFile;
   const drop = deps.drop ?? dropFile;

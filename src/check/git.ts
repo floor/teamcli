@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { syncChildTimeout } from '../child.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** A git command that failed, or a ref that can't be used. */
 export class GitError extends Error {}
@@ -35,6 +36,7 @@ const CONFIGURATION = ['log.showSignature=false', 'i18n.logOutputEncoding=UTF-8'
 );
 
 function run(cwd: string, args: string[]): GitResult {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync('git', [...CONFIGURATION, ...args], {
     cwd,
     encoding: 'utf8',

@@ -3,7 +3,8 @@
 // record and writes nothing. Apply writes the declaration, rewrites the line, and leaves the
 // old script as a stub that says where the launch comes from. It never deletes a record and
 // never reads a script's secrets or environment values.
-import { lstatSync, mkdirSync, writeFileSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';

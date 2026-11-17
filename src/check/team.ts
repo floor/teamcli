@@ -155,6 +155,7 @@ import {
 } from './sidebar.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export type { CheckSidebarSources };
 
@@ -360,6 +361,7 @@ export const realCheckSources: CheckSources = {
     heldHere: (session) => heldIn(session),
     signal: (pid, signal) => {
       try {
+        hostedCommit('process.kill');
         process.kill(pid, signal === 'terminate' ? 'SIGTERM' : 'SIGKILL');
         return true;
       } catch {

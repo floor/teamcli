@@ -22,11 +22,13 @@
 // Running it again is safe; only the rule's account list changes, to the accounts named this time.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACCOUNT_NAME_PATTERN, OWNER_HELPER_FORMAT, SHARED_OWNER_LEDGER, SYSTEM_OWNER_FOLDER } from './owner-pin-path.ts';
 import { OWNER_HELPER_APP, OWNER_HELPER_BUN, OWNER_HELPER_HOME, OWNER_HELPER_LAUNCHER, OWNER_HELPER_ROOT, OWNER_HELPER_TMP, OWNER_HELPER_USER } from './owner-spend.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export { OWNER_HELPER_HOME };
 export const OWNER_HELPER_SUDOERS = '/etc/sudoers.d/teamcli-owner';
@@ -316,6 +318,7 @@ export function realInstallSystem(): InstallSystem {
     platform: process.platform,
     uid: () => process.getuid?.() ?? -1,
     run: (argv) => {
+      hostedCommit('node:child_process.spawnSync');
       const run = spawnSync(argv[0]!, argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: Infinity, env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C' } });
       return { status: run.status, stdout: run.stdout ?? '', stderr: run.stderr ?? (run.error?.message ?? '') };
     },

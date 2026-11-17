@@ -1,6 +1,7 @@
 // Screen observations are informational, independent of the launch gate's confirmed readings.
 // No team names, seats, paths or screen text are retained in this machine-wide store.
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, renameSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { withLock } from '../state.ts';
 import { WINDOWS, type QuotaFigure } from '../profiles/quota.ts';

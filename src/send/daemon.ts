@@ -12,21 +12,8 @@ import { refuseTyping } from './no-pane-messaging.ts';
 // durable copy through the relay package under `<storeDir>/drops/<session>/<seat>/<id>`, and
 // appends `0600` JSONL records to `<storeDir>/messages.jsonl`.
 import { randomUUID } from 'node:crypto';
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, readFileSync } from 'node:fs';
+import { chmodSync, fchmodSync, linkSync, mkdirSync, openSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { connect } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -477,6 +464,7 @@ export function requestDaemon(
       resolve(null);
       return;
     }
+    hostedCommit('node:net.connect');
     const socket = connect({ path: socketPath });
     let buffer = '';
     let settled = false;

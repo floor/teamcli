@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
@@ -33,6 +34,7 @@ import { admitTeamCreate, approveTeamCreate, createTeamCreateRequest, listApprov
 import { assertionFile } from '../client-cli.ts';
 import { teamTextTarget, writeTeamText } from '../file/team-text.ts';
 import { readStoredTeamConfig, teamConfigRecordPath } from '../registry/team-config-store.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 // What git must never pick up: the file and the runtime files beside it — the start files of
 // the services included: the socket and its lock, the lock's takeover claim (a killed
@@ -83,6 +85,7 @@ function declaredEntity(home: string, place: string): string | null {
 
 function git(root: string, ...args: string[]): string | null {
   try {
+    hostedCommit('node:child_process.execFileSync');
     return execFileSync('git', ['-C', root, ...args], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],

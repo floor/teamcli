@@ -14,7 +14,8 @@
 // The record is read here from the state file with no other module of the daemon: this file is
 // imported by the terminal host's adapter, and the daemon's state module reaches that adapter
 // through its own imports, so it is never imported from here.
-import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, readFileSync } from 'node:fs';
+import { openSync } from './host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { daemonStatePath } from './daemon/paths.ts';
 

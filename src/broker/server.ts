@@ -30,7 +30,8 @@
 // busy-waits; `withLock` itself is untouched. A start whose wait
 // outlasts the deadline answers `locked`: refused, nothing cleared, nothing bound. The lock is
 // released when the listen lands and on every other way out of the section.
-import { closeSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { linkSync, mkdirSync, openSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { createServer, connect, type Socket } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { anotherPaneRefusal, callerVerdict, noPaneRefusal, standingOf, type Caller } from '../caller.ts';
@@ -38,6 +39,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { TaskRead, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { applyPolicy, bareRefusalId, type TaskPolicy } from './policy.ts';
 import { MAX_ANSWER_BYTES, MAX_REQUEST_BYTES, brokerSocket, encodeLine, parseRequest, type BrokerAnswer, type BrokerRequest } from './protocol.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** What one dispatch of the read produced: the adapter's read (with its notice, when the read
  *  was not the whole tracker), or a failure the broker keeps to its own terminal. */
@@ -441,6 +443,7 @@ async function startWalk(input: StartBrokerInput, path: string): Promise<StartBr
       confirmed = undefined;
     }
     const sockets = new Set<Socket>();
+    hostedCommit('node:net.createServer');
     const server = createServer((socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));

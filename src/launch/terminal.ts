@@ -1,3 +1,4 @@
+import { hostedCommit } from '../host/request-scope.ts';
 // Reading one key from the owner's terminal.
 //
 // Raw mode is entered for one read and left the instant the read ends, so the terminal is never
@@ -51,6 +52,7 @@ export const processSignals: Signals = {
     process.removeListener(signal, handler);
   },
   reRaise: (signal) => {
+    hostedCommit('process.kill');
     process.kill(process.pid, signal);
   },
 };

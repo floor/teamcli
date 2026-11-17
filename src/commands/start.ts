@@ -20,6 +20,7 @@ import { noteTeam } from '../registry/teams.ts';
 import { checkLogin } from './doctor.ts';
 import { profileFor } from '../profiles/index.ts';
 import { StartFiles, StartFilesError } from '../start/files.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export const USAGE = `Usage: team start [--json]
 
@@ -169,6 +170,7 @@ function presetText(name: string, clis: readonly [string, string]): string {
 function notifyDaemon(home: string, root: string): void {
   const socketPath = daemonSocketPath(home);
   if (!existsSync(socketPath)) return;
+  hostedCommit('node:net.connect');
   const socket = connect({ path: socketPath });
   socket.unref();
   const timer = setTimeout(() => socket.destroy(), 200);

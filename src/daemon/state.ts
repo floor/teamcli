@@ -1,8 +1,9 @@
 // The one machine daemon's state record (`<home>/.config/team/daemon.state.json`, mode 0600).
 // The daemon writes it at start and refreshes `heartbeatAt` while it serves; `team status`,
 // `team check` and the daemon's own health answer read it through this module.
-import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
+import { closeSync, constants, fstatSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, openSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
+import { chmod, mkdir, rename, writeFile } from '../host/guarded-fs-promises.ts';
 import { pidAlive } from '../state.ts';
 import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';

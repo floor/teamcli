@@ -22,7 +22,8 @@
 
 import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { charterLifetime } from '../charter/check.ts';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';

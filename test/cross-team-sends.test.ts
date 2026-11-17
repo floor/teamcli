@@ -484,3 +484,50 @@ describe('cross-team --record', () => {
 
 describe('a cross-team delivery reads the receiver’s runtime launch', () => {
 });
+
+// The warm send host's first-effect check (rfc-bus-send-server §2.5; review round 1 F1): an
+// admitted real send whose client no longer holds at its first effect is handed back before any
+// record, drop, lock, history line or registry write exists, and no frame is taken. Every file and
+// folder of the world keeps its bytes, mode, size and mtime; in-process, the same send lands.
+describe('the hosted first-effect check', () => {
+  function tree(dir: string): Map<string, string> {
+    const { readdirSync, lstatSync } = require('node:fs') as typeof import('node:fs');
+    const out = new Map<string, string>();
+    const walk = (at: string): void => {
+      for (const name of readdirSync(at)) {
+        if (name === '.git') continue;
+        const path = join(at, name);
+        const stat = lstatSync(path);
+        const bytes = stat.isFile() ? readFileSync(path, 'base64') : '';
+        out.set(path, `${stat.isDirectory() ? 'd' : 'f'}:${stat.mode}:${stat.size}:${stat.mtimeMs}:${bytes}`);
+        if (stat.isDirectory()) walk(path);
+      }
+    };
+    walk(dir);
+    return out;
+  }
+
+  test('a send whose client changed before its first effect writes nothing and takes no frame', async () => {
+    const { armHostedGuard, disarmHostedGuard, HostedFallback, runAsHostedRequest } = await import('../src/host/request-scope.ts');
+    const before = tree(world.base);
+    armHostedGuard(() => 'the client is gone');
+    let error: unknown = null;
+    let reading: (Reading & { frames: string[] }) | null = null;
+    try {
+      reading = await runAsHostedRequest({ peerPid: 1, startPid: 1, currentParent: () => 1 }, () => sendForReal({ team: 'web', seat: 'web-lead' }, 'api-lead@api'));
+    } catch (thrown) {
+      error = thrown;
+    }
+    const guard = disarmHostedGuard();
+    expect(error === null || error instanceof HostedFallback).toBe(true);
+    expect(guard.fellBack).toContain('the client changed before the first effect');
+    expect(guard.first).toBeNull();
+    expect(reading?.frames ?? []).toEqual([]);
+    expect(tree(world.base)).toEqual(before);
+    // In-process, the same send is admitted and kept: its record exists (this world has no live
+    // route, so it waits in the inbox), which the hosted run never began.
+    const local = await sendForReal({ team: 'web', seat: 'web-lead' }, 'api-lead@api');
+    expect(local.err).toContain("kept in api-lead@api's inbox");
+    expect(tree(world.base)).not.toEqual(before);
+  });
+});

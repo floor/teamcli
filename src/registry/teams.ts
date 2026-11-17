@@ -7,7 +7,8 @@
 // lose each other's update.
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { dirname, join, resolve } from 'node:path';
 import { resolveLobby } from '../lobby/gate.ts';
 import * as projects from './projects.ts';

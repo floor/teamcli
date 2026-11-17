@@ -1,19 +1,6 @@
 import { hostedCommit } from '../host/request-scope.ts';
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  fstatSync,
-  openSync,
-  readdirSync,
-  readSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, readdirSync, readSync, statSync } from 'node:fs';
+import { chmodSync, fchmodSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join, sep } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { folderProblemAt } from '../held.ts';
@@ -196,7 +183,7 @@ export function ensureStoreLadder(storeDir: string, home: string): string | null
   return null;
 }
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 
 /**
  * Creates `path` as a real folder of this user's at mode 0700, one level at a time so no parent

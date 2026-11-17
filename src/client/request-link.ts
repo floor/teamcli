@@ -7,7 +7,8 @@
 // Only the nonce's SHA-256 is stored.
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { closeSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { closeSync, readFileSync } from 'node:fs';
+import { mkdirSync, openSync, writeSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { GRANT_REQUEST_ID_PATTERN, grantRequestsFolder } from './emission.ts';
 

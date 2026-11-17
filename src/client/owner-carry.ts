@@ -18,7 +18,8 @@
 // answer window and the single-use claim. Added: the two file envelopes below, which carry those
 // records unchanged and are themselves unsigned; every check is made on what they carry.
 
-import { closeSync, lstatSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { closeSync, lstatSync, readFileSync } from 'node:fs';
+import { openSync, writeSync } from '../host/guarded-fs.ts';
 import { resolve } from 'node:path';
 import {
   boundOwnerActionAnswer,

@@ -21,7 +21,8 @@
 // flushed by a later append; it never fails the step it records.
 import { hostedCommit } from '../host/request-scope.ts';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { appendEvent, type EventAppendInput, type EventAppendResult } from '../bus/log.ts';
 import { storePath } from '../store/store.ts';

@@ -3,7 +3,8 @@
 // authority: an agent that can write the file cannot make a charter that verifies.
 
 import { verify as cryptoVerify } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname } from 'node:path';
 import { confirmedSignerKey, ownerSeatPublicKey, readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import {

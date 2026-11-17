@@ -30,7 +30,8 @@
 // only proves attachment and does NOT overwrite the newer stream state. This is deliberately
 // conservative: a stale idle snapshot can never flip a working seat back to idle.
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { createConnection } from 'node:net';
 import { basename, join } from 'node:path';
 import { resolveCodexDaemonPolicy, type CodexDaemonResolution } from '../../policy/codex-daemon.ts';
@@ -48,6 +49,7 @@ import {
   type CodexPresenceOutcome,
 } from './codex-app-server.ts';
 import { presencePaths, stagePresenceRecord } from './spool.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 export const CODEX_CONNECT_TIMEOUT_MS = 2_000;
 export const CODEX_RETRY_MS = 5_000;
@@ -205,6 +207,7 @@ type WireHandlers = {
 /** The measured upgrade and frame codec, shared with the repo's thread/read probe. It answers
  *  pings and reports a close or a protocol error once; the source owns every JSON-RPC word. */
 function connectWire(socketPath: string, handlers: WireHandlers): Wire {
+  hostedCommit('node:net.createConnection');
   const socket = createConnection({ path: socketPath });
   const secKey = randomBytes(16).toString('base64');
   const expectedAccept = createHash('sha1')

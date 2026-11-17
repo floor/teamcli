@@ -9,7 +9,8 @@
 // No git process is started. The checkout's `.git` is read: a folder is the repository itself; a
 // file (`gitdir: <path>`) is a linked worktree, whose `commondir` names the shared repository,
 // and `info/exclude` is read from the shared one, as git does.
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync } from '../host/guarded-fs.ts';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /** The repository folder whose `info/exclude` applies to `cwd`, and `cwd`'s path inside the

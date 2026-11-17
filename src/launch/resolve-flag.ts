@@ -1,6 +1,7 @@
 // A named launcher supplies the seat's pane command through resolveLaunch.
 // A seat without a launcher keeps its existing launch path.
-import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { discover, resolveLaunch, type Discovery, type ResolveContext } from '../launchers/resolve.ts';
 import type { Diagnostic, ResolvedLaunch } from '../launchers/types.ts';

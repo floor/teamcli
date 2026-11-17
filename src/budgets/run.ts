@@ -10,6 +10,7 @@ import type { WindowName } from '../profiles/quota.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { checkCommands, checkReadings, type ApprovedCheck } from './checks.ts';
 import { resetsFrom } from './readings.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** One window of a subscription check reading. */
 export type CheckWindow = {
@@ -94,6 +95,7 @@ export function parseOutput(account: BudgetAccount, text: string, now: number): 
  */
 export function runCommand(path: string, timeoutMs = 10_000): string | null {
   try {
+    hostedCommit('node:child_process.spawnSync');
     const result = spawnSync(path, [], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -121,6 +123,7 @@ export function readCheck(account: BudgetAccount, path: string, now: number, tim
  */
 export async function runCommandAsync(path: string, options: ChildOptions = {}): Promise<string | null> {
   try {
+    hostedCommit('runner.execText');
     return await execText(path, [], {
       timeoutMs: options.timeoutMs ?? 10_000,
       env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' },

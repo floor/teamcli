@@ -1,4 +1,5 @@
-import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { callerOf, type Caller } from '../caller.ts';

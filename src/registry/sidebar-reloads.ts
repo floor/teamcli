@@ -10,7 +10,8 @@
 // file never reads as an empty one), and the writers that consume it degrade to a note, never a
 // refusal, because the sidebar is presentation and never blocks a launch.
 
-import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';

@@ -1,5 +1,6 @@
 import { hostedCommit } from './host/request-scope.ts';
-import { existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { mkdirSync, renameSync, unlinkSync } from './host/guarded-fs.ts';
 import { appendStateFile, stateFileStat } from './file-write.ts';
 import { dirname, join } from 'node:path';
 import { plainLine } from './launch/plain.ts';

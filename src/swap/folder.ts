@@ -2,7 +2,8 @@
 // worktree under the state lock. No fetch, setup command, branch deletion or shared checkout reset.
 import { SEAT_FOLDER_DEFAULT, seatFolderOf } from '../file/sections/seat_folder.ts';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { mkdirSync, rmdirSync } from '../host/guarded-fs.ts';
 import { dirname, resolve } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
 import { insideTrust } from '../file/paths.ts';
@@ -10,6 +11,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { emptySession, readState, updateState, worktreeOf, type WorktreeState } from '../state.ts';
 import { fillPattern, ownStartFolderProblem, placedStartFolders, protectedLanding, publicNameHit, realLanding, taskProblem } from '../worktree/place.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export type SwapFolder = { cwd: string; mode: Seat['mode']; create?: { task: string; record: WorktreeState; base: string } };
 export type FolderInput = { team: TeamFile; seat: Seat; cli: string; root: string; dir: string; home: string };
@@ -73,6 +75,7 @@ export function createPresetFolder(input: FolderInput, plan: SwapFolder): Preset
     const parents: string[] = [];
     for (let parent = dirname(folder); !existsSync(parent); parent = dirname(parent)) parents.push(parent);
     mkdirSync(dirname(folder), { recursive: true });
+    hostedCommit('node:child_process.spawnSync');
     const ran = spawnSync('git', ['worktree', 'add', '-q', '-b', create.record.branch, folder, create.base], {
       cwd: input.root, encoding: 'utf8', timeout: syncChildTimeout(8_000),
     });
@@ -102,6 +105,7 @@ export function rollbackPresetFolder(input: FolderInput, allocation: PresetAlloc
     // Compare-and-delete preserves a branch moved concurrently after the check above.
     // The folder is already gone, so the slot is cleared either way. Leaving the record
     // would make the next swap refuse a task whose path is missing.
+    hostedCommit('node:child_process.spawnSync');
     const removed = spawnSync('git', ['update-ref', '-d', ref, allocation.head], {
       cwd: input.root, encoding: 'utf8', timeout: syncChildTimeout(2_000),
     });
@@ -115,6 +119,7 @@ export function rollbackPresetFolder(input: FolderInput, allocation: PresetAlloc
 }
 
 function git(root: string, args: string[]): string {
+  hostedCommit('node:child_process.spawnSync');
   const ran = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: syncChildTimeout(2_000) });
   if (ran.status !== 0) throw new Error((ran.stderr || ran.error?.message || 'git refused').split('\n')[0]);
   return ran.stdout.trim();

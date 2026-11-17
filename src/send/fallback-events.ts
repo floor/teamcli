@@ -72,7 +72,8 @@
 // receives neither.
 import { createHash } from 'node:crypto';
 import { writeStateFile } from '../file-write.ts';
-import { type Dir, existsSync, lstatSync, mkdirSync, opendirSync, readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { type Dir, existsSync, lstatSync, opendirSync, readdirSync } from 'node:fs';
+import { mkdirSync, renameSync, rmdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join, sep } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';

@@ -31,7 +31,8 @@
 
 import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { fchmodSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import {

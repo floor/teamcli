@@ -10,7 +10,8 @@
 // Like the retry's marker, this one is a convenience, never the message: the drop file is the
 // message, and a marker that cannot be written or read costs a confirmation, not a byte of the
 // body.
-import { readdirSync, readFileSync, unlinkSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { unlinkSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { dropMessage } from './native.ts';
 

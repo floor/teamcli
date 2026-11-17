@@ -5,7 +5,8 @@
 // owner's, as editing the file by hand was.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -41,6 +42,7 @@ import { findAgent, updateAgent } from '../registry/agents.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 import { editedRecordText, getAt, parsePath, parseValue, reservedKeyIn, shownValue, withValue, type RecordPath } from './team-record.ts';
 import type { ConfigSources } from '../commands/config.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 function realRoot(cwd: string): string {
   return findRoot(cwd) ?? resolve(cwd);
@@ -75,6 +77,7 @@ function refuseUnreadable(io: Io, json: boolean, message: string): number {
 
 function runEditor(path: string, env: Record<string, string | undefined>): number {
   const editor = env.VISUAL || env.EDITOR || 'vi';
+  hostedCommit('node:child_process.spawnSync');
   const ran = spawnSync('/bin/sh', ['-c', `${editor} "$1"`, 'sh', path], { stdio: 'inherit' });
   return ran.status ?? 1;
 }

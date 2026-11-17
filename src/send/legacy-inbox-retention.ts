@@ -43,7 +43,8 @@
 // Nothing is deleted. A runtime writer that writes a record once per id asks
 // `legacyArchivedRecordExists`, which also sees a claimed record, so a notice is not written twice.
 import type { KeyObject } from 'node:crypto';
-import { closeSync, constants, ftruncateSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, constants, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { ftruncateSync, linkSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { daemonStateAlive, readDaemonState } from '../daemon/state.ts';
 import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { join } from 'node:path';

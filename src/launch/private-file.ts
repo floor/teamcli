@@ -3,7 +3,8 @@
 // and both refuse to write through a symbolic link — a config file or folder that is a link is
 // left untouched, and the caller says what it can instead.
 import { randomBytes } from 'node:crypto';
-import { closeSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, fsyncSync, lstatSync } from 'node:fs';
+import { fchmodSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join } from 'node:path';
 
 /** Writes a record under a CLI's home as its owner's private file. */

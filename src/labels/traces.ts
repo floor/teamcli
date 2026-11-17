@@ -14,6 +14,7 @@ import { stripSgr } from '../ansi.ts';
 import { syncChildTimeout } from '../child.ts';
 import { readHistory } from '../send/history.ts';
 import type { SessionState } from '../state.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export type SeatTrace =
   | {
@@ -108,6 +109,7 @@ export function seatWorktree(session: SessionState, seat: string, root: string):
  * commits yet, or one git cannot read, has no trace.
  */
 export function commitTrace(worktree: string): SeatTrace | null {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync(
     'git',
     ['-c', 'log.showSignature=false', 'log', '-1', '--format=%aI%x00%h%x00%s'],

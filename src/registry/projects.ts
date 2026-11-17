@@ -9,14 +9,8 @@
 // read-modify-write under a lock ending in an atomic replace, exactly like teams.ts, so a reader
 // never sees half a file and two writers never lose each other's update.
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { editedRecordText, withValue } from '../config/team-record.ts';
 import type { RulesEditPlan } from '../entities.ts';

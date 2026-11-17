@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { SECRET_ABSENT, type SecretStore } from '../secrets/store.ts';
 import type { CredentialsBlock } from './profile.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** What the store answered: it holds the item, it does not, or this machine cannot say. */
 export type CredentialState = 'present' | 'absent' | 'unavailable';
@@ -58,6 +59,7 @@ export function credentialProbeFor(
 
 function realRun(file: string, args: readonly string[]): CredentialRun {
   try {
+    hostedCommit('node:child_process.spawnSync');
     const done = spawnSync(file, [...args], { stdio: ['ignore', 'ignore', 'ignore'], timeout: 5000 });
     return { status: done.status, error: done.error };
   } catch (error) {

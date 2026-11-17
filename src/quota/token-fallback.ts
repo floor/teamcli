@@ -5,7 +5,8 @@
 //
 // Part 3, the automatic swap onto the team's fallback list, waits for team swap. `tokenSwapHook`
 // is the only place that swap will be called. It writes nothing and restarts nothing.
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { stripSgr } from '../ansi.ts';
 

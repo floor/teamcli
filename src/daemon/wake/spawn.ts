@@ -17,6 +17,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discardWakeInherit, writeWakeInherit, type WakeChildRequest } from './token.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 /** How long one wake may run before it is ended. Above the walk's own 10 s verify bound: a child
  *  still walking at this point is not going to deliver, and its reservation stays as it was. */
@@ -65,6 +66,7 @@ export function spawnWakeChild(input: SpawnWakeInput): number | null {
 
   let child: ReturnType<typeof spawn>;
   try {
+    hostedCommit('node:child_process.spawn');
     child = spawn(process.execPath, [entry, '--inherited', nonce], {
       cwd: input.request.root,
       stdio: 'ignore',

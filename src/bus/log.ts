@@ -14,21 +14,8 @@
 // (`cursor + 1 < oldestSeq`), `readEventsFromCursor` answers `gap` with `oldest_seq` so the
 // subscriber resyncs from the underlying records before following on; a window every retained
 // drop record covers also carries `reason: 'retention'`.
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  fstatSync,
-  mkdirSync,
-  openSync,
-  readSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, readSync, statSync } from 'node:fs';
+import { chmodSync, fchmodSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { createHash, type Hash, type KeyObject } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';

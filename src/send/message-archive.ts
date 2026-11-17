@@ -7,7 +7,8 @@
 // no reader: it is moved whole, alone, and never served or acknowledged. Every file is read
 // without following a link and moved with `renameSync`; nothing here unlinks anything.
 import { createHash, type KeyObject } from 'node:crypto';
-import { closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { openSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join, relative } from 'node:path';
 import { legacyReceiptMatches, messagePayload } from '../commands/messages.ts';
 import { ensureFoldersBelow } from './history.ts';

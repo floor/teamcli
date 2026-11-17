@@ -16,7 +16,8 @@
 import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { closeSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, fsyncSync, readFileSync, statSync } from 'node:fs';
+import { linkSync, openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { cliWordListOf, provenScriptWord, shellScriptWordOf } from '../launch/cli-scope.ts';
 import { flockBound, flockExclusive } from '../lock/flock.ts';
@@ -708,6 +709,7 @@ function reclaimHeldByHelper(dropDir: string, id: string, hooks?: ChannelCommitH
   const status = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
   const go = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
   const prep = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
+  hostedCommit('node:child_process.spawn');
   const helper = spawn('/usr/bin/python3', ['-c', FLOCK_HELPER, claim, lock, String(process.pid), status, go, prep], {
     stdio: ['pipe', 'ignore', 'ignore'],
   });

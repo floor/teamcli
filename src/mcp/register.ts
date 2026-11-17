@@ -20,7 +20,8 @@
 import { spawnSync } from 'node:child_process';
 import { syncChildTimeout } from '../child.ts';
 import { readStateFile, writeStateFile } from '../file-write.ts';
-import { existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +30,7 @@ import { currentBriefClaim } from '../launch/general-brief.ts';
 import { fillInboxPlace, inboxEntryName, profileFor, type InboxPlace } from '../profiles/profile.ts';
 import { registeredRootOf, type RegisteredRoot } from '../registry/teams.ts';
 import { readState } from '../state.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** A registration's outcome: made, or refused with the reason the seat's line carries. */
 export type InboxRegistration = { ok: true } | { ok: false; reason: string };
@@ -74,6 +76,7 @@ export function selfRunner(): { command: string; entry: string } {
 
 function runIn(cwd: string): (command: string, args: readonly string[]) => InboxRun {
   return (command, args) => {
+    hostedCommit('node:child_process.spawnSync');
     const result = spawnSync(command, [...args], {
       cwd,
       encoding: 'utf8',
@@ -350,6 +353,7 @@ function excludeTarget(folder: string, target: string): boolean {
 }
 
 function runGit(folder: string, args: readonly string[]): { code: number; stdout: string } | null {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync('git', [...args], {
     cwd: folder,
     encoding: 'utf8',

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, writeSync, type Stats } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readSync, realpathSync, type Stats } from 'node:fs';
+import { fchmodSync, openSync, writeSync } from '../host/guarded-fs.ts';
 import { constants as systemConstants } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { cliWordList, shellQuote } from '../profiles/profile.ts';

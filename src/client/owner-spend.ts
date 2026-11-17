@@ -28,7 +28,8 @@
 // This file is the helper's side, and the account side's shared formats; the account side's
 // call is src/client/owner-spend-client.ts.
 
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, writeSync } from 'node:fs';
+import { closeSync, fsyncSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, openSync, writeSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 // Only the leaf rules: the helper's program is bundled from this file, and nothing it loads reads
 // a file of TeamCLI's own or the caller's at its start.

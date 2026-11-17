@@ -4,7 +4,8 @@
 // index is the exclusion truth and is replaced atomically; the journal is the run's state fold and
 // audit. Nothing here dispatches, sends, activates a run or claims the Kernel ledger.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { LockBusyError, withLock } from '../../state.ts';
 import { canonicalJson, definitionId, occurrenceId } from '../canonical.ts';

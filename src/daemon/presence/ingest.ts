@@ -21,7 +21,8 @@
 // final `stopped` channel record and resolves. It never releases anything early and has no
 // timeout; if an fs write cannot complete, close stays pending, which is the honest state.
 import { constants, type Dirent } from 'node:fs';
-import { mkdir, open, readFile, readdir, rename, stat, truncate, unlink } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { mkdir, open, rename, truncate, unlink } from '../../host/guarded-fs-promises.ts';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { STATE_FILE } from '../../state.ts';

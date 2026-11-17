@@ -32,11 +32,8 @@ import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { readTeamConfig } from '../../file/team-config.ts';
-import {
-  stage as relayStage,
-  type CopyTarget,
-  type RelayReceipt as PackageRelayReceipt,
-} from '../../../packages/relay/index.js';
+import type { CopyTarget, RelayReceipt as PackageRelayReceipt } from '../../../packages/relay/index.js';
+import { relayStage } from '../relay-stage.ts';
 import {
   resolveCodexDaemonPolicy,
   type CodexDaemonResolution,

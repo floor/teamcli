@@ -9,7 +9,8 @@ import { traceBeatWork } from '../diagnostics/beat-work.ts';
 // own fingerprint. No key store of the system is touched — no Keychain, no
 // prompt — only these files, under the home `team` was given.
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as cryptoSign, verify as cryptoVerify, type KeyObject } from 'node:crypto';
-import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { linkSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { currentRunMemo } from '../run-memo.ts';

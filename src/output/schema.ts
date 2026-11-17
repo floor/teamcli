@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
 import { CONFIG_KEYS, CONFIG_LEVELS } from '../config/registry.ts';

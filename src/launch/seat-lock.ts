@@ -1,6 +1,7 @@
 import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { accessSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, readFileSync } from 'node:fs';
+import { linkSync, mkdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { processStartOf } from '../watch/pane.ts';
 

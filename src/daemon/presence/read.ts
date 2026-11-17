@@ -7,7 +7,8 @@
 // 5-second updater never scans the whole log and never samples only the current projection: a
 // working→idle pair between two beats is delivered as two transitions, in order, each with its
 // binding and seq.
-import { open, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { open } from '../../host/guarded-fs-promises.ts';
 import { join } from 'node:path';
 import {
   readPresenceLogLine, readPresenceReading, readPresenceStatus,

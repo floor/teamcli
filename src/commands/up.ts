@@ -147,6 +147,7 @@ import { readScreen, statusRow } from '../watch/screen.ts';
 import { placedStartFolders, seatCwdRefusal, seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 // What `up` reads from outside the file, so tests can stand in for it.
 export type UpSources = {
@@ -417,6 +418,7 @@ const realLaunch: Launch = {
   deleteSession: sessionDelete,
   kill(pid) {
     try {
+      hostedCommit('process.kill');
       process.kill(pid, 'SIGTERM');
       return true;
     } catch (error) {

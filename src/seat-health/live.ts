@@ -4,7 +4,7 @@
 // ordinary send. This step never asks for a checkpoint.
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from '../host/guarded-fs.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChoresChildConfig, ChoresChildRoute } from '../daemon/chores/protocol.ts';
@@ -31,6 +31,7 @@ import type { SeatHealthPorts } from '../daemon/chores/child.ts';
 import type { WatchdogSeat } from './pass.ts';
 import type { ProcessRow } from './proof.ts';
 import { readRestartReady, type RestartReady } from './restart.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 const READ = { timeoutMs: 10_000 };
 
@@ -157,6 +158,7 @@ function chainDeclarations(sources: PolicyChainSources): Policy[] | null {
 
 function runTeam(cwd: string, args: readonly string[]): Promise<{ code: number | null; stdout: string }> {
   return new Promise((resolve) => {
+    hostedCommit('node:child_process.spawn');
     const child = spawn('team', [...args], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     child.unref();
     const out: Buffer[] = [];

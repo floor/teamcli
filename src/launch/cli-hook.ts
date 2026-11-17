@@ -21,10 +21,8 @@
 // is one this run names on the seat's launch line, and the hooks take nothing from the CLI's
 // stdin — no session id, no transcript path, no environment.
 import { shippedClaudeSettings } from '../launchers/shipped.ts';
-import {
-  closeSync, constants, fchmodSync, lstatSync, lutimesSync, mkdirSync, openSync, readFileSync, readSync, realpathSync,
-  renameSync, unlinkSync, writeSync, type Stats,
-} from 'node:fs';
+import { closeSync, constants, lstatSync, readFileSync, readSync, realpathSync, type Stats } from 'node:fs';
+import { fchmodSync, lutimesSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';

@@ -65,6 +65,7 @@ import { processCommandOf, processStartOf, watchLaunchOf, watchStopRead } from '
 import { processWorkingFolderOf } from '../watch/process-adapter.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 // What `down` reads from outside the file, so tests can stand in for it.
 export type DownSources = {
@@ -169,6 +170,7 @@ const realLaunch: DownLaunch = {
   deleteSession: sessionDelete,
   kill(pid) {
     try {
+      hostedCommit('process.kill');
       process.kill(pid, 'SIGTERM');
       return true;
     } catch {

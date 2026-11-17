@@ -15,7 +15,8 @@
 // remote shell would lose the daemon at every disconnect, so an install reads the account's
 // linger setting and says plainly when the daemon will stop at logout. It never changes that
 // setting: enabling it needs the system's administrator, and an install does not run as one.
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { unlinkSync } from '../host/guarded-fs.ts';
 import { basename, join } from 'node:path';
 import { DAEMON_LABEL, daemonLabel, daemonLogPath } from './paths.ts';
 import {

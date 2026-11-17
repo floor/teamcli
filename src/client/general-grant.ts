@@ -3,7 +3,8 @@
 // another principal (never to itself, never wider than its own); that child is signed by the
 // holder's client key and chains back to an owner-signed root.
 import { createPrivateKey, randomBytes, type KeyObject } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';

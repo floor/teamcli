@@ -22,10 +22,8 @@ import { cliHooksHome } from '../launch/cli-hook.ts';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { syncChildTimeout } from '../child.ts';
-import {
-  chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync,
-  renameSync, rmSync, statSync, unlinkSync, writeFileSync,
-} from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, openSync, renameSync, rmSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { daemonRuntimeRoot, machineConfigDir } from './paths.ts';
 import type {
@@ -38,6 +36,7 @@ import type {
   ServiceRunner,
   ServiceUninstallResult,
 } from './service.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** `O_NOFOLLOW` is POSIX: a platform without it gets 0, and the `lstat` check before every open
  *  is what refuses a link; the flag makes the open itself refuse one that appeared after it. */
@@ -45,6 +44,7 @@ const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 /** The live runner: the platform's command, bounded so no manager call can hang the install. */
 export const realServiceRunner: ServiceRunner = (command, args): ServiceRunResult => {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync(command, args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],

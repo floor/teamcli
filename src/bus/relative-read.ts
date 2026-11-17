@@ -10,7 +10,8 @@
 // the descriptor that open produced. That is the one difference between the two runtimes — the
 // dirfd chain holds each folder it has checked, the prefix walk resolves the path again below
 // it — and it is stated here so a reader of either runtime knows which guarantee it has.
-import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, readSync } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { sealedRecordOf, type SealedRead } from '../send/record.ts';
 
