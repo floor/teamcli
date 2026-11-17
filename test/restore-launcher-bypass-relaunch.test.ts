@@ -70,6 +70,8 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 let launchLine = WRAPPER;
+// A folder of the seat's own (relative to the root), for the changed-conversation cases.
+let seatCwd: string | undefined;
 let coordinator = 'lead';
 const OLD_PANE = 'fixture-pane-before-restart';
 const OLD_SPACE = 'fixture-space-before-restart';
@@ -83,7 +85,7 @@ session: ${SESSION}
 trust:
   - ${lobby}
   - ${root}
-workspace:
+${seatCwd !== undefined && seatCwd.startsWith('../') ? `  - ${join(root, seatCwd)}\n` : ''}workspace:
   mode: shared
 seats:
   - role: coordinator
@@ -103,7 +105,7 @@ seats:
     model: DeepSeek Flash
     version: "4.0"
     launch: ${launchLine}
-`;
+${seatCwd === undefined ? '' : `    cwd: ${seatCwd}\n`}`;
 }
 
 function ownedUrl(): string {
@@ -185,6 +187,9 @@ type Scene = {
   /** Called on every read of the pane's processes, with the running count: a test changes the
    *  world between the plan's reading and execution's. */
   onProcessRead?: (count: number) => void;
+  /** The pane's folder as the host lists it; `cwdNow` may change it between plan and execution. */
+  cwd?: string;
+  onAgentsRead?: () => void;
 };
 
 function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
@@ -194,13 +199,15 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
   let relaunched = false;
   let processReads = 0;
   let listedName = scene.name === undefined ? null : scene.name;
-  const agents = (): HerdrAgent[] | null => [{
+  cwdNow = scene.cwd ?? root;
+  const agents = (): HerdrAgent[] | null => { scene.onAgentsRead?.(); return agentsRaw(); };
+  const agentsRaw = (): HerdrAgent[] | null => [{
     name: listedName,
     agent: 'claude',
     pane: PANE,
     workspace: SPACE,
     status: scene.status ?? 'idle',
-    cwd: root,
+    cwd: cwdNow,
     ...(scene.session === null ? {} : { session: scene.session ?? THREAD }),
   }];
   const launch: Launch = {
@@ -292,7 +299,10 @@ const said = (io: { out: string; err: string }): string => `${io.out}${io.err}`;
 const seatRuns = (trace: Trace): Trace['runs'] => trace.runs.filter((run) => run.pane === PANE);
 const firstWord = (command: string): string => command.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*/, '').split(/\s/)[0] ?? '';
 
+let cwdNow = '';
+
 beforeEach(() => {
+  seatCwd = undefined;
   base = realpathSync(mkdtempSync(join(shortSocketBase(), 'c75ep-')));
   root = join(base, 'acme');
   dir = join(root, '.agents');
@@ -488,5 +498,67 @@ describe('round 3: structure triggers the relaunch, screen text never does', () 
     expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
     expect(seatRuns(made.trace)[0]?.command).toContain(`--resume ${THREAD}`);
     expect(seatState()?.pane).toBe(PANE);
+  });
+});
+
+// Integration of the two reboot branches (2026-11-17): a wrapper seat the host restored in another
+// conversation of its own, standing in its own worktree. One repair, one relaunch, resuming the
+// conversation the pane proves (B, never the recorded A); and the conversation change is proved
+// again at execution, so a pane that left the worktree between plan and execution gets no key.
+const OTHER_THREAD = '019a0000-aaaa-7bbb-8ccc-000000000002';
+
+function seatFolder(): string {
+  const folder = join(root, seatCwd ?? '.');
+  mkdirSync(folder, { recursive: true });
+  return realpathSync(folder);
+}
+
+describe('a restored wrapper seat in another conversation, in its own worktree', () => {
+  test('is relaunched once, resuming the proven conversation', async () => {
+    seatCwd = '../worker-tree';
+    setup();
+    record();
+    const made = sources({ name: null, session: OTHER_THREAD, screen: CLEAN, cwd: seatFolder() });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp([], io, made.sources), said(io)).toBe(0);
+    expect(made.trace.typed.filter((text) => text === '/exit')).toHaveLength(1);
+    expect(seatRuns(made.trace)).toHaveLength(1);
+    expect(seatRuns(made.trace)[0]?.command).toContain(OTHER_THREAD);
+    expect(seatRuns(made.trace)[0]?.command).not.toContain(THREAD);
+    expect(made.trace.created).toEqual([]);
+    expect(made.trace.closed).toEqual([]);
+  });
+
+  test('gets no key when its pane left the worktree between plan and execution', async () => {
+    seatCwd = '../worker-tree';
+    setup();
+    record();
+    const folder = seatFolder();
+    let planned = false;
+    const made = sources({
+      name: null,
+      session: OTHER_THREAD,
+      screen: CLEAN,
+      cwd: folder,
+      // The plan reads the pane's processes once; every host reading after it sees the pane
+      // standing in the root, outside the seat's worktree.
+      onProcessRead: () => { planned = true; },
+      onAgentsRead: () => { if (planned) cwdNow = root; },
+    });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources);
+    expect(made.trace.typed, said(io)).toEqual([]);
+    expect(seatRuns(made.trace)).toEqual([]);
+  });
+
+  test('outside its worktree it is not relaunched into the other conversation', async () => {
+    seatCwd = '../worker-tree';
+    setup();
+    record();
+    seatFolder();
+    const made = sources({ name: null, session: OTHER_THREAD, screen: CLEAN, cwd: root });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources);
+    expect(seatRuns(made.trace).some((run) => run.command.includes(OTHER_THREAD))).toBe(false);
   });
 });
