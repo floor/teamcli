@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
-import { readScreen } from '../src/watch/screen.ts';
+import { modelFaultAtIdle, readScreen } from '../src/watch/screen.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
 import { codexEndpointSocket, type ManagedEndpointRead } from '../src/launch/codex-endpoint.ts';
@@ -400,19 +400,44 @@ describe('round 2: only the CLI own current failure entry triggers a relaunch', 
     expect(seatRuns(made.trace)[0]?.command).toContain(`--resume ${THREAD}`);
   });
 
-  test('a draft under the failure entry is never exited', async () => {
-    setup();
-    record();
-    // A captured draft frame (2.1.289, typed text in the box) under the failure entry.
-    const typed = readFileSync(new URL('./fixtures/claude-code/2.1.289/unsent-typed-ansi.txt', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-    const rule = typed.indexOf('\n─');
-    const draft = `${typed.slice(0, rule)}\n⏺ There's an issue with the selected model (deepseek-flash). It may not exist or you may not have access to it.${typed.slice(rule)}`;
-    expect(readScreen('claude-code', draft).kind).toBe('unsent');
-    const made = sources({ name: SEAT, screen: draft });
-    const io = testIo(root, { kind: 'owner' });
-    await runUp([], io, made.sources);
-    expect(made.trace.typed).toEqual([]);
-    expect(seatRuns(made.trace)).toEqual([]);
+  // A plain-text draft under the failure entry, on the 2.1.319 frame these seats run (the input
+  // row is `❯` and a no-break space, then the typed words) and on a fresh 2.1.326 capture from a
+  // scratch pane: the screen reads unsent, and the relaunch types nothing.
+  const NBSP_PROMPT = '\u276f\u00a0';
+  const draftUnder = (frame: string, hint: RegExp): string => {
+    const drafted = frame.replace(hint, `${NBSP_PROMPT}half a sentence the owner typed`);
+    if (drafted === frame) throw new Error('the fixture holds no suggestion row to replace');
+    const rule = drafted.lastIndexOf('\n─', drafted.indexOf(`${NBSP_PROMPT}half`));
+    return `${drafted.slice(0, rule)}\n⏺ There's an issue with the selected model (deepseek-flash). It may not exist or you may not have access to it.${drafted.slice(rule)}`;
+  };
+  const CAPTURED_326 = readFileSync(new URL('./fixtures/claude-code/2.1.326/unsent-typed.txt', import.meta.url), 'utf8')
+    .replace('Haiku 5.5', 'deepseek-flash');
+  const DRAFTS: [string, string][] = [
+    ['2.1.319, quota row', draftUnder(CLEAN, /\u276f\u00a0Try "[^"\n]*"/)],
+    ['2.1.319, no quota row', draftUnder(CLEAN, /\u276f\u00a0Try "[^"\n]*"/).replace(' · S: - · W: 12% (-5.7%) (157h29m)', '').trimEnd()],
+    ['2.1.326 capture', (() => {
+      const rule = CAPTURED_326.lastIndexOf('\n─', CAPTURED_326.indexOf('half a sentence'));
+      return `${CAPTURED_326.slice(0, rule)}\n⏺ There's an issue with the selected model (deepseek-flash). It may not exist or you may not have access to it.${CAPTURED_326.slice(rule)}`;
+    })()],
+  ];
+  for (const [name, draft] of DRAFTS) {
+    test(`a draft under the failure entry is never exited (${name})`, async () => {
+      expect(readScreen('claude-code', draft).kind).toBe('unsent');
+      expect(modelFaultAtIdle('claude-code', draft)).toBe(false);
+      setup();
+      record();
+      const made = sources({ name: SEAT, screen: draft });
+      const io = testIo(root, { kind: 'owner' });
+      await runUp([], io, made.sources);
+      expect(made.trace.typed).toEqual([]);
+      expect(seatRuns(made.trace)).toEqual([]);
+    });
+  }
+
+  test('the captured 2.1.326 frames read idle and unsent', () => {
+    const idle = readFileSync(new URL('./fixtures/claude-code/2.1.326/idle.txt', import.meta.url), 'utf8');
+    expect(readScreen('claude-code', idle).kind).toBe('idle');
+    expect(readScreen('claude-code', CAPTURED_326).kind).toBe('unsent');
   });
 
   test('a wrapper seat the host moved to another pane is relaunched there through execution', async () => {
