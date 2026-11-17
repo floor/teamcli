@@ -86,13 +86,13 @@ function ownedUrl(): string {
   return socket.url;
 }
 
-function record(opts: { session?: string | null; endpoint?: boolean } = {}): void {
+function record(opts: { session?: string | null; endpoint?: boolean; stage?: 'ready' | 'launched' } = {}): void {
   const session = opts.session === undefined ? THREAD : opts.session;
   const endpoint = opts.endpoint !== false;
   updateState(dir, (state) => {
     const held = (state.sessions[SESSION] ??= emptySession());
     held.seats[SEAT] = {
-      stage: 'ready',
+      stage: opts.stage ?? 'ready',
       id: HANDLE,
       pane: PANE,
       workspace: SPACE,
@@ -435,4 +435,36 @@ test('a pane named for another seat is left untouched', async () => {
   expect(said(io)).toContain(`its pane is named ${OTHER}; team never adopts a pane another seat owns`);
   expect(seatState()?.pane).toBe(PANE);
   expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+// 17 Nov restart: material's operator had stopped at `launched` before the restart, so the
+// unready adoption re-tied it on the strong proof alone and left it on an endpoint whose socket
+// was gone (every push leg answered ENOENT). An unready record whose endpoint died is relaunched
+// in place like a ready one.
+test('an unready record whose endpoint died is relaunched in place, not adopted', async () => {
+  setup();
+  record({ stage: 'launched' });
+  const made = sources({ name: null });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(made.trace.closed).toEqual([]);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+  expect(made.trace.managed).toEqual([{ dir, seat: SEAT }]);
+  expect(seatState()?.stage).toBe('ready');
+  expect(seatState()?.pane).toBe(PANE);
+});
+
+test('an unready record on a live endpoint is still adopted where it stands', async () => {
+  setup();
+  record({ stage: 'launched' });
+  const made = sources({ name: null, socket: true, alive: true });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
 });
