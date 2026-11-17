@@ -3,10 +3,10 @@
 // status the pass cannot read keeps the legacy clock. The episode marker beside the drop is the
 // observable: `climbed: true` once the alarm went out.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { noteLeadEpisode } from '../src/watch/unread.ts';
+import { noteLeadEpisode, rearmLeadEpisodes } from '../src/watch/unread.ts';
 import type { RetryScene } from '../src/watch/retry.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 
@@ -66,5 +66,47 @@ describe('E3: the lead alarm waits while the lead is working', () => {
     writeFileSync(join(dropDir, 'm1.lead-episode'), `${JSON.stringify({ at: 0, climbed: true })}\n`);
     noteLeadEpisode(s, 'lead', dropDir, 'm1', 20 * MIN, false, true);
     expect(episode(dropDir)).toEqual({ at: 0, climbed: true });
+  });
+});
+
+describe('E3: lead episode files are this seat\'s own plain files only', () => {
+  test('a link to another seat\'s episode is never re-armed or written through', () => {
+    const base = mkdtempSync(join(tmpdir(), 'e3-link-'));
+    made.push(base);
+    const mine = join(base, 'lead');
+    const other = join(base, 'other');
+    mkdirSync(mine);
+    mkdirSync(other);
+    const target = join(other, 'm9.lead-episode');
+    writeFileSync(target, `${JSON.stringify({ at: 1, climbed: false })}\n`);
+    symlinkSync(target, join(mine, 'm9.lead-episode'));
+    rearmLeadEpisodes(mine, 99 * MIN);
+    expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ at: 1, climbed: false });
+    const { scene: s } = scene();
+    noteLeadEpisode(s, 'lead', mine, 'm9', 99 * MIN, true, true);
+    noteLeadEpisode(s, 'lead', mine, 'm9', 99 * MIN, true);
+    expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ at: 1, climbed: false });
+  });
+
+  test('a link to any JSON outside the folder is left untouched', () => {
+    const base = mkdtempSync(join(tmpdir(), 'e3-out-'));
+    made.push(base);
+    const mine = join(base, 'lead');
+    mkdirSync(mine);
+    const outside = join(base, 'settings.json');
+    writeFileSync(outside, `${JSON.stringify({ at: 5, climbed: false, keep: 'me' })}\n`);
+    symlinkSync(outside, join(mine, 'm1.lead-episode'));
+    rearmLeadEpisodes(mine, 50 * MIN);
+    expect(JSON.parse(readFileSync(outside, 'utf8'))).toEqual({ at: 5, climbed: false, keep: 'me' });
+  });
+
+  test('a plain episode file of the seat\'s own folder is re-armed', () => {
+    const base = mkdtempSync(join(tmpdir(), 'e3-own-'));
+    made.push(base);
+    writeFileSync(join(base, 'm1.lead-episode'), `${JSON.stringify({ at: 1, climbed: false })}\n`);
+    writeFileSync(join(base, 'm2.lead-episode'), `${JSON.stringify({ at: 1, climbed: true })}\n`);
+    rearmLeadEpisodes(base, 7 * MIN);
+    expect(JSON.parse(readFileSync(join(base, 'm1.lead-episode'), 'utf8'))).toEqual({ at: 7 * MIN, climbed: false });
+    expect(JSON.parse(readFileSync(join(base, 'm2.lead-episode'), 'utf8'))).toEqual({ at: 1, climbed: true });
   });
 });

@@ -47,9 +47,9 @@
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
 import { writeFileSync } from '../host/guarded-fs.ts';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { appendEvent } from '../bus/log.ts';
 import { nudgeBus } from '../bus/server.ts';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
@@ -592,17 +592,42 @@ function isLeadSeat(scene: RetryScene, seat: string): boolean {
     || (scene.team.operator !== '' && seat === scene.team.operator);
 }
 
+/** Whether `path` is a plain file (not a link, not any other kind) whose real path lies directly
+ *  in `folder` (already a real path). Any read error is a no. */
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function ownPlainFile(path: string, folder: string): boolean {
+  try {
+    if (!lstatSync(path).isFile()) return false;
+    return dirname(realpathSync(path)) === folder;
+  } catch {
+    return false;
+  }
+}
+
 /** Re-arms every lead-alarm clock in the seat's drop folder that has not climbed: the clock
  *  restarts at `nowMs`. A folder or marker that cannot be read or written is left as it is. */
 export function rearmLeadEpisodes(dropDir: string, nowMs: number): void {
   let names: string[];
+  let folder: string;
   try {
+    folder = realpathSync(dropDir);
     names = readdirSync(dropDir).filter((name) => name.endsWith('.lead-episode'));
   } catch {
     return;
   }
   for (const name of names) {
     const path = join(dropDir, name);
+    // Only a plain file that is this seat's own: a link (to another seat's episode or anywhere
+    // else) or any other kind of entry is left untouched, and so is a file whose real path is not
+    // directly inside the seat's own folder.
+    if (!ownPlainFile(path, folder)) continue;
     try {
       const parsed = JSON.parse(readFileSync(path, 'utf8')) as { at?: unknown; climbed?: unknown };
       if (parsed.climbed === true || typeof parsed.at !== 'number') continue;
@@ -632,6 +657,17 @@ export function noteLeadEpisode(
   working = false,
 ): void {
   const path = join(dropDir, `${id}.lead-episode`);
+  // An episode entry that is a link, or not a plain file of this seat's own folder, is never read
+  // or written through (a missing one is created below as a plain file).
+  if (existsSync(path) || isLink(path)) {
+    let folder: string;
+    try {
+      folder = realpathSync(dropDir);
+    } catch {
+      return;
+    }
+    if (!ownPlainFile(path, folder)) return;
+  }
   let at: number | undefined;
   let climbed = false;
   try {

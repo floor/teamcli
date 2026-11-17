@@ -3,7 +3,8 @@
 // `team up` writes each seat's general brief before the seat runs, so the send walk often finds no
 // live route and the signed record is kept in the seat's inbox with nothing to wake the seat for it
 // (the lead-unread alarm then fires minutes later). Once the plan has brought the seat to `ready`,
-// this offers that same delivery once more through the full event-delivery walk (`eventWalk`).
+// this offers it once more as a pointer through the seat's typed wake (`pointerWake`); the body is
+// only ever served by the seat's own claim-bound reader.
 //
 // It is bound to the seat's current claim: the record must be the delivery the seat's state claims
 // now (same id, incarnation and brief digest), and it must not already be read. A stale or
@@ -33,40 +34,45 @@ export type ReadyWalk = (input: {
 }) => Promise<{ ok: true; via: string } | { ok: false; reason: string }>;
 
 /**
- * The default walk: the full event-delivery walk every carrier of an already written record takes
- * (`walkReplyDelivery`: the receiving seat's own resolved order, the development channel's push,
- * the Codex native queue, the webhook, the profile-gated typed wake, the bus inbox under them),
- * with every pane-safety, held-box and human rule it keeps. The record is the launch's own; no leg
- * writes a second one. A walk that ends at the inbox (`drop`) is not an offer the seat took.
+ * The default ready offer: a pointer, never the brief's body. A general brief is exposed only by
+ * the seat's own claim-bound reader (`inbox_read` / `team drops --read`), which admits it exclusively
+ * against the current claim before the body leaves; no carrier here may queue or type the body
+ * (the native queue would enqueue it before any receipt, racing that reader). So the offer types
+ * one profile-gated pointer line ("Run team drops --read … and do that.") through the seat's own
+ * typed wake, with every guard that wake keeps (two idle reads, an empty box, no key into a
+ * working pane, a draft or a dialog). It refuses, typing nothing, for a seat the team marks human,
+ * for the team's orchestrator (a pane the owner works in), for a CLI with no typed wake, and for a
+ * seat with no recorded pane. A pointer read twice costs one extra inbox read, never a second body.
  */
-export const eventWalk: ReadyWalk = async (input) => {
-  const { realHost, walkReplyDelivery } = await import('../commands/send.ts');
-  const { namingFor } = await import('../send/names.ts');
-  const { teamIdOf } = await import('../registry/teams.ts');
-  const host = input.host ?? { ...realHost, home: input.home };
-  const teamId = teamIdOf(input.root);
-  const quiet = { stdout: () => {}, stderr: () => {}, cwd: input.root, env: {}, stdinIsTTY: false };
-  const walk = await walkReplyDelivery({
-    io: quiet,
-    host,
-    dir: input.dir,
-    root: input.root,
-    project: input.team.project,
-    session: input.session,
-    seat: input.plan.seat,
-    cli: input.plan.cli,
-    payload: input.plan.payload,
-    naming: namingFor({ home: input.home, root: input.root, viewerTeam: teamId, seat: input.plan.seat, file: input.team }),
-    file: input.team,
-    sender: { teamId, project: input.team.project, label: null },
-    address: null,
-    who: input.plan.payload.from,
-  });
-  if (!walk.walked) return { ok: false, reason: walk.failures.length === 0 ? 'no delivery leg could run' : walk.failures.join('; ') };
-  if (walk.via === 'drop' || walk.endpointBlocked !== undefined) {
-    return { ok: false, reason: walk.failures.length === 0 ? 'no wake leg took it' : walk.failures.join('; ') };
+export const pointerWake: ReadyWalk = async (input) => {
+  const { realHost } = await import('../commands/send.ts');
+  const { readState } = await import('../state.ts');
+  const { profileFor } = await import('../profiles/index.ts');
+  const { readTriggerLine } = await import('../send/native.ts');
+  const { deliverTypedWake } = await import('../send/typed-wake.ts');
+  const name = input.plan.seat;
+  const seat = input.team.seats.find((one) => one.name === name);
+  if (seat === undefined) return { ok: false, reason: 'the team file names no such seat' };
+  if (seat.human === true) return { ok: false, reason: 'a human seat is never typed into' };
+  if (input.team.orchestrator !== '' && name === input.team.orchestrator) {
+    return { ok: false, reason: 'the orchestrator\'s pane is never typed into by a launch' };
   }
-  return { ok: true, via: String(walk.via) };
+  const cli = seat.cli ?? input.plan.cli;
+  if ((profileFor(cli)?.typedWake ?? null) === null) return { ok: false, reason: `${cli} has no typed wake; the brief waits for the seat's own inbox read` };
+  let pane: string | undefined;
+  try {
+    pane = readState(input.dir).sessions[input.session]?.seats[name]?.pane;
+  } catch {
+    pane = undefined;
+  }
+  if (pane === undefined || pane === '') return { ok: false, reason: 'the seat records no pane' };
+  const line = readTriggerLine(name, input.session);
+  if (line === null) return { ok: false, reason: 'no pointer line fits' };
+  const host = input.host ?? { ...realHost, home: input.home };
+  const wakeHost = host.typedWake?.(input.session);
+  if (wakeHost === undefined) return { ok: false, reason: 'this host has no typed wake' };
+  const out = await deliverTypedWake(wakeHost, pane, line, cli);
+  return out.delivered ? { ok: true, via: 'typed' } : { ok: false, reason: out.reason };
 };
 
 export type BriefAtReadyInput = {
@@ -100,7 +106,7 @@ export async function offerBriefsAtReady(input: BriefAtReadyInput): Promise<Brie
   const claimOf = input.claimOf ?? currentClaimIn;
   const isRead = input.isRead
     ?? ((dropDir, id, context, home, claim) => receiptHeld(dropDir, id, context, home, briefBindingOf(claim)));
-  const walk = input.walk ?? eventWalk;
+  const walk = input.walk ?? pointerWake;
   for (const plan of report.walks ?? []) {
     const delivery = report.deliveries.find((one) => one.seat === plan.seat);
     // Only a delivery whose record stands and whose walk took no leg: an ok walk already reached
