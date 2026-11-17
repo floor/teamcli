@@ -31,3 +31,12 @@ The CLI help runs list `-a never`, `-s danger-full-access`, `--no-alt-screen`,
 
 - `confirmation`: no confirmation dialog appeared when clearing the draft, dismissing the question and plan with Escape, or exiting.
 - `exit question`: `/exit` returned directly to the shell.
+
+## thread-locked.txt (2026-11-17)
+
+The Codex TUI after `codex resume <id>` when another app-server still held the conversation (`thread-locked.txt` plain, `thread-locked-ansi.txt` the styled `--format ansi` read the launch takes):
+"This conversation is open in another app — Close it there and press R", with only retry, fork
+and exit keys and no composer. Captured read-only (`herdr pane read --source visible`) from the
+reboot simulation's own scratch seat; the transcript above the screen was replaced by one neutral
+prompt line. Measured alongside it: an app-server keeps a conversation loaded about sixty
+seconds after its last client leaves.

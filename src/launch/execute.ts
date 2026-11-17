@@ -47,6 +47,10 @@ import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { processStartOf } from '../watch/pane.ts';
 import { classifyComposer, readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
+import { codexThreadLockedScreen } from './codex-thread-release.ts';
+
+/** The conversation id a Codex line resumes (`codex … resume <id>`). */
+const CODEX_RESUME_ID = /\bresume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/;
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
@@ -211,6 +215,9 @@ export type Host = {
   /** The session's recorded seats, read fresh; null when unreadable. The waiting proof refuses a
    *  pane or workspace any other seat's record names. */
   seatStates?(session: string): Record<string, SeatState> | null;
+  /** Waits, bounded, until no Codex app-server this seat can collide with lists the
+   *  conversation as loaded. Read-only. Absent: no wait. */
+  codexThreadFree?(session: string, seat: string, threadId: string): Promise<{ free: true } | { free: false; why: string }>;
   /** The pane this command itself runs in, when the caller's placement or the environment names
    *  one. A sweep or a close-leftover never closes a workspace holding it. */
   callerPane?: string;
@@ -1519,6 +1526,57 @@ export async function executePlan(
       }
       case 'launch': {
         reportProgress(op.seat, 'launching');
+        // A Codex line that resumes a conversation runs only once no app-server it can collide
+        // with still lists that conversation loaded (the TUI a relaunch or a restart just exited,
+        // the seat's previous endpoint keep it about a minute; a resume inside that window opens
+        // on "This conversation is open in another app", 17 Nov). The wait comes first, so every
+        // reading below — the run's own stop, the pane, its workspace, its name, its process, the
+        // start guard and the channel lease — is taken after it, immediately before the line.
+        const resumedId = op.cli === 'codex' ? CODEX_RESUME_ID.exec(op.command)?.[1] : undefined;
+        if (resumedId !== undefined && host.codexThreadFree !== undefined) {
+          const free = await host.codexThreadFree(session, op.seat, resumedId);
+          if (stopped || closing()) {
+            stopped = true;
+            abort = true;
+            break;
+          }
+          if (!free.free) {
+            held = true;
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: `its conversation is still held by another Codex app-server (${free.why}); nothing launched` });
+            break;
+          }
+          // A pane the line would be typed into is proven again after the wait: still listed in
+          // its workspace, named for no other seat, its own shell alone in front, and that shell
+          // at an empty prompt (a line typed there meanwhile is never run over).
+          // The place the line goes to, however it came to be: the plan's recorded pane, or the
+          // workspace a create step made for this seat earlier in the run (review round 7).
+          const target = place(op.seat, op.pane, op.workspace);
+          if (target !== null) {
+            const targetPane = target.pane;
+            const targetSpace = target.workspace;
+            const panesNow = targetSpace === undefined ? null : host.workspacePanes?.(session, targetSpace) ?? null;
+            const agentsNow = host.agentList?.(session) ?? null;
+            const processAfter = host.processInfo?.(session, targetPane) ?? null;
+            const why = targetSpace !== undefined && (panesNow === null || !panesNow.includes(targetPane))
+              ? 'its pane is no longer listed in its workspace'
+              : agentsNow === null
+                ? 'its pane could not be checked against the agent list'
+                : agentsNow.some((agent) => agent.pane === targetPane && agent.name !== null && agent.name !== op.seat)
+                  ? 'its pane is named for another seat'
+                  : !paneHoldsOnlyShell(processAfter)
+                    ? 'its pane no longer holds only its shell'
+                    : !bareShellEmptyPrompt(host.paneText?.(session, targetPane) ?? null)
+                      ? 'its shell prompt is not empty'
+                      : null;
+            if (why !== null) {
+              held = true;
+              dropped.add(op.seat);
+              final(op.seat, { kind: 'left out', reason: `${why} after the wait for its conversation; nothing launched` });
+              break;
+            }
+          }
+        }
         // A launch that reuses the seat's own recorded pane re-reads the pane and its workspace
         // immediately before anything is typed, and judges the process reading against the
         // identity the seat's record holds. Only a pane the workspace still lists and whose own
@@ -2819,10 +2877,21 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'holds unsent text; nothing typed' });
           break;
         }
+        // A Codex TUI that could not open the conversation because another app-server still
+        // held it ("This conversation is open in another app"): no composer, nothing to lose,
+        // and its own exit key leaves. Only that exact screen, read fresh before the key.
+        // The whole frame must be that screen (codexThreadLockedScreen: the exact lock rows last,
+        // no composer), and the same frame must classify as no dialog, draft or working turn.
+        const lockedFrame = (frame: string | null): boolean => {
+          if (op.cli !== 'codex' || !codexThreadLockedScreen(frame)) return false;
+          const read = launchKind(readScreen(op.cli, frame ?? undefined).kind);
+          return read === 'provider error' || read === 'unknown';
+        };
+        const locked = kind !== 'idle' && lockedFrame(host.paneText?.(session, op.pane) ?? null);
         // Allow-list: the profile idle prompt is the only screen that may be typed into. A
         // permission, trust, question, or unknown dialog that appeared after the plan holds
         // here, with nothing typed.
-        if (kind !== 'idle') {
+        if (kind !== 'idle' && !locked) {
           held = true;
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'is not at an idle prompt; nothing typed' });
@@ -2856,7 +2925,15 @@ export async function executePlan(
         // again before each further key: a dialog that appeared in between takes nothing.
         let refused: string | null = null;
         const idlePrompt = (): boolean => screenKind() === 'idle';
-        if (profile.exit !== null) {
+        if (locked) {
+          // One fresh frame and one fresh process reading, immediately before the key: the same
+          // structure on that frame, and the pane still running the process the proof read.
+          const frame = host.paneText?.(session, op.pane) ?? null;
+          const processBefore = host.processInfo?.(session, op.pane) ?? null;
+          if (!lockedFrame(frame) || JSON.stringify(processBefore) !== JSON.stringify(processNow)) {
+            refused = 'its screen or its process changed before the exit key; nothing typed';
+          } else if (!(host.sendKey?.(session, op.pane, 'q') ?? false)) refused = 'its exit was not sent; left as it is';
+        } else if (profile.exit !== null) {
           const exitWord = profile.exit;
           if (!idlePrompt()) {
             refused = 'is not at an idle prompt; nothing typed';

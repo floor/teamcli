@@ -556,7 +556,7 @@ export function resolveCodexAttemptEndpoint(
   return { ok: true, socketPath: socket, remote: `unix://${socket}` };
 }
 
-function encodeMaskedWsTextFrame(text: string): Buffer {
+export function encodeMaskedWsTextFrame(text: string): Buffer {
   const payload = Buffer.from(text, 'utf8');
   const mask = randomBytes(4);
   let header: Buffer;
@@ -586,7 +586,7 @@ const MAX_SERVER_FRAME_BYTES = 1024 * 1024;
 /** While the handshake is incomplete, anything past this is not a handshake this probe reads. */
 const MAX_HANDSHAKE_BYTES = 16 * 1024;
 
-function decodeServerWsFrames(buffer: Buffer): { frames: string[]; rest: Buffer; error?: string } {
+export function decodeServerWsFrames(buffer: Buffer): { frames: string[]; rest: Buffer; error?: string } {
   const frames: string[] = [];
   let offset = 0;
   while (offset + 2 <= buffer.length) {
