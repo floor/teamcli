@@ -82,4 +82,3 @@ describe('caller placement narrowed by the herdr session hint', () => {
     expect(at('beta')).toBeNull();
   });
 });
-

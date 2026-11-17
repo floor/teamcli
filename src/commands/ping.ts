@@ -17,7 +17,8 @@
 // ids) are where the receipt and the reply are looked for, not the folder the command runs in. A
 // receipt counts only when its signature verifies and it names that id, recipient, root and
 // session; a reply only when its record verifies, sits on that thread, comes from the recipient
-// to the sender (by name and agent id) and carries this run's token.
+// to the sender (by name and agent id) and carries this run's token. A message the owner sent is
+// answered where `team reply` answers it: the entity's `owner-reply-to` endpoint.
 import { spawn } from 'node:child_process';
 import type { KeyObject } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -27,9 +28,11 @@ import { readArgs } from '../args.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { resolveOwnerReplyTo } from '../policy/owner-reply.ts';
 import { teamBinding } from '../registry/binding.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
 import { sameFolder, signedReceiptOf, verifiedRecordAt, verifyReceipt, type RecordPayload } from '../send/record.ts';
+import { resolveTarget } from '../send/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team ping <seat> [--wait <seconds>] [--json]
@@ -165,10 +168,38 @@ export function receiptAt(sent: RecordPayload, key: KeyObject): number | null {
   return Number.isNaN(when) ? null : when;
 }
 
-/** The folder the sender's replies land in: its team found by the sender's signed agent id in a
- *  registered roster, else the team the caller's folder binds to, else the folder's own
- *  configuration; null when none places it. */
-export function replyFolderOf(home: string, io: Io, sent: RecordPayload, teams: readonly TeamRecord[]): string | null {
+/** Where the recipient's reply to `sent` lands and whom it must name: the folder and the
+ *  recipient identity (seat and agent id) a `team reply` writes it for. */
+export type ReplyDestination = { folder: string; to: string; to_id: string | null };
+
+/** The reply destination of `sent`, resolved the way `team reply` resolves it. A record the owner
+ *  sent is answered at the entity's `owner-reply-to` endpoint (read from the recipient team's
+ *  entity, resolved through the registry, across teams): that seat's folder, that seat and its
+ *  agent id. A seat's record is answered in its own folder: its team found by the sender's
+ *  signed agent id in a registered roster, else the team the caller's folder binds to, else the
+ *  folder's own configuration. Null when none places it. */
+export function replyDestinationOf(home: string, io: Io, sent: RecordPayload, teams: readonly TeamRecord[]): ReplyDestination | null {
+  if (sent.from === 'owner') {
+    // The recipient team's entity: its configuration's, else its registry record's (a team the
+    // registry alone defines has no file to name it).
+    let entity: string | null = null;
+    try {
+      const loaded = readTeamConfig(sent.root, { home });
+      if (loaded.ok) entity = loaded.team.entity ?? null;
+    } catch {
+      entity = null;
+    }
+    if (entity === null) {
+      const held = teams.filter((team) => sameFolder(team.root, sent.root) && team.session === sent.session);
+      if (held.length === 1) entity = held[0]!.entity ?? null;
+    }
+    const replyTo = resolveOwnerReplyTo(sent.root, home, entity);
+    if (!replyTo.ok) return null;
+    const endpoint = resolveTarget(home, replyTo.target, io);
+    if ('error' in endpoint) return null;
+    const seat = endpoint.agent.reach.seat;
+    return { folder: join(endpoint.team.root, '.agents', 'send-drops', endpoint.agent.reach.session, seat), to: seat, to_id: endpoint.agent.id };
+  }
   const byId = sent.from_id === null ? [] : teams.filter((team) => team.roster.some((entry) => entry.agent === sent.from_id));
   let place: Place | null = byId.length === 1 ? { root: byId[0]!.root, session: byId[0]!.session } : null;
   if (place === null) {
@@ -183,14 +214,15 @@ export function replyFolderOf(home: string, io: Io, sent: RecordPayload, teams: 
       place = null;
     }
   }
-  return place === null ? null : join(place.root, '.agents', 'send-drops', place.session, sent.from);
+  return place === null ? null : { folder: join(place.root, '.agents', 'send-drops', place.session, sent.from), to: sent.from, to_id: sent.from_id };
 }
 
-/** The recipient's verified reply to `sent` in `folder`, newer than `since`: a record that
- *  verifies, sits on the sent record's thread, comes from its recipient (name and agent id) to its
- *  sender (name and agent id) and carries `pong <token>`. Its signed `at` (sent) and the file's
- *  time (landed), or null. */
-export function replyTo(folder: string, sent: RecordPayload, token: string, since: number, key: KeyObject): { sent: number; landed: number } | null {
+/** The recipient's verified reply to `sent` at its destination, newer than `since`: a record that
+ *  verifies, sits on the sent record's thread, comes from its recipient (name and agent id) to the
+ *  destination's recipient (name and agent id) and carries `pong <token>`. Its signed `at` (sent)
+ *  and the file's time (landed), or null. */
+export function replyTo(destination: ReplyDestination, sent: RecordPayload, token: string, since: number, key: KeyObject): { sent: number; landed: number } | null {
+  const folder = destination.folder;
   let names: string[];
   try {
     names = readdirSync(folder);
@@ -209,9 +241,9 @@ export function replyTo(folder: string, sent: RecordPayload, token: string, sinc
     if (landed < since) continue;
     const reply = verifiedRecordAt(path, name, key);
     if (reply === null || reply.thread !== sent.thread) continue;
-    if (reply.from !== sent.to || reply.to !== sent.from) continue;
+    if (reply.from !== sent.to || reply.to !== destination.to) continue;
     if (sent.to_id !== null && reply.from_id !== sent.to_id) continue;
-    if (sent.from_id !== null && reply.to_id !== sent.from_id) continue;
+    if (destination.to_id !== null && reply.to_id !== destination.to_id) continue;
     if (!reply.body.includes(`pong ${token}`)) continue;
     const at = Date.parse(reply.at);
     return { sent: Number.isNaN(at) ? landed : at, landed };
@@ -262,7 +294,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
   const { places, teams } = placesOf(host.home, io);
 
   const token = `P${host.now().toString(36)}`;
-  type Tracked = PingRow & { started: number; sent: RecordPayload | null; folder: string | null };
+  type Tracked = PingRow & { started: number; sent: RecordPayload | null; destination: ReplyDestination | null };
   const rows: Tracked[] = await Promise.all(targets.map(async (target): Promise<Tracked> => {
     const at = target.lastIndexOf('@');
     const seat = at < 0 ? target : target.slice(0, at);
@@ -284,7 +316,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
       status: id === null ? 'refused' : 'not read',
       started,
       sent: null,
-      folder: null,
+      destination: null,
     };
   }));
 
@@ -297,7 +329,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
       if (row.sent === null) {
         row.sent = sentRecordOf(places, row.seat, row.id, key);
         if (row.sent === null) continue;
-        row.folder = replyFolderOf(host.home, io, row.sent, teams);
+        row.destination = replyDestinationOf(host.home, io, row.sent, teams);
       }
       if (row.read_ms === null) {
         const read = receiptAt(row.sent, key);
@@ -306,7 +338,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
           row.status = 'read';
         }
       }
-      const reply = row.folder === null ? null : replyTo(row.folder, row.sent, token, since, key);
+      const reply = row.destination === null ? null : replyTo(row.destination, row.sent, token, since, key);
       if (reply !== null) {
         row.reply_sent_ms = Math.max(0, reply.sent - row.started);
         row.reply_landed_ms = Math.max(0, reply.landed - row.started);
@@ -317,7 +349,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
     await host.wait(250);
   }
 
-  const out: PingRow[] = rows.map(({ started: _started, sent: _sent, folder: _folder, ...row }) => row);
+  const out: PingRow[] = rows.map(({ started: _started, sent: _sent, destination: _destination, ...row }) => row);
   const ok = out.length > 0 && out.every((row) => row.status === 'replied');
   if (json) {
     writeJson(io, 'team.ping', { token, wait_seconds: waitSeconds, rows: out, all_replied: ok });

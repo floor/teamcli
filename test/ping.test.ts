@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import type { Io } from '../src/io.ts';
 import { idOf, legOf, runPing, type PingHost } from '../src/commands/ping.ts';
 import { recordTextOf, signReceiptPayload, signRecord, type RecordPayload } from '../src/send/record.ts';
+import { lobbyDir } from '../src/lobby/gate.ts';
+import { writePolicySet } from '../src/policy/index.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { upsertTeam } from '../src/registry/teams.ts';
 
 const AT = '2026-11-17T09:00:00.000Z';
@@ -27,15 +30,19 @@ function io(cwd: string): Io & { out: string; err: string } {
   }) as Io & { out: string; err: string };
 }
 
-type Answer = 'reply' | 'unsigned-reply' | 'bad-signature' | 'wrong-sender' | 'unsigned-receipt' | 'none';
+type Answer = 'reply' | 'unsigned-reply' | 'bad-signature' | 'wrong-sender' | 'wrong-recipient' | 'unsigned-receipt' | 'none';
 
 /**
  * Team `alpha` is registry-only: no `.agents/team.yaml` anywhere. The caller runs from team
  * `beta`'s folder (a team file, another session), while its seat `lead` is `alpha`'s: the reply
  * lands in `alpha`'s folder, found by the sender's signed agent id, never by the folder.
  * Each target answers the way `answers` says.
+ *
+ * `owner`: the owner sends (no sender agent id), and the entity `floor` declares its
+ * `owner-reply-to` endpoint as `inbox@hq`, a seat of another team: a reply lands in `hq`'s
+ * folder for `inbox`, with `inbox`'s agent id, the way `team reply` writes it.
  */
-function scene(answers: Record<string, Answer>) {
+function scene(answers: Record<string, Answer>, owner = false) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'ping-')));
   const home = join(base, 'h');
   const alpha = join(base, 'alpha');
@@ -46,12 +53,43 @@ function scene(answers: Record<string, Answer>) {
   writeFileSync(join(beta, '.agents', 'team.yaml'), 'project: beta\nsession: beta\n');
   upsertTeam(home, 't-alpha', {
     project: 'alpha',
+    ...(owner ? { entity: 'floor' } : {}),
     session: 'alpha',
     root: alpha,
     at: AT,
     roster: Object.entries(AGENT).map(([seat, agent]) => ({ agent, seat, role: 'worker' })),
   });
   upsertTeam(home, 't-beta', { project: 'beta', session: 'beta', root: beta, at: AT, roster: [] });
+  const hq = join(base, 'hq');
+  let inboxId: string | null = null;
+  if (owner) {
+    mkdirSync(hq, { recursive: true });
+    const inbox = registerAgent(home, {
+      name: 'inbox of hq',
+      signing: { model: 'Test', version: '1', role: 'implementer' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: 'hq', seat: 'inbox', session: 'hq', pane: 'pane-inbox', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    inboxId = inbox.id;
+    upsertTeam(home, 'hq', {
+      project: 'hq', entity: 'floor', session: 'hq', root: hq, lobby: lobbyDir(home), at: AT,
+      roster: [{ agent: inbox.id, seat: 'inbox', role: 'implementer' }], lifecycle: 'running', by: 'up',
+    });
+    const wrote = writePolicySet(home, { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'inbox@hq' }, { now: new Date(AT) });
+    if (!wrote.ok) throw new Error(wrote.why);
+  }
+  const endpointDrop = () => {
+    const dir = join(hq, '.agents', 'send-drops', 'hq', 'inbox');
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  };
   // The fake clock starts at the real one: a reply counts from the files it finds newer than the run.
   let clock = Date.now();
   const drop = (seat: string) => {
@@ -74,8 +112,9 @@ function scene(answers: Record<string, Answer>) {
       const id = IDS[seat as keyof typeof IDS];
       clock += 400;
       const sent = signRecord(record({
-        id, thread: id, to: seat, to_id: AGENT[seat as keyof typeof AGENT], from: 'lead', from_id: AGENT.lead,
-        body: `from lead — admitted by: test\n\n${args[2]}`,
+        id, thread: id, to: seat, to_id: AGENT[seat as keyof typeof AGENT],
+        from: owner ? 'owner' : 'lead', from_id: owner ? null : AGENT.lead,
+        body: `from ${owner ? 'the owner' : 'lead'} — admitted by: test\n\n${args[2]}`,
       }), home);
       writeFileSync(join(drop(seat), id), recordTextOf(sent));
       const answer = answers[seat]!;
@@ -90,9 +129,14 @@ function scene(answers: Record<string, Answer>) {
         id: replyId, thread: id, in_reply_to: id, at: new Date(clock + 3_000).toISOString(),
         from: answer === 'wrong-sender' ? 'quiet' : seat,
         from_id: answer === 'wrong-sender' ? AGENT.quiet : AGENT[seat as keyof typeof AGENT],
-        to: 'lead', to_id: AGENT.lead, body: `from ${seat} — admitted by: test\n\npong ${token}`,
+        ...(owner ? { root: hq, session: 'hq', to: 'inbox', to_id: inboxId } : { to: 'lead', to_id: AGENT.lead }),
+        // The right seat name with another agent's id: not the destination's recipient.
+        ...(answer === 'wrong-recipient' ? { to_id: AGENT.quiet } : {}),
+        body: `from ${seat} — admitted by: test\n\npong ${token}`,
       });
-      if (answer === 'reply' || answer === 'wrong-sender' || answer === 'unsigned-receipt') {
+      if (owner && (answer === 'reply' || answer === 'wrong-sender' || answer === 'wrong-recipient')) {
+        writeFileSync(join(endpointDrop(), replyId), recordTextOf(signRecord(reply, home)));
+      } else if (answer === 'reply' || answer === 'wrong-sender' || answer === 'wrong-recipient' || answer === 'unsigned-receipt') {
         writeFileSync(join(drop('lead'), replyId), recordTextOf(signRecord(reply, home)));
       } else if (answer === 'unsigned-reply') {
         writeFileSync(join(drop('lead'), replyId), JSON.stringify({ payload: reply, signature: 'not a signature' }, null, 2));
@@ -107,8 +151,8 @@ function scene(answers: Record<string, Answer>) {
   return { home, alpha, beta, host };
 }
 
-async function rows(answers: Record<string, Answer>, argv: string[] = ['--all', '--wait', '2', '--json']) {
-  const { beta, host } = scene(answers);
+async function rows(answers: Record<string, Answer>, argv: string[] = ['--all', '--wait', '2', '--json'], owner = false) {
+  const { beta, host } = scene(answers, owner);
   const out = io(beta);
   const code = await runPing(argv, out, host);
   const doc = JSON.parse(out.out) as { rows: { seat: string; status: string; read_ms: number | null; reply_sent_ms: number | null }[]; all_replied: boolean };
@@ -132,11 +176,22 @@ describe('team ping', () => {
     expect(by.worker!.reply_sent_ms).toBeGreaterThan(by.worker!.read_ms!);
   });
 
-  test('an unsigned reply, a reply whose signature does not cover it and a reply from another seat do not count', async () => {
-    for (const answer of ['unsigned-reply', 'bad-signature', 'wrong-sender'] as const) {
+  test('an unsigned reply, a reply whose signature does not cover it, a reply from another seat and one to another agent do not count', async () => {
+    for (const answer of ['unsigned-reply', 'bad-signature', 'wrong-sender', 'wrong-recipient'] as const) {
       const { code, by } = await rows({ worker: answer });
       expect(code).toBe(1);
       expect(by.worker).toMatchObject({ status: 'read', reply_sent_ms: null });
+    }
+  });
+
+  test('an owner ping: the reply at the owner-reply-to endpoint (another team\'s seat) counts; one from another seat or to another agent does not', async () => {
+    const answered = await rows({ worker: 'reply' }, undefined, true);
+    expect(answered.code).toBe(0);
+    expect(answered.by.worker).toMatchObject({ status: 'replied' });
+    for (const answer of ['wrong-sender', 'wrong-recipient'] as const) {
+      const impostor = await rows({ worker: answer }, undefined, true);
+      expect(impostor.code).toBe(1);
+      expect(impostor.by.worker).toMatchObject({ status: 'read', reply_sent_ms: null });
     }
   });
 

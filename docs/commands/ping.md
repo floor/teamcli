@@ -35,10 +35,13 @@ id among the registered teams' folders and the caller's own team configuration, 
 machine's message key. Its signed root, session, recipient and sender decide where the rest is
 read, never the folder the command runs in: the recipient's
 `.agents/send-drops/<session>/<seat>/<id>.read.json` receipt, counted only when its signature
-verifies and it names that id, recipient, root and session; and the sender's own folder (its team
-found by the sender's signed agent id in the registry roster, else the team the caller binds to),
-where a reply counts only when its record verifies, sits on the message's thread, comes from the
-recipient to the sender by name and agent id, and carries this run's token. Writes nothing itself: each message is
+verifies and it names that id, recipient, root and session; and the reply's destination, resolved
+the way [`team reply`](reply.md) resolves it — for a seat's message the sender's own folder (its
+team found by the sender's signed agent id in the registry roster, else the team the caller binds
+to); for the owner's message the entity's `owner-reply-to` endpoint, which may be a seat of another
+team — where a reply counts only when its record verifies, sits on the message's thread, comes
+from the recipient by name and agent id to that destination's seat and agent id, and carries this
+run's token. Writes nothing itself: each message is
 written by its own `team send`, with that send's history line, and each answer by its seat's
 `team reply`.
 
