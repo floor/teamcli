@@ -2905,6 +2905,29 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(log).toContain(`worker: its Codex endpoint holds thread ${THREAD}; bound as the seat's session`);
   });
 
+  // A managed Codex seat whose endpoint could not start must not be stopped first: the preflight
+  // is read before the stop, and a refusal leaves the old CLI running with nothing typed.
+  test('a restart whose managed Codex endpoint could not start stops nothing', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const asked: string[] = [];
+    run.sources.upLaunch.codexEndpoint = {
+      ...managedEndpoint(fixture, 'prs_fedcba987654'),
+      preflight: (input: { seat: string }) => { asked.push(input.seat); return 'no socket path this build can bind'; },
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const before = readState(fixture.dir).sessions.acme?.seats.worker;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).not.toBe(0);
+    expect(asked).toEqual(['worker']);
+    expect(run.did.typed).toEqual([]);
+    expect(io.err).toContain('no socket path this build can bind; left running, nothing typed');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker).toEqual(before);
+  });
+
   // The ambiguous reading: the endpoint holds two threads, so neither is proven to be this seat's.
   // Nothing is bound, and the restart stays honest about what a send will do.
   test('a restart whose Codex endpoint holds more than one thread binds none and stays pull-only', async () => {
