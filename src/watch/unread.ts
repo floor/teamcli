@@ -404,10 +404,19 @@ function dueForWake(
   if (!(age >= unreadAfter * 1000)) return false;
   if (pendingOwned && existsSync(pendingDropPath(dropDir, message.id))) return false;
   if (existsSync(wakePath(dropDir, message.id))) return false;
-  if (retryTries === null) return !existsSync(reportedPath(dropDir, message.id));
+  // A held drop under a watch that runs no held-drop retry was kept from every wake by its
+  // marker, while the report still went out at twice the window: its report is no word that a
+  // wake was tried, so it does not stand in the way of the first one. The report marker still
+  // keeps the report from going out twice, and a wake younger than the slow ladder's last day
+  // is the only one it lets through.
+  const neverWoken = !pendingOwned
+    && age < WAKE_SLOW_MAX_AGE_MS
+    && existsSync(pendingDropPath(dropDir, message.id));
+  const reported = existsSync(reportedPath(dropDir, message.id)) && !neverWoken;
+  if (retryTries === null) return !reported;
   const ledger = wakeTryOf(dropDir, message.id);
   // Before any typed attempt, a report already written is the word that stands.
-  if (ledger === null) return !existsSync(reportedPath(dropDir, message.id));
+  if (ledger === null) return !reported;
   if (ledger.tries >= retryTries && !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
   const next = Date.parse(ledger.next_at);
   if (Number.isFinite(next) && nowMs < next) return false;

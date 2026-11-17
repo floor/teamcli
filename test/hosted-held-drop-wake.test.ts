@@ -278,3 +278,50 @@ describe('a held drop marker under a watch with no held-drop retry', () => {
     expect(existsSync(wakeTryPath(dropDir, MSG_A)) || existsSync(wakePath(dropDir, MSG_A))).toBe(true);
   });
 });
+
+describe('a held drop already reported before any wake (round 10 review)', () => {
+  function reportedScene(ageMs: number) {
+    const { made, team } = makeWorld();
+    const ts = new Date(NOW.getTime() - ageMs);
+    const dropDir = seedUnreadDrop(made, 'helper', MSG_B, 'ping', ts);
+    seedSendHistory(made, 'helper', MSG_B, { via: 'drop' });
+    markPending(dropDir, { ts: ts.toISOString(), from: 'owner', to: 'helper', body: 'ping', id: MSG_B, leg: 'drop' });
+    writeFileSync(join(dropDir, `${MSG_B}.reported`), `${JSON.stringify({ id: MSG_B, at: NOW.toISOString(), state: 'reported', to: [] })}\n`);
+    const fake = makeFakeWakeHost((_i, enters, typed) => {
+      if (enters >= 1) return MUSE_WORKING;
+      if (typed.length >= 1) return museHolding(typed[typed.length - 1]!);
+      return MUSE_IDLE;
+    });
+    const sources: RetrySources = {
+      screen: () => MUSE_IDLE,
+      status: () => 'idle',
+      typeText: () => false,
+      pressEnter: () => false,
+      sleep: async () => {},
+      typedWake: (paneId, line, cli) => deliverTypedWake(fake.host, paneId, line, cli, FAST),
+    };
+    return { made, team, dropDir, fake, sources };
+  }
+
+  test('hours past twice the window, never woken: the idle seat gets its first wake, once', async () => {
+    const { made, team, dropDir, fake, sources } = reportedScene(5 * 60 * MIN);
+    await pass(made, team, sources, NOW, false);
+    expect(fake.typed).toHaveLength(1);
+    expect(wakeMarkerOf(made, 'helper', MSG_B)).toMatchObject({ id: MSG_B, state: 'sent' });
+    await pass(made, team, sources, new Date(NOW.getTime() + 30_000), false);
+    expect(fake.typed).toHaveLength(1);
+    expect(existsSync(join(dropDir, `${MSG_B}.reported`))).toBe(true);
+  });
+
+  test('the same drop under a watch whose held-drop retry runs: the report still stands', async () => {
+    const { made, team, fake, sources } = reportedScene(5 * 60 * MIN);
+    await pass(made, team, sources, NOW);
+    expect(fake.typed).toEqual([]);
+  });
+
+  test('past the slow ladder\'s last day, the report stands', async () => {
+    const { made, team, fake, sources } = reportedScene(8 * 24 * 60 * MIN);
+    await pass(made, team, sources, NOW, false);
+    expect(fake.typed).toEqual([]);
+  });
+});
