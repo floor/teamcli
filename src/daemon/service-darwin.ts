@@ -6,7 +6,8 @@
 // The retained runtime copy the unit runs, its verification, the bounded load retries and the
 // rollback bookkeeping are shared with every adapter (`service-runtime.ts`); this file holds only
 // the unit's own text, how that text is read back, and the manager's commands.
-import { lstatSync, readdirSync, readFileSync, realpathSync, existsSync, unlinkSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync, existsSync } from 'node:fs';
+import { unlinkSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { daemonLabel, daemonLogPath } from './paths.ts';
 import {

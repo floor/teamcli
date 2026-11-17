@@ -1,3 +1,4 @@
+import { hostedCommit } from '../host/request-scope.ts';
 import type { KeyObject } from 'node:crypto';
 // The seat's inbox: the drop folder `team send` already writes, read from the seat's own side.
 //
@@ -18,7 +19,8 @@ import type { KeyObject } from 'node:crypto';
 // session or the seat refuses service; an id is a lowercase UUID — or the `unread-<uuid>` name a
 // build before 0.5.3 wrote for a runtime report to a lead — and nothing else, so no id can name a
 // path; a drop or receipt that is a link is refused, never followed.
-import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import {
   briefBindingOf,
@@ -197,6 +199,7 @@ export function ensureInboxFolder(root: string, session: string, seat: string): 
 
 /** Writes the listener marker whole at 0600 by rename; false when it cannot be written. */
 export function writeListener(dropDir: string, listener: InboxListener): boolean {
+  hostedCommit('writeListener');
   try {
     dropMessage(dropDir, LISTENER_FILE, `${JSON.stringify(listener)}\n`);
     return true;

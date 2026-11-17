@@ -27,10 +27,12 @@
 // intersection of every occurrence's scope, and the duplicate count is reported. Intersection is
 // what keeps a diff-only class c entry from becoming a tracked-tree rule through source order.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** Where a private entry reads: a tracked path, a tracked file's text, or the pre-push diff. */
 export type PrivateScope = 'path' | 'content' | 'diff';
@@ -261,6 +263,7 @@ function scratchRepository(): Scratch {
   } catch {
     return { path: '', problem: 'cannot create the private scan scratch folder' };
   }
+  hostedCommit('node:child_process.spawnSync');
   const init = spawnSync('git', ['init', '--quiet', path], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -271,6 +274,7 @@ function scratchRepository(): Scratch {
 }
 
 function addScratch(path: string, files: readonly string[]): boolean {
+  hostedCommit('node:child_process.spawnSync');
   const added = spawnSync('git', ['-C', path, 'add', '--', ...files], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -283,6 +287,7 @@ function addScratch(path: string, files: readonly string[]): boolean {
  *  `-a` reads every file as text: a NUL byte makes git call a file binary, and skipping it would
  *  hide the names it carries. */
 function grep(repo: string, pattern: string, pathspec: string): { status: number; stdout: string } {
+  hostedCommit('node:child_process.spawnSync');
   const run = spawnSync('git', ['-C', repo, 'grep', '--no-color', '-z', '-n', '-a', '-E', '-f', '-', '--', pathspec], {
     input: `${pattern}\n`,
     encoding: 'utf8',
@@ -308,6 +313,7 @@ function validate(rules: readonly PrivateRule[], scratch: string): { problem: st
 }
 
 function trackedFiles(root: string): { files: string[] } | { problem: string } {
+  hostedCommit('node:child_process.spawnSync');
   const listed = spawnSync('git', ['-C', root, 'ls-files', '-z'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -542,12 +548,14 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   else if (base.startsWith('refs/tags/v') && base.length > 'refs/tags/v'.length) ref = base;
   else if (base.startsWith('v') && base.length > 1) ref = `refs/tags/${base}`;
   else return { problem: 'private diff base must be origin/main or an existing public release tag (v*)' };
+  hostedCommit('node:child_process.spawnSync');
   const present = spawnSync('git', ['-C', root, 'show-ref', '--verify', '--quiet', ref], {
     stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
   });
   if (present.error !== undefined || present.status !== 0) {
     return { problem: 'cannot resolve private diff public base: origin/main or a public release tag (v*) is required' };
   }
+  hostedCommit('node:child_process.spawnSync');
   const resolved = spawnSync('git', ['-C', root, 'rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
   });
@@ -556,6 +564,7 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   if (ref.startsWith('refs/tags/')) {
     // A local tag name alone proves no public history. Require the tagged commit to be
     // reachable from the fetched public main ref before trusting any removed line from it.
+    hostedCommit('node:child_process.spawnSync');
     const publicHistory = spawnSync('git', ['-C', root, 'merge-base', '--is-ancestor', baseCommit, 'refs/remotes/origin/main'], {
       stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
     });
@@ -563,6 +572,7 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
       return { problem: 'private diff tag base must be an ancestor of refs/remotes/origin/main; a local-only tag cannot supply removed move twins' };
     }
   }
+  hostedCommit('node:child_process.spawnSync');
   const diff = spawnSync(
     'git',
     ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--text', `${baseCommit}..HEAD`, '--'],
@@ -664,6 +674,7 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
     moves.push(line.index!);
   }
 
+  hostedCommit('node:child_process.spawnSync');
   const commits = spawnSync('git', ['-C', root, 'log', '--format=%H', `${baseCommit}..HEAD`], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -672,6 +683,7 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   });
   if (commits.error !== undefined || commits.status !== 0) return { problem: `cannot read the commits since ${base}` };
   for (const sha of commits.stdout.split('\n').filter(Boolean)) {
+    hostedCommit('node:child_process.spawnSync');
     const body = spawnSync('git', ['-C', root, 'cat-file', 'commit', sha], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],

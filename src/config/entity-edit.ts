@@ -19,7 +19,8 @@
 // owner seat is pinned from another machine, where no terminal is the owner and no general grant
 // stands; the request is carried to the owner's signers as a file (`team approvals export`).
 
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { readArgs } from '../args.ts';

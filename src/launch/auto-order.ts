@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentList, workspaceList, type HerdrAgent } from '../herdr.ts';
 import { readState } from '../state.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /**
  * Set in the spawned pass's environment. `team order` delegates its restarts in-process,
@@ -122,6 +123,7 @@ export const realAutoOrderSources: AutoOrderSources = {
   spawnOrder(argv, root) {
     const here = fileURLToPath(import.meta.url);
     const entry = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+    hostedCommit('node:child_process.spawn');
     const child = spawn(process.execPath, [entry, ...argv], {
       cwd: root,
       detached: true,

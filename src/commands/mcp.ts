@@ -12,7 +12,8 @@
 import { spawnSync } from 'node:child_process';
 import { spawnProcessToolSync } from '../process-tools-adapter.ts';
 import { createPublicKey } from 'node:crypto';
-import { closeSync, constants as fs, fstatSync, lstatSync, openSync, readSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants as fs, fstatSync, lstatSync, readSync, readdirSync, readFileSync } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -35,6 +36,7 @@ import {
   writeJsonError,
   type SeverityLevel,
 } from '../output/index.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export const USAGE = `Usage: team mcp status [--json]
        team mcp doctor [--json]
@@ -264,6 +266,7 @@ export const realSources: McpSources = {
   },
   probeHttp(url, upgrade) {
     const headers = upgrade ? ['-H', 'Connection: Upgrade', '-H', 'Upgrade: websocket'] : [];
+    hostedCommit('node:child_process.spawnSync');
     const result = spawnSync('curl', [
       '-sS', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '8', '--http1.1', ...headers, url,
     ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 12_000 });

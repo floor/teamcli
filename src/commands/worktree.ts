@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
@@ -23,6 +24,7 @@ import { pullSession } from '../send/session-cli.ts';
 import { emptySession, readState, withLock, writeAtomic, STATE_FILE, type State } from '../state.ts';
 import { approvalStanding, findStore, readApproval, type Standing } from '../store/store.ts';
 import { fillPattern, publicNameHit, realLanding, taskProblem } from '../worktree/place.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 // What the command reads from outside the process, so a test can point the approval store elsewhere.
 export type WorktreeSources = {
@@ -868,6 +870,7 @@ function commitsOnNoRemote(root: string, worktree: string, branch: string, base:
 }
 
 function realSetup(cwd: string, command: string): number {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync('sh', ['-c', command], {
     cwd,
     encoding: 'utf8',
@@ -897,6 +900,7 @@ function publishedBranch(root: string, branch: string): string | null {
 }
 
 function git(cwd: string, args: string[]): Run {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',

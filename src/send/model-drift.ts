@@ -1,7 +1,7 @@
 // Source: lead decision 2026-11-11 02:30Z, following the cross-lab model-follows-cli read:
 // model-only drift delivers and flags; an observation never relaxes the entity model rule.
 import { createHash, randomUUID } from 'node:crypto';
-import { unlinkSync } from 'node:fs';
+import { unlinkSync } from '../host/guarded-fs.ts';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { readStateFile, writeStateFile } from '../file-write.ts';
 import type { Seat, TeamFile } from '../file/types.ts';

@@ -22,7 +22,8 @@
 
 import { clientPaneGuard } from './pane-guard.ts';
 import { randomBytes, type KeyObject } from 'node:crypto';
-import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, realpathSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, fsyncSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { linkSync, mkdirSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import type { Args } from '../args.ts';
 import { heldAt } from '../launch/rules-file.ts';

@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 // What `--until` may name, shared by the command that stores it and by `readMerge`.
 //
@@ -40,6 +41,7 @@ function notABranch(branch: string): string {
 }
 
 function git(cwd: string, args: string[]): { code: number; stdout: string } {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',

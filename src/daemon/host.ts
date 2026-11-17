@@ -11,22 +11,8 @@ import { createBeatWork, observeBeatWork, traceBeatWork } from '../diagnostics/b
 // the daemon refreshes a heartbeat and records any request it has held too long; a probe that
 // gets no answer is reported as running with an unanswered probe, never as healthy.
 import { randomUUID } from 'node:crypto';
-import {
-  appendFileSync,
-  chmodSync,
-  closeSync,
-  constants as fsConstants,
-  existsSync,
-  fchmodSync,
-  fstatSync,
-  ftruncateSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  realpathSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, chmodSync, fchmodSync, ftruncateSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
@@ -97,6 +83,8 @@ import {
   type DaemonStuckRequest,
 } from './state.ts';
 import type { ReaperRecord } from '../orphan-reaper.ts';
+import { sweepCountsAreNews } from './sweep-said.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** One checkout as hosted by this process; the state record keeps the same shape. */
 export type MachineRootStatus = DaemonRootState;
@@ -1114,6 +1102,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // in-flight tracking, and the same socket file, permission and stale-path ownership below.
   let adoptNotifiedRoot: ((root: string) => Promise<void>) | null = null;
   const pendingRootAdds: string[] = [];
+  hostedCommit('relay.createHostServer');
   const host = createHostServer({
     socketPath,
     frameLimit: DAEMON_FRAME_LIMIT,
@@ -2500,7 +2489,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         );
       }
       const report = entry.report;
-      if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
+      if (report !== null && sweepCountsAreNews('beat', entry.root, report)) {
         logLine(
           `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
         );

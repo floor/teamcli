@@ -37,6 +37,7 @@ import { readTeams, type TeamRecord } from '../registry/teams.ts';
 import { sameFolder, signedReceiptOf, verifiedRecordAt, verifyReceipt, type RecordPayload } from '../send/record.ts';
 import { resolveTarget } from '../send/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export const USAGE = `Usage: team ping <seat> [--wait <seconds>] [--json]
        team ping --all [--wait <seconds>] [--json]
@@ -89,6 +90,7 @@ export type PingHost = {
  *  captured. Standard input is inherited, never replaced: a terminal stays the terminal it is. */
 export function runChild(program: readonly string[], args: string[], io: Io): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
+    hostedCommit('node:child_process.spawn');
     const child = spawn(program[0]!, [...program.slice(1), ...args], {
       cwd: io.cwd,
       env: io.env as NodeJS.ProcessEnv,

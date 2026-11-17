@@ -2,7 +2,8 @@
 // must not open another browser window on top of it: the page polls, and the new card appears
 // there. This file is the only place a request would open a window.
 
-import { lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
+import { mkdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 
 export type OwnerPageLink = { pid: number; port: number; url: string };

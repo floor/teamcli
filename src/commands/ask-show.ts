@@ -2,7 +2,8 @@
 // No team file, no caller check, no herdr. Whoever can read the key file can run it. The key
 // is base64url of 32 bytes. The marker is the guard's side file, not a new field of the ask.
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, readSync } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import { resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import type { Command, Io } from '../io.ts';

@@ -14,7 +14,7 @@ import { typedWakeMaxFor } from './readable-wake.ts';
 // The screens are the CLI's own captured frames (`test/fixtures/muse/` and
 // `test/fixtures/cursor/2026.10.22/`): `idle` is the empty box, `unsent` is the box holding the
 // line, and the profile's `working` rule is the acknowledgement.
-import { writeFileSync } from 'node:fs';
+import { writeFileSync } from '../host/guarded-fs.ts';
 import { agentPromptAsync, paneReadAsync, pressEnterAsync, sendKeyAsync, typeTextAsync } from '../herdr.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { captureDraft, dropPathOf, keepDraft, keepSeatDraft } from './deliver.ts';

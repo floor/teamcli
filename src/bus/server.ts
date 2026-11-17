@@ -17,20 +17,8 @@ import { readStateFile, writeStateFile } from '../file-write.ts';
 //   cursor was rotated out or the subscriber's buffer overflowed, and either returns the batch
 //   (`follow: false`) or streams live events (`follow: true`).
 // Runs an initial `reconcilePass` on startup and every `reconcileIntervalMs` thereafter.
-import {
-  chmodSync,
-  closeSync,
-  fstatSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { closeSync, fstatSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, openSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { connect, createServer, type Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -74,6 +62,7 @@ import { makeWebhookDelivery, type WebhookFacts } from './webhook.ts';
 import { recordWebhookDelivery } from './webhook-record.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
 import { RECORD_NAME, verifiedArrival } from './arrival.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** The serving bus's process marker, beside its socket. */
 export function busMarkerPath(root: string): string {
@@ -1014,6 +1003,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       return run;
     };
 
+    hostedCommit('node:net.createServer');
     const server = createServer((socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));
@@ -1491,6 +1481,7 @@ function askBus(root: string, request: BusRequest, deadlineMs: number): Promise<
     let settled = false;
     let connected = false;
     let buffer = '';
+    hostedCommit('node:net.connect');
     const socket = connect(busSocket(root));
     const finish = (outcome: BusAsk) => {
       if (settled) return;
@@ -1582,6 +1573,7 @@ export function nudgeBusNoWait(
   return new Promise((done) => {
     let settled = false;
     let connected = false;
+    hostedCommit('node:net.connect');
     const socket = connect(busSocket(root));
     const finish = (outcome: BusNudgeSent) => {
       if (settled) return;

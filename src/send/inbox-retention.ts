@@ -15,7 +15,9 @@
 // is older than the seat's channel start. The record's own sent time is not that proof. A dry
 // run lists both sets and writes nothing. A real run writes one audit line, including a move
 // that stopped part way.
-import { linkSync, lstatSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { hostedCommit } from '../host/request-scope.ts';
+import { lstatSync, readdirSync } from 'node:fs';
+import { linkSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import { readListener } from '../mcp/inbox.ts';
@@ -672,6 +674,7 @@ export function writeExplicitAck(input: {
   key: KeyObject;
   at: string;
 }): boolean {
+  hostedCommit('writeExplicitAck');
   const path = ackNotePath(input.folder, input.id);
   const context: StatusContext = { to: input.to, root: input.root, session: input.session };
   const existing = readVerifiedReceipt(path, input.id, 'read', context, input.key);

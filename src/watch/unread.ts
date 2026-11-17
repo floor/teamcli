@@ -47,7 +47,8 @@
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
+import { writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { appendEvent } from '../bus/log.ts';
 import { nudgeBus } from '../bus/server.ts';

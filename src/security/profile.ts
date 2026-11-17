@@ -13,7 +13,8 @@
 // prepare a proposal, but only the owner's device can produce the signature that makes it count.
 
 import { createHash, verify as cryptoVerify } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { confirmedSignerKey, ownerSeatPublicKey, readOwnerSeat, type OwnerSeatKeyStore, type OwnerSigner } from '../client/owner-seat.ts';

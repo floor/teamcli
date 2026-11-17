@@ -15,6 +15,7 @@
 // that line. The id is recorded on the walk and in the history line the send writes.
 import { spawn, spawnSync } from 'node:child_process';
 import { repoFromUrl } from './compose.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** What a profile declares for the CLI's own session call, as the CLI's help and captures read. */
 export type SessionCliSpec = {
@@ -74,6 +75,7 @@ export const defaultSessionCliSpawn: SessionCliSpawn = (binary, args, options) =
     };
     let child;
     try {
+      hostedCommit('node:child_process.spawn');
       child = spawn(binary, [...args], {
         cwd: options.cwd,
         env: { ...process.env },

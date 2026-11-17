@@ -21,6 +21,9 @@ export type RunMemo = {
   projectRules: Map<string, Map<string, string[]>>;
   messageKeys: Map<string, KeyState>;
   gitRoots: Map<string, string>;
+  /** Validated team texts (src/file/load.ts `loadTeamText`), keyed by the text's digest, its root,
+   *  its path and every option that changes the result. Only successful loads are kept. */
+  teamLoads: Map<string, unknown>;
 };
 
 let activeMemo: RunMemo | null = null;
@@ -37,6 +40,7 @@ function createRunMemo(): RunMemo {
     projectRules: new Map(),
     messageKeys: new Map(),
     gitRoots: new Map(),
+    teamLoads: new Map(),
   };
 }
 

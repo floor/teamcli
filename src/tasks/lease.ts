@@ -1,7 +1,8 @@
 // A lease is a file in this clone: `.agents/leases/<id>.json`. Two live leases in this clone do
 // not cover one id. Another clone, and another machine, are outside that promise. The file is
 // not signed. The lock is `withLock` on the leases directory, which is not `.agents/team.lock`.
-import { readdirSync, readFileSync, unlinkSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { unlinkSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { withLock, writeAtomic } from '../state.ts';
 import type { TaskRecord } from './adapter.ts';

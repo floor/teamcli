@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, renameSync, rmdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { recordSeatRenameOf, recordTeamRenameOf } from '../approve/approval.ts';

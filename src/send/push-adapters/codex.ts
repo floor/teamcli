@@ -21,6 +21,7 @@ import { DELIVERY_TIMEOUT_DEFAULTS } from '../../policy/types.ts';
 import { recordedSeatSession, type RecordedSeatSessionRead } from '../../registry/resume.ts';
 import { readState, type SeatState } from '../../state.ts';
 import type { RuntimePushAdapter, RuntimePushOutcome, RuntimePushRequest } from '../push.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 /** Default bound for one `codex queue` invocation, in milliseconds (`DELIVERY_TIMEOUT_DEFAULTS.native * 1000` = 15s). */
 export const CODEX_QUEUE_TIMEOUT_MS = DELIVERY_TIMEOUT_DEFAULTS.native * 1000;
@@ -127,6 +128,7 @@ export const defaultCodexSpawn: CodexSpawn = (binary, args, options) =>
 
     let child;
     try {
+      hostedCommit('node:child_process.spawn');
       child = spawn(binary, [...args], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });

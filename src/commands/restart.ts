@@ -1,5 +1,6 @@
 import { evictHerdrAgentList, evictHerdrPaneProcessInfo } from '../herdr.ts';
-import { chmodSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';

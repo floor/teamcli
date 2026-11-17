@@ -1,4 +1,5 @@
-import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, readlinkSync, realpathSync } from 'node:fs';
+import { closeSync, constants, fstatSync, readdirSync, readSync, readlinkSync, realpathSync } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';

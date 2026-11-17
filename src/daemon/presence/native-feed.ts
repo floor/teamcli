@@ -1,6 +1,7 @@
 // Default-off native feed. Production has no trusted turn/lane/gate registration yet:
 // adapters may refuse, but no payload can enroll itself. Every emitted gate is unknown.
-import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { constants, closeSync, fstatSync, fsyncSync, lstatSync, readSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { randomBytes } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { userInfo } from 'node:os';

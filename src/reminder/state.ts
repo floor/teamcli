@@ -7,7 +7,8 @@
 // A key is reserved before the send walks and settled when it ends: a crash mid-send can lose
 // that reminder's results but never sends the same instant twice. A reminder that speaks for the
 // owner must not repeat itself, and a lost result stays visible as a record with no finish.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { machineConfigDir } from '../daemon/paths.ts';

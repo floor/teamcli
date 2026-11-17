@@ -6,7 +6,8 @@
 // config is read from the descriptor it just checked. A link swapped in between the check and the
 // rename cannot receive the file: the handle still names the directory that was opened.
 
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, type Stats } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, type Stats } from 'node:fs';
+import { mkdirSync, openSync } from '../host/guarded-fs.ts';
 import { constants as osConstants } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { machineConfigDir, runtimeDir } from '../daemon/paths.ts';

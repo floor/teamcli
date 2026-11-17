@@ -5,6 +5,7 @@
 // The secret is never an argument of this process or of any other. A test stands in for the whole
 // function and never runs it.
 import { spawn } from 'node:child_process';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** The entry names every store takes: a plain word that no shell reads twice, so it may stand as
  *  an argument and on a launch line as it is. The team's own files already hold names in this
@@ -31,6 +32,7 @@ export const realSecretRun: SecretRunner = (command, args, options) =>
       clearTimeout(deadline);
       resolve(result);
     };
+    hostedCommit('node:child_process.spawn');
     const child = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'ignore'],
       ...(options.env === undefined ? {} : { env: options.env }),

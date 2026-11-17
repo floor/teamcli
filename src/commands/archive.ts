@@ -8,7 +8,8 @@
 // actually there: a team that never launched has no state, and one no message ever reached has no
 // drops. Links are never followed into the archive.
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';

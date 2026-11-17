@@ -18,7 +18,8 @@
 // files, never what the seat may send. This guards against a mistaken agent, as placement does:
 // every seat runs as the owner's user.
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerAncestors, callerOf } from '../caller.ts';

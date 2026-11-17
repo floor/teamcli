@@ -3,7 +3,7 @@
 // Key creation is not a signature. A cancelled sign writes nothing.
 
 import { verify as cryptoVerify } from 'node:crypto';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';

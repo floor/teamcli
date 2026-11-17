@@ -1,9 +1,11 @@
+import { hostedCommit } from './host/request-scope.ts';
 import { traceChildStep } from './diagnostics/child-steps.ts';
 import { herdrDirect } from './herdr-direct.ts';
 import { traceBeatWork } from './diagnostics/beat-work.ts';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, closeSync, constants, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, fsyncSync, lstatSync, readFileSync, statSync } from 'node:fs';
+import { fchmodSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from './host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { execText, wasAborted, wasKilled, type ChildOptions } from './child.ts';
@@ -644,6 +646,7 @@ export function forgeShimText(real: string): string {
  *  created exclusively, so a pre-created link cannot be followed. False when it could not be
  *  written; the caller then closes the fallback rather than leaving the environment as it was. */
 export function writeForgeShim(dir: string, real: string): boolean {
+  hostedCommit('herdr writeForgeShim');
   const file = join(dir, FORGE_CLI);
   const text = forgeShimText(real);
   try {
@@ -759,6 +762,7 @@ export function seatServerEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.Proc
 // so the forge shim stands ahead of the machine's CLI (see `seatServerEnv`). Refuses unless the
 // session is absent: a second server for a session that already runs has been seen to drop it.
 export function startServer(session: string): boolean {
+  hostedCommit('herdr startServer');
   if (sessionState(session) !== 'absent') return false;
   let env: NodeJS.ProcessEnv;
   try {
@@ -781,6 +785,7 @@ export function startServer(session: string): boolean {
 // Sets a workspace's label, which herdr draws as sidebar line 1. `herdr workspace rename --help`
 // names the two arguments and no flags. False when herdr doesn't answer or reports an error.
 export function workspaceRename(workspace: string, label: string, session?: string): boolean {
+  hostedCommit('herdr workspaceRename');
   const out = capture(['workspace', 'rename', workspace, label], session);
   if (out === null) return false;
   const body = parsed(out);
@@ -792,6 +797,7 @@ export function workspaceCreate(
   label: string,
   session?: string,
 ): { pane: string; workspace: string } | null {
+  hostedCommit('herdr workspaceCreate');
   const result = resultOf(['workspace', 'create', '--cwd', cwd, '--label', label, '--no-focus'], session) as {
     root_pane?: { pane_id?: unknown };
     workspace?: { workspace_id?: unknown };
@@ -822,6 +828,7 @@ function waitsForPrompt(said: string): boolean {
 }
 
 export function paneRun(pane: string, command: string, session?: string): boolean {
+  hostedCommit('herdr paneRun');
   const deadline = Date.now() + PANE_RUN_PROMPT_WAIT_MS;
   for (;;) {
     let out: string | null;
@@ -863,6 +870,7 @@ export const SIDEBAR_TTL_CAP_MS = 86_400_000;
 // 2026-11-04, scratch session). The policy layer clamps before this, and the adapter still
 // refuses what the host would refuse.
 export function reportDisplayAgent(pane: string, text: string, session?: string, ttlMs?: number): boolean {
+  hostedCommit('herdr reportDisplayAgent');
   if (ttlMs !== undefined && (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > SIDEBAR_TTL_CAP_MS)) {
     return false;
   }
@@ -880,6 +888,7 @@ export async function reportDisplayAgentAsync(
   pane: string, text: string, session: string, ttlMs: number,
   options: HerdrReadOptions = {},
 ): Promise<boolean> {
+  hostedCommit('herdr reportDisplayAgentAsync');
   if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > SIDEBAR_TTL_CAP_MS) return false;
   const args = ['pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', text, '--ttl-ms', String(ttlMs)];
   try {
@@ -1360,6 +1369,7 @@ export function hostConfigCheck(): { ok: boolean; text: string } {
 export type ConfigReload = { applied: boolean; text: string };
 
 export function reloadConfig(session: string): ConfigReload {
+  hostedCommit('herdr reloadConfig');
   let result: unknown;
   try {
     result = run(['server', 'reload-config'], session);
@@ -1443,6 +1453,7 @@ export function applySidebarLayout(
   deps: SidebarApplyDeps,
   rowGap?: number,
 ): SidebarApply {
+  hostedCommit('herdr applySidebarLayout');
   const file = hostConfigPath(home);
   const reloads = (): { reloaded: string[]; failed: { session: string; text: string }[] } => {
     const reloaded: string[] = [];
@@ -1516,6 +1527,7 @@ export function applySidebarLayout(
  * is typed into the pane.
  */
 export function reportAgentPresent(pane: string, agent: string, session?: string): boolean {
+  hostedCommit('herdr reportAgentPresent');
   const out = capture(['pane', 'report-agent', '--source', 'team', '--agent', agent, '--state', 'idle', pane], session);
   if (out === null) return false;
   const body = parsed(out);
@@ -1524,6 +1536,7 @@ export function reportAgentPresent(pane: string, agent: string, session?: string
 }
 
 export function agentRename(pane: string, name: string, session?: string): boolean {
+  hostedCommit('herdr agentRename');
   const named = (listed: HerdrAgent[] | null): boolean =>
     listed?.some((agent) => agent.pane === pane && agent.name === name) === true;
   if (named(agentList(session))) return true;
@@ -1541,6 +1554,7 @@ export function agentRename(pane: string, name: string, session?: string): boole
 // text left the pane's text exactly as it was and only moved the focus (see the result of the
 // slice that added this call). False when herdr doesn't list the target or the call failed.
 export function focusAgent(target: string, session?: string): boolean {
+  hostedCommit('herdr focusAgent');
   const out = capture(['agent', 'focus', target], session);
   if (out === null) return false;
   const body = parsed(out);
@@ -1548,6 +1562,7 @@ export function focusAgent(target: string, session?: string): boolean {
 }
 
 export function workspaceClose(workspace: string, session?: string): boolean {
+  hostedCommit('herdr workspaceClose');
   // The CLI processes in front of the workspace's shells, read before the close: a CLI that
   // ignores the hangup outlives its pane as an orphan (seen 2026-11-13: four Codex processes
   // reparented to launchd after restarts, one holding a seat's conversation so the relaunched
@@ -1575,6 +1590,7 @@ export function endOrphans(
   sleep: (ms: number) => void,
   reapers: readonly number[] = [],
 ): number[] {
+  hostedCommit('herdr endOrphans');
   let left = [...new Set(owned)];
   for (let waited = 0; waited < 2_000 && left.length > 0; waited += 250) {
     sleep(250);
@@ -1611,6 +1627,7 @@ function sleepSync(ms: number): void {
 
 // Stops a session, which herdr keeps listed as stopped.
 export function sessionStop(name: string): boolean {
+  hostedCommit('herdr sessionStop');
   const out = capture(['session', 'stop', name]);
   if (out === null) return false;
   return sessionStopped(out, name);
@@ -1626,6 +1643,7 @@ export function sessionStopped(stdout: string, name: string): boolean {
 // lists it stopped. `up` deletes a stopped session this team's state records, then starts it.
 // A delete while the session is still running is refused by herdr and returns false.
 export function sessionDelete(name: string): boolean {
+  hostedCommit('herdr sessionDelete');
   const out = capture(['session', 'delete', name]);
   if (out === null) return false;
   return sessionCleared(out, name);
@@ -1722,6 +1740,7 @@ export function herdrCommand(session: string | undefined, ...args: string[]): st
 // The two functions that type. Their callers have just seen the pane at an empty idle prompt,
 // look at it again between the text and the Enter, and type nothing anywhere else.
 export function typeText(pane: string, text: string, session?: string): boolean {
+  hostedCommit('herdr typeText');
   try {
     execFileSync('herdr', [...(session ? ['--session', session] : []), 'pane', 'send-text', pane, text], { stdio: 'ignore', timeout: 10_000 });
     return true;
@@ -1742,6 +1761,7 @@ export async function typeTextAsync(
   session?: string,
   options: HerdrReadOptions = {},
 ): Promise<boolean> {
+  hostedCommit('herdr typeTextAsync');
   try {
     await execText(
       'herdr',
@@ -1755,6 +1775,7 @@ export async function typeTextAsync(
 }
 
 export function pressEnter(pane: string, session?: string): boolean {
+  hostedCommit('herdr pressEnter');
   return sendKey(pane, SUBMIT_ENTER, session);
 }
 
@@ -1766,6 +1787,7 @@ export async function agentPromptAsync(
   session?: string,
   options: HerdrReadOptions = {},
 ): Promise<boolean> {
+  hostedCommit('herdr agentPromptAsync');
   try {
     await execText(
       'herdr',
@@ -1783,11 +1805,13 @@ export async function pressEnterAsync(
   session?: string,
   options: HerdrReadOptions = {},
 ): Promise<boolean> {
+  hostedCommit('herdr pressEnterAsync');
   return sendKeyAsync(pane, 'enter', session, options);
 }
 
 /** One key, by the name `herdr pane send-keys` takes. The same call `pressEnter` uses. */
 export function sendKey(pane: string, key: string, session?: string): boolean {
+  hostedCommit('herdr sendKey');
   try {
     execFileSync('herdr', [...(session ? ['--session', session] : []), 'pane', 'send-keys', pane, key], { stdio: 'ignore', timeout: 10_000 });
     return true;
@@ -1802,6 +1826,7 @@ export async function sendKeyAsync(
   session?: string,
   options: HerdrReadOptions = {},
 ): Promise<boolean> {
+  hostedCommit('herdr sendKeyAsync');
   try {
     await execText(
       'herdr',

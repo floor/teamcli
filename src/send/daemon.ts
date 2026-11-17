@@ -1,3 +1,4 @@
+import { hostedCommit } from '../host/request-scope.ts';
 import { recordDeliveredBody, RUNTIME_WAKE_MAX } from './readable-wake.ts';
 import { typedWakeMaxFor } from './readable-wake.ts';
 import { refuseTyping } from './no-pane-messaging.ts';
@@ -11,25 +12,12 @@ import { refuseTyping } from './no-pane-messaging.ts';
 // durable copy through the relay package under `<storeDir>/drops/<session>/<seat>/<id>`, and
 // appends `0600` JSONL records to `<storeDir>/messages.jsonl`.
 import { randomUUID } from 'node:crypto';
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, readFileSync } from 'node:fs';
+import { chmodSync, fchmodSync, linkSync, mkdirSync, openSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { connect } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { stage as relayStage } from '../../packages/relay/index.js';
+import { relayStage } from './relay-stage.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { seatNickname } from '../file/sections/seats.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -476,6 +464,7 @@ export function requestDaemon(
       resolve(null);
       return;
     }
+    hostedCommit('node:net.connect');
     const socket = connect({ path: socketPath });
     let buffer = '';
     let settled = false;
@@ -873,6 +862,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
       if (!dropLadder.ok) {
         return Promise.resolve(refuseTyped(`${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`));
       }
+      hostedCommit('relay stage');
       return relayStage(
         { dir: dropLadder.leaf, name: handoffId },
         { id: handoffId, record: request.body },
@@ -994,6 +984,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`,
       });
     }
+    hostedCommit('relay stage');
     return relayStage(
       { dir: dropLadder.leaf, name: queuedId },
       { id: queuedId, record: request.body },
@@ -1414,6 +1405,7 @@ async function executeQueuedSend(
   // The copy is the relay package's durable write: whole bytes, 0600 in a 0700 folder, published
   // by an exclusive link, so a holder already at the name is never replaced. The ladder above
   // stays this command's path policy; admission, history and the typed leg all stay here.
+  hostedCommit('relay stage');
   const staged = await relayStage(
     { dir: stateDropDir, name: msgId },
     { id: msgId, record: body },

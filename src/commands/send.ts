@@ -1,3 +1,4 @@
+import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
@@ -5,10 +6,12 @@ import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
 import { inlineWake, oversizedWake, recordDeliveredBody, typedWakeMaxFor, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
 import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync } from '../host/guarded-fs.ts';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
-import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
+import { relayDeliver } from '../send/relay-stage.ts';
+import { relayStage } from '../send/relay-stage.ts';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { nudgeBusNoWait } from '../bus/server.ts';
@@ -1658,6 +1661,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // stays on the log line; the admission is the owner's, because the owner seat signed it.
   // The default rule lifts the same gate and leaves the sender as the seat: the header names
   // the seat, and the id rides the seat's own record, or the file's seat when it has none.
+  // The owner as acting principal is never decided in the warm send host (rfc-bus-send-server §2.5).
+  if (seatApproved && !leadsLift) hostedFallbackPoint('the owner would be the acting principal');
   const acting: Caller = seatApproved && !leadsLift ? { kind: 'owner' } : caller;
   // The line's own team, for every reader outside this one: the history the receiving team keeps
   // must say where its sender stood, not leave a shared seat name to the local roster.
@@ -3801,14 +3806,16 @@ type StagedForWalk =
  *  An unanswered continuation files nothing: the claim stays `sent`. History is only appended. */
 function noteLateWebhook(posted: SenderPostOutcome, fields: StepFields, onDelivered: (ms: number) => void): void {
   if (posted.kind !== 'unknown' || posted.late === undefined) return;
-  void posted.late.then((late) => {
+  // The one callback the send path leaves running after it returns; the warm send host waits for
+  // it (bounded) before restoring the request's environment (rfc-bus-send-server §2.4).
+  deferHosted(posted.late.then((late) => {
     if (late.kind === 'posted') {
       webhookStep(fields, { kind: 'posted', ms: late.ms }, 'late');
       onDelivered(late.ms);
       return;
     }
     if (late.kind === 'failed') webhookStep(fields, { kind: 'failed', reason: late.reason }, 'late');
-  });
+  }));
 }
 
 async function postSeatWebhook(
@@ -3908,6 +3915,7 @@ async function stageSendRecord(
     }
   }
   const record = recordTextOf(signed);
+  hostedCommit('relay stage');
   const staged = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
   if (staged.outcome === 'refused') return { ok: false, reason: staged.reason };
   // The step fields are the record's own: the receiving team's store, the message id, the
@@ -6376,6 +6384,8 @@ function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: 
  *  The leaf alone would leave the parents at the umask, so other users could list
  *  session ids and seat names. `.agents` itself is not changed. */
 export function sealDropTree(dir: string, session: string, seat: string): void {
+  // Creates the drop folders and narrows their modes: an effect.
+  hostedCommit('drop tree');
   const root = join(dir, 'send-drops');
   const sessionDir = join(root, session);
   const leaf = join(sessionDir, seat);

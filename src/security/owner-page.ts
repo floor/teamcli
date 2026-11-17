@@ -23,10 +23,12 @@ import { grantCard, ownerActionCard, ownerActionDetails, teamCreateCard, teamCre
 import { actionRequestsFolder, approveTeamCreate, readTeamCreateRecord, TEAM_CREATE_ID_PATTERN, TEAM_CREATE_TTL_MS, teamCreateSummary, type TeamCreateParams } from '../client/team-create.ts';
 import { approveOwnerAction, EXACT_ANSWER_ACTIONS, OWNER_ACTION_ID_PATTERN, OWNER_ACTION_TTL_MS, OWNER_ACTIONS, ownerActionSummary, readOwnerActionRecord, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
 import { answerChoiceOf, approveAsOwnerSeat, deferUntilOf, GRANT_REQUEST_ID_PATTERN, GRANT_REQUEST_TTL_MS, grantRequestsFolder, pendingGrantPrompt } from '../client/emission.ts';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { writeFileSync } from '../host/guarded-fs.ts';
 import { openRequestLink } from '../client/request-link.ts';
 import { join } from 'node:path';
 import { ownerDeviceConsent, readProposal, readSecurityProfile, securityProfileChallenge, securityProfileLine, signSecurityProfile } from './profile.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export const OWNER_PAGE_RP_ID = 'localhost';
 
@@ -517,6 +519,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
 
 export function serveOwnerPage(options: OwnerPageOptions): Promise<{ server: Server; url: string; port: number; token: string }> {
   const token = options.token ?? randomBytes(18).toString('base64url');
+  hostedCommit('node:http.createServer');
   const server = createServer();
   return new Promise((resolve, reject) => {
     server.once('error', reject);

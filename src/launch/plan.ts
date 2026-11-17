@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ownStartFolderProblem, type StartFolder, type OwnStartFolderInput } from '../worktree/place.ts';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';

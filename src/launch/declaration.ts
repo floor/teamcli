@@ -12,7 +12,8 @@
 // (`declaredInboundOf` in `src/send/inbound.ts`) handles that precedence; this module only reads
 // what the scripts themselves say, so the launch side can merge that word into the one file the
 // CLI actually loads.
-import { closeSync, constants, lstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, lstatSync, readSync } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 

@@ -29,11 +29,8 @@ import { spawn } from 'node:child_process';
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { readTeamConfig } from '../../file/team-config.ts';
-import {
-  stage as relayStage,
-  type CopyTarget,
-  type RelayReceipt as PackageRelayReceipt,
-} from '../../../packages/relay/index.js';
+import type { CopyTarget, RelayReceipt as PackageRelayReceipt } from '../../../packages/relay/index.js';
+import { relayStage } from '../relay-stage.ts';
 import {
   DELIVERY_RECEIPT_SECONDS,
   receiptSecondsFor,
@@ -58,6 +55,7 @@ import {
   type RuntimePushOutcome,
   type RuntimePushRequest,
 } from '../push.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 /** Canonical leg name in `DELIVERY_LEGS`. */
 export const HEADLESS_RESUME_ROUTE = 'headless-resume' as const;
@@ -341,6 +339,7 @@ export const defaultHeadlessResumeSpawn: HeadlessResumeSpawn = (binary, args, op
     const file = executableOnPath(binary, env.PATH) ?? binary;
     let child;
     try {
+      hostedCommit('node:child_process.spawn');
       child = spawn(file, [...args], {
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
         env,

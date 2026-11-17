@@ -705,3 +705,59 @@ test('a short id still refuses a corrupt record sharing its prefix', async () =>
   expect(result.code).toBe(1);
   expect(result.err).toContain('cannot be read');
 });
+
+// The warm send host's first-effect check (rfc-bus-send-server §2.5; review round 1 F1): an
+// admitted reply whose client no longer holds at its first effect is handed back before the
+// target's seat lock, the drop folders or any record exists. Every file and folder under the scene
+// keeps its bytes, mode, size and mtime, and no delivery is attempted.
+describe('the hosted first-effect check', () => {
+  function tree(dir: string): Map<string, string> {
+    const { readdirSync, lstatSync } = require('node:fs') as typeof import('node:fs');
+    const out = new Map<string, string>();
+    const walk = (at: string): void => {
+      for (const name of readdirSync(at)) {
+        if (name === '.git') continue;
+        const path = join(at, name);
+        const stat = lstatSync(path);
+        const bytes = stat.isFile() ? readFileSync(path, 'base64') : '';
+        out.set(path, `${stat.isDirectory() ? 'd' : 'f'}:${stat.mode}:${stat.size}:${stat.mtimeMs}:${bytes}`);
+        if (stat.isDirectory()) walk(path);
+      }
+    };
+    walk(dir);
+    return out;
+  }
+
+  test('a reply whose client changed before its first effect writes nothing at all', async () => {
+    const { armHostedGuard, disarmHostedGuard, HostedFallback, runAsHostedRequest } = await import('../src/host/request-scope.ts');
+    place('helper', 'w2:p1');
+    sentTo('helper', SENT, { from: 'worker' });
+    const io = testIo(root);
+    const paneRoot = 4242;
+    io.callerSources = () => ({
+      ancestors: () => [{ pid: paneRoot, name: 'zsh' }, { pid: 1, name: 'herdr' }],
+      agents: () => [{ pane: 'w2:p1', name: 'helper', agent: null, workspace: '', status: '', cwd: root }],
+      paneRootPid: (pane: string) => (pane === 'w2:p1' ? paneRoot : null),
+      env: io.env,
+      stdinIsTTY: io.stdinIsTTY,
+    });
+    const before = tree(base);
+    let delivered = 0;
+    armHostedGuard(() => 'the client is gone');
+    let error: unknown = null;
+    try {
+      await runAsHostedRequest({ peerPid: 1, startPid: 1, currentParent: () => 1 }, () => runReply([SENT, 'answered'], io, host({ newId: () => REPLY, deliver: async () => { delivered += 1; return { ok: true }; } } as never)));
+    } catch (thrown) {
+      error = thrown;
+    }
+    const guard = disarmHostedGuard();
+    expect(error).toBeInstanceOf(HostedFallback);
+    expect(guard.first).toBeNull();
+    expect(delivered).toBe(0);
+    expect(tree(base)).toEqual(before);
+    // In-process, the same reply lands.
+    const local = testIo(root);
+    local.callerSources = io.callerSources;
+    expect(await runReply([SENT, 'answered'], local, host({ newId: () => REPLY })), local.err).toBe(0);
+  });
+});

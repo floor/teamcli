@@ -5,16 +5,8 @@
 // connector reads the same records. Nothing here waits on a seat, and a held or unreachable seat
 // silences neither the notification nor the record.
 import { createHash, randomBytes } from 'node:crypto';
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, existsSync, fsyncSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
 import { messageFile, type MessagePayload } from '../commands/messages.ts';

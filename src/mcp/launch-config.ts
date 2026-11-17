@@ -1,7 +1,8 @@
 // A Claude channel's project config belongs to one seat and one claimed launch. No CLI home,
 // shared lobby config or trust store is read or written here.
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
+import { mkdirSync, openSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLegacyTrust } from '../file/paths.ts';

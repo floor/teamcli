@@ -29,7 +29,8 @@
 // that file changed was launched without the setting in force, and the socket it exposes is
 // older than the declaration. `inboundIsLive` compares the two so a not-yet-restarted seat is
 // skipped rather than sent a frame its session would hold.
-import { chmodSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { cliHookSettingsPath, cliHookLegacySettingsPath, setsSettings } from '../launch/cli-hook.ts';
 import {

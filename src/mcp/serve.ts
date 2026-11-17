@@ -77,6 +77,7 @@ import {
   type InboxListener,
 } from './inbox.ts';
 import { selfRunner } from './register.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** The protocol version this server speaks when the client names one it does not know. */
 export const PROTOCOL_VERSION = '2025-06-18';
@@ -216,6 +217,7 @@ export function restartSelf(hooks: RestartHooks = {}): void {
   let child: ChildProcess;
   try {
     const args = withoutEpoch(process.argv.slice(2));
+    hostedCommit('node:child_process.spawn');
     child = start(command, [entry, ...args, ...(hooks.epoch === undefined ? [] : ['--epoch', hooks.epoch])], {
       stdio: 'inherit',
       env: { ...process.env, [SERVE_REPLACEMENT_ENV]: '1' },

@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { hostedCommit } from './host/request-scope.ts';
+import { existsSync } from 'node:fs';
+import { mkdirSync, renameSync, unlinkSync } from './host/guarded-fs.ts';
 import { appendStateFile, stateFileStat } from './file-write.ts';
 import { dirname, join } from 'node:path';
 import { plainLine } from './launch/plain.ts';
@@ -27,6 +29,7 @@ const reported = new Set<string>();
 // file, a permission the owner kept — is refused and reported once per path here. Commands
 // keep their own result; the diagnostic makes missing evidence visible.
 export function logLine(dir: string, command: string, caller: string, what: string, now: Date = new Date()): void {
+  hostedCommit('logLine');
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const path = join(dir, LOG_FILE);

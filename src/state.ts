@@ -1,5 +1,8 @@
+import { currentRunMemo } from './run-memo.ts';
+import { hostedCommit } from './host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { linkSync, mkdirSync, openSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from './host/guarded-fs.ts';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
@@ -1032,6 +1035,7 @@ export function updateState<T>(
   change: (state: State) => T,
   options: { waitMs?: number; writeWhen?: (result: T) => boolean } = {},
 ): T {
+  hostedCommit('updateState');
   return withLock(dir, () => {
     const state = readState(dir);
     const result = change(state);
@@ -1101,6 +1105,9 @@ function writeTemporary(path: string, text: string, random: () => string, mode?:
  * the only file this call created — leaving the live name as it was.
  */
 export function writeAtomic(path: string, text: string, options: { random?: () => string } = {}): void {
+  hostedCommit('writeAtomic');
+  // A policy, state or config file written in this run may change what a team text validates to.
+  currentRunMemo()?.teamLoads.clear();
   const random = options.random ?? (() => randomBytes(10).toString('hex'));
   const temporary = writeTemporary(path, text, random, 0o600);
   try {

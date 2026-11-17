@@ -11,6 +11,7 @@ import type { Command, Io } from '../io.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { parseYaml, toValue } from '../yaml.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export const USAGE = `Usage: team git <arguments>
 
@@ -171,6 +172,7 @@ function currentBranch(cwd: string): Promise<string | null> {
 
 function run(binary: string, args: string[], io: Io, env: Record<string, string>): Promise<number> {
   return new Promise((resolve) => {
+    hostedCommit('node:child_process.spawn');
     const child = spawn(binary, args, { cwd: io.cwd, env, stdio: 'inherit' });
     child.on('error', (error) => { io.stderr(`team: ${binary} could not start: ${error.message}\n`); resolve(1); });
     child.on('close', (code) => resolve(code ?? 1));

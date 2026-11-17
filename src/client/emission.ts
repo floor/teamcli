@@ -14,7 +14,8 @@
 
 import { createHash, randomBytes, randomInt, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { charterLifetime } from '../charter/check.ts';
@@ -31,6 +32,7 @@ import { chooseGrantExpiry, projectIdOfTeamId } from './grant-duration.ts';
 import { bundleCard, bundleSpecsInForce, projectIdOfTeam } from './bundles.ts';
 import { grantPromptText } from './grant-prompt.ts';
 import { msg } from './grant-messages.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export type GrantEmission = 'owner-terminal' | 'conversational';
 
@@ -218,6 +220,7 @@ export const systemNotifier: OwnerNotifier = Object.assign((title: string, text:
   if (platform() !== 'darwin') return 'failed';
   const quote = (value: string) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   try {
+    hostedCommit('node:child_process.execFileSync');
     execFileSync('/usr/bin/osascript', ['-'], { input: `display notification ${quote(text)} with title ${quote(title)}\n`, stdio: ['pipe', 'ignore', 'ignore'], timeout: 10_000 });
     return 'unconfirmed';
   } catch {

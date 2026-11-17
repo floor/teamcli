@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
-import { findRoot, holdGitRoots, HELD_GIT_ROOT_MS, setGitAnsweredHook } from '../src/file/load.ts';
+import { findRoot, gitRootReadCount, holdGitRoots, HELD_GIT_ROOT_MS, setGitAnsweredHook } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { hostedLoop } from './helpers/hosted-watch.ts';
@@ -54,13 +54,13 @@ function commitEmpty(root: string): void {
 
 /** The answer findRoot gives while no `git` can be started: a held root answers, a read that
  *  needs a child finds none and answers null. */
+// The hold's answer only: null when the read had to start git. The hold is partitioned by the git
+// environment (PATH among it), so a changed PATH can no longer stand for "no git here"; the count
+// of git starts tells the two apart instead.
 function withoutGit(cwd: string): string | null {
-  process.env.PATH = join(base, 'no-bin');
-  try {
-    return findRoot(cwd);
-  } finally {
-    process.env.PATH = priorPath;
-  }
+  const before = gitRootReadCount();
+  const root = findRoot(cwd);
+  return gitRootReadCount() === before ? root : null;
 }
 
 function hold(options: { ttlMs?: number; now?: () => number } = {}): () => void {

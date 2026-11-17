@@ -13,6 +13,7 @@
 // judgement the command already made, and the socket reading looks at file names and process
 // lists — it never opens, dials or writes to another session's socket.
 
+import { hostedCommit } from '../host/request-scope.ts';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PaneProcesses } from '../herdr.ts';
@@ -76,6 +77,7 @@ export function routesPath(project: string, root: string, home: string): string 
 /** Appends one route record to the project's own stream. The result is the caller's to judge:
  *  `team route` refuses when it is not `ok`, so the answer only ever follows a written record. */
 export function appendRoute(project: string, root: string, home: string, record: RouteRecord): HistoryWrite {
+  hostedCommit('appendRoute');
   return appendStoreLine(project, root, home, ROUTES_FILE, { ...record });
 }
 

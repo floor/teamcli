@@ -33,7 +33,8 @@
 // never written into the record. Writing never creates a key: a machine with no owner key
 // refuses the switch and names the owner terminal's signed-write path.
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from './host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { canonical } from './approve/fingerprint.ts';

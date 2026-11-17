@@ -29,8 +29,10 @@
 // approval is spent only by the owner helper, in that account's own ledger folder
 // (src/client/owner-spend.ts). No process of an entity account writes any of it.
 
+import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { fchmodSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import {
@@ -318,6 +320,7 @@ const LEDGER_ENTRY = /^oa_[0-9a-f]{24}\.[a-z-]{1,40}$/;
  * the system folder's, which no command of this account writes, among them — spends nothing.
  */
 export function claimInLedger(home: string, id: string, action: string, at: Date): { ok: true } | { ok: false; why: string } {
+  hostedCommit('claimInLedger');
   const entry = `${id}.${action}`;
   if (!LEDGER_ENTRY.test(entry)) return { ok: false, why: `request ${id} cannot be spent for ${action}` };
   const state = ownerStateOf(home);

@@ -2,7 +2,8 @@
 // case-safe file naming and the quarantine rename. No locking lives here; the store serializes
 // callers and owns the commit order.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { appendStateFile, writeStateFile } from '../../file-write.ts';
 import { canonicalJson } from '../canonical.ts';

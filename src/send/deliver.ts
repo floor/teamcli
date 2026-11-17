@@ -15,7 +15,8 @@ const NO_PANE_MESSAGING_ON = true;
 // greyed suggestion or placeholder is faint (SGR 2), the screen reads it `idle`, and so it counts
 // as an empty box — it is never text to wait for, never text to clear, and never a reason for an
 // Enter. Only text the CLI drew unstyled is in the box.
-import { chmodSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join } from 'node:path';
 import { stripSgr } from '../ansi.ts';
 import { boxHoldsText } from '../launch/deliver.ts';

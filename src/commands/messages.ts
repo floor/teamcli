@@ -15,7 +15,8 @@
 // record a previous build left verifies the same way; nothing writes it any more. The signature
 // is integrity: every seat runs as the owner-user, so it is not proof of who sent it.
 import { type KeyObject } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';

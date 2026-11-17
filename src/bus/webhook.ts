@@ -31,7 +31,8 @@
 // so the bus and the seat's pull keep the fallback they always had.
 import { spawn } from 'node:child_process';
 import { writeStateFile } from '../file-write.ts';
-import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { renameSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SeatWebhook, TeamFile } from '../file/types.ts';
@@ -42,6 +43,7 @@ import { strayWebhookOf, webhookRouteOf, type WebhookRoute } from '../send/webho
 import { WEBHOOK_SENDER_DEADLINE_MAX_MS } from '../settings/webhook-sender.ts';
 import { webhookSenderDeadlineMs } from '../settings/webhook-sender-policy.ts';
 import type { SignedEventRecord } from './log.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** How hard one record is tried when the request could not be sent at all: three attempts in
  *  total, five seconds each, then one and four seconds between them — about twenty seconds. A
@@ -647,6 +649,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
       // A redirect is never followed: it would carry the secret to a destination the routine's
       // own address never named. The policy rides on the attempt, not on the request object, so a
       // row that names neither new field builds exactly the request object it always did.
+      hostedCommit('fetch');
       const response = await fetchFn(request.url, { ...prepared, redirect: 'error', signal: AbortSignal.timeout(policy.timeoutMs) });
       if (response.status >= 200 && response.status < 300) {
         if (claimDir !== null) finishClaim(claimDir, claimId, () => new Date(), input.root);
@@ -872,6 +875,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     // One request, built above. The signal is the policy max when the sender deadline is the
     // bound, so the injected request can still settle after this caller has returned. A tighter
     // row aborts at its own bound.
+    hostedCommit('fetch');
     const pending = (input.fetch ?? fetch)(request.url, {
       ...prepared,
       redirect: 'error',
@@ -966,6 +970,7 @@ function unrefPipe(pipe: unknown): void {
  *  settled the answer itself; `stop` closes the pipes so the child settles after the parent is gone. */
 function spawnLateWorker(job: LateJob): { stop: () => void; took: () => void; done: Promise<LateLine | null> } {
   const entry = fileURLToPath(import.meta.url);
+  hostedCommit('node:child_process.spawn');
   const child = spawn(process.execPath, [entry, '--finish-late'], {
     detached: true,
     stdio: ['pipe', 'pipe', 'ignore'],
@@ -1197,6 +1202,7 @@ async function finishLateWorker(): Promise<void> {
   const started = Date.now();
   let line: LateLine;
   try {
+    hostedCommit('fetch');
     const response = await fetch(job.url, {
       method: 'POST',
       headers: job.headers,

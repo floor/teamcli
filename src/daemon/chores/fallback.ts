@@ -22,6 +22,7 @@ import {
   type SweepRootResult,
 } from '../fallback-sweep.ts';
 import type { ChoresPass } from './child.ts';
+import { sweepCountsAreNews } from '../sweep-said.ts';
 import { inboxArchivePass, type InboxArchiveDeps, type InboxArchivePass } from './inbox-archive.ts';
 
 import type { ChoresChildConfig } from './protocol.ts';
@@ -42,7 +43,7 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
     return notes;
   }
   const report = entry.report;
-  if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
+  if (report !== null && sweepCountsAreNews('chores', entry.root, report)) {
     notes.push(
       `fallback sweep: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
     );

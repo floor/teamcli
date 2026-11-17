@@ -5,7 +5,8 @@
 // taken without waiting and tried again until the deadline. Bun has no call for it, so it is
 // called from the system library through `bun:ffi`, required only when a lock is taken (the
 // helper runs under Bun), so the built CLI compiles without Bun's types.
-import { closeSync, openSync } from 'node:fs';
+import { closeSync } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import { createRequire } from 'node:module';
 
 const LOCK_EX = 2;

@@ -8,7 +8,8 @@
 // holds the three operations every wake caller shares (the watch's unread pass, the watch's
 // retry, and the daemon's wake child); each caller passes the path it resolved with `wakePath`.
 import { randomBytes } from 'node:crypto';
-import { closeSync, fsyncSync, linkSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, fsyncSync, readFileSync } from 'node:fs';
+import { linkSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join } from 'node:path';
 import { dropMessage } from './native.ts';
 

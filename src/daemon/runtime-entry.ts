@@ -10,9 +10,8 @@
 // answered the health probe. `cleanRuntime` only deletes folders named for a content hash, so the
 // record survives a refresh; the copy it describes may not. Nothing here reads a file a CLI
 // owns: the record lives under the machine folder this module names.
-import {
-  closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readSync, writeSync,
-} from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, readSync } from 'node:fs';
+import { mkdirSync, openSync, writeSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { daemonRuntimeRoot } from './paths.ts';

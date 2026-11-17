@@ -18,6 +18,7 @@
 // its `.agents/team.yaml` is retired, so the loader's resolved path names no file. The identity
 // is then the canonical root that path resolves to — the key the registry addresses the team by
 // — so a registry-only watch is admitted while another root or another file name still refuses.
+import { HOSTED_NO_AUTHORITY, hostedRequest } from '../host/request-scope.ts';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -88,6 +89,8 @@ function stateUnderLock(dir: string): State {
  * never stored or accepted as a token.
  */
 export function verifyWatchAuthority(input: WatchAuthorityInput): WatchActorVerdict {
+  // A line the warm send host runs for a client never carries a watch's authority.
+  if (hostedRequest() !== null) return refuse(HOSTED_NO_AUTHORITY);
   if (input.purpose !== WATCH_DIRECT_WORK) {
     return refuse('the watch actor is admitted for direct work only');
   }

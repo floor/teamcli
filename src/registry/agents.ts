@@ -13,7 +13,8 @@ import { traceChildStep } from '../diagnostics/child-steps.ts';
 // (src/send/admit.ts).
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { isSeatId, updateState, withLock, type SeatState } from '../state.ts';
 import type { LaunchedIdentity } from '../launch/identity.ts';

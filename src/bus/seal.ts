@@ -13,7 +13,8 @@
 // seals existed, and a segment that cannot be sealed blocks the sealing of every later segment
 // (their predecessor chain would be broken).
 import { createHash, type KeyObject } from 'node:crypto';
-import { constants, closeSync, fstatSync, openSync, readSync, type Stats } from 'node:fs';
+import { constants, closeSync, fstatSync, readSync, type Stats } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { writeAtomic } from '../state.ts';

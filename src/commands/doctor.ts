@@ -101,6 +101,7 @@ export type CommandRunner = (binary: string, args: string[]) => { status: number
 export type CommandRead = { status: number | null; stdout: string; stderr: string };
 
 export function run(binary: string, args: string[]): { status: number | null; stdout: string } | null {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync(binary, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 });
   return result.error ? null : { status: result.status, stdout: result.stdout };
 }
@@ -1007,6 +1008,7 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
 import { firstRunLine, firstRunVerdicts, codexOwnServerArgv } from '../launchers/first-run.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from '../permissions/must-not-pretend.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /**
  * The projects-root findings (src/file/root-word.ts): each value of the team's text that writes

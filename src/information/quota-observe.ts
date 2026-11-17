@@ -12,6 +12,7 @@ import { readScreen, statusRow } from '../watch/screen.ts';
 import type { CostObservation, QuotaObservation, QuotaWindow } from './quota.ts';
 import { PANE_UNREAD, USAGE_UNANSWERED } from './quota.ts';
 import { realKey, type MachineUsage, type UsageView } from './usage.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export type QuotaLive = {
   observations: QuotaObservation[];
@@ -347,6 +348,7 @@ export function parseUsageOutput(text: string, now: number): QuotaObservation[] 
 function runUsageCommand(cli: string): string | null {
   if (cli !== 'agy' && cli !== 'antigravity') return null;
   try {
+    hostedCommit('node:child_process.execFileSync');
     return execFileSync('agy', ['--print', '/usage'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 });
   } catch {
     return null;

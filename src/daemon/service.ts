@@ -71,6 +71,8 @@ export type ServiceProgram = {
   /** Whether the unit's run command carries the watch opt-in. Absent means the unit starts the
    *  daemon without a hosted watch, exactly as a plain `run` does. Independent of `presence`. */
   watch?: boolean;
+  /** `--send-server`: the run starts the warm send host (src/host/). */
+  sendServer?: boolean;
   /** The PATH the installing shell had (0.5.9). The service manager starts a unit with only
    *  /usr/bin:/bin:/usr/sbin:/sbin, where herdr (often ~/.local/bin or /opt/homebrew/bin) is not
    *  found: every session read then failed and every hosted send answered "the session could not

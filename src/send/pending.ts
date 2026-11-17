@@ -31,7 +31,9 @@
 // call could substitute. It lives beside `messages.jsonl` in the project's state folder, at mode
 // 0600, one file per id, written whole by rename; a file that cannot be written refuses the
 // handoff, so an unrecorded native send is never the easy path.
-import { chmodSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { hostedCommit } from '../host/request-scope.ts';
+import { readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { storePath } from '../store/store.ts';
@@ -95,6 +97,7 @@ export function markPending(dropDir: string, drop: Omit<PendingDrop, 'tries'>): 
 
 /** Writes a failed retry back, so the next pass knows how many tries are left. */
 export function recordPendingTry(dropDir: string, drop: PendingDrop): void {
+  hostedCommit('recordPendingTry');
   writePendingDrop(dropDir, { ...drop, tries: drop.tries + 1 });
 }
 
@@ -377,6 +380,7 @@ function sweepPendingDir(
  *  temporary file at 0600 renamed to the id's own name. An existing file at that path is never
  *  replaced — ids are never reused, so a file there is not this handoff's. */
 export function writePending(project: string, root: string, home: string, record: PendingNative): PendingWrite {
+  hostedCommit('writePending');
   const store = storePath(project, root, home);
   const ladder = ensureStoreLadder(store, home);
   if (ladder !== null) return { ok: false, reason: ladder };

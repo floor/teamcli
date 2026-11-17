@@ -5,8 +5,10 @@
 // it; the test suite's preload stands in for it (test/preload/team-config-source.ts).
 import { spawnSync } from 'node:child_process';
 import { OWNER_HELPER_LAUNCHER, OWNER_HELPER_SUDO, OWNER_HELPER_USER } from './owner-spend.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export function execOwnerHelper(stdin: string): { status: number | null; stdout: string } {
+  hostedCommit('node:child_process.spawnSync');
   const run = spawnSync(OWNER_HELPER_SUDO, ['-n', '-u', OWNER_HELPER_USER, '--', OWNER_HELPER_LAUNCHER], {
     input: stdin,
     encoding: 'utf8',

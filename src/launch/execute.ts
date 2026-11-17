@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname } from 'node:path';
 import { SIDEBAR_TTL_CAP_MS, type ConfigReload, type HerdrAgent, type PaneProcesses, type SidebarApply } from '../herdr.ts';
 

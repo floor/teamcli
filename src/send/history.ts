@@ -1,18 +1,6 @@
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  fstatSync,
-  openSync,
-  readdirSync,
-  readSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs';
+import { hostedCommit } from '../host/request-scope.ts';
+import { closeSync, constants, existsSync, fstatSync, readdirSync, readSync, statSync } from 'node:fs';
+import { chmodSync, fchmodSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join, sep } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { folderProblemAt } from '../held.ts';
@@ -195,7 +183,7 @@ export function ensureStoreLadder(storeDir: string, home: string): string | null
   return null;
 }
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 
 /**
  * Creates `path` as a real folder of this user's at mode 0700, one level at a time so no parent
@@ -285,6 +273,7 @@ function rotateHistory(path: string): string | null {
  * at mode 0600 without following symbolic links. Rotates at 1 MB keeping 3 files at mode 0600.
  */
 export function appendHistory(project: string, root: string, home: string, entry: HistoryEntry): HistoryWrite {
+  hostedCommit('appendHistory');
   const record: HistoryEntry = {
     ts: entry.ts,
     from: entry.from,
@@ -322,6 +311,7 @@ export function appendStoreLine(
   record: Record<string, unknown>,
   options: { rotate?: boolean; label?: string } = {},
 ): HistoryWrite {
+  hostedCommit('appendStoreLine');
   const storeDir = storePath(project, root, home);
   const ladderErr = ensureStoreLadder(storeDir, home);
   if (ladderErr !== null) return { ok: false, reason: ladderErr };

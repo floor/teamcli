@@ -1,5 +1,6 @@
 // A hand-started seat uses the same bounded project pair, config gate and register writer.
-import { lstatSync, rmdirSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
+import { rmdirSync } from '../host/guarded-fs.ts';
 import { dirname, join, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, callerVerdict, logTag, recordedPaneOf, standingOf } from '../caller.ts';

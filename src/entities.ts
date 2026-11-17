@@ -3,19 +3,8 @@
 // nicknames. Read-only, like the rest of the configuration readers: this writes nothing, runs
 // nothing and opens no pane; the `names.unique` word has its own writer in
 // `src/config/entity-edit.ts`.
-import {
-  closeSync,
-  existsSync,
-  realpathSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, existsSync, realpathSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, unlinkSync, writeFileSync, writeSync } from './host/guarded-fs.ts';
 import { dirname, join, normalize } from 'node:path';
 import { editedRecordText, getAt, withValue } from './config/team-record.ts';
 import { leadWordProblem } from './lead.ts';
@@ -69,6 +58,7 @@ export function lockedEntities<T>(home: string, work: () => T): T {
     // The writer re-reads the file under this lock, so whatever the run memoised before the
     // write is stale from here on, for this home: drop it before the work runs.
     currentRunMemo()?.entityRules.delete(home);
+    currentRunMemo()?.teamLoads.clear();
     return work();
   } finally {
     try {

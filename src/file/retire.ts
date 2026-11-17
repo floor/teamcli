@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { parkInRuntimeTrash, runtimeTrashEmptyLine } from './runtime-trash.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** Set to any non-empty value to skip the system Trash and park in the runtime trash (the test suite does). */
 export const NO_SYSTEM_TRASH_ENV = 'TEAM_NO_SYSTEM_TRASH';
@@ -36,6 +37,7 @@ export function retireTeamFile(
     ? options.trashCommand
     : (env[NO_SYSTEM_TRASH_ENV] ? null : trashCommand(options.platform ?? process.platform));
   if (command !== null) {
+    hostedCommit('node:child_process.spawnSync');
     const ran = spawnSync(command[0], [...command[1], path], { stdio: 'ignore', timeout: 15_000 });
     if (ran.status === 0 && !existsSync(path)) return { how: 'trash', to: 'the Trash' };
   }

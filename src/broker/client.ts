@@ -6,6 +6,7 @@
 import { connect } from 'node:net';
 import type { TaskRead } from '../tasks/adapter.ts';
 import { MAX_ANSWER_BYTES, brokerSocket, encodeLine, parseAnswer, type BrokerRequest } from './protocol.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** The `TIMEOUT_MS = 5000` shape from the release check's wiring: a hung broker must not hang
  *  the seat. */
@@ -37,6 +38,7 @@ export function askBroker(root: string, request: BrokerRequest, options: { deadl
     let connected = false;
     let buffer = '';
     let timer: ReturnType<typeof setTimeout> | undefined;
+    hostedCommit('node:net.connect');
     const socket = connect(brokerSocket(root));
     const finish = (outcome: BrokerOutcome) => {
       if (settled) return;

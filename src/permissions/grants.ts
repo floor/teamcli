@@ -40,7 +40,8 @@
 // list here is the grantable side of the map's last row; the map owns the command side.
 
 import type { KeyObject } from 'node:crypto';
-import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { linkSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { charterGrantBound } from '../charter/check.ts';

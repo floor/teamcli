@@ -16,6 +16,7 @@
 //
 // The client itself lives in `packages/relay` (index.js) with the rest of the transport. This
 // module keeps the names TeamCLI imports and the build's own policy flag beside them.
+import { hostedCommit } from '../host/request-scope.ts';
 import { FRAME_LIMIT as RELAY_FRAME_LIMIT, SEND_TIMEOUT_MS as RELAY_SEND_TIMEOUT_MS, dial as relayDial } from '../../packages/relay/index.js';
 
 /** An accepted frame, or the reason the socket did not take it. */
@@ -50,5 +51,6 @@ export const SOCKET_SEND: boolean = true;
  * frame was taken, or the deadline.
  */
 export function sendFrame(socketPath: string, frame: string, timeoutMs = SEND_TIMEOUT_MS): Promise<SendOutcome> {
+  hostedCommit('sendFrame');
   return relayDial(socketPath, frame, timeoutMs);
 }

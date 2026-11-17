@@ -18,7 +18,8 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { loadAndResolvePolicyChain, writePolicySet } from '../policy/sources.ts';
@@ -34,6 +35,7 @@ import {
   type SignedOwnerAnswer,
   type SignerType,
 } from './owner-signature.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export { OWNER_SEAT_ANSWER_DOMAIN, ownerSeatAnswerBytes, ownerSeatPublicKey, signatureOk, webauthnChallenge };
 export type { OwnerSeatAnswer, OwnerSigner, SignedOwnerAnswer, SignerType };
@@ -61,7 +63,7 @@ export function ownerSeatHelperPath(home: string = homedir()): string {
 /** The system adapter: the compiled helper (`helpers/owner-seat-keystore.swift`). */
 export function systemOwnerSeatKeyStore(helper: string = ownerSeatHelperPath()): OwnerSeatKeyStore {
   const run = (args: string[], input?: string, timeout = 120_000): string =>
-    execFileSync(helper, args, { encoding: 'utf8', stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], timeout, ...(input !== undefined ? { input } : {}) }).trim();
+    (hostedCommit('node:child_process.execFileSync'), execFileSync(helper, args, { encoding: 'utf8', stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], timeout, ...(input !== undefined ? { input } : {}) }).trim());
   const point = (out: string) => /^04[0-9a-f]{128}$/.test(out);
   return {
     name: 'system-credential-store',

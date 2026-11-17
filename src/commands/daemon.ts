@@ -79,8 +79,8 @@ import { pidAlive } from '../state.ts';
 import { version as installedVersion, gitHead as installedGitHead } from '../version.ts';
 
 export const USAGE = `Usage: team daemon status [--json]
-       team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--no-presence] [--no-watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+       team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]
+       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
        team daemon restart [--dry-run] [--json]
        team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
        team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
@@ -92,6 +92,9 @@ and bus endpoints in the same process, so no second or third daemon process runs
 \`run --presence\` additionally hosts each checkout's presence pipeline: the spool ingester, the
 activity reconciler, the publisher and the per-seat health answer. Without the flag the daemon
 does not read presence at all.
+\`run --send-server\` additionally starts the warm send host: a supervised child that runs a seat's
+plain \`send\`, \`reply\` and \`ack\` lines with its modules already loaded, and hands every other
+line back to the client, which runs it as before.
 \`run --watch\` additionally hosts one watch per checkout on the daemon's existing heartbeat.
 Without the flag no checkout's watch is hosted, and the daemon reads no pane for one.
 \`install\` writes and registers a user service unit that starts the daemon at login and restarts
@@ -189,6 +192,8 @@ type Parsed = {
   dryRun: boolean;
   presence: boolean;
   watch: boolean;
+  sendServer: boolean;
+  noSendServer: boolean;
   /** `--no-presence` / `--no-watch`: an install drops that opt-in from the installed unit. */
   noPresence: boolean;
   noWatch: boolean;
@@ -207,7 +212,7 @@ type Parsed = {
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited', 'approval', 'reason'], ['json', 'dry-run', 'presence', 'watch', 'no-presence', 'no-watch', 'request']);
+  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited', 'approval', 'reason'], ['json', 'dry-run', 'presence', 'watch', 'send-server', 'no-presence', 'no-watch', 'no-send-server', 'request']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
   // uses `known`; the flags and values come from `readArgs`. `chores` is the daemon's own child
@@ -246,6 +251,8 @@ function parse(argv: string[]): Parsed {
     dryRun: args.flags.has('dry-run'),
     presence: args.flags.has('presence'),
     watch: args.flags.has('watch'),
+    sendServer: args.flags.has('send-server'),
+    noSendServer: args.flags.has('no-send-server'),
     noPresence: args.flags.has('no-presence'),
     noWatch: args.flags.has('no-watch'),
     startedBy: args.values['started-by'],
@@ -289,6 +296,9 @@ function verbProblem(parsed: Parsed): string | null {
   if (parsed.verb === 'run' && parsed.route !== undefined) return '--route belongs to fault-watch';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.presence) return '--presence belongs to run or install';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.watch) return '--watch belongs to run or install';
+  if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.sendServer) return '--send-server belongs to run or install';
+  if (parsed.verb !== 'install' && parsed.noSendServer) return '--no-send-server belongs to install';
+  if (parsed.sendServer && parsed.noSendServer) return '--send-server and --no-send-server cannot both be given';
   if (parsed.verb !== 'install' && parsed.noPresence) return '--no-presence belongs to install';
   if (parsed.verb !== 'install' && parsed.noWatch) return '--no-watch belongs to install';
   if (parsed.presence && parsed.noPresence) return '--presence and --no-presence cannot both be given';
@@ -497,7 +507,7 @@ type DaemonPlan = {
   optIns?: OptIns;
 };
 
-type OptIns = { presence: boolean; watch: boolean };
+type OptIns = { presence: boolean; watch: boolean; sendServer: boolean };
 
 /** The opt-ins the unit installed for `targetHome` runs with; none when it cannot be read. */
 function installedOptIns(manager: ServiceManager | null, targetHome: string): OptIns {
@@ -507,7 +517,7 @@ function installedOptIns(manager: ServiceManager | null, targetHome: string): Op
   } catch {
     // An unreadable unit keeps nothing: the install writes the opt-ins it names.
   }
-  return { presence: words.includes('--presence'), watch: words.includes('--watch') };
+  return { presence: words.includes('--presence'), watch: words.includes('--watch'), sendServer: words.includes('--send-server') };
 }
 
 /** An install keeps the opt-ins the installed unit already runs with and adds the ones it names;
@@ -516,6 +526,7 @@ function effectiveOptIns(parsed: Parsed, installed: OptIns): OptIns {
   return {
     presence: parsed.presence || (!parsed.noPresence && installed.presence),
     watch: parsed.watch || (!parsed.noWatch && installed.watch),
+    sendServer: parsed.sendServer || (!parsed.noSendServer && installed.sendServer),
   };
 }
 
@@ -562,10 +573,13 @@ function daemonPlan(io: Io, parsed: Parsed, home: string, installedFor?: (target
     if (parsed.watch) words.push('watch');
     if (parsed.noPresence) words.push('no-presence');
     if (parsed.noWatch) words.push('no-watch');
+    if (parsed.sendServer) words.push('send-server');
+    if (parsed.noSendServer) words.push('no-send-server');
     // What the unit will run with, read from the installed unit now: an answer to this plan
     // admits only this effective install, and a unit whose opt-ins changed since admits nothing.
-    const optIns = effectiveOptIns(parsed, installedFor === undefined ? { presence: false, watch: false } : installedFor(targetHome));
+    const optIns = effectiveOptIns(parsed, installedFor === undefined ? { presence: false, watch: false, sendServer: false } : installedFor(targetHome));
     words.push(`effective-presence=${optIns.presence ? 'on' : 'off'}`, `effective-watch=${optIns.watch ? 'on' : 'off'}`);
+    if (optIns.sendServer) words.push('effective-send-server=on');
     return { targetHome, realTargetHome, roots, words, optIns };
   }
   return { targetHome, realTargetHome, roots, words };
@@ -1061,6 +1075,7 @@ function installAgain(roots: readonly string[], parsed: Parsed): string {
   for (const root of roots) parts.push('--root', shellQuote(root));
   if (parsed.presence) parts.push('--presence');
   if (parsed.watch) parts.push('--watch');
+  if (parsed.sendServer) parts.push('--send-server');
   return parts.join(' ');
 }
 
@@ -1274,6 +1289,7 @@ function refreshStaleCopy(
     roots: named.roots,
     ...(words.includes('--presence') ? { presence: true } : {}),
     ...(words.includes('--watch') ? { watch: true } : {}),
+    ...(words.includes('--send-server') ? { sendServer: true } : {}),
     ...(io.env.PATH !== undefined && io.env.PATH !== '' ? { path: io.env.PATH } : {}),
   };
   let planned: string | null;
@@ -1675,6 +1691,13 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     io.stdout(
       `team daemon: running (pid ${String(process.pid)}); socket ${machine.socketPath}; ${rootsSummary(machine.roots).join('; ')}; broker not hosted\n`,
     );
+    // `--send-server`: the warm send host, a supervised child (src/host/supervise.ts).
+    const sendServer = parsed.sendServer
+      ? (await import('../host/supervise.ts')).superviseSendServer({
+          home,
+          log: (line) => appendDaemonLog(home, line, sources.now?.() ?? new Date()),
+        })
+      : null;
     let disarm = (): void => {};
     if (fatalWhy === null) {
       await new Promise<void>((settle) => {
@@ -1685,6 +1708,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       io.stderr(`team daemon: ${fatalWhy}\n`);
     }
     disarm();
+    await sendServer?.stop();
     await machine.close();
     appendDaemonLog(home, 'daemon stopped', sources.now?.() ?? new Date());
     if (fatalWhy !== null) {
@@ -1818,10 +1842,11 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   // An answered request runs the opt-ins its plan bound (checked against the unit at the gate);
   // every other install reads them from the unit now.
   const unitOptIns = installedOptIns(manager, targetHome);
-  const { presence, watch } = answeredPlan?.optIns ?? effectiveOptIns(parsed, unitOptIns);
+  const { presence, watch, sendServer } = answeredPlan?.optIns ?? effectiveOptIns(parsed, unitOptIns);
   const kept = [
     !parsed.presence && presence && unitOptIns.presence ? '--presence' : null,
     !parsed.watch && watch && unitOptIns.watch ? '--watch' : null,
+    !parsed.sendServer && sendServer && unitOptIns.sendServer ? '--send-server' : null,
   ].filter((word) => word !== null);
   if (kept.length > 0) {
     io.stderr(`team daemon: kept ${kept.join(' and ')} from the installed unit (drop with ${kept.map((word) => word.replace('--', '--no-')).join(' or ')})\n`);
@@ -1829,6 +1854,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   const dropped = [
     !presence && unitOptIns.presence ? '--presence' : null,
     !watch && unitOptIns.watch ? '--watch' : null,
+    !sendServer && unitOptIns.sendServer ? '--send-server' : null,
   ].filter((word) => word !== null);
   if (dropped.length > 0) {
     io.stderr(`team daemon: dropped ${dropped.join(' and ')} from the installed unit, as asked\n`);
@@ -1841,6 +1867,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // install writes no flag and starts exactly the daemon it did before.
     ...(presence ? { presence: true } : {}),
     ...(watch ? { watch: true } : {}),
+    ...(sendServer ? { sendServer: true } : {}),
     // The general grant and client key that admitted this install (io.general) are the door's
     // for this run and are never written into the unit: the service-started run is admitted by
     // its own `--started-by service-manager`, and a definition that named a key or a grant would

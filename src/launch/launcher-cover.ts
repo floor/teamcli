@@ -2,7 +2,8 @@
 // The approval digest is the owner's cover: a flag-on launch runs them only when the
 // stored digest is the bytes on disk now. Flag off never reads this.
 import { createHash } from 'node:crypto';
-import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { canonical } from '../approve/fingerprint.ts';
 

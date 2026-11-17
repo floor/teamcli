@@ -4,7 +4,8 @@
 // as drift, exactly as the inline text did. The files live in TeamCLI's machine folder, the
 // owner's alone, never in a checkout. Nothing secret is in them: they are the seat's rules.
 import { createHash } from 'node:crypto';
-import { closeSync, constants, lstatSync, mkdirSync, openSync, renameSync, writeSync } from 'node:fs';
+import { closeSync, constants, lstatSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, writeSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 

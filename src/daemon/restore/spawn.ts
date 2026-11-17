@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RestoreSweepResult } from '../../launch/restore-sweep.ts';
 import { discardRestoreInherit, restoreDoorText, writeRestoreDoor } from './token.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 /** The result kinds a child may report. A line naming anything else is not a result. */
 const RESULT_KINDS = new Set(['no-recorded-session', 'lock-held', 'not-running', 'unreadable', 'refused', 'ran']);
@@ -123,6 +124,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
 
   let child: ReturnType<typeof spawn>;
   try {
+    hostedCommit('node:child_process.spawn');
     child = spawn(process.execPath, [entry, '--inherited', nonce], {
       cwd: input.root,
       stdio: ['ignore', 'pipe', 'pipe', 'pipe'],

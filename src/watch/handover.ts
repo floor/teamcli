@@ -11,7 +11,8 @@
 // atomically and 0600, and its freshness window is measured on the daemon's own fixed liveness
 // beat (5 s), never on a watch rhythm: a sweep may be a day long, but a hosting daemon beats
 // every five seconds while it waits.
-import { existsSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { unlinkSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { writeStateFile } from '../file-write.ts';
 

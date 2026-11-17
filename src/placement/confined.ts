@@ -23,7 +23,8 @@
 //
 // This guards against a mistaken agent, as every placement does: every seat runs as the owner's
 // user. It is read only when the parent walk could not be read at all.
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { cliHookStatePath } from '../launch/cli-hook.ts';
