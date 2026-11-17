@@ -1000,4 +1000,7 @@ export function resetCallerCaches(): void {
   cachedCallerSnapshotId = null;
   cachedCallerSourcesRef = undefined;
   cachedCurrentCallers.clear();
+  // Noted once per cause per run: the warm send host forgets them between requests, so each
+  // hosted line says what an in-process run of it would.
+  notedAncestorFailures.clear();
 }
