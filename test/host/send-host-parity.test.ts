@@ -50,10 +50,11 @@ describe('the host runs a line exactly as the CLI does', () => {
     }, 120_000);
   }
 
-  test('another HOME or TMPDIR is handed back, and the next matching line still matches', () => {
+  test('another HOME is handed back, another TMPDIR is served as in-process, and the next line still matches', () => {
     const report = run('direct-first');
     expect(report.otherHome).toEqual({ v: 1, kind: 'fallback', why: "HOME differs from the send host's" });
-    expect(report.otherTmp).toEqual({ v: 1, kind: 'fallback', why: "TMPDIR differs from the send host's" });
+    expect(report.otherTmp.kind).toBe('ran');
+    expect(strip(report.otherTmp)).toEqual(strip(report.results[0]!.direct));
     expect(strip(report.after.hosted)).toEqual(strip(report.after.direct));
   }, 120_000);
 });
