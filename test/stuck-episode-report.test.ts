@@ -23,6 +23,7 @@ import type { Live } from '../src/status/compare.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { reportStuckSeats } from '../src/watch/unread.ts';
+import { appendHistory } from '../src/send/history.ts';
 
 const NOW = new Date('2026-11-05T12:00:00.000Z');
 const N = 600;
@@ -399,6 +400,33 @@ test('a recognised idle screen with mail past 2N is named, not excused', () => {
   expect(first[0]).toContain('4 messages wait');
   expect(first[0]).toContain('oldest 120 min');
   expect(said).toHaveLength(1);
+  expect(one.typed).toEqual([]);
+  expect(one.enters).toBe(0);
+});
+
+test('a typed wake the send already delivered is named, not reported as never typed', () => {
+  const made = world();
+  const team = teamOf(made);
+  fourHeld(made);
+  const wokenAt = new Date(NOW.getTime() - 119 * MIN).toISOString();
+  const wrote = appendHistory(team.project, made.root, made.home, {
+    ts: wokenAt,
+    from: 'owner',
+    to: 'worker',
+    body: `message ${OLD_1}`,
+    id: OLD_1,
+    outcome: 'delivered (typed wake)',
+    via: 'typed',
+  });
+  expect(wrote.ok).toBe(true);
+  const one = pane(ANTIGRAVITY_IDLE);
+  const said: string[] = [];
+  report(made, team, one, said);
+
+  const first = leadNotices(made);
+  expect(first).toHaveLength(1);
+  expect(first[0]).toContain(`a typed wake was delivered at ${wokenAt} and the seat has not read it since`);
+  expect(first[0]).not.toContain('no wake line was typed');
   expect(one.typed).toEqual([]);
   expect(one.enters).toBe(0);
 });
