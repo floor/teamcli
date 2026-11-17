@@ -1,4 +1,4 @@
-import { hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
+import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
@@ -3804,14 +3804,16 @@ type StagedForWalk =
  *  An unanswered continuation files nothing: the claim stays `sent`. History is only appended. */
 function noteLateWebhook(posted: SenderPostOutcome, fields: StepFields, onDelivered: (ms: number) => void): void {
   if (posted.kind !== 'unknown' || posted.late === undefined) return;
-  void posted.late.then((late) => {
+  // The one callback the send path leaves running after it returns; the warm send host waits for
+  // it (bounded) before restoring the request's environment (rfc-bus-send-server §2.4).
+  deferHosted(posted.late.then((late) => {
     if (late.kind === 'posted') {
       webhookStep(fields, { kind: 'posted', ms: late.ms }, 'late');
       onDelivered(late.ms);
       return;
     }
     if (late.kind === 'failed') webhookStep(fields, { kind: 'failed', reason: late.reason }, 'late');
-  });
+  }));
 }
 
 async function postSeatWebhook(

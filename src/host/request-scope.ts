@@ -104,3 +104,33 @@ export function hostedCommit(what: string): void {
   }
   guard.first = what;
 }
+
+/** How long the host waits, after a line's `main` returns, for the work that line left running
+ *  (rfc-bus-send-server §2.4, "Deferred callbacks"). */
+export const DEFERRED_WAIT_MS = 200;
+
+const deferred = new Set<Promise<unknown>>();
+
+/** Registers work a hosted line leaves running after its command returns (a late webhook
+ *  continuation). The host waits for it, bounded, before it restores the environment, and recycles
+ *  when it is still pending. A no-op outside the host: an in-process run's process simply stays
+ *  alive until the work settles, as it always has. The audit of every such site is
+ *  test/host/send-host-deferred.test.ts. */
+export function deferHosted(work: Promise<unknown>): void {
+  if (active === null) return;
+  const held = work.then(() => undefined, () => undefined);
+  deferred.add(held);
+  void held.then(() => { deferred.delete(held); });
+}
+
+/** Waits up to `ms` for every registered deferred work to settle; the count still pending. */
+export async function settleHostedDeferred(ms: number = DEFERRED_WAIT_MS): Promise<number> {
+  if (deferred.size === 0) return 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.all([...deferred]),
+    new Promise<void>((settle) => { timer = setTimeout(settle, ms); }),
+  ]);
+  if (timer !== undefined) clearTimeout(timer);
+  return deferred.size;
+}

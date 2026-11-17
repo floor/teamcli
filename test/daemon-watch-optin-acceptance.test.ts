@@ -653,3 +653,52 @@ describe('the broker stays absent and off, whatever the watch opt-in', () => {
     expect(await started.finish()).toBe(0);
   });
 });
+
+describe('the send-server opt-in follows the watch opt-in', () => {
+  test('install --send-server writes it once, a plain install keeps it, and only --no-send-server drops it', async () => {
+    const world = scratch();
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: world.home });
+    const install = async (argv: string[]) => {
+      const io = testIo(world.root, owner);
+      expect(await runDaemon(argv, io, sourcesOf(world.home, {
+        accountHome: world.home,
+        service: manager,
+        program: { execPath: '/runtime/bin/node', entry: programAt(world.home) },
+        health: async () => ANSWERING,
+      })), io.err).toBe(0);
+      return { io, unit: readFileSync(manager.unitPath(world.home), 'utf8') };
+    };
+    const first = await install(['install', '--presence', '--watch', '--send-server']);
+    expect(first.unit.split('--send-server').length - 1).toBe(1);
+    const plain = await install(['install']);
+    expect(plain.io.err).toContain('kept --presence and --watch and --send-server from the installed unit');
+    expect(plain.unit.split('--send-server').length - 1).toBe(1);
+    const dropped = await install(['install', '--no-send-server']);
+    expect(dropped.io.err).toContain('dropped --send-server from the installed unit, as asked');
+    expect(dropped.unit).not.toContain('--send-server');
+    expect(dropped.unit).toContain('--watch');
+  });
+
+  test('install --send-server --dry-run writes nothing and names the effective opt-in in its plan', async () => {
+    const world = scratch();
+    const service = fakeService();
+    const io = testIo(world.root, owner);
+    expect(await runDaemon(['install', '--send-server', '--dry-run'], io, sourcesOf(world.home, { service }))).toBe(0);
+    expect(service.calls).toEqual([]);
+    expect(service.programs.at(-1)).toMatchObject({ roots: [world.root], sendServer: true });
+  });
+
+  test('--send-server belongs to run or install, --no-send-server to install, and never both', async () => {
+    const world = scratch();
+    const cases: Array<[string[], string]> = [
+      [['status', '--send-server'], '--send-server belongs to run or install'],
+      [['run', '--no-send-server'], '--no-send-server belongs to install'],
+      [['install', '--send-server', '--no-send-server'], '--send-server and --no-send-server cannot both be given'],
+    ];
+    for (const [argv, why] of cases) {
+      const io = testIo(world.root, owner);
+      expect(await runDaemon(argv, io, sourcesOf(world.home, { service: fakeService() }))).toBe(2);
+      expect(io.err).toContain(why);
+    }
+  });
+});

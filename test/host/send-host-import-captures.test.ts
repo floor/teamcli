@@ -173,6 +173,9 @@ const MUTABLE: Record<string, string> = {
   'src/herdr.ts: waitExec': 'test',
   'src/host/request-scope.ts: active': 'request',
   'src/host/request-scope.ts: guard': 'request',
+  // The deferred work a hosted line left running: drained (bounded) by the host after each request,
+  // and a host whose set is not empty recycles.
+  'src/host/request-scope.ts: deferred': 'request',
   'src/host/run.ts: SEND_FLAGS_WITH_VALUE': 'constant',
   'src/host/run.ts: SEND_FLAGS': 'constant',
   'src/host/run.ts: REPLY_FLAGS': 'constant',

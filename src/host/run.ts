@@ -14,10 +14,12 @@ import type { Io } from '../io.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import {
   armHostedGuard,
+  DEFERRED_WAIT_MS,
   disarmHostedGuard,
   HostedFallback,
   HostedStoppedAfterEffect,
   runAsHostedRequest,
+  settleHostedDeferred,
 } from './request-scope.ts';
 
 export const HOST_PROTOCOL_VERSION = 1;
@@ -148,6 +150,7 @@ export async function runHostedLine(request: HostRequest, peer: HostPeer, deps: 
   let thrown: unknown = null;
   let fellBack: string | null = null;
   let first: string | null = null;
+  let lateCallbacks = 0;
   try {
     replaceEnv(request.env);
     process.chdir(request.cwd);
@@ -178,6 +181,9 @@ export async function runHostedLine(request: HostRequest, peer: HostPeer, deps: 
   } catch (error) {
     thrown = error;
   } finally {
+    // Work the line left running reads its own captured values; it still sees the request's
+    // environment while the host waits for it, bounded (rfc-bus-send-server §2.4).
+    lateCallbacks = await settleHostedDeferred(DEFERRED_WAIT_MS);
     const guard = disarmHostedGuard();
     process.stdout.write = savedOut;
     process.stderr.write = savedErr;
@@ -191,7 +197,8 @@ export async function runHostedLine(request: HostRequest, peer: HostPeer, deps: 
   }
   const recycle = currentRunMemo() !== null
     ? 'a run-memo scope was left open'
-    : activeHerdrSnapshotId() !== null ? 'a herdr snapshot was left open' : null;
+    : activeHerdrSnapshotId() !== null ? 'a herdr snapshot was left open'
+      : lateCallbacks > 0 ? `${String(lateCallbacks)} deferred callback(s) outlived the request` : null;
   if ((thrown instanceof HostedFallback || fellBack !== null) && first === null) {
     return { answer: { v: 1, kind: 'fallback', why: thrown instanceof HostedFallback ? thrown.why : fellBack ?? 'handed back' }, recycle };
   }
