@@ -99,6 +99,10 @@ function world(opts: {
   duringRead?: (session: string) => Promise<void> | void;
   /** Sessions whose server is spawned but not up within the bound (the child lives on). */
   slow?: Set<string>;
+  lock?: BootRunDeps['lock'];
+  childState?: BootRunDeps['childState'];
+  /** The daemon dies right after writing the reservation, before the spawn. */
+  crashAfterReserve?: boolean;
 }) {
   const spawns: string[] = [];
   const live = new Set<number>();
@@ -129,25 +133,30 @@ function world(opts: {
       const route = routes.find((one) => one.root === root);
       return route === undefined ? { boot: opts.boot, hosted: { problem: 'the root is no longer hosted' }, registry: null } : good(route, opts.boot);
     },
-    start: async (session, proveNow) => {
+    start: async (session, hooks) => {
       attempts.push(session);
-      // The start's own read of the host, then the proof, then the spawn: as startStoppedServer.
+      // As startStoppedServer: the read of the host, then proof, reservation, spawn, identity.
       await opts.duringRead?.(session);
       if (!stopped.has(session)) return { kind: 'not-stopped' };
-      if (!proveNow()) return { kind: 'refused' };
+      if (hooks.proveNow !== undefined && !hooks.proveNow()) return { kind: 'refused' };
+      if (hooks.reserve !== undefined && !hooks.reserve()) return { kind: 'refused' };
+      if (opts.crashAfterReserve === true) throw new Error('daemon died after the reservation');
       spawns.push(session);
       if (opts.slow?.has(session) === true) {
         // Spawned, not up within the bound: the child lives on with this pid.
         live.add(4242);
+        hooks.spawned?.({ pid: 4242, start: 1_000 });
         return { kind: 'failed', child: { pid: 4242, start: 1_000 } };
       }
       if (opts.dead?.has(session) === true) return { kind: 'failed' };
+      hooks.spawned?.({ pid: 5000 + spawns.length, start: 2_000 });
       started.push(session);
       stopped.delete(session);
       running.add(session);
       return { kind: 'started' };
     },
-    childLive: (child) => live.has(child.pid) && child.start === 1_000,
+    lock: (root, session) => (opts.lock !== undefined ? opts.lock(root, session) : { release: () => {} }),
+    childState: (child) => (opts.childState !== undefined ? opts.childState(child) : live.has(child.pid) && child.start === 1_000 ? 'alive' : 'gone'),
     hosted: () => routes,
     lifecycleProblem: () => null,
     loadPerCore: () => (loads.length > 0 ? loads.shift() as number : 1),
@@ -304,4 +313,109 @@ test('once the earlier attempt\'s server is gone, the record clears and a fresh 
   await runBootWork(w.deps);
   expect(w.spawns).toEqual(['floor']);
   expect(w.started).toEqual(['floor']);
+});
+
+test('a live child whose start time cannot be read is not gone: no second spawn across passes and a restart', async () => {
+  writeBootQueue(home, { boot: BOOT_B, from: BOOT_A, pending: [{ ...FLOOR, child: { pid: 4242, start: 1_000 }, tries: 1 }], settled: [] });
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor']), childState: () => 'unknown' });
+  w.limitWaits(3);
+  await runBootWork(w.deps);
+  const v = world({ boot: BOOT_B, stopped: new Set(['floor']), childState: () => 'unknown' });
+  v.limitWaits(3);
+  await runBootWork(v.deps);
+  expect(w.spawns.length + v.spawns.length).toBe(0);
+  expect(readBootQueue(home)?.pending[0]?.child).toEqual({ pid: 4242, start: 1_000 });
+  expect(readBootQueue(home)?.pending[0]?.last).toBe('its earlier server cannot be told to be gone; not started again');
+});
+
+test('a daemon that dies after the reservation leaves a record that blocks a second spawn', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor']), crashAfterReserve: true });
+  const planned = await planBoot(w.deps);
+  if (planned.kind !== 'work') throw new Error('no work');
+  w.limitWaits(2);
+  await expect(workBootQueue(w.deps, planned.queue)).rejects.toThrow('daemon died after the reservation');
+  expect(readBootQueue(home)?.pending[0]?.child).toEqual({ pid: null, start: null });
+  // The next daemon of this boot: the reservation is unresolved, so nothing is spawned.
+  const v = world({ boot: BOOT_B, stopped: new Set(['floor']) });
+  v.limitWaits(3);
+  await runBootWork(v.deps);
+  expect(v.spawns).toEqual([]);
+  expect(readBootQueue(home)?.pending[0]?.last).toBe('an earlier start was reserved and its outcome is unknown; not started again (attach it to restore it)');
+});
+
+test('the spawned child\'s identity is durable at once, before the start resolves', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+  let seenDuring: unknown;
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor']), slow: new Set(['floor']) });
+  const start = w.deps.start;
+  w.deps.start = async (session, hooks) => start(session, {
+    ...hooks,
+    spawned: (child) => { hooks.spawned?.(child); seenDuring = readBootQueue(home)?.pending[0]?.child; },
+  });
+  w.limitWaits(2);
+  await runBootWork(w.deps);
+  expect(seenDuring).toEqual({ pid: 4242, start: 1_000 });
+});
+
+test('two processes: a team down holding the session run lock means no spawn; released, the start runs', async () => {
+  const { acquireRunLock } = await import('../src/launch/run-lock.ts');
+  const lockDir = join(home, 'team-dir');
+  mkdirSync(lockDir, { recursive: true });
+  // Another process (as `team down` would) takes the session's run lock and keeps it.
+  const holder = Bun.spawn(['bun', '-e', `
+    const { acquireRunLock } = await import(${JSON.stringify(new URL('../src/launch/run-lock.ts', import.meta.url).pathname)});
+    const lock = acquireRunLock(${JSON.stringify(lockDir)}, 'floor');
+    if ('held' in lock) process.exit(3);
+    console.log('locked');
+    await new Promise((resolve) => process.stdin.once('data', resolve));
+    lock.release();
+  `], { stdin: 'pipe', stdout: 'pipe' });
+  const realLock: BootRunDeps['lock'] = (_root, session) => {
+    const taken = acquireRunLock(lockDir, session);
+    return 'held' in taken ? { held: `another session-mutating run is holding session ${session}` } : taken;
+  };
+  try {
+    const reader = holder.stdout.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain('locked');
+    reader.releaseLock();
+    writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+    const w = world({ boot: BOOT_B, stopped: new Set(['floor']), lock: realLock });
+    w.limitWaits(2);
+    await runBootWork(w.deps);
+    expect(w.attempts).toEqual([]);
+    expect(readBootQueue(home)?.pending[0]?.last).toBe('another session-mutating run is holding session floor');
+    // The other process releases: the next daemon pass takes the lock and starts.
+    holder.stdin.write('go\n');
+    holder.stdin.end();
+    await holder.exited;
+  } finally {
+    // Never leave the holder behind, whatever failed above.
+    holder.kill();
+  }
+  const v = world({ boot: BOOT_B, stopped: new Set(['floor']), lock: realLock });
+  v.limitWaits(2);
+  await runBootWork(v.deps);
+  expect(v.started).toEqual(['floor']);
+});
+
+test('the socket probe proves absence only for a missing or refused socket', async () => {
+  const { socketProbe } = await import('../src/herdr-direct.ts');
+  const probe = socketProbe();
+  if (probe === null) return; // not macOS/Bun: the probe is unbound and every look is unknown
+  const dir = join(home, 'sock');
+  mkdirSync(dir, { recursive: true });
+  // No socket file: proven absent.
+  expect(probe(join(dir, 'none.sock'))).toBe('absent');
+  // A listener: a successful connect is a live server, whatever it would answer.
+  const path = join(dir, 'live.sock');
+  const server = Bun.listen({ unix: path, socket: { data() {}, open(socket) { socket.end(); } } });
+  expect(probe(path)).toBe('listening');
+  server.stop(true);
+  // A path too long to bind: not proof of anything.
+  expect(probe(join(dir, 'x'.repeat(120)))).toBe('unknown');
+  // A file that is not a socket: not proof of absence.
+  writeFileSync(join(dir, 'plain'), '');
+  expect(probe(join(dir, 'plain'))).not.toBe('listening');
 });

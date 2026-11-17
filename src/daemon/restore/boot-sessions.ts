@@ -36,8 +36,10 @@ export type SessionsRunning = { boot: string; at: number; running: BootRoute[] }
 export type QueueEntry = BootRoute & {
   tries?: number;
   last?: string;
-  /** A server an earlier attempt spawned that was not up in time: never spawn another while it lives. */
-  child?: { pid: number; start: number | null };
+  /** A start in flight or not yet up: `pid: null` is the reservation written before the spawn
+   *  (its outcome unknown if nothing replaced it); otherwise the spawned server's identity.
+   *  No other server is spawned while it lives or cannot be told to be gone. */
+  child?: { pid: number | null; start: number | null };
 };
 /** The work for one boot: built from the observation of boot `from`; routes still to start
  *  (each with its last failure, if any), and those settled (started or invalidated). */
@@ -112,7 +114,8 @@ export function readBootQueue(home: string): BootQueue | null {
     session: one.session as string,
     ...(typeof one.tries === 'number' && Number.isInteger(one.tries) && one.tries > 0 ? { tries: one.tries } : {}),
     ...(typeof one.last === 'string' && one.last !== '' ? { last: one.last } : {}),
-    ...(childOf(one.child) === null ? {} : { child: childOf(one.child) as NonNullable<QueueEntry['child']> }),
+    // A child record that does not read is kept as an unresolved reservation (fail closed).
+    ...(one.child === undefined ? {} : { child: childOf(one.child) ?? { pid: null, start: null } }),
   }));
   return { boot, from, pending: entries, settled: settled as BootQueue['settled'] };
 }
@@ -120,9 +123,9 @@ export function readBootQueue(home: string): BootQueue | null {
 function childOf(value: unknown): QueueEntry['child'] | null {
   if (typeof value !== 'object' || value === null) return null;
   const { pid, start } = value as Record<string, unknown>;
-  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 1) return null;
+  if (pid !== null && (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 1)) return null;
   if (start !== null && (typeof start !== 'number' || !Number.isFinite(start))) return null;
-  return { pid, start: start as number | null };
+  return { pid: pid as number | null, start: start as number | null };
 }
 
 export function writeBootQueue(home: string, queue: BootQueue): boolean {

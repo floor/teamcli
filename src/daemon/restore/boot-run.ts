@@ -21,7 +21,7 @@ import {
   type SessionsRunning,
   type StartFacts,
 } from './boot-sessions.ts';
-import type { StoppedServerStart } from '../../herdr.ts';
+import type { StoppedServerHooks, StoppedServerStart } from '../../herdr.ts';
 
 export type BootRunDeps = {
   bootId: () => Promise<string | null>;
@@ -36,11 +36,15 @@ export type BootRunDeps = {
   /** The same facts read synchronously (team file and registry now; the boot id given), for the
    *  proof the start runs with nothing awaited between it and the spawn. */
   factsNow: (root: string, boot: string | null) => StartFacts;
-  /** Starts a session that reads stopped and resolves once the server is up (or why not).
-   *  `proveNow` runs after the start's last await, immediately before the spawn. */
-  start: (session: string, proveNow: () => boolean) => Promise<StoppedServerStart>;
-  /** Whether a server an earlier attempt spawned still lives: same pid, same start time. */
-  childLive: (child: { pid: number; start: number | null }) => boolean;
+  /** Starts a session that reads stopped and resolves once the server is up (or why not); the
+   *  caller holds the session's run lock. The hooks run after its last await (see herdr.ts). */
+  start: (session: string, hooks: StoppedServerHooks) => Promise<StoppedServerStart>;
+  /** Takes the session's run lock (the one `team down`, `up` and `remove` take), without
+   *  waiting: a release, or why it is held. */
+  lock: (root: string, session: string) => { release: () => void } | { held: string };
+  /** An earlier attempt's server: 'alive' (same pid, same start time), 'gone' (no such
+   *  process, or a different start time: the pid was reused), or 'unknown' (not readable). */
+  childState: (child: { pid: number; start: number | null }) => 'alive' | 'gone' | 'unknown';
   /** The routes the daemon hosts now (for the observation only; starts use `facts`). */
   hosted: () => readonly BootRoute[];
   /** Why the registered team may not be restored, or null (observation filter). */
@@ -104,13 +108,17 @@ export async function workBootQueue(deps: BootRunDeps, queue: BootQueue): Promis
     let startedOne = false;
     for (const route of [...queue.pending]) {
       if (deps.loadPerCore() > deps.loadMaxPerCore) break;
-      // A server an earlier attempt spawned is never doubled: while it lives, the route waits
-      // for it (and settles once its session reads running); once it is gone, the record clears.
+      // A server an earlier attempt spawned (or reserved) is never doubled: while it lives, or
+      // while it cannot be told to be gone, the route waits for it (and settles once its session
+      // reads running). Only a proven exit or a reused pid clears the record.
       const entry = queue.pending.find((one) => same(one, route));
       if (entry?.child !== undefined) {
-        if (deps.childLive(entry.child)) {
+        const state = entry.child.pid === null ? 'unknown' : deps.childState({ pid: entry.child.pid, start: entry.child.start });
+        if (state !== 'gone') {
           if ((await deps.sessions())?.get(route.session) === true) settle(route, 'started (by an earlier attempt)');
-          else note(route, 'its server from an earlier attempt is still starting');
+          else note(route, entry.child.pid === null
+            ? 'an earlier start was reserved and its outcome is unknown; not started again (attach it to restore it)'
+            : state === 'alive' ? 'its server from an earlier attempt is still starting' : 'its earlier server cannot be told to be gone; not started again');
           continue;
         }
         delete entry.child;
@@ -122,24 +130,61 @@ export async function workBootQueue(deps: BootRunDeps, queue: BootQueue): Promis
         note(route, problem);
         continue;
       }
-      // The proof is taken again inside the start, after its last await and right before the
-      // spawn: a stop, rebind or removal during the start's own reads refuses it.
-      let late: string | null = null;
-      const result = await deps.start(route.session, () => {
-        late = startProblem(route, queue.boot, deps.factsNow(route.root, facts.boot));
-        return late === null;
-      });
-      const outcome = result.kind;
-      if (outcome === 'refused') {
-        note(route, late ?? 'the proof failed at the start');
+      // The run lock `team down`, `up` and `remove` take is held across the observation, the
+      // proof and the spawn: no other session mutation interleaves. Not taken: retried later.
+      const lock = deps.lock(route.root, route.session);
+      if ('held' in lock) {
+        note(route, lock.held);
         continue;
       }
-      if (result.kind === 'failed' && result.child !== undefined) {
-        // Spawned but not up in time: its pid and start time are kept, so no retry doubles it.
-        const kept = queue.pending.find((one) => same(one, route));
-        if (kept !== undefined) kept.child = result.child;
-        note(route, 'its server did not come up in time; that server is watched, not doubled');
+      let late: string | null = null;
+      let result: StoppedServerStart;
+      try {
+        result = await deps.start(route.session, {
+          // Under the lock, after the observation taken under it: the proof again, now.
+          proveNow: () => {
+            late = startProblem(route, queue.boot, deps.factsNow(route.root, facts.boot));
+            return late === null;
+          },
+          // The in-flight reservation, durable before the spawn.
+          reserve: () => {
+            const held = queue.pending.find((one) => same(one, route));
+            if (held === undefined) return false;
+            held.child = { pid: null, start: null };
+            return deps.writeQueue(queue);
+          },
+          // The child's identity, durable as soon as it exists.
+          spawned: (child) => {
+            const held = queue.pending.find((one) => same(one, route));
+            if (held === undefined) return;
+            held.child = child;
+            save(`${route.session}: spawned ${String(child.pid)}`);
+          },
+        });
+      } finally {
+        lock.release();
+      }
+      const outcome = result.kind;
+      if (outcome === 'refused') {
+        const held = queue.pending.find((one) => same(one, route));
+        if (held?.child !== undefined && held.child.pid === null && late === null) {
+          // The reservation could not be written: nothing was spawned, so it is withdrawn.
+          delete held.child;
+          note(route, 'the in-flight reservation could not be written; not started');
+        } else note(route, late ?? 'the proof failed at the start');
         continue;
+      }
+      if (result.kind === 'failed') {
+        const held = queue.pending.find((one) => same(one, route));
+        if (held?.child !== undefined && held.child.pid !== null) {
+          // Spawned but not up in time: its identity is kept, so no retry doubles it.
+          note(route, 'its server did not come up in time; that server is watched, not doubled');
+          continue;
+        }
+        if (held?.child !== undefined && held.child.pid === null) {
+          // Reserved, and the spawn itself failed: no process exists, so the reservation goes.
+          delete held.child;
+        }
       }
       if (outcome === 'started') {
         deps.log(`restore: session ${route.session} started again after the machine restart`);

@@ -788,19 +788,26 @@ export function startServer(session: string): boolean {
 // running session, and never a session that does not exist. The check is the awaited session
 // list (bounded, abortable), read immediately before the spawn: the daemon's loop never blocks
 // on it. 'not-stopped' when the session is absent or running; 'unread' when herdr did not answer.
-// `proveNow`, when given, is the caller's own proof, run synchronously after the last await and
-// immediately before the spawn, together with a fresh synchronous look at the session's own
-// socket: nothing is awaited between them and the spawn, so a change either sees stops the start
-// ('refused', or 'not-stopped' when a server answers now). A server spawned but not up within the
-// bound is returned with its pid and start time ('failed', `child`): its caller must not spawn
-// another while that one lives.
+// The caller holds the session's run lock for the whole call (the observation below is the one
+// taken under it). After the awaited session list, with nothing awaited before the spawn:
+// `proveNow` (the caller's proof), a synchronous look at the session's own socket (only proven
+// absence goes on), then `reserve` (the caller's durable in-flight record, written before the
+// spawn: false refuses). `spawned` gets the child's pid and start time as soon as it exists, so a
+// daemon that dies at any point still leaves a record that blocks a second server. A server not
+// up within the bound returns 'failed' with that child; its caller must not spawn another while
+// it lives.
 export type StoppedServerStart =
   | { kind: 'started' | 'not-stopped' | 'unread' | 'refused' }
   | { kind: 'failed'; child?: { pid: number; start: number | null } };
+export type StoppedServerHooks = {
+  proveNow?: () => boolean;
+  reserve?: () => boolean;
+  spawned?: (child: { pid: number; start: number | null }) => void;
+};
 export async function startStoppedServer(
   session: string,
   options: HerdrReadOptions = {},
-  proveNow?: () => boolean,
+  hooks: StoppedServerHooks = {},
   startOf: (pid: number) => number | null = () => null,
 ): Promise<StoppedServerStart> {
   hostedCommit('herdr startStoppedServer');
@@ -810,7 +817,7 @@ export async function startStoppedServer(
   const found = sessions.find((one) => one.name === session);
   if (found === undefined || found.running) return { kind: 'not-stopped' };
   // From here to the spawn nothing is awaited.
-  if (proveNow !== undefined && !proveNow()) return { kind: 'refused' };
+  if (hooks.proveNow !== undefined && !hooks.proveNow()) return { kind: 'refused' };
   const answers = sessionAnswersNow(session);
   if (answers === 'answers') return { kind: 'not-stopped' };
   if (answers === 'unknown') return { kind: 'unread' };
@@ -821,12 +828,14 @@ export async function startStoppedServer(
     return { kind: 'failed' };
   }
   const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
+  if (hooks.reserve !== undefined && !hooks.reserve()) return { kind: 'refused' };
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
   } catch {
     return { kind: 'failed' };
   }
+  if (child.pid !== undefined) hooks.spawned?.({ pid: child.pid, start: startOf(child.pid) });
   // The spawn's own outcome is awaited (an error event is handled, never left unhandled), then
   // the session must read running within the bound: only then is the server up.
   const spawned = await new Promise<boolean>((resolve) => {

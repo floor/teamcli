@@ -1132,9 +1132,25 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       const stood = authorizeClientDown(dir);
       if (stood !== null) return clientRefusedAt(stood);
     }
-    remember();
-    noteStopped();
-    noteSessionEmpty();
+    // The stop intent is written under the same run lock as every session mutation, so it
+    // cannot interleave with the daemon's boot start of this session (proof, then spawn).
+    const idleLock = dry ? null : acquireRunLock(dir, session);
+    if (idleLock !== null && 'held' in idleLock) {
+      refuse(io, json, 'down', {
+        id: 'down.run-lock',
+        message: runLockText(idleLock.held, session, dir, idleLock.startedAt),
+        repair: null,
+      });
+      // exit: down.run-lock
+      return 1;
+    }
+    try {
+      remember();
+      noteStopped();
+      noteSessionEmpty();
+    } finally {
+      idleLock?.release();
+    }
     if (json) {
       writeJson(io, 'team.down', {
         format: 1 as const,

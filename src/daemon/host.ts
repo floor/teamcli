@@ -38,6 +38,7 @@ import { restoreLifecycleProblem } from '../launch/restore-lifecycle.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive, readState, type State } from '../state.ts';
 import { processStartOf } from '../launch/codex-endpoint.ts';
+import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { probeDaemonSocket, probeDaemonSocketReading, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
@@ -3147,10 +3148,27 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       writeQueue: (queue) => writeBootQueue(home, queue),
       writeObserved: (record) => writeSessionsRunning(home, record),
       sessions: () => sessionsRunningMap(() => sessionListAsync({ signal: restoreAbort.signal })),
-      start: (session, proveNow) => startStoppedServer(session, { signal: restoreAbort.signal }, proveNow, processStartOf),
-      // The same process only: alive, and (when one was read) the same start time, so a reused
-      // pid is never taken for the earlier attempt's server.
-      childLive: (child) => pidAlive(child.pid) && (child.start === null || processStartOf(child.pid) === child.start),
+      start: (session, hooks) => startStoppedServer(session, { signal: restoreAbort.signal }, hooks, processStartOf),
+      // Gone only on proof: no such process, or a different start time read (a reused pid). A
+      // live pid whose start time does not read, or was never read, is not gone.
+      childState: (child) => {
+        if (!pidAlive(child.pid)) return 'gone';
+        if (child.start === null) return 'unknown';
+        const now = processStartOf(child.pid);
+        if (now === null) return 'unknown';
+        return now === child.start ? 'alive' : 'gone';
+      },
+      // The session's run lock, from the route's own team folder, taken without waiting.
+      lock: (root, session) => {
+        const entry = routeTeams.get(root);
+        if (entry === undefined) return { held: 'the root is no longer hosted' };
+        let loaded: ReturnType<typeof readTeamConfig>;
+        try { loaded = readRouteTeam(entry, home); }
+        catch (error) { return { held: `the team could not be read: ${messageOf(error)}` }; }
+        if (!loaded.ok) return { held: 'the team could not be read' };
+        const taken = acquireRunLock(dirname(loaded.path), session);
+        return 'held' in taken ? { held: runLockText(taken.held, session, dirname(loaded.path), taken.startedAt) } : taken;
+      },
       // Read at the moment of each start: this boot's id, then the synchronous facts.
       facts: async (root): Promise<StartFacts> => factsNow(root, await bootId()),
       factsNow: (root, boot) => factsNow(root, boot),
