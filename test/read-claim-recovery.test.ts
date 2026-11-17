@@ -272,6 +272,71 @@ test('an unreadable claim folder keeps the cut-off take: nothing is published or
   expect(readMessage(target(made), id, made.home).ok).toBe(false);
 });
 
+// Hermes and Hestia, round 6: a recovery seal that cannot be made keeps the claim its recovery's.
+// The owner file stays, a later reader gets "being recovered", and the next pass seals and
+// publishes: the body goes out once.
+test('a recovery seal that fails keeps the owner: a later reader gets no body, the retry exposes it once', async () => {
+  const made = open();
+  const id = 'c1a10000-0000-4000-8000-000000000009';
+  plant(made, id);
+  const request = 'c1a1aaaa-0000-4000-8000-000000000009';
+  const folder = cutOffTake(made, request);
+  const owner = relayClaimOwner(folder, request);
+  const first = readMessage(target(made), id, made.home, undefined, undefined, { receipt: 'after', owner });
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  saveChunk(folder, request, 0, `${first.body}\n`, [id]);
+  holderDies(made, [id]);
+  // The receipt cannot be written: the seal fails inside the seat's reader.
+  const dropDir = target(made).dropDir;
+  chmodSync(dropDir, 0o500);
+  try {
+    await relayOutboxes(made.dir, SESSION, [SEAT], recovery(made));
+  } finally {
+    chmodSync(dropDir, 0o700);
+  }
+  expect(existsSync(join(folder, `${request}.result.json`))).toBe(false);
+  expect(claimsOwnedBy(dropDir, owner)).toEqual([id]);
+  const rival = readMessage(target(made), id, made.home);
+  expect(rival.ok).toBe(false);
+  if (!rival.ok) expect(rival.reason).toContain('being recovered');
+  await relayOutboxes(made.dir, SESSION, [SEAT], recovery(made));
+  const out = (JSON.parse(readFileSync(join(folder, `${request}.result.json`), 'utf8')) as { out: string }).out;
+  expect(bodiesIn(out, id)).toBe(1);
+  const after = readMessage(target(made), id, made.home);
+  expect(after.ok).toBe(false);
+  if (!after.ok) expect(after.served).toBe('already-served');
+});
+
+// Hestia, round 6: unframed output withheld beside a voided claim is discarded before the first
+// publish attempt, so a retry after a failed publish cannot bring it back.
+test('withheld unframed output stays withheld across a failed publish', async () => {
+  const made = open();
+  const id = 'c1a10000-0000-4000-8000-00000000000a';
+  plant(made, id);
+  const request = 'c1a1aaaa-0000-4000-8000-00000000000a';
+  const folder = cutOffTake(made, request);
+  const owner = relayClaimOwner(folder, request);
+  const first = readMessage(target(made), id, made.home, undefined, undefined, { receipt: 'after', owner });
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  writeFileSync(join(folder, `${request}.partial`), `${first.body}\n`);
+  holderDies(made, [id]);
+  const result = join(folder, `${request}.result.json`);
+  // The first publish attempt fails after its temp file was written.
+  const failing: RelaySources = { ...recovery(made), trace: (point) => { if (point === 'result-fsync') throw new Error('injected publish failure'); } };
+  await relayOutboxes(made.dir, SESSION, [SEAT], failing);
+  expect(existsSync(result)).toBe(false);
+  expect(existsSync(join(folder, `${request}.taking`))).toBe(true);
+  expect(existsSync(join(folder, `${request}.partial`))).toBe(false);
+  await relayOutboxes(made.dir, SESSION, [SEAT], recovery(made));
+  const out = (JSON.parse(readFileSync(result, 'utf8')) as { out: string }).out;
+  expect(out).not.toContain(id);
+  // The voided message is read once by the next reader.
+  const next = readMessage(target(made), id, made.home);
+  expect(next.ok).toBe(true);
+});
+
 // Hestia, round 4: `team messages` serves the seat's own mail through its own receipt act. It
 // takes the same claim: while a deferred read holds the id, it shows no body; after the seal the
 // id is served, and across both readers the body went out once.

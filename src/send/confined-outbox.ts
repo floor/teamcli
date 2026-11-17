@@ -357,8 +357,15 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
       // The take is released only once its result stands: a failed publication leaves the
       // marker, and a later pass answers it as cut off.
       if (publishResult(folder, id, result, seat, sources)) {
-        dropPartial(folder, id, sources.trace);
-        try { unlinkSync(taking); } catch { /* removed with the results */ }
+        // A read whose seal could not be made left its claims standing: the saved output and the
+        // take stay, and the recovery pass seals them from it (the result already stands).
+        const left = claimsOwnedBy(join(dir, 'send-drops', session, seat), relayClaimOwner(folder, id));
+        if (left === null || left.length > 0) {
+          sources.log(`${seat}: outbox request ${id} left read claims unsealed; its saved output is kept for recovery`);
+        } else {
+          dropPartial(folder, id, sources.trace);
+          try { unlinkSync(taking); } catch { /* removed with the results */ }
+        }
       }
       ran += 1;
     }
@@ -420,6 +427,7 @@ function recoverTaken(dropDir: string, seat: string, folder: string, names: read
     // published, and then only its marker is left to remove.
     if (names.includes(`${id}${RESULT_SUFFIX}`)) {
       if (settleClaims(dropDir, seat, owner, () => readPartial(folder, id, sources.stat), sources) === false) continue;
+      dropPartial(folder, id, sources.trace);
       try { unlinkSync(path); } catch { /* gone already */ }
       continue;
     }
@@ -441,8 +449,15 @@ function recoverTaken(dropDir: string, seat: string, folder: string, names: read
     const settled = settleClaims(dropDir, seat, owner, () => handed, sources);
     if (settled === false) continue;
     // An earlier build's unframed output proves no body whole: beside claims of this request it is
-    // withheld, so a voided claim's body is never published.
-    const out = settled === 'claims' ? handed.text.slice(handed.legacy.length) : handed.text;
+    // withheld, so a voided claim's body is never published. The decision is made durable before
+    // the first publish attempt by discarding that file (folder fsynced): a retry after a failed
+    // publish finds no legacy output to bring back.
+    const withhold = settled === 'claims' && handed.legacy !== '';
+    if (withhold && !discardLegacy(folder, id)) {
+      sources.log(`outbox request ${id}: its unframed saved output could not be discarded; kept for a later pass`);
+      continue;
+    }
+    const out = withhold ? handed.text.slice(handed.legacy.length) : handed.text;
     if (publishResult(folder, id, {
       id,
       code: 1,
@@ -592,6 +607,21 @@ function readPartial(folder: string, id: string, stat?: RelaySources['stat']): S
     saved.ids.push(...(header.ids as string[]));
   }
   return saved;
+}
+
+/** Discards an earlier build's unframed saved output, durably: false keeps it for a later pass. */
+function discardLegacy(folder: string, id: string): boolean {
+  try {
+    unlinkSync(join(folder, `${id}${PARTIAL_SUFFIX}`));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+  }
+  try {
+    fsyncFolder(folder);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function dropPartial(folder: string, id: string, trace?: RelaySources['trace']): void {

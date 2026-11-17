@@ -20,7 +20,9 @@ const OWNER_SUFFIX = '.owner';
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 export type ReadClaim =
-  | { ok: true; release: () => void }
+  /** `release` settles the claim (owner file, then claim); `keep` lets go of the claim lock only,
+   *  leaving a named owner's file standing for its recovery (a seal that could not be made). */
+  | { ok: true; release: () => void; keep: () => void }
   | { ok: false; why: 'busy' | 'recovering' | 'unknown' | 'durable' | 'unwritable' };
 
 /** The owner a relayed read's claim names: the outbox request that holds it. */
@@ -144,6 +146,11 @@ export function claimRead(dropDir: string, id: string, owner?: string, adopt = f
       if (released) return;
       released = true;
       settle(dropDir, id, owner);
+      lock.release();
+    },
+    keep: () => {
+      if (released) return;
+      released = true;
       lock.release();
     },
   };

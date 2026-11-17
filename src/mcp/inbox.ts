@@ -925,10 +925,20 @@ export function readMessage(
       ok: true,
       body,
       seal: () => {
+        let sealed = false;
         try {
-          return publish() === true;
+          const wrote = publish();
+          sealed = wrote === true;
+          return sealed;
         } finally {
-          release();
+          // A named owner's claim is released only once its receipt stands (sealed now, or the id
+          // already served). A seal that could not be made keeps the owner file: the claim stays
+          // its recovery's, and no later reader serves the body that was already handed over.
+          if (sealed || handover.owner === undefined || receiptHeldNow()) release();
+          else if (!released) {
+            released = true;
+            claim.keep();
+          }
         }
       },
       release,
