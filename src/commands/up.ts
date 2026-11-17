@@ -224,9 +224,7 @@ export type UpSources = {
 
 export type Launch = {
   /** Whether a resume line's conversation is on disk; absent in fixtures, so nothing is read. */
-  /** `recorded`: the seat's own recorded launch line, the only source a wrapper in front of the
-   *  CLI is measured against. */
-  conversationExists?(cli: string, cwd: string, id: string, command?: string, recorded?: string): boolean | null;
+  conversationExists?(cli: string, cwd: string, id: string, command?: string): boolean | null;
   /** Writes the sidebar layout (`rows` and `indicators`) to the terminal host's config, validates
    *  it through the host, and rolls back on failure. Absent: runs `applySidebarLayout` on
    *  `sources.home` with `checkSidebarConfig`. */
@@ -376,7 +374,7 @@ export function watchCommand(session: string): string {
 }
 
 const realLaunch: Launch = {
-  conversationExists: (cli, cwd, id, command, recorded) => conversationOnDisk(cli, cwd, id, process.env, command, recorded),
+  conversationExists: (cli, cwd, id, command) => conversationOnDisk(cli, cwd, id, process.env, command),
   checkSidebarConfig: () => hostConfigCheck(),
   reloadSidebar: (session) => reloadConfig(session),
   sessionState,

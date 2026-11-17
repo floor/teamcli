@@ -82,6 +82,32 @@ describe('waiting for a Codex conversation to be free', () => {
     expect(got).toEqual({ free: false, heldBy: 'shared', waitedMs: 6000 });
   });
 
+  // Review round 7: paging is charged to the whole bound. Each page here takes two seconds; the
+  // app-server answers a page only inside the time it is given, as a real one is cut off.
+  test('slow pages never run past the bound, and a late last page does not make it free', async () => {
+    let at = 0;
+    const given: number[] = [];
+    const pages: Record<string, { data: string[]; nextCursor: string | null }> = {
+      '': { data: ['a'], nextCursor: 'p2' },
+      p2: { data: ['b'], nextCursor: null },
+    };
+    const rpc = async (_socket: string, calls: RpcCall[], timeoutMs = 3000) => {
+      given.push(timeoutMs);
+      if (timeoutMs < 2000) { at += timeoutMs; return { ok: false as const, why: `no answer within ${String(timeoutMs)} ms`, replies: [] }; }
+      at += 2000;
+      const cursor = (calls[0]?.params as { cursor?: string }).cursor ?? '';
+      return { ok: true as const, replies: [{ ok: true as const, result: pages[cursor] }] };
+    };
+    const got = await waitCodexThreadFree({
+      sockets: ['shared'], threadId: ID, timeoutMs: 3000, pollMs: 1000, rpc,
+      now: () => at, sleep: async (ms) => { at += ms; },
+    });
+    expect(got.free).toBe(false);
+    expect(got.waitedMs).toBeLessThanOrEqual(3000);
+    // The second page was given only what was left of the bound.
+    expect(given).toEqual([3000, 1000]);
+  });
+
   test('only ever asks which conversations are loaded: nothing is resumed, unsubscribed or unloaded', async () => {
     const w = world({ shared: [[ID], []] });
     const c = clock();

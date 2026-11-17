@@ -176,6 +176,8 @@ type Scene = {
   duringWait?: (world: { rename(name: string): void; setProcess(process: PaneProcesses): void; setShell(text: string): void }) => void;
   /** Successive screens for the pane while the TUI runs; the last one stays. */
   screens?: string[];
+  /** The recorded pane and workspace are gone: the seat is launched in a workspace the run creates. */
+  gone?: boolean;
   /** The screen at the n-th read of the pane (1-based), or undefined for the scene's own. */
   screenAt?: (read: number) => string | undefined;
 };
@@ -188,7 +190,13 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
   // After a relaunch the pane shows the fresh TUI's idle prompt.
   let relaunched = false;
   let listedName = scene.name === undefined ? null : scene.name;
-  const agents = (): HerdrAgent[] | null => [{
+  const MADE = 'fixture-pane-made';
+  const MADE_SPACE = 'fixture-space-made';
+  let made = false;
+  const madeState = { process: { shell: 500, foreground: [500] } as PaneProcesses, screen: SHELL, name: null as string | null };
+  const agents = (): HerdrAgent[] | null => scene.gone === true
+    ? (made ? [{ name: madeState.name, agent: 'codex', pane: MADE, workspace: MADE_SPACE, status: 'idle', cwd: scene.cwd ?? root }] : [])
+    : [{
     name: listedName,
     agent: 'codex',
     pane: PANE,
@@ -203,7 +211,8 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     sessionUp: () => true,
     createWorkspace(_session, _cwd, label) {
       trace.created.push(label);
-      return { pane: 'fixture-pane-made', workspace: 'fixture-space-made' };
+      made = true;
+      return { pane: MADE, workspace: MADE_SPACE };
     },
     paneRun(_session, pane, command) {
       trace.runs.push({ pane, command });
@@ -231,9 +240,9 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
       async codexThreadWait(input: { sockets: string[]; threadId: string }) {
         trace.waits.push(input);
         scene.duringWait?.({
-          rename: (name) => { listedName = name; },
-          setProcess: (process) => { scene.process = process; },
-          setShell: (text) => { scene.shell = text; },
+          rename: (name) => { listedName = name; madeState.name = name; },
+          setProcess: (process) => { scene.process = process; madeState.process = process; },
+          setShell: (text) => { scene.shell = text; madeState.screen = text; },
         });
         return scene.threadWait!.shift() ?? { free: true as const, waitedMs: 0 };
       },
@@ -249,8 +258,9 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     },
     agentPanes: () => [PANE],
     agents,
-    workspacePanes: (_session, workspace) => (workspace === SPACE ? [PANE] : null),
-    paneText: () => {
+    workspacePanes: (_session, workspace) => (workspace === MADE_SPACE && made ? [MADE] : workspace === SPACE && scene.gone !== true ? [PANE] : null),
+    paneText: (_session, pane) => {
+      if (pane === MADE) return relaunched ? IDLE : madeState.screen;
       paneReads += 1;
       if (scene.screenAt !== undefined && !exited && !relaunched) {
         const at = scene.screenAt(paneReads);
@@ -263,6 +273,8 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     },
     foreground: () => (exited ? ['zsh'] : ['codex']),
     processInfo: (_session, pane) => {
+      if (pane === MADE) return relaunched ? RESTORED : madeState.process;
+      if (pane === PANE && scene.gone === true) return null;
       if (pane === PANE && scene.process !== undefined) return scene.process;
       if (pane === PANE && exited) return { shell: RESTORED.shell, foreground: [RESTORED.shell] };
       return RESTORED;
@@ -779,4 +791,37 @@ describe('the lock key needs the exact lock frame', () => {
     expect(seatRuns(made.trace)).toEqual([]);
     expect(said(io)).toContain('its screen or its process changed before the exit key; nothing typed');
   });
+});
+
+// Review round 7: the post-wait proof covers a pane the run itself created, not only a recorded one.
+describe('a seat launched in a workspace the run creates, resuming its conversation', () => {
+  test('nothing changes during the wait: it is launched there, resumed', async () => {
+    setup();
+    record();
+    const made = sources({ gone: true, threadWait: [{ free: true, waitedMs: 30_000 }] });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources);
+    expect(made.trace.waits).toHaveLength(1);
+    const runs = made.trace.runs.filter((run) => run.pane === 'fixture-pane-made');
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.command).toContain(`resume ${THREAD}`);
+  });
+
+  const changes: [string, Scene['duringWait']][] = [
+    ['the new pane is named for another seat', (w) => w.rename(OTHER)],
+    ['another program starts in the new shell', (w) => w.setProcess({ shell: 500, foreground: [500, 777] })],
+    ['a line is typed at the new shell prompt', (w) => w.setShell('~/work/acme main\n❯ echo hello')],
+  ];
+  for (const [name, change] of changes) {
+    test(`${name}: nothing is launched`, async () => {
+      setup();
+      record();
+      const made = sources({ gone: true, threadWait: [{ free: true, waitedMs: 30_000 }], duringWait: change });
+      const io = testIo(root, { kind: 'owner' });
+      await runUp([], io, made.sources);
+      expect(made.trace.waits).toHaveLength(1);
+      expect(made.trace.runs.filter((run) => run.pane === 'fixture-pane-made')).toEqual([]);
+      expect(said(io)).toContain('after the wait for its conversation; nothing launched');
+    });
+  }
 });

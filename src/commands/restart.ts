@@ -157,7 +157,7 @@ function aim(session: string): string | undefined {
 
 const realUpLaunch: Launch = {
   codexThreadWait: shippedCodexThreadWait,
-  conversationExists: (cli, cwd, id, command, recorded) => conversationOnDisk(cli, cwd, id, process.env, command, recorded),
+  conversationExists: (cli, cwd, id, command) => conversationOnDisk(cli, cwd, id, process.env, command),
   sessionState,
   startServer,
   sessionUp: sessionRunning,

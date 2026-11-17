@@ -120,8 +120,7 @@ export type Host = {
    */
   stopManagedCodexEndpoint?(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   /** Whether the conversation a resume line names is on disk for its CLI; null when unknown. */
-  /** `recorded`: the seat's own recorded launch line (src/profiles/profile.ts directConversationLaunch). */
-  conversationExists?(cli: string, cwd: string, id: string, command?: string, recorded?: string): boolean | null;
+  conversationExists?(cli: string, cwd: string, id: string, command?: string): boolean | null;
   /**
    * Registers the seat's team inbox with its CLI, run in the seat's folder directly before the
    * launch command. `session` is the launch's own, which narrows the registry to the team the
@@ -1550,19 +1549,24 @@ export async function executePlan(
           // A pane the line would be typed into is proven again after the wait: still listed in
           // its workspace, named for no other seat, its own shell alone in front, and that shell
           // at an empty prompt (a line typed there meanwhile is never run over).
-          if (op.pane !== undefined) {
-            const panesNow = op.workspace === undefined ? null : host.workspacePanes?.(session, op.workspace) ?? null;
+          // The place the line goes to, however it came to be: the plan's recorded pane, or the
+          // workspace a create step made for this seat earlier in the run (review round 7).
+          const target = place(op.seat, op.pane, op.workspace);
+          if (target !== null) {
+            const targetPane = target.pane;
+            const targetSpace = target.workspace;
+            const panesNow = targetSpace === undefined ? null : host.workspacePanes?.(session, targetSpace) ?? null;
             const agentsNow = host.agentList?.(session) ?? null;
-            const processAfter = host.processInfo?.(session, op.pane) ?? null;
-            const why = op.workspace !== undefined && (panesNow === null || !panesNow.includes(op.pane))
+            const processAfter = host.processInfo?.(session, targetPane) ?? null;
+            const why = targetSpace !== undefined && (panesNow === null || !panesNow.includes(targetPane))
               ? 'its pane is no longer listed in its workspace'
               : agentsNow === null
                 ? 'its pane could not be checked against the agent list'
-                : agentsNow.some((agent) => agent.pane === op.pane && agent.name !== null && agent.name !== op.seat)
+                : agentsNow.some((agent) => agent.pane === targetPane && agent.name !== null && agent.name !== op.seat)
                   ? 'its pane is named for another seat'
                   : !paneHoldsOnlyShell(processAfter)
                     ? 'its pane no longer holds only its shell'
-                    : !bareShellEmptyPrompt(host.paneText?.(session, op.pane) ?? null)
+                    : !bareShellEmptyPrompt(host.paneText?.(session, targetPane) ?? null)
                       ? 'its shell prompt is not empty'
                       : null;
             if (why !== null) {
@@ -1775,11 +1779,8 @@ export async function executePlan(
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.
         const resumeTarget = namedResumeTarget(op.cli ?? '', command);
-        // The seat's own recorded launch line: the record's, else the signed line this launch
-        // records. A wrapper in front of the CLI is measured only against it.
-        const recordedLine = host.seatStates?.(session)?.[op.seat]?.launch_line ?? op.recordLine;
-        if (resumeTarget && op.cwd !== undefined && directConversationLaunch(op.cli ?? '', command, recordedLine)
-          && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget, command, recordedLine) === false) {
+        if (resumeTarget && op.cwd !== undefined && directConversationLaunch(op.cli ?? '', command)
+          && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget, command) === false) {
           const fresh = withoutResume(op.cli ?? '', command);
           if (fresh !== null) {
             freshFrom = resumeTarget;

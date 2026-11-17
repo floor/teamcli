@@ -117,6 +117,9 @@ function loadedPage(reply: RpcReply | undefined): { ids: string[]; next: string 
   return { ids: data as string[], next: typeof next === 'string' && next !== '' ? next : null };
 }
 
+/** One page's own bound. */
+const RPC_TIMEOUT_MS = 3000;
+
 /** The most pages one reading follows; a list longer than this is not read to its end. */
 const MAX_PAGES = 50;
 
@@ -129,10 +132,16 @@ export async function codexThreadLoaded(
   socketPath: string,
   threadId: string,
   rpc: typeof codexRpcSession = codexRpcSession,
+  /** Milliseconds left of the caller's whole bound: every page is capped by it, no page starts
+   *  once it is spent, and a page that ends past it is no reading (review round 7). */
+  remainingMs: () => number = () => RPC_TIMEOUT_MS,
 ): Promise<LoadedReading> {
   let cursor: string | null = null;
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const read = await rpc(socketPath, [{ method: 'thread/loaded/list', params: cursor === null ? {} : { cursor } }]);
+    const left = remainingMs();
+    if (left <= 0) return { unknown: 'the wait bound was spent before the list was read to its end' };
+    const read = await rpc(socketPath, [{ method: 'thread/loaded/list', params: cursor === null ? {} : { cursor } }], Math.min(RPC_TIMEOUT_MS, left));
+    if (remainingMs() < 0) return { unknown: 'the list was not read to its end within the wait bound' };
     if (!read.ok) return read.absent === true && page === 0 ? 'absent' : { unknown: read.why };
     const got = loadedPage(read.replies[0]);
     if (got === null) return { unknown: 'thread/loaded/list gave no valid list' };
@@ -165,10 +174,11 @@ export async function waitCodexThreadFree(input: {
   const now = input.now ?? Date.now;
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>((settle) => setTimeout(settle, ms)));
   const started = now();
+  const remaining = (): number => input.timeoutMs - (now() - started);
   for (;;) {
     let heldBy: string | null = null;
     for (const socket of input.sockets) {
-      const reading = await codexThreadLoaded(socket, input.threadId, input.rpc);
+      const reading = await codexThreadLoaded(socket, input.threadId, input.rpc, remaining);
       if (reading === 'loaded') { heldBy = socket; break; }
       // Fail closed: a reading that is not established counts as holding it.
       if (typeof reading === 'object') { heldBy = `${socket} (unreadable: ${reading.unknown})`; break; }
@@ -176,7 +186,9 @@ export async function waitCodexThreadFree(input: {
     const waitedMs = now() - started;
     if (heldBy === null) return { free: true, waitedMs };
     if (waitedMs >= input.timeoutMs) return { free: false, heldBy, waitedMs };
-    await sleep(input.pollMs);
+    await sleep(Math.min(input.pollMs, Math.max(0, remaining())));
+    // The bound is spent: no further reading starts, and the last holder seen is the answer.
+    if (remaining() <= 0) return { free: false, heldBy, waitedMs: now() - started };
   }
 }
 
