@@ -903,6 +903,7 @@
     "test/restore-fresh-start-independent.test.ts": 5,
     "test/restore-load-retry.test.ts": 2,
     "test/restore-provider-relaunch.test.ts": 3,
+    "test/restore-rebound-execute.test.ts": 1,
     "test/restore-relaunch-independent.test.ts": 1,
     "test/restore-summary-contract.test.ts": 2,
     "test/restore-swapfree-carried.test.ts": 0,

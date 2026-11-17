@@ -52,6 +52,30 @@ describe('a caller under a shared Codex app-server', () => {
   });
 });
 
+describe('an inner CLI under the shared server', () => {
+  // inner CLI -> shell -> shared server -> pane A's Codex TUI -> pane A's shell -> herdr, A named
+  // for another seat (tester-codex): the inner CLI must not hide the boundary.
+  const inner = (cli: string): Process[] => [
+    { pid: 990, name: 'zsh' },
+    { pid: 980, name: cli },
+    { pid: 970, name: 'zsh' },
+    ...underShared.slice(1),
+  ];
+
+  for (const cli of ['codex', 'claude']) {
+    test(`an inner ${cli} is never placed as pane A's seat, sessioned or not`, () => {
+      const placed = sources({ ancestors: () => inner(cli) });
+      expect(placeCaller(placed, 'floor')).toEqual({ kind: 'unplaced', reason: SHARED_CODEX_REASON });
+      expect(placeCaller(placed)).toEqual({ kind: 'unplaced', reason: SHARED_CODEX_REASON });
+    });
+  }
+
+  test('sharedCodexServer sees the pair behind an inner CLI', () => {
+    expect(sharedCodexServer(inner('codex'))).toBe(true);
+    expect(sharedCodexServer(inner('claude'))).toBe(true);
+  });
+});
+
 describe('sharedCodexServer', () => {
   test('a Codex started directly by a Codex is a shared server', () => {
     expect(sharedCodexServer(underShared)).toBe(true);

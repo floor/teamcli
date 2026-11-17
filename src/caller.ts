@@ -246,15 +246,17 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
 /** Why a caller under a Codex app-server another Codex process started is not placed by its pane. */
 export const SHARED_CODEX_REASON = 'its Codex tools run in an app-server another Codex process started, which serves more than one pane; team cannot tell which seat it is (a lead runs team restart <seat>, which attaches the seat to its own endpoint)';
 
-/** Whether the caller's nearest Codex ancestor was started directly by another Codex process: an
- *  app-server a Codex TUI spawned for itself, not a pane's own CLI. A Codex the seat runs from a
- *  shell (`codex exec` in a tool call) has that shell between the two and is not this case. */
+/** Whether a shared Codex server stands anywhere among the caller's parents: a Codex process
+ *  started directly by another Codex process (an app-server a TUI spawned for itself, which
+ *  serves other panes' TUIs too). Every ancestor is checked, not only the nearest CLI: a tool
+ *  that starts another CLI under the shared server (`codex exec`, `claude -p`) puts that CLI
+ *  between the caller and the server, and the server still decides nothing about the pane above
+ *  it. A Codex the seat runs from a shell has that shell between the two and is not this case. */
 export function sharedCodexServer(ancestors: readonly Process[]): boolean {
-  const at = ancestors.findIndex((process) => processNameMatches(process.name, CLI_PROCESSES));
-  if (at < 0) return false;
-  const nearest = ancestors[at]!;
-  const parent = ancestors[at + 1];
-  return basename(nearest.name) === 'codex' && parent !== undefined && basename(parent.name) === 'codex';
+  return ancestors.some((process, at) => {
+    const parent = ancestors[at + 1];
+    return basename(process.name) === 'codex' && parent !== undefined && basename(parent.name) === 'codex';
+  });
 }
 
 /** The confined-seat reading (src/placement/confined.ts) for a caller whose parent walk could not

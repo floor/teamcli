@@ -822,6 +822,20 @@ export function planStartsProcess(planned: UpSeat): boolean {
 }
 
 /**
+ * The conversation a relaunch resumes once the pane proved it: the one id every reader takes.
+ * The launch line reads `registry.sessionId` before `resume`, and the duplicate check reads
+ * `resume` first, so a registry binding still naming the conversation the records held must be
+ * replaced too: a pane proven in conversation B is never exited and then resumed as A.
+ */
+function provenResume(planned: UpSeat, proven: string | null): Pick<UpSeat, 'resume' | 'registry'> {
+  if (proven === null) return {};
+  return {
+    resume: proven,
+    ...(planned.registry === undefined ? {} : { registry: { ...planned.registry, sessionId: proven } }),
+  };
+}
+
+/**
  * Whether a restore that keeps a live pane may run the open plan's endpoint repair instead: an
  * in-place relaunch for a lost managed Codex endpoint (`ownLine.endpoint`), on the very pane and
  * workspace the seat's record names, that starts a process (so no hold, doubt or busy pane). Any
@@ -1472,6 +1486,7 @@ function seatPlan(
       const proven = provenSession ?? null;
       const resumeHold = proven === null ? undefined : uncarryableResume(planned, proven);
       if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      const resumed = provenResume(planned, proven);
       const recordedLine = recorded.launch_line;
       const launch = why === 'channel' && recordedLine !== undefined && !channelLaunchEnabled(planned.launch) && channelLaunchEnabled(recordedLine)
         ? recordedLine
@@ -1488,7 +1503,7 @@ function seatPlan(
           cli: seat.cli,
           ownLine: proven === null ? {} : { session: proven },
         },
-        ...(proven === null ? {} : { resume: proven }),
+        ...resumed,
       };
     } else if ((proof.kind === 'session' || proof.kind === 'cli') && endpointRelaunch(seat, recorded, planned.launch)) {
       // A Codex seat whose recorded managed endpoint died, or that is live with no usable
@@ -1521,7 +1536,7 @@ function seatPlan(
           cli: seat.cli,
           ownLine: { ...(proven === null ? {} : { session: proven }), endpoint: true },
         },
-        ...(proven === null ? {} : { resume: proven }),
+        ...provenResume(planned, proven),
       };
     } else {
       const next = launchedIdentity(processes[seat.name] ?? null);
@@ -4794,6 +4809,15 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       concurrency,
       continuityIds,
       restoreSeats: seats,
+      // Read again from disk at the adoption: another seat recorded on the pane since the plan
+      // read the state is a claim the evidence must see.
+      restoreWorktree: (name: string) => {
+        try {
+          return restoreWorktreeOf(team, root, readState(dir).sessions[session], name);
+        } catch {
+          return undefined;
+        }
+      },
       ...(internal?.restoreMissingOnly === true ? {
         restoreGuard: (name: string) => restoreKeepOf(name)?.reason ?? null,
       } : {}),

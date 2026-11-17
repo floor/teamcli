@@ -19,7 +19,7 @@ import { ownStartFolderProblem } from '../worktree/place.ts';
 import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { writeCursorCommandDeny } from './grok-command-deny.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
-import { restoreProof } from './restore-proof.ts';
+import { restoreProof, type RestoreWorktree } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
 import { appendOnLaunchLine } from './cli-scope.ts';
 import { codexCommandHasFlag, codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
@@ -661,6 +661,10 @@ export type ExecuteOptions = {
   isClosing?: () => boolean;
   /** Recheck original-pane absence before automatic restore mutates a seat. */
   restoreGuard?(seat: string): string | null;
+  /** A fresh read of a seat's worktree evidence (its folder, every other seat's, and whether
+   *  another seat's record names its pane), for an adoption that changes the seat's conversation:
+   *  the evidence that authorized the change is read again before the record is written. */
+  restoreWorktree?(seat: string): RestoreWorktree | undefined;
 };
 
 /** Runs a plan. Steps carry the operation beside the command the dry run prints. */
@@ -2245,15 +2249,32 @@ export async function executePlan(
         // adoption: no rename, no record.
         const agentsNow = host.agentList?.(session) ?? null;
         const processNow = host.processInfo?.(session, op.pane) ?? null;
+        // A conversation change is proved again from the binding the records hold, with the
+        // worktree and claim evidence read again now: a folder or a competing record that moved
+        // since the plan refuses the adoption, never an exact-id proof on the new id.
+        const rebound = op.rebound;
+        const worktreeNow = rebound === undefined ? undefined : options?.restoreWorktree?.(op.seat);
         const proof = restoreProof({
           seat: { name: op.seat, cli: op.cli },
           recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.recordedLaunched },
           agents: agentsNow,
           process: processNow,
           foreground: host.foreground?.(session, op.pane) ?? null,
-          recordedSession: op.session,
+          recordedSession: rebound === undefined ? op.session : rebound.from,
           screen: host.paneText?.(session, op.pane) ?? null,
+          ...(worktreeNow === undefined ? {} : { worktree: worktreeNow }),
         });
+        if (rebound !== undefined && (proof.kind !== 'session' || proof.rebound?.to !== rebound.to)) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, {
+            kind: 'left out',
+            reason: proof.kind === 'none'
+              ? proof.why
+              : `its conversation no longer proves the change the plan read (${rebound.from} to ${rebound.to}); left as the host restored it`,
+          });
+          break;
+        }
         if (proof.kind === 'none') {
           held = true;
           dropped.add(op.seat);

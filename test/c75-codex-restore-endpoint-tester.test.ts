@@ -58,7 +58,7 @@ session: ${SESSION}
 trust:
   - ${lobby}
   - ${root}
-workspace:
+${seatCwd !== undefined && seatCwd.startsWith('../') ? `  - ${join(root, seatCwd)}\n` : ''}workspace:
   mode: shared
 seats:
   - role: coordinator
@@ -559,4 +559,30 @@ test('the same pane outside the seat\'s folder is not re-tied', async () => {
   expect(made.trace.renamed).toEqual([]);
   expect(seatState()?.agent_session).toBe(THREAD);
   expect(said(io)).toContain('its pane holds another conversation');
+});
+
+test('records naming A and a pane proven in B by its worktree, with a dead endpoint: the relaunch resumes B', async () => {
+  seatCwd = '../worker-tree';
+  setup();
+  record();
+  const made = sources({ name: null, session: OTHER_THREAD, cwd: seatFolder() });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${OTHER_THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).not.toContain(THREAD);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+});
+
+test('the restore pass resumes B too', async () => {
+  seatCwd = '../worker-tree';
+  setup();
+  record();
+  const made = sources({ name: null, session: OTHER_THREAD, cwd: seatFolder() });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources, SWEEP), said(io)).toBe(0);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${OTHER_THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).not.toContain(THREAD);
 });
