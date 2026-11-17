@@ -85,7 +85,7 @@ import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { inboxLive } from '../mcp/inbox.ts';
 import { channelLaunchFallback, channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
-import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { isSocketFile, codexEndpointPreflight, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
 import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
@@ -253,6 +253,8 @@ export type Launch = {
   codexEndpoint?: {
     managed(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }): Promise<ManagedEndpointRead>;
     stop(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
+    /** What would stop the managed endpoint from starting, read before an in-place exit. */
+    preflight?(input: { dir: string; session: string; seat: string }): string | null;
   };
   /** Waits, bounded and read-only, until none of these Codex app-servers lists the conversation
    *  as loaded (src/launch/codex-thread-release.ts). Absent: no wait — a fake launch asks no
@@ -386,6 +388,7 @@ const realLaunch: Launch = {
     registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (input) => launchCodexEndpoint(input),
+    preflight: (input) => codexEndpointPreflight(input),
     stop: (input) => stopSeatCodexEndpoint(input),
   },
   codexThreadWait: shippedCodexThreadWait,
@@ -4600,6 +4603,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         : {
             managedCodexEndpoint: (input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }) => launch.codexEndpoint!.managed(input),
             stopManagedCodexEndpoint: (input: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(input),
+            ...(launch.codexEndpoint!.preflight === undefined ? {} : { codexEndpointProblem: (input: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.preflight!(input) }),
           }),
       ...(launch.registerInbox
         ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }

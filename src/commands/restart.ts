@@ -68,7 +68,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, launchKind, type Host } from '../launch/execute.ts';
-import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { codexEndpointPreflight, launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
 import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
@@ -79,7 +79,7 @@ import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { currentCodexRecipe } from '../launch/features.ts';
 import { featureDialogClose } from '../launch/reboot.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, managedCodexLaunch, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
 import { isShippedLauncher } from '../launchers/shipped.ts';
@@ -97,6 +97,7 @@ import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
+import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { emptySession, mintSeatId, readState, carriedStartFolderProblem, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { findAgent as findRegisteredAgent, recordProvenAgentAddress, updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
@@ -168,6 +169,7 @@ const realUpLaunch: Launch = {
     registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
+    preflight: (endpoint) => codexEndpointPreflight(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
@@ -1334,6 +1336,21 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       }
       return problem;
     };
+    // The managed endpoint the relaunch will start, decided the way the plan decides it
+    // (`managedCodexLaunch`, src/launch/plan.ts), and what would stop it starting.
+    const restartEndpointProblem = (): string | null => {
+      const endpoint = sources.upLaunch.codexEndpoint;
+      if (endpoint?.preflight === undefined || next.cli !== 'codex') return null;
+      const managed = managedCodexLaunch({
+        cli: next.cli,
+        binary: profile.binary,
+        codexDaemon: codexDaemonForSeat({ home, root, team, seat: name, session }),
+        stateDir: dir,
+        launch: planSeat.launch,
+        command: planSeat.launch,
+      });
+      return managed ? endpoint.preflight({ dir, session, seat: name }) : null;
+    };
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
     let handoverPath: string | undefined;
     let handoverAsked: string | undefined;
@@ -1403,6 +1420,10 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // pane is closed, so a seat that goes down is never left down by a guard below.
       const stopMachineProblem = machineRefusal();
       if (stopMachineProblem) return { kind: 'not-ready', message: stopMachineProblem };
+      // The same holds for a managed Codex seat's endpoint: what would stop it from starting is
+      // read while the old CLI still runs, never found after the exit with the pane at its shell.
+      const endpointProblem = restartEndpointProblem();
+      if (endpointProblem) return { kind: 'not-ready', message: `${name}: ${endpointProblem}; left running, nothing typed` };
 
       // A pane herdr still lists is stopped; one it no longer lists is not typed into, and the
       // old record is cleared below either way.
@@ -2206,6 +2227,7 @@ function hostOf(input: {
       : {
           managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }) => launch.codexEndpoint!.managed(endpoint),
           stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
+          ...(launch.codexEndpoint!.preflight === undefined ? {} : { codexEndpointProblem: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.preflight!(endpoint) }),
         }),
     ...(launch.registerInbox
       ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
