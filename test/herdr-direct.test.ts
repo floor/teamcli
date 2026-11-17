@@ -37,20 +37,20 @@ describe('the socket the CLI would use', () => {
   const env = (extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv => ({ HOME: '/home/u', ...extra });
 
   test('an explicit session names its own socket, whatever HERDR_SOCKET_PATH says', () => {
-    expect(directSocketOf('floor', env({ HERDR_SOCKET_PATH: '/elsewhere/x.sock' }))).toBe('/home/u/.config/herdr/sessions/floor/herdr.sock');
+    expect(directSocketOf('alpha', env({ HERDR_SOCKET_PATH: '/elsewhere/x.sock' }))).toBe('/home/u/.config/herdr/sessions/alpha/herdr.sock');
   });
 
   test('no session: HERDR_SOCKET_PATH, only when it is a herdr socket under this HOME', () => {
-    expect(directSocketOf(undefined, env({ HERDR_SOCKET_PATH: '/home/u/.config/herdr/sessions/material/herdr.sock' }))).toBe('/home/u/.config/herdr/sessions/material/herdr.sock');
+    expect(directSocketOf(undefined, env({ HERDR_SOCKET_PATH: '/home/u/.config/herdr/sessions/beta/herdr.sock' }))).toBe('/home/u/.config/herdr/sessions/beta/herdr.sock');
     expect(directSocketOf(undefined, env({ HERDR_SOCKET_PATH: '/home/u/.config/herdr/herdr.sock' }))).toBe('/home/u/.config/herdr/herdr.sock');
     expect(directSocketOf(undefined, env({ HERDR_SOCKET_PATH: '/home/other/.config/herdr/sessions/a/herdr.sock' }))).toBeNull();
     expect(directSocketOf(undefined, env({ HERDR_SOCKET_PATH: '/home/u/.config/herdr/sessions/../x/herdr.sock' }))).toBeNull();
-    expect(directSocketOf(undefined, env({ HERDR_SESSION: 'floor' }))).toBeNull();
+    expect(directSocketOf(undefined, env({ HERDR_SESSION: 'alpha' }))).toBeNull();
     expect(directSocketOf(undefined, env({}))).toBeNull();
   });
 
   test('XDG_CONFIG_HOME or a name the CLI refuses keeps the CLI', () => {
-    expect(directSocketOf('floor', env({ XDG_CONFIG_HOME: '/x' }))).toBeNull();
+    expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/x' }))).toBeNull();
     expect(directSocketOf('a b', env({}))).toBeNull();
     expect(directSocketOf('..', env({}))).toBeNull();
     expect(directSocketOf('a/b', env({}))).toBeNull();
