@@ -916,6 +916,8 @@
     "test/restored-launcher-boundaries.test.ts": 5,
     "test/restored-seat-recognition-four-cases.test.ts": 4,
     "test/resume.test.ts": 3,
+    "test/retie-agy-worktree.test.ts": 5,
+    "test/retie-remaining.test.ts": 3,
     "test/retire-mcp-inbox-leg.test.ts": 2,
     "test/rewake-after-busy-independent.test.ts": 2,
     "test/root-word-launch-gates.test.ts": 3,

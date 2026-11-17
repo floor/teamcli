@@ -317,6 +317,9 @@ export type Op =
       /** The pane moved to another conversation inside the seat's own worktree: `session` is
        *  `to`, and the execute says the change on the seat's own line. */
       rebound?: { from: string; to: string };
+      /** An unready record with no conversation, adopted on the declared CLI at an idle prompt in
+       *  the seat's own worktree: the execute reads the worktree evidence again before writing. */
+      worktreeProof?: true;
       /** Sidebar line 2, painted by the rename's own step (`also`). */
       displayAgent?: string;
       /** The record never reached ready (stopped at `launched`, or waiting at a dialog). The
@@ -580,6 +583,8 @@ export interface UpSeat {
     session?: string;
     /** See the adopt op's `rebound`. */
     rebound?: { from: string; to: string };
+    /** See the adopt op's `worktreeProof`. */
+    worktreeProof?: true;
     via: 'session' | 'cli';
     sentence: string;
     /** The record never reached ready: see the adopt op's `unready`. */
@@ -1222,6 +1227,7 @@ export function upPlan(input: UpInput): Step[] {
           ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
           ...(seat.adopted.session === undefined ? {} : { session: seat.adopted.session }),
           ...(seat.adopted.rebound === undefined ? {} : { rebound: seat.adopted.rebound }),
+          ...(seat.adopted.worktreeProof === true ? { worktreeProof: true as const } : {}),
           ...(seat.adopted.unready === undefined ? {} : { unready: seat.adopted.unready }),
         },
       });

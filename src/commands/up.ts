@@ -91,7 +91,7 @@ import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/p
 import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsOnlyShell, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS, liveConversationElsewhere, restoredBypassesLauncher, restorePaneBusy, restoreProof, restoreRelaunch, restoreWorktreeOf, unreadyRestoreProof, type RestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
+import { CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS, liveConversationElsewhere, restoredBypassesLauncher, restorePaneBusy, restoreProof, restoreRelaunch, restoreWorktreeOf, unreadyRestoreProof, paneInOwnWorktree, type RestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
 import { featureDialogClose, restoredPaneByConversation } from '../launch/reboot.ts';
 import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
@@ -806,6 +806,25 @@ function restoredModelUnread(
     .filter((word) => word.length >= 3 && /[a-z]/.test(word));
   const id = banner.toLowerCase();
   return !words.some((word) => id.includes(word));
+}
+
+/**
+ * Why `--retie` leaves a seat the plan would start. A pane proven the seat's own that needs an
+ * in-place relaunch (its managed Codex endpoint died, or its launcher's settings are gone) names
+ * that cause and the plain `team up` that repairs it, resuming its conversation; anything else
+ * keeps the general sentence.
+ */
+export function retieSkipReason(planned: UpSeat, heldPane: string | undefined, session: string): string {
+  if (heldPane === undefined) return 'not launched: --retie only re-ties seats whose panes are running';
+  const own = planned.repair?.ownLine;
+  if (own !== undefined && planned.repair?.pane === heldPane) {
+    const cause = own.endpoint === true
+      ? 'its managed Codex endpoint died with the restart, so its tools run on a server another pane started'
+      : "its pane runs the bare CLI without its launch line's settings";
+    const resumes = own.session === undefined ? '' : `, resuming ${own.session}`;
+    return `its pane is the seat's own, but ${cause}; --retie never relaunches: team up --session ${session} exits it in place and launches its own line there${resumes}`;
+  }
+  return 'not launched or closed: --retie only re-ties seats whose panes are running; its pane cannot be re-tied as it stands';
 }
 
 /**
@@ -1529,6 +1548,46 @@ function seatPlan(
           sentence: unready.sentence,
           session: continuitySession,
           unready: recorded.stage ?? 'launched',
+        },
+      };
+    }
+  }
+  // A record that stopped before ready with no conversation on either side (a CLI that reports no
+  // id, such as agy): the strong proof has nothing to compare, and the weak one never adopts an
+  // unready record on its own. The seat's own worktree is the place evidence that stands in for
+  // the id: the pane's folder inside this seat's worktree and no other seat's, no other record
+  // naming the pane, the declared CLI alone in its workspace at an idle prompt. A seat that needs
+  // a relaunch (a launcher, a dead endpoint) is left to the paths that relaunch it.
+  if (verdict === 'replaced' && recorded.stage !== 'ready' && recorded.pane && recorded.workspace && recorded.launched
+    && continuitySession === null && restoreWorktree !== undefined
+    && !restoredBypassesLauncher(effectiveSeatOf(seat, planned)) && !endpointRelaunch(seat, recorded, planned.launch)) {
+    const entry = agents?.find((agent) => agent.pane === recorded.pane);
+    const proof = entry !== undefined && (entry.session === undefined || entry.session === '')
+      && paneInOwnWorktree(entry.cwd, restoreWorktree)
+      ? restoreProof({
+          seat,
+          recorded: { stage: 'ready', pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched },
+          agents,
+          process: processes[seat.name] ?? null,
+          foreground: foregroundOf(recorded.pane),
+          recordedSession: undefined,
+          screen: screenOf(recorded.pane),
+        })
+      : null;
+    const next = proof?.kind === 'cli' ? launchedIdentity(processes[seat.name] ?? null) : null;
+    if (proof?.kind === 'cli' && next !== null) {
+      return {
+        ...planned,
+        stage: 'ready',
+        adopted: {
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          recordedLaunched: recorded.launched,
+          launched: next,
+          via: 'cli',
+          sentence: `${proof.sentence}, in the seat's own worktree`,
+          unready: recorded.stage ?? 'launched',
+          worktreeProof: true,
         },
       };
     }
@@ -3384,9 +3443,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         seats.push({
           ...kept,
           stopped: true,
-          retieSkip: held?.pane === undefined
-            ? 'not launched: --retie only re-ties seats whose panes are running'
-            : 'not launched or closed: --retie only re-ties seats whose panes are running; its pane cannot be re-tied as it stands',
+          retieSkip: retieSkipReason(planned, held?.pane, session),
         });
         continue;
       }
