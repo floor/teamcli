@@ -1,5 +1,5 @@
 import { execProcessToolSync } from './process-tools-adapter.ts';
-import { kernelProcess } from './process-kernel.ts';
+import { kernelProcess, runsInSeatbelt } from './process-kernel.ts';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename } from 'node:path';
@@ -102,6 +102,9 @@ export type CallerSources = {
    *  (src/placement/confined.ts); null when no record holds `pane` or the proof fails. Read only
    *  when the parent walk could not be read at all. Absent: such a caller stays unplaced. */
   confinedSeat?(pane: string, session: string | undefined): ConfinedSeat | null;
+  /** Whether this process runs inside a sandbox profile (macOS Seatbelt). It only words the
+   *  refusal for a walk that already failed: it never places a caller. Absent: false. */
+  sandboxed?(): boolean;
 };
 
 /** Whether a pane herdr lists without a name is the pane the seat's record holds. The proof is
@@ -141,7 +144,7 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
   // caller is a confined seat whose sandbox hides every process outside it. That seat is placed
   // by its own grant, never by the variable that names its pane.
   if (!ancestors?.length) return confinedCaller(sources, session)
-    ?? { kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' };
+    ?? { kind: 'unplaced', reason: unreadWalkReason(sources) };
   const pids = new Set(ancestors.map((process) => process.pid));
 
   // A Codex app-server one Codex process started for itself serves every Codex TUI that attaches
@@ -260,6 +263,17 @@ export function sharedCodexServer(ancestors: readonly Process[]): boolean {
   });
 }
 
+export const UNREAD_WALK_REASON = 'its parent processes can\'t be read to the top';
+export const SANDBOXED_WALK_REASON = 'it runs inside a command sandbox that hides its parent processes, so no seat can be proved; '
+  + 'run the team command as a command of its own, not chained with other shell commands, so the CLI runs it outside its sandbox';
+
+/** Why a caller whose parent walk could not be read stays unplaced. Inside a sandbox the walk is
+ *  refused by design and the remedy is different, so the reason says so; the caller is unplaced
+ *  either way. */
+function unreadWalkReason(sources: Pick<CallerSources, 'sandboxed'>): string {
+  return sources.sandboxed?.() === true ? SANDBOXED_WALK_REASON : UNREAD_WALK_REASON;
+}
+
 /** The confined-seat reading (src/placement/confined.ts) for a caller whose parent walk could not
  *  be read. The pane variable only names which record to test. When the terminal host answers,
  *  a pane it lists under another seat's name refuses the reading. */
@@ -336,7 +350,7 @@ export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'calle
   const ancestors = sources ? sources.ancestors() : readAncestors();
   const env = sources ? sources.env : io.env;
   const stdinIsTTY = sources ? sources.stdinIsTTY : io.stdinIsTTY;
-  if (!ancestors?.length) return { kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' };
+  if (!ancestors?.length) return { kind: 'unplaced', reason: unreadWalkReason(sources ?? { sandboxed: runsInSeatbelt }) };
   if (ancestors.some((process) => process.name === 'herdr')) {
     return { kind: 'unplaced', reason: 'it runs under herdr' };
   }
@@ -783,7 +797,13 @@ function ancestorReadFailure(error: unknown): string {
     ? 'snapshot unread (timeout)' : 'snapshot unread (reader failed)';
 }
 
-function noteAncestorFailure(cause: string): void {
+const notedAncestorFailures = new Set<string>();
+
+/** One line per cause per process. Inside a sandbox the refusal reason already says why the walk
+ *  is unread, so the reader's own failures are not repeated on stderr. */
+export function noteAncestorFailure(cause: string): void {
+  if (notedAncestorFailures.has(cause) || runsInSeatbelt()) return;
+  notedAncestorFailures.add(cause);
   console.error(`team caller: ${cause}`);
 }
 
@@ -942,6 +962,7 @@ export function currentCaller(
     processStartOf: (pid) => processStartOf(pid),
     ownerSignsElsewhere: ownerSignsElsewhereOnThisAccount,
     confinedSeat: (pane, asked) => confinedSeatAt(io.cwd ?? process.cwd(), pane, asked),
+    sandboxed: runsInSeatbelt,
   };
   if (extra !== undefined) return placeCaller({ ...sources, ...extra }, session);
   const snapId = activeHerdrSnapshotId();

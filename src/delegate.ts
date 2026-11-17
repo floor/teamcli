@@ -1,6 +1,6 @@
 import { approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
-import { callerOf, describeCaller, readAncestors, type Caller, type CallerSources } from './caller.ts';
+import { callerOf, describeCaller, readAncestors, SANDBOXED_WALK_REASON, type Caller, type CallerSources } from './caller.ts';
 import type { ActingCommand, Delegate, DelegateCommand } from './delegate-types.ts';
 import { ACTING_COMMANDS } from './delegate-types.ts';
 import { devModeFileApproval, type DevModeRun } from './dev_mode.ts';
@@ -457,6 +457,6 @@ function findEntry(
 
 function evidenceCaller(caller: Caller): string | null {
   if (caller.kind !== 'unplaced') return null;
-  if (caller.reason === ANCESTORS || caller.reason === HERDR || caller.reason === ROOTS) return caller.reason;
+  if (caller.reason === ANCESTORS || caller.reason === SANDBOXED_WALK_REASON || caller.reason === HERDR || caller.reason === ROOTS) return caller.reason;
   return null;
 }
