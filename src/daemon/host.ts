@@ -27,7 +27,7 @@ import { getTeam, noteStoppedTeamRunning, readTeams, teamIdOf } from '../registr
 import { currentRunMemo } from '../run-memo.ts';
 import type { TeamFile } from '../file/types.ts';
 import { paneProcessesAsync, sessionListAsync, sessionRunningAsync, startStoppedServer, type PaneProcesses } from '../herdr.ts';
-import { bootId, readBootQueue, readSessionsRunning, writeBootQueue, writeSessionsRunning } from './restore/boot-sessions.ts';
+import { bootId, readBootQueue, readSessionsRunning, writeBootQueue, writeSessionsRunning, type StartFacts } from './restore/boot-sessions.ts';
 import { runBootWork, type BootRunDeps } from './restore/boot-run.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -3122,6 +3122,32 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       writeObserved: (record) => writeSessionsRunning(home, record),
       sessions: () => sessionsRunningMap(() => sessionListAsync({ signal: restoreAbort.signal })),
       start: (session) => startStoppedServer(session, { signal: restoreAbort.signal }),
+      // Read at the moment of each start: this boot's id, the root's hosted route with its team
+      // file read again now, and the registry's entry for that root read again now.
+      facts: async (root): Promise<StartFacts> => {
+        const boot = await bootId();
+        const route = routes.find((one) => one.root === root);
+        let hosted: StartFacts['hosted'];
+        if (route === undefined) hosted = { problem: 'the root is no longer hosted' };
+        else {
+          const change = hostedRouteChange(route);
+          hosted = change === null ? { root: route.root, team: route.team, session: route.session } : { problem: change };
+        }
+        let registry: StartFacts['registry'] = null;
+        try {
+          const canonical = realpathSync(root);
+          const memo = currentRunMemo();
+          memo?.teamsTolerant.delete(home);
+          memo?.teamsStrict.delete(home);
+          const record = getTeam(home, teamIdOf(canonical));
+          if (record !== null && realpathSync(record.root) === canonical) {
+            registry = { root: canonical, team: record.project, session: record.session, lifecycle: record.lifecycle };
+          }
+        } catch {
+          registry = null;
+        }
+        return { boot, hosted, registry };
+      },
       hosted: () => routes.map((route) => ({ root: route.root, team: route.team, session: route.session })),
       lifecycleProblem: (root, team) => restoreLifecycleProblem(home, root, team),
       loadPerCore: () => (loadavg()[0] ?? 0) / Math.max(1, cpus().length),

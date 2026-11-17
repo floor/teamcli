@@ -805,13 +805,31 @@ export async function startStoppedServer(
     return 'failed';
   }
   const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
-  try {
-    const child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
-    child.unref();
-    return 'started';
-  } catch {
-    return 'failed';
+  // The spawn's own outcome is awaited (an error event is handled, never left unhandled), then
+  // the session must read running within the bound: only then is the server up.
+  const spawned = await new Promise<boolean>((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
+    } catch {
+      resolve(false);
+      return;
+    }
+    child.once('error', () => resolve(false));
+    child.once('spawn', () => {
+      child.unref();
+      resolve(true);
+    });
+  });
+  if (!spawned) return 'failed';
+  const until = Date.now() + (options.timeoutMs ?? 15_000);
+  while (Date.now() < until) {
+    if (options.signal?.aborted === true) return 'failed';
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const now = await sessionListAsync(options);
+    if (now?.find((one) => one.name === session)?.running === true) return 'started';
   }
+  return 'failed';
 }
 
 // Sets a workspace's label, which herdr draws as sidebar line 1. `herdr workspace rename --help`

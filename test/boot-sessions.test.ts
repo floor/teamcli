@@ -1,6 +1,8 @@
-// Boot restore (reviews of c54febae5): only registered, hosted team routes are started; the
-// evidence is a per-boot id, never a clock; the queue is durable and resumed by a daemon
-// restarted in the same boot; a route stopped or rebound since is invalidated, not started.
+// Boot restore (reviews of c54febae5 and d23287b71): a start runs only on a fresh positive proof
+// (boot id, hosted route from the file read now, a running registry entry with the same team and
+// session); the evidence is a per-boot id; the queue is durable, resumed in the same boot, built
+// from an observation once only; every failure is a retryable record; every pending route is
+// visited each pass; a route settles only once its server is up.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,16 +10,17 @@ import { join } from 'node:path';
 import {
   bootId,
   bootQueuePath,
-  bootRouteProblem,
   planBootQueue,
   readBootQueue,
   readSessionsRunning,
   sessionsRunningPath,
+  startProblem,
   writeBootQueue,
   writeSessionsRunning,
   type BootQueue,
   type BootRoute,
   type SessionsRunning,
+  type StartFacts,
 } from '../src/daemon/restore/boot-sessions.ts';
 import { planBoot, runBootWork, workBootQueue, type BootRunDeps } from '../src/daemon/restore/boot-run.ts';
 
@@ -25,6 +28,7 @@ const FLOOR: BootRoute = { root: '/w/floor', team: 'floor', session: 'floor' };
 const MATERIAL: BootRoute = { root: '/w/material', team: 'material', session: 'material' };
 const BOOT_A = 'AAAAAAAA-0000-4000-8000-000000000001';
 const BOOT_B = 'BBBBBBBB-0000-4000-8000-000000000002';
+const BOOT_C = 'CCCCCCCC-0000-4000-8000-000000000003';
 
 let home: string;
 beforeEach(() => {
@@ -36,14 +40,14 @@ afterEach(() => { rmSync(home, { recursive: true, force: true }); });
 test('both records round-trip, and malformed ones read as absent', () => {
   expect(writeSessionsRunning(home, { boot: BOOT_A, at: 5, running: [FLOOR, FLOOR, MATERIAL] })).toBe(true);
   expect(readSessionsRunning(home)).toEqual({ boot: BOOT_A, at: 5, running: [FLOOR, MATERIAL] });
-  const queue: BootQueue = { boot: BOOT_A, pending: [MATERIAL], settled: [{ route: FLOOR, outcome: 'started' }] };
+  const queue: BootQueue = { boot: BOOT_B, from: BOOT_A, pending: [{ ...MATERIAL, tries: 2, last: 'the terminal host did not answer' }], settled: [{ route: FLOOR, outcome: 'started' }] };
   expect(writeBootQueue(home, queue)).toBe(true);
   expect(readBootQueue(home)).toEqual(queue);
   writeFileSync(sessionsRunningPath(home), '{"boot":"x","at":1,"running":[{"root":"rel","team":"t","session":"s"}]}');
   expect(readSessionsRunning(home)).toBeNull();
   writeFileSync(sessionsRunningPath(home), '{"boot":"x","at":1,"running":[{"root":"/r","team":"t","session":"../x"}]}');
   expect(readSessionsRunning(home)).toBeNull();
-  writeFileSync(bootQueuePath(home), 'not json');
+  writeFileSync(bootQueuePath(home), '{"boot":"x","pending":[],"settled":[]}');
   expect(readBootQueue(home)).toBeNull();
 });
 
@@ -53,33 +57,47 @@ test('the boot id is the kernel boot session uuid, never a clock reading', async
   expect(await bootId(async () => { throw new Error('no sysctl'); })).toBeNull();
 });
 
-test('a queue is planned only from another boot\'s observation, and a same-boot queue is resumed', () => {
+test('a queue is planned once from another boot\'s observation; a same-boot queue is resumed', () => {
   const observed: SessionsRunning = { boot: BOOT_A, at: 1, running: [FLOOR, MATERIAL] };
-  // Another boot's observation: a new queue.
-  expect(planBootQueue(observed, null, BOOT_B)).toEqual({ queue: { boot: BOOT_B, pending: [FLOOR, MATERIAL], settled: [] }, isNew: true });
-  // This boot's observation (a daemon restarted later, or a clock change): nothing.
+  expect(planBootQueue(observed, null, BOOT_B)).toEqual({ queue: { boot: BOOT_B, from: BOOT_A, pending: [FLOOR, MATERIAL], settled: [] }, isNew: true });
+  // This boot's observation (a later daemon, or a clock change): nothing.
   expect(planBootQueue(observed, null, BOOT_A)).toBeNull();
-  // A stored queue of this boot wins over any observation: resumed, never re-derived.
-  const stored: BootQueue = { boot: BOOT_B, pending: [MATERIAL], settled: [{ route: FLOOR, outcome: 'started' }] };
+  // A stored queue of this boot is resumed, never re-derived.
+  const stored: BootQueue = { boot: BOOT_B, from: BOOT_A, pending: [MATERIAL], settled: [{ route: FLOOR, outcome: 'started' }] };
   expect(planBootQueue({ boot: BOOT_B, at: 9, running: [] }, stored, BOOT_B)).toEqual({ queue: stored, isNew: false });
-  // An old boot's queue is not resumed.
-  expect(planBootQueue(null, { ...stored, boot: BOOT_A }, BOOT_B)).toBeNull();
-  // No boot id: nothing.
+  // Boot C finds boot A's observation still on disk (boot B's observer never replaced it), but
+  // boot B's queue was built from it: it is not replayed.
+  expect(planBootQueue(observed, stored, BOOT_C)).toBeNull();
   expect(planBootQueue(observed, null, null)).toBeNull();
 });
 
-test('a route is eligible only while it is the same hosted route of a team that is not stopped', () => {
-  const ok = () => null;
-  expect(bootRouteProblem(FLOOR, [FLOOR], ok)).toBeNull();
-  expect(bootRouteProblem(FLOOR, [MATERIAL], ok)).toBe('the root is no longer hosted');
-  expect(bootRouteProblem(FLOOR, [{ ...FLOOR, session: 'floor2' }], ok)).toBe('the team\'s session is now "floor2", not "floor"');
-  expect(bootRouteProblem(FLOOR, [{ ...FLOOR, team: 'other' }], ok)).toBe('the root now hosts team "other", not "floor"');
-  expect(bootRouteProblem(FLOOR, [FLOOR], () => 'the registry team is stopped')).toBe('the registry team is stopped');
+const good = (route: BootRoute, boot = BOOT_B): StartFacts => ({ boot, hosted: { ...route }, registry: { ...route, lifecycle: 'running' } });
+
+test('a start needs the whole positive proof, read at the moment of the start', () => {
+  expect(startProblem(FLOOR, BOOT_B, good(FLOOR))).toBeNull();
+  expect(startProblem(FLOOR, BOOT_B, { ...good(FLOOR), boot: null })).toBe('this boot\'s id cannot be read now');
+  expect(startProblem(FLOOR, BOOT_B, good(FLOOR, BOOT_C))).toBe('the boot id changed since the queue was planned');
+  expect(startProblem(FLOOR, BOOT_B, { ...good(FLOOR), hosted: { problem: 'the root is no longer hosted' } })).toBe('the root is no longer hosted');
+  expect(startProblem(FLOOR, BOOT_B, { ...good(FLOOR), hosted: { ...FLOOR, session: 'floor2' } })).toBe('the team\'s session is now "floor2", not "floor"');
+  expect(startProblem(FLOOR, BOOT_B, { ...good(FLOOR), registry: null })).toBe('the registry has no team for this root');
+  expect(startProblem(FLOOR, BOOT_B, { ...good(FLOOR), registry: { ...FLOOR, session: 'other', lifecycle: 'running' } })).toBe('the registry names session "other", not "floor"');
+  expect(startProblem(FLOOR, BOOT_B, { ...good(FLOOR), registry: { ...FLOOR, lifecycle: 'stopped' } })).toBe('the registry team is stopped');
 });
 
-/** A world for the orchestration: files in `home`, a fake terminal host and load. */
-function world(opts: { boot: string; hosted?: BootRoute[]; stopped?: Set<string>; running?: Set<string>; load?: number[]; lifecycle?: (root: string) => string | null; failWrites?: boolean }) {
+/** A world for the orchestration: files in `home`, a fake terminal host, load and facts. */
+function world(opts: {
+  boot: string;
+  hosted?: BootRoute[];
+  stopped?: Set<string>;
+  running?: Set<string>;
+  load?: number[];
+  facts?: (root: string) => StartFacts;
+  failWrites?: boolean;
+  /** Sessions whose server never comes up. */
+  dead?: Set<string>;
+}) {
   const started: string[] = [];
+  const attempts: string[] = [];
   const logs: string[] = [];
   let clock = 0;
   const loads = [...(opts.load ?? [])];
@@ -87,6 +105,7 @@ function world(opts: { boot: string; hosted?: BootRoute[]; stopped?: Set<string>
   const running = opts.running ?? new Set<string>();
   let waits = 0;
   let maxWaits = 50;
+  const routes = opts.hosted ?? [FLOOR, MATERIAL];
   const deps: BootRunDeps = {
     bootId: async () => opts.boot,
     readObserved: () => readSessionsRunning(home),
@@ -94,15 +113,22 @@ function world(opts: { boot: string; hosted?: BootRoute[]; stopped?: Set<string>
     writeQueue: (queue) => (opts.failWrites === true ? false : writeBootQueue(home, queue)),
     writeObserved: (record) => (opts.failWrites === true ? false : writeSessionsRunning(home, record)),
     sessions: async () => new Map<string, boolean>([...[...stopped].map((name): [string, boolean] => [name, false]), ...[...running].map((name): [string, boolean] => [name, true])]),
+    facts: async (root) => {
+      if (opts.facts !== undefined) return opts.facts(root);
+      const route = routes.find((one) => one.root === root);
+      return route === undefined ? { boot: opts.boot, hosted: { problem: 'the root is no longer hosted' }, registry: null } : good(route, opts.boot);
+    },
     start: async (session) => {
-      if (!stopped.has(session)) return running.has(session) ? 'not-stopped' : 'not-stopped';
+      attempts.push(session);
+      if (!stopped.has(session)) return 'not-stopped';
+      if (opts.dead?.has(session) === true) return 'failed';
       started.push(session);
       stopped.delete(session);
       running.add(session);
       return 'started';
     },
-    hosted: () => opts.hosted ?? [FLOOR, MATERIAL],
-    lifecycleProblem: (root) => opts.lifecycle?.(root) ?? null,
+    hosted: () => routes,
+    lifecycleProblem: () => null,
     loadPerCore: () => (loads.length > 0 ? loads.shift() as number : 1),
     wait: async (ms) => { clock += ms; waits += 1; return waits <= maxWaits; },
     now: () => clock,
@@ -113,11 +139,10 @@ function world(opts: { boot: string; hosted?: BootRoute[]; stopped?: Set<string>
     budgetMs: 30 * 60_000,
     observeEveryMs: 10_000,
   };
-  return { deps, started, logs, stopped, running, limitWaits: (n: number) => { maxWaits = n; waits = 0; } };
+  return { deps, started, attempts, logs, stopped, running, limitWaits: (n: number) => { maxWaits = n; waits = 0; } };
 }
 
 test('after a restart, only the registered routes that ran are started, and an unrelated session never is', async () => {
-  // Before the restart: floor and material ran; a personal session ran too but is not a route.
   writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR, MATERIAL] });
   const w = world({ boot: BOOT_B, stopped: new Set(['floor', 'material', 'personal']) });
   w.limitWaits(3);
@@ -127,65 +152,74 @@ test('after a restart, only the registered routes that ran are started, and an u
   expect(readBootQueue(home)?.pending).toEqual([]);
 });
 
-test('a team taken down, or a root rebound to another session, is invalidated, not started', async () => {
-  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR, MATERIAL] });
+test('a refused proof is never started: it stays pending with its reason, and starts once the proof holds', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+  let downed = true;
   const w = world({
     boot: BOOT_B,
-    stopped: new Set(['floor', 'material']),
-    hosted: [{ ...FLOOR, session: 'floor-new' }, MATERIAL],
-    lifecycle: (root) => (root === MATERIAL.root ? 'the registry team is stopped' : null),
+    stopped: new Set(['floor']),
+    facts: () => (downed ? { ...good(FLOOR), registry: { ...FLOOR, lifecycle: 'stopped' } } : good(FLOOR)),
   });
+  const planned = await planBoot(w.deps);
+  if (planned.kind !== 'work') throw new Error('no work');
+  w.limitWaits(2);
+  await workBootQueue(w.deps, planned.queue);
+  expect(w.attempts).toEqual([]);
+  const left = readBootQueue(home)?.pending[0];
+  expect(left?.last).toBe('the registry team is stopped');
+  expect((left?.tries ?? 0) >= 1).toBe(true);
+  downed = false;
   w.limitWaits(3);
-  await runBootWork(w.deps);
-  expect(w.started).toEqual([]);
-  const settled = readBootQueue(home)?.settled.map((one) => one.outcome) ?? [];
-  expect(settled).toEqual([
-    'invalidated: the team\'s session is now "floor-new", not "floor"',
-    'invalidated: the registry team is stopped',
-  ]);
+  await workBootQueue(w.deps, readBootQueue(home) as BootQueue);
+  expect(w.started).toEqual(['floor']);
 });
 
-test('held load across an observation, then a same-boot daemon restart: the queue survives and the sessions still start', async () => {
+test('a stuck route does not hold the others: every pending route is visited each pass', async () => {
   writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR, MATERIAL] });
-  // First daemon: the load stays over the guard; the observer writes this boot's record meanwhile.
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor', 'material']), dead: new Set(['floor']) });
+  w.limitWaits(3);
+  await runBootWork(w.deps);
+  expect(w.started).toEqual(['material']);
+  const queue = readBootQueue(home);
+  expect(queue?.pending.map((one) => one.session)).toEqual(['floor']);
+  expect(queue?.pending[0]?.last).toBe('its server did not come up');
+  expect(queue?.settled.map((one) => one.outcome)).toEqual(['started']);
+});
+
+test('held load across an observation, then a same-boot daemon restart: the queue survives and the sessions start', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR, MATERIAL] });
   const first = world({ boot: BOOT_B, stopped: new Set(['floor', 'material']), load: [9, 9, 9, 9, 9, 9] });
   const planned = await planBoot(first.deps);
-  expect(planned.queue?.pending).toEqual([FLOOR, MATERIAL]);
+  if (planned.kind !== 'work') throw new Error('no work');
   first.limitWaits(4);
-  await workBootQueue(first.deps, planned.queue as BootQueue);
+  await workBootQueue(first.deps, planned.queue);
   writeSessionsRunning(home, { boot: BOOT_B, at: 99, running: [] });
   expect(first.started).toEqual([]);
-  // Second daemon, same boot: this boot's observation is newer, but the stored queue is resumed.
   const second = world({ boot: BOOT_B, stopped: first.stopped });
   second.limitWaits(3);
   await runBootWork(second.deps);
   expect(second.started).toEqual(['floor', 'material']);
 });
 
-test('a queue that cannot be written starts nothing (fail closed), and says so', async () => {
-  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+test('an unwritable queue starts nothing and leaves the observation in place for a later daemon', async () => {
+  const before: SessionsRunning = { boot: BOOT_A, at: 1, running: [FLOOR] };
+  writeSessionsRunning(home, before);
   const w = world({ boot: BOOT_B, stopped: new Set(['floor']), failWrites: true });
-  w.limitWaits(2);
+  w.limitWaits(3);
   await runBootWork(w.deps);
   expect(w.started).toEqual([]);
-  expect(w.logs.join('\n')).toContain('the boot queue could not be written; no session is started');
-  expect(w.logs.join('\n')).toContain('the running-sessions record could not be written');
+  expect(w.logs.join('\n')).toContain('the boot queue could not be written; nothing is started until it is');
+  expect(readSessionsRunning(home)).toEqual(before);
+  // A later daemon in the same boot can write: it plans from the kept evidence and starts.
+  const v = world({ boot: BOOT_B, stopped: new Set(['floor']) });
+  v.limitWaits(3);
+  await runBootWork(v.deps);
+  expect(v.started).toEqual(['floor']);
 });
 
-test('the observer records only hosted routes whose session runs and whose team is not stopped', async () => {
-  const w = world({ boot: BOOT_B, running: new Set(['floor', 'material', 'personal']), lifecycle: (root) => (root === MATERIAL.root ? 'stopped' : null) });
+test('the observer records only hosted routes whose session runs', async () => {
+  const w = world({ boot: BOOT_B, running: new Set(['floor', 'personal']), stopped: new Set(['material']) });
   w.limitWaits(1);
   await runBootWork(w.deps);
   expect(readSessionsRunning(home)).toEqual({ boot: BOOT_B, at: 10_000, running: [FLOOR] });
-});
-
-test('a session stopped by hand is dropped from the record at the next observation', async () => {
-  const w = world({ boot: BOOT_B, running: new Set(['floor', 'material']) });
-  w.limitWaits(1);
-  await runBootWork(w.deps);
-  expect(readSessionsRunning(home)?.running).toEqual([FLOOR, MATERIAL]);
-  const v = world({ boot: BOOT_B, running: new Set(['floor']), stopped: new Set(['material']) });
-  v.limitWaits(1);
-  await runBootWork(v.deps);
-  expect(readSessionsRunning(home)?.running).toEqual([FLOOR]);
 });
