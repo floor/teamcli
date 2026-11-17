@@ -33,6 +33,7 @@ import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
 import { attributedBody, attributeSenderClaim, type SenderAttribution } from '../send/sender-claim.ts';
+import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
 import { readState } from '../state.ts';
 import {
   alreadyReadSentence,
@@ -854,12 +855,13 @@ export function readMessage(
   // or — for a manual read — the claim it served. It is never the key's own generation.
   const writerEpoch = brief?.epoch ?? binding?.epoch;
   const signedReceipt = signReceiptPayload(receipt, home, writerEpoch === undefined ? undefined : { epoch: writerEpoch });
-  const body = attributedBody(payload.body, payload.from, {
+  const attributed = attributedBody(payload.body, payload.from, {
     record: payload,
     home,
     root: target.root,
     rule: payload.rule,
   });
+  const body = takesReaderLine(payload, isGeneralBriefRecord(payload)) ? bodyWithReaderLine(attributed, id, existingRecordIdsIn(target.dropDir)) : attributed;
   // The inbox server publishes the receipt before it returns the body: a receipt that cannot be
   // made durable shows nothing, and a seat that loses its place during the write shows nothing
   // either. The receipt stands — that path is at-most-once. The CLI mailbox reader asks for the
@@ -922,12 +924,15 @@ export function peekMessage(target: InboxTarget, id: string, home: string, seats
   const payload = opened.payload;
   return {
     ok: true,
-    body: attributedBody(payload.body, payload.from, {
-      record: payload,
-      home,
-      root: target.root,
-      rule: payload.rule,
-    }),
+    body: (() => {
+      const attributed = attributedBody(payload.body, payload.from, {
+        record: payload,
+        home,
+        root: target.root,
+        rule: payload.rule,
+      });
+      return takesReaderLine(payload, isGeneralBriefRecord(payload)) ? bodyWithReaderLine(attributed, id, existingRecordIdsIn(target.dropDir)) : attributed;
+    })(),
   };
 }
 

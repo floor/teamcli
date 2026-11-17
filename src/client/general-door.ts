@@ -109,6 +109,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   'owner-seat': ['account', 'days', 'entity', 'from', 'grant-emission', 'name', 'out', 'owner-signers', 'policy-entity', 'port', 'reason', 'signer', 'team'],
   pause: ['client', 'reason', 'seat', 'team'],
   peek: ['lines'],
+  ping: ['wait'],
   plan: [],
   policy: ['entity', 'file', 'kind', 'project', 'seat', 'until'],
   pr: ['file'],
