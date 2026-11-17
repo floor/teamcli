@@ -23,12 +23,15 @@ import { mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarde
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerAncestors, callerOf } from '../caller.ts';
-import { REPLY_FLAG_OPTIONS, SEND_FLAG_OPTIONS, SEND_VALUED_OPTIONS } from './command-grammar.ts';
+import { ACK_FLAG_OPTIONS, DROPS_FLAG_OPTIONS, DROPS_VALUED_OPTIONS, REPLY_FLAG_OPTIONS, SEND_FLAG_OPTIONS, SEND_VALUED_OPTIONS } from './command-grammar.ts';
 import type { Io } from '../io.ts';
 import { cliHookStatePath } from '../launch/cli-hook.ts';
 import { confinedSeatAt } from '../placement/confined.ts';
+import { isRecordSidecarName, recordNameOk } from './record.ts';
 
-export type OutboxCommand = 'send' | 'reply';
+export type OutboxCommand = 'send' | 'reply' | 'ack' | 'drops';
+
+const OUTBOX_COMMANDS: readonly OutboxCommand[] = ['send', 'reply', 'ack', 'drops'];
 
 export type OutboxRequest = {
   v: 1;
@@ -69,14 +72,25 @@ export function outboxFolder(dir: string, session: string, seat: string): string
 const RELAY_ALLOWED: Record<OutboxCommand, { valued: readonly string[]; flags: readonly string[] }> = {
   send: { valued: ['subject', 'channel'], flags: ['json', 'dry-run', 'list'] },
   reply: { valued: [], flags: ['close', 'json'] },
+  // One message, by its id, as `team ack <id>` reads it (E5). The scoped form clears other
+  // records by age and is the owner's and the lead's, never a confined seat's.
+  ack: { valued: [], flags: ['json'] },
+  // The seat's own mail, read and receipted: `team drops --read --seat <self>` (E5).
+  drops: { valued: ['seat', 'session', 'epoch', 'id'], flags: ['read'] },
+};
+
+const GRAMMAR: Record<OutboxCommand, { valued: readonly string[]; flags: readonly string[] }> = {
+  send: { valued: SEND_VALUED_OPTIONS, flags: SEND_FLAG_OPTIONS },
+  reply: { valued: [], flags: REPLY_FLAG_OPTIONS },
+  // `--seat` and `--older-than` are read as valued here so the scoped form is named, then refused.
+  ack: { valued: ['seat', 'older-than'], flags: [...ACK_FLAG_OPTIONS, 'dry-run'] },
+  drops: { valued: DROPS_VALUED_OPTIONS, flags: DROPS_FLAG_OPTIONS },
 };
 
 /** Why a relayed command may not run, or null. */
 export function relayRefusal(command: OutboxCommand, argv: readonly string[]): string | null {
-  const grammar = command === 'send'
-    ? { valued: [...SEND_VALUED_OPTIONS] as string[], flags: [...SEND_FLAG_OPTIONS] as string[] }
-    : { valued: [] as string[], flags: [...REPLY_FLAG_OPTIONS] as string[] };
-  const args = readArgs([...argv], grammar.valued, grammar.flags);
+  const grammar = GRAMMAR[command];
+  const args = readArgs([...argv], [...grammar.valued], [...grammar.flags]);
   if (args.error !== undefined) return `its line does not read (${args.error})`;
   const allowed = RELAY_ALLOWED[command];
   for (const name of Object.keys(args.values)) {
@@ -85,6 +99,44 @@ export function relayRefusal(command: OutboxCommand, argv: readonly string[]): s
   for (const name of args.flags) {
     if (!allowed.flags.includes(name)) return `--${name} is not taken from a sandboxed seat's ${command}`;
   }
+  if (command === 'ack' && args.rest.length !== 1) return 'a sandboxed seat acknowledges one message, by its id';
+  if (command === 'drops' && (!args.flags.has('read') || args.values.seat === undefined)) {
+    return 'a sandboxed seat relays only its own `team drops --read --seat <seat>`';
+  }
+  return null;
+}
+
+/**
+ * What binds a relayed read or acknowledgement to the seat that asked (E5): `drops --read` names
+ * that seat and, when it names one, that session; `ack <id>` names exactly one record in that
+ * seat's own drop folder. The run that follows is the ordinary command with its ordinary checks;
+ * this refuses a request that names another seat's mail before anything runs. Null when bound.
+ */
+export function relayBindingRefusal(
+  dir: string,
+  request: { command: OutboxCommand; argv: readonly string[]; seat: string; session: string },
+): string | null {
+  if (request.command !== 'ack' && request.command !== 'drops') return null;
+  const grammar = GRAMMAR[request.command];
+  const args = readArgs([...request.argv], [...grammar.valued], [...grammar.flags]);
+  if (request.command === 'drops') {
+    if (args.values.seat !== request.seat) return 'it reads another seat\'s mail than its outbox';
+    if (args.values.session !== undefined && args.values.session !== request.session) return 'it reads another session than its outbox';
+    return null;
+  }
+  const id = args.rest[0] ?? '';
+  if (!recordNameOk(id)) return 'its id is not a record id';
+  const folder = join(dir, 'send-drops', request.session, request.seat);
+  let names: string[];
+  try {
+    if (!lstatSync(folder).isDirectory()) return 'the seat has no drop folder';
+    names = readdirSync(folder);
+  } catch {
+    return 'the seat has no drop folder';
+  }
+  const records = names.filter((name) => name.startsWith(id) && !name.startsWith('.') && !isRecordSidecarName(name));
+  if (records.length === 0) return 'no message of that id waits in the seat\'s own folder';
+  if (records.length > 1) return 'that id prefix names more than one message in the seat\'s own folder';
   return null;
 }
 
@@ -249,7 +301,7 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
         continue;
       }
       const result = plain
-        ? await runRequest(taking, id, seat, session, sources)
+        ? await runRequest(dir, taking, id, seat, session, sources)
         : refusal(id, seat, sources, 'it is not a plain file of this user of at most 256 KiB');
       // The outbox must still be the folder that was checked before the run.
       if (identityOf(folder) !== folderId) {
@@ -334,15 +386,15 @@ function identityOf(folder: string): string | null {
   }
 }
 
-async function runRequest(path: string, id: string, seat: string, session: string, sources: RelaySources): Promise<OutboxResult> {
+async function runRequest(dir: string, path: string, id: string, seat: string, session: string, sources: RelaySources): Promise<OutboxResult> {
   try {
-    return await checkedRun(path, id, seat, session, sources);
+    return await checkedRun(dir, path, id, seat, session, sources);
   } catch (error) {
     return refusal(id, seat, sources, `it could not be run (${(error as Error).message})`);
   }
 }
 
-async function checkedRun(path: string, id: string, seat: string, session: string, sources: RelaySources): Promise<OutboxResult> {
+async function checkedRun(dir: string, path: string, id: string, seat: string, session: string, sources: RelaySources): Promise<OutboxResult> {
   const at = sources.now();
   const refuse = (why: string): OutboxResult => refusal(id, seat, sources, why);
   let request: OutboxRequest;
@@ -356,11 +408,13 @@ async function checkedRun(path: string, id: string, seat: string, session: strin
     return refuse('it is not a request this build reads');
   }
   if (request.v !== 1 || request.id !== id) return refuse('it is not a request this build reads');
-  if (request.command !== 'send' && request.command !== 'reply') return refuse('it names no send or reply');
+  if (!OUTBOX_COMMANDS.includes(request.command)) return refuse('it names no send, reply, ack or read');
   if (!Array.isArray(request.argv) || !request.argv.every((word) => typeof word === 'string')) return refuse('its words are not text');
   const optionRefusal = relayRefusal(request.command, request.argv);
   if (optionRefusal !== null) return refuse(optionRefusal);
   if (request.seat !== seat || request.session !== session) return refuse('it names another seat or session than its outbox');
+  const binding = relayBindingRefusal(dir, request);
+  if (binding !== null) return refuse(binding);
   const written = Date.parse(request.at);
   if (!Number.isFinite(written) || at.getTime() - written > REQUEST_MAX_AGE_MS || written - at.getTime() > 60_000) {
     return refuse('it is older than ten minutes');

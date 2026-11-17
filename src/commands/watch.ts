@@ -1,4 +1,6 @@
 import { currentClaimIn } from '../mcp/inbox.ts';
+import { realHost as realAckHost, runAck } from './ack.ts';
+import { runDrops } from './drops.ts';
 import { messageFile } from './messages.ts';
 import { traceChildStep } from '../diagnostics/child-steps.ts';
 import { captureModelDriftFences, clearRepairedModelDrifts } from '../send/model-drift.ts';
@@ -2928,7 +2930,11 @@ async function relayConfinedOutboxes(
       try {
         code = command === 'send'
           ? await runSend(argv, io, realHost)
-          : await runReply(argv, io, realReplyHost);
+          : command === 'reply'
+            ? await runReply(argv, io, realReplyHost)
+            : command === 'ack'
+              ? await runAck(argv, io, realAckHost)
+              : await runDrops(argv, io);
       } catch (error) {
         code = 1;
         err += `team ${command}: ${(error as Error).message}\n`;
