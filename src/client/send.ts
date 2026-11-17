@@ -14,6 +14,8 @@
 // client invocation with no delivery callback (the tests that exercise the record alone) writes
 // the drop and stops.
 
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -154,7 +156,11 @@ export function writeClientDrop(input: {
   } catch {
     return { ok: false, why: 'the drop could not be signed with the checkout message key' };
   }
-  const written = ensureRecord(input.target.dropDir, signed);
+  const record = signed;
+  const { value: written } = appendDeliverySync({ dropDir: input.target.dropDir, record }, () => {
+    const result = ensureRecord(input.target.dropDir, record);
+    return { ok: result.ok, value: result };
+  }, { home: input.home, log: queueLog(input.target.dropDir) });
   if (!written.ok) return { ok: false, why: written.reason };
   return { ok: true, path: written.path, id, recipientId: input.target.recipientId, record: payload };
 }

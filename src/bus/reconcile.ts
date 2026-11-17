@@ -20,6 +20,9 @@ import { traceBeatWork } from '../diagnostics/beat-work.ts';
 // unchanged, and so is the parsed history. Correctness does not move: every record is still
 // raised on every pass (the dedupe set decides), read-once receipts keep their sender, and a
 // receipt that arrives in a later pass than its record still carries that record's sender.
+import { appendRecovered, queuedHint, recoverSessionQueues } from '../queue/append.ts';
+import { logLine } from '../log.ts';
+import { queueLog } from '../queue/log.ts';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -106,6 +109,9 @@ export type ReconcileOptions = {
    *  reason is a fixed sentence about the file's kind or signature, never its content. The bus
    *  prints it; a caller that does not listen leaves it out. */
   onRefused?: (refusal: { where: string; reason: string }) => void;
+  /** False leaves the queue's orphan source off for this pass (a scene that tests the log alone).
+   *  Absent or true, a verified record with no committed queue entry is appended as recovered. */
+  queueOrphans?: boolean;
 };
 
 export type ReconcileResult =
@@ -146,7 +152,7 @@ export type ReconcileStats = {
  *  signed fields, so a refused record can never contribute to an event; a refusal is cached by
  *  the same stat stamp as a verification, so an unchanged refused record is not read again. */
 type DropEntry =
-  | { kind: 'drop'; verified: true; event: EventAppendInput }
+  | { kind: 'drop'; verified: true; event: EventAppendInput; queued?: true }
   | { kind: 'drop'; verified: false };
 type ReceiptEntry = {
   kind: 'receipt';
@@ -201,6 +207,8 @@ type DeferredAppend =
  *  and a new bus process starts with an empty one, which only costs it one full first pass. */
 export type ReconcileState = {
   dirs: Map<string, DirCache>;
+  /** Whether this bus's first pass already ran the queue's recovery on start. */
+  queuesRecovered?: boolean;
   /** Per drop folder, the sender each record id carried when the pass saw it. Held across passes
    *  so a receipt that arrives after its record was taken still names the sender; pruned to the
    *  ids the current listing still holds on every pass. When that is not enough — a quiet pass
@@ -618,6 +626,14 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   }
   // Deferred appends belong to the previous pass's async retry; a new pass starts its own list.
   state.deferred = [];
+  // The queue's recovery on start (rfc-event-comms §1, E4): the bus's first pass settles every
+  // seat queue a crashed writer left mid-commit, before any record is looked at.
+  if (!state.queuesRecovered && options.queueOrphans !== false) {
+    state.queuesRecovered = true;
+    for (const failed of recoverSessionQueues(root, session, { home, log: (line) => logLine(join(root, '.agents'), 'queue', 'queue', line) })) {
+      logLine(join(root, '.agents'), 'queue', 'queue', `${session}/${failed.seat}: not recovered (${failed.reason})`);
+    }
+  }
   const visited = new Set<string>();
   const nowDate = options.now ?? new Date();
   const nowIso = nowDate.toISOString();
@@ -869,6 +885,15 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           if (entry.kind === 'drop' && entry.verified) {
             if (entry.event.from !== undefined) sendersById.set(id, entry.event.from);
             raise(entry.event);
+            // The queue's orphan source (rfc-event-comms §1, E4): a verified record with no
+            // committed entry is appended at the next seq, flagged recovered. Asked once per
+            // record file: a committed or existing answer is kept in the cache entry.
+            if (entry.queued !== true && options.queueOrphans !== false) {
+              const queued = queuedHint(seatDir, id)
+                ? 'existing'
+                : appendRecovered(seatDir, { root, session, seat }, id, { home, log: queueLog(seatDir) }).kind;
+              if (queued === 'existing' || queued === 'committed') entry.queued = true;
+            }
           }
         }
         yield;

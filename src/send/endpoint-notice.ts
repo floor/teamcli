@@ -3,6 +3,8 @@
 // enqueued. Restoring the team does not clear that mark. The notice reaches the lead through
 // the drop readers. Channel admission does not name this principal: the signature is the shared
 // home key, and it proves only that a seat wrote the record.
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { randomUUID } from 'node:crypto';
 import { readStateFile, writeStateFile } from '../file-write.ts';
@@ -49,7 +51,10 @@ export function writeRuntimeNotice(input: {
     }
     if (input.prepareOnly === true) return { ok: true, payload, existing: false };
     const signed = signRecord(payload, input.home);
-    dropMessage(leadDir, input.id, `${JSON.stringify(signed, null, 2)}\n`);
+    appendDeliverySync({ dropDir: leadDir, record: signed }, () => {
+      dropMessage(leadDir, input.id, `${JSON.stringify(signed, null, 2)}\n`);
+      return { ok: true, value: null };
+    }, { home: input.home, log: queueLog(leadDir) });
     return { ok: true, payload, existing: false };
   } catch {
     return { ok: false, reason: 'the signed lead notice could not be written' };

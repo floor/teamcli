@@ -1,5 +1,7 @@
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
+import { appendDelivery } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
@@ -3924,7 +3926,16 @@ async function stageSendRecord(
   }
   const record = recordTextOf(signed);
   hostedCommit('relay stage');
-  const staged = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
+  // The receiver's queue (rfc-event-comms §1, E4, shadow): the staging is the record write the
+  // append wraps, unchanged; the queue's own outcome never changes this send's.
+  const { value: staged } = await appendDelivery(
+    { dropDir, record: signed },
+    async () => {
+      const result = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
+      return { ok: result.outcome !== 'refused', value: result };
+    },
+    { home, log: queueLog(dropDir, now) },
+  );
   if (staged.outcome === 'refused') return { ok: false, reason: staged.reason };
   // The step fields are the record's own: the receiving team's store, the message id, the
   // session, the pair and the thread. `ts` differs per step — the record's signed `at` for the
