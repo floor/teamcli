@@ -224,3 +224,41 @@ describe('E5 round 1: binding and hand-over', () => {
     expect(existsSync(join(folder, `${id}.partial`))).toBe(false);
   });
 });
+
+describe('E5 round 2: the hand-over is durable in order, and unreadable saved output is kept', () => {
+  test('partial flushed (file, folder) before the command goes on; result flushed (file, folder) before the partial is removed', async () => {
+    const { root, dir } = team();
+    const points: string[] = [];
+    const sources: RelaySources = {
+      ...relayWith(async (_command, _argv, _cwd, _caller, persist) => {
+        persist('BODY\n');
+        points.push('command-continues');
+        return { code: 0, out: 'BODY\n', err: '' };
+      }),
+      trace: (point) => points.push(point),
+    };
+    plant(dir, { v: 1, id: '00000000-0000-4000-8000-0000000000e1', command: 'drops', argv: ['--read', '--seat', 'keeper'], cwd: root, seat: 'keeper', session: 's', pane: 'pane-k', at: new Date().toISOString() });
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(points).toEqual(['partial-fsync', 'partial-folder-fsync', 'command-continues', 'result-fsync', 'result-folder-fsync', 'partial-removed']);
+  });
+
+  test('saved output that cannot be read at recovery is kept with its take, and answered once it reads again', async () => {
+    const { dir } = team();
+    const folder = outboxFolder(dir, 's', 'keeper')!;
+    mkdirSync(folder, { recursive: true });
+    const id = '00000000-0000-4000-8000-0000000000f1';
+    const taking = join(folder, `${id}.taking`);
+    writeFileSync(taking, '{}');
+    const old = new Date(Date.now() - 6 * 60_000);
+    utimesSync(taking, old, old);
+    mkdirSync(join(folder, `${id}.partial`));
+    const sources = relayWith(async () => ({ code: 0, out: '', err: '' }));
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(existsSync(taking)).toBe(true);
+    expect(existsSync(join(folder, `${id}.result.json`))).toBe(false);
+    rmdirSync(join(folder, `${id}.partial`));
+    writeFileSync(join(folder, `${id}.partial`), 'SAVED BODY\n');
+    await relayOutboxes(dir, 's', ['keeper'], sources);
+    expect(JSON.parse(readFileSync(join(folder, `${id}.result.json`), 'utf8')).out).toBe('SAVED BODY\n');
+  });
+});

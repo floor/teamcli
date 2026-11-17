@@ -32,7 +32,6 @@ import { acquireLockAt, type LockSteps } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readNoFollow } from '../send/history.ts';
 import { recordFile, sameFolder, signedRecordOf, verifyRecord, type SignedRecord } from '../send/record.ts';
-import { heldAt } from '../launch/rules-file.ts';
 
 /** The domain a queue entry is signed over. */
 export const QUEUE_DOMAIN = 'team-queue-v1\n';
@@ -110,12 +109,19 @@ function seqName(seq: number): string {
 }
 
 /** Writes `text` whole: a private temp file in the same folder, fsynced, renamed, folder fsynced. */
+/** Writes every byte: a short write is continued, never taken for the whole text. */
+export function writeAll(fd: number, text: string): void {
+  const bytes = Buffer.from(text);
+  let offset = 0;
+  while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset);
+}
+
 function writeDurable(path: string, text: string): void {
   const folder = dirname(path);
   const temp = join(folder, `.${basename(path)}.${randomBytes(6).toString('hex')}.tmp`);
   const fd = openSync(temp, 'wx', 0o600);
   try {
-    writeSync(fd, text);
+    writeAll(fd, text);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
@@ -150,7 +156,7 @@ function openJournal(path: string, flags: number): number {
 function appendLine(path: string, line: JournalLine): void {
   const fd = openJournal(path, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND);
   try {
-    writeSync(fd, `${JSON.stringify(line)}\n`);
+    writeAll(fd, `${JSON.stringify(line)}\n`);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
@@ -277,11 +283,19 @@ type OnDisk = { state: 'absent' } | { state: 'bad' } | { state: 'unreadable' } |
 
 function recordOnDisk(target: Target, msgId: string, home: string): OnDisk {
   const path = recordFile(target.dropDir, msgId);
-  const held = heldAt(path).kind;
-  if (held === 'missing') return { state: 'absent' };
+  // Only ENOENT proves absence: any other stat failure is uncertainty, settled later.
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
+  }
   // A link, a folder or a FIFO at the name is not a record; a plain file that cannot be read now
   // is not proven absent or corrupt, and stays to be settled later.
-  if (held !== 'file') return { state: 'bad' };
+  if (stat.isSymbolicLink() || !stat.isFile()) return { state: 'bad' };
+  // No key to verify with is not a failed verification: it is never created here to settle it.
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return { state: 'unreadable' };
   const text = readNoFollow(path);
   if (text === null) return { state: 'unreadable' };
   let parsed: unknown;
@@ -291,8 +305,7 @@ function recordOnDisk(target: Target, msgId: string, home: string): OnDisk {
     return { state: 'bad' };
   }
   const record = signedRecordOf(parsed);
-  const key = messageKeyState(home);
-  if (record === null || key.kind !== 'key' || !verifyRecord(record, key.key)) return { state: 'bad' };
+  if (record === null || !verifyRecord(record, key.key)) return { state: 'bad' };
   const payload = record.payload;
   if (payload.id !== msgId || payload.to !== target.seat || payload.session !== target.session || !sameFolder(payload.root, target.root)) {
     return { state: 'bad' };

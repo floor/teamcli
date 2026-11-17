@@ -323,3 +323,24 @@ test('a file already in the archive is not overwritten', () => {
   expect(existsSync(join(drop(made), ACKED))).toBe(true);
   expect(report.move).not.toContain(ACKED);
 });
+
+// rfc-event-comms E5, review round 2: the exact-id read seals its receipt only after its output
+// was handed over. A relayed read whose output could not be saved (its stdout throws) leaves the
+// message unread, and the next admitted read still gets the body.
+test('team drops --read --id: a hand-over that throws leaves the message unread for the next read', async () => {
+  const made = open();
+  const id = '5ea1ed00-0000-4000-8000-0000000000f1';
+  plant(made, id, '2026-11-08T14:00:00.000Z');
+  place(made);
+  const caller = { kind: 'seat' as const, name: SEAT, pane: PANE, session: SESSION };
+  const failing = testIo(made.root, caller);
+  failing.stdout = () => { throw new Error('the outbox could not save the output'); };
+  await runDrops(['--read', '--seat', SEAT, '--session', SESSION, '--id', id], failing, { home: made.home }).catch(() => 1);
+  const key = messageKeyState(made.home);
+  if (key.kind !== 'key') throw new Error('the fixture has no message key');
+  expect(statusOf(drop(made), id, { to: SEAT, root: made.root, session: SESSION }, key.key)).toBe('sent');
+  const next = testIo(made.root, caller);
+  expect(await runDrops(['--read', '--seat', SEAT, '--session', SESSION, '--id', id], next, { home: made.home })).toBe(0);
+  expect(next.out).toContain(id);
+  expect(statusOf(drop(made), id, { to: SEAT, root: made.root, session: SESSION }, key.key)).toBe('read');
+});

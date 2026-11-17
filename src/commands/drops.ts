@@ -774,13 +774,18 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
       const got = peek
         ? peekMessage(target, asked, sources.home, seatNames, brief)
-        : readMessage(target, asked, sources.home, brief);
+        // The receipt follows the hand-over, as the batch read's does: a stdout that throws (a
+        // relayed read whose output could not be saved) leaves the message unread.
+        : readMessage(target, asked, sources.home, brief, undefined, { receipt: 'after' });
       if (!got.ok && got.served === 'already-served') {
         io.stdout(`${settled === null ? got.reason : alreadyReadSentence(asked, settled.at, settled.readBy, seatNames)}\n`);
         return readOk();
       }
       if (got.ok) {
         io.stdout(`${got.body}\n`);
+        if (got.seal !== undefined && !got.seal()) {
+          io.stderr(`team drops: ${asked}: the read receipt could not be written after the body was handed over\n`);
+        }
         if (peek) logLine(dir, 'peek', logTag(shown), `${seatName}: ${asked}`);
         return readOk();
       }

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
+import { messageKeyPath } from '../src/store/keys.ts';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -408,5 +409,37 @@ describe('round 1: the orphan source through the bus\'s own reconcile pass', () 
     pass(s, state);
     expect(queuedHint(s.dropDir, id(2))).toBe(true);
     expect(queuedHint(s.dropDir, id(3))).toBe(true);
+  });
+});
+
+describe('round 2: uncertainty stays reserved, then commits at its own seq', () => {
+  test('a stat failure that is not ENOENT leaves the seq reserved; after repair it commits at seq 1', () => {
+    const s = scene();
+    expect(crashAt(s, id(1), 'record')).toBe(9);
+    const aside = join(base, 'drops-aside');
+    renameSync(s.dropDir, aside);
+    writeFileSync(s.dropDir, 'a file where the folder was');
+    recoverSessionQueues(s.root, SESSION, { home: s.home });
+    expect(lastStates(s.dropDir).get(1)).toBe('reserved');
+    unlinkSync(s.dropDir);
+    renameSync(aside, s.dropDir);
+    recoverSessionQueues(s.root, SESSION, { home: s.home });
+    expect(lastStates(s.dropDir).get(1)).toBe('committed');
+    expect(entriesOf(s.dropDir)).toEqual([1]);
+  });
+
+  test('no verification key: the seq stays reserved and no key is made; with the key back it commits at seq 1', () => {
+    const s = scene();
+    expect(crashAt(s, id(1), 'record')).toBe(9);
+    const keyPath = messageKeyPath(s.home);
+    expect(existsSync(keyPath)).toBe(true);
+    const aside = join(base, 'key-aside.json');
+    renameSync(keyPath, aside);
+    recoverSessionQueues(s.root, SESSION, { home: s.home });
+    expect(lastStates(s.dropDir).get(1)).toBe('reserved');
+    expect(existsSync(keyPath)).toBe(false);
+    renameSync(aside, keyPath);
+    recoverSessionQueues(s.root, SESSION, { home: s.home });
+    expect(lastStates(s.dropDir).get(1)).toBe('committed');
   });
 });

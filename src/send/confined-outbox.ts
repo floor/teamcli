@@ -20,7 +20,8 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { readNoFollow } from './history.ts';
-import { mkdirSync, openSync, renameSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
+import { writeAll } from '../queue/append.ts';
+import { mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerAncestors, callerOf } from '../caller.ts';
@@ -278,6 +279,8 @@ export type RelaySources = {
   run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller, persist: (text: string) => void): Promise<{ code: number; out: string; err: string }>;
   now(): Date;
   log(line: string): void;
+  /** Test seam: each durability point of the hand-over, in order. */
+  trace?: (point: 'partial-fsync' | 'partial-folder-fsync' | 'result-fsync' | 'result-folder-fsync' | 'partial-removed') => void;
 };
 
 /** The most requests one pass runs, across every seat: the rest wait for the next pass. */
@@ -327,9 +330,17 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
       } catch {
         continue;
       }
-      const result = plain
-        ? await runRequest(dir, taking, id, seat, session, sources)
-        : refusal(id, seat, sources, 'it is not a plain file of this user of at most 256 KiB');
+      let result: OutboxResult;
+      try {
+        result = plain
+          ? await runRequest(dir, taking, id, seat, session, sources)
+          : refusal(id, seat, sources, 'it is not a plain file of this user of at most 256 KiB');
+      } catch (error) {
+        if (!(error instanceof SavedOutputUnreadable)) throw error;
+        sources.log(`${seat}: outbox request ${id} stopped and its saved output cannot be read now; it is kept for a later pass`);
+        ran += 1;
+        continue;
+      }
       // The outbox must still be the folder that was checked before the run.
       if (identityOf(folder) !== folderId) {
         sources.log(`${seat}: the outbox changed while request ${id} ran; its result was not written`);
@@ -338,7 +349,7 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
       // The take is released only once its result stands: a failed publication leaves the
       // marker, and a later pass answers it as cut off.
       if (publishResult(folder, id, result, seat, sources)) {
-        dropPartial(folder, id);
+        dropPartial(folder, id, sources.trace);
         try { unlinkSync(taking); } catch { /* removed with the results */ }
       }
       ran += 1;
@@ -354,12 +365,22 @@ function refusal(id: string, seat: string, sources: Pick<RelaySources, 'log' | '
 
 /** Writes a result beside its request: a new temporary file (never one already there, never
  *  through a link), then a rename into place. */
-function publishResult(folder: string, id: string, result: OutboxResult, seat: string, sources: Pick<RelaySources, 'log'>): boolean {
+function publishResult(folder: string, id: string, result: OutboxResult, seat: string, sources: Pick<RelaySources, 'log' | 'trace'>): boolean {
   // A fresh temporary name per attempt: one a crashed attempt left behind never blocks this one.
   const temp = join(folder, `.${id}.result.${randomUUID()}.tmp`);
   try {
-    writeFileSync(temp, `${JSON.stringify(result)}\n`, { mode: 0o600, flag: 'wx' });
+    const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
+    try {
+      writeAll(fd, `${JSON.stringify(result)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    sources.trace?.('result-fsync');
     renameSync(temp, join(folder, `${id}${RESULT_SUFFIX}`));
+    // The result's name is durable before the saved output it replaces may be removed.
+    fsyncFolder(folder);
+    sources.trace?.('result-folder-fsync');
     return true;
   } catch (error) {
     sources.log(`${seat}: the result of outbox request ${id} could not be written (${(error as Error).message})`);
@@ -396,6 +417,10 @@ function recoverTaken(folder: string, names: readonly string[], nowMs: number, s
     sources.log(`outbox request ${id} was cut off while it ran; its outcome is unknown`);
     // What the run had already handed over is answered with it, never replaced by an empty result.
     const handed = readPartial(folder, id);
+    if (handed === null) {
+      sources.log(`outbox request ${id}: its saved output cannot be read now; kept for a later pass`);
+      continue;
+    }
     if (publishResult(folder, id, {
       id,
       code: 1,
@@ -405,7 +430,7 @@ function recoverTaken(folder: string, names: readonly string[], nowMs: number, s
         : 'team: the relay stopped after this output was handed over; what it read is above\n',
       at: new Date(nowMs).toISOString(),
     }, id, sources) === false) continue;
-    dropPartial(folder, id);
+    dropPartial(folder, id, sources.trace);
     try { unlinkSync(path); } catch { /* the sweep removes it */ }
   }
 }
@@ -425,33 +450,52 @@ async function runRequest(dir: string, path: string, id: string, seat: string, s
   } catch (error) {
     // What the command already handed over stays the seat's: its durable output is the result's.
     const handed = readPartial(dirname(path), id);
+    // Saved output that cannot be read now is kept, never replaced: the take stays for recovery.
+    if (handed === null) throw new SavedOutputUnreadable();
     const result = refusal(id, seat, sources, `it could not be run (${(error as Error).message})`);
     return handed === '' ? result : { ...result, out: handed };
   }
 }
 
 const PARTIAL_SUFFIX = '.partial';
+
+class SavedOutputUnreadable extends Error {}
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 /** Appends a run's stdout to `<id>.partial` in the outbox, flushed before it returns. A write that
  *  fails throws into the command's own stdout, which then keeps its messages unread. */
-function appendPartial(folder: string, id: string, text: string): void {
+function appendPartial(folder: string, id: string, text: string, trace?: RelaySources['trace']): void {
   const fd = openSync(join(folder, `${id}${PARTIAL_SUFFIX}`), constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | NOFOLLOW, 0o600);
   try {
     if (!fstatSync(fd).isFile()) throw new Error('the outbox output is not a plain file');
-    writeSync(fd, text);
+    writeAll(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  trace?.('partial-fsync');
+  // Its name is durable too before the command goes on to seal anything.
+  fsyncFolder(folder);
+  trace?.('partial-folder-fsync');
+}
+
+function fsyncFolder(folder: string): void {
+  const fd = openSync(folder, constants.O_RDONLY);
+  try {
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
 }
 
-function readPartial(folder: string, id: string): string {
-  return readNoFollow(join(folder, `${id}${PARTIAL_SUFFIX}`)) ?? '';
+/** The saved output: '' when none was saved, null when one exists and cannot be read now. */
+function readPartial(folder: string, id: string): string | null {
+  return readNoFollow(join(folder, `${id}${PARTIAL_SUFFIX}`));
 }
 
-function dropPartial(folder: string, id: string): void {
+function dropPartial(folder: string, id: string, trace?: RelaySources['trace']): void {
   try { unlinkSync(join(folder, `${id}${PARTIAL_SUFFIX}`)); } catch { /* none was written */ }
+  trace?.('partial-removed');
 }
 
 async function checkedRun(dir: string, path: string, id: string, seat: string, session: string, sources: RelaySources): Promise<OutboxResult> {
@@ -495,7 +539,7 @@ async function checkedRun(dir: string, path: string, id: string, seat: string, s
     cwd = '';
   }
   if (cwd === '') return refuse('its working folder is not a folder');
-  const persist = (text: string): void => appendPartial(dirname(path), id, text);
+  const persist = (text: string): void => appendPartial(dirname(path), id, text, sources.trace);
   const ran = await sources.run(request.command, bound.argv, cwd, { kind: 'seat', name: seat, pane: request.pane, session }, persist);
   sources.log(`${seat}: outbox request ${id} (${request.command}) ran, exit ${String(ran.code)}`);
   return { id, code: ran.code, out: ran.out, err: ran.err, at: at.toISOString() };
