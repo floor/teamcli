@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 function exit(message: string, code: number): never {
   console.error(message);
@@ -74,16 +74,32 @@ export function markBinExecutable(root: string): void {
   chmodSync(join(root, bin), 0o755);
 }
 
-/** Writes `dist/build-id`: one sha256 over every emitted file's relative path and bytes, in
- *  sorted order. The warm send host and its client compare it, so a rebuild that changes any
- *  module is another build (src/host/client.ts `clientBuildStamp`). */
-export function writeBuildId(outDir: string): void {
-  const files: string[] = [];
-  walkFiles(outDir, (file) => { files.push(file); });
+/** The package's runtime files outside `dist` that the built CLI imports: the relay package
+ *  (`dist/send/relay-stage.js` and the adapters import `packages/relay/index.js`, the daemon its
+ *  `host/server.js`). Listed by the package's `files` too. */
+export const RUNTIME_OUTSIDE_DIST = ['packages/relay/index.js', 'packages/relay/package.json', 'packages/relay/host'];
+
+/** Writes `dist/build-id`: one sha256 over every emitted file's relative path and bytes, and over
+ *  every runtime file outside `dist` the built code imports (RUNTIME_OUTSIDE_DIST, under the
+ *  package root), in sorted order. The warm send host and its client compare it, so a rebuild that
+ *  changes any module the host would run, relay code included, is another build
+ *  (src/host/client.ts `clientBuildStamp`). A listed runtime path that is missing fails the build. */
+export function writeBuildId(outDir: string, packageRoot: string = dirname(outDir)): void {
+  const entries: { key: string; path: string }[] = [];
+  walkFiles(outDir, (file) => {
+    const rel = relative(outDir, file);
+    if (rel !== 'build-id') entries.push({ key: `dist/${rel}`, path: file });
+  });
+  for (const listed of RUNTIME_OUTSIDE_DIST) {
+    const at = join(packageRoot, listed);
+    if (!existsSync(at)) throw new Error(`build: the runtime file ${listed} is missing; the build identity cannot cover it`);
+    if (statSync(at).isDirectory()) walkFiles(at, (file) => { entries.push({ key: relative(packageRoot, file), path: file }); });
+    else entries.push({ key: listed, path: at });
+  }
   const hash = createHash('sha256');
-  for (const file of files.map((path) => relative(outDir, path)).filter((path) => path !== 'build-id').sort()) {
-    hash.update(`${file}\0`);
-    hash.update(readFileSync(join(outDir, file)));
+  for (const entry of entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
+    hash.update(`${entry.key}\0`);
+    hash.update(readFileSync(entry.path));
     hash.update('\0');
   }
   writeFileSync(join(outDir, 'build-id'), `${hash.digest('hex')}\n`);

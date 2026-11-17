@@ -132,6 +132,66 @@ export function inventory(entry: string = ENTRY): Inventory {
     const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
     // local name -> [module, imported name]
     const bound = new Map<string, [string, string]>();
+    // local name -> what, for a variable whose initializer names a starter (`const f = x.fetch ?? fetch`)
+    const aliases = new Map<ts.Node, Map<string, string>>();
+    const scopeOf = (x: ts.Node): ts.Node => {
+      let s: ts.Node | undefined = x.parent;
+      while (s !== undefined && !ts.isFunctionLike(s) && !ts.isSourceFile(s)) s = s.parent;
+      return s ?? sf;
+    };
+    const aliasOf = (id: ts.Identifier): string | null => {
+      let s: ts.Node | undefined = id;
+      while (s !== undefined) {
+        if (ts.isFunctionLike(s) || ts.isSourceFile(s)) {
+          const hit = aliases.get(s)?.get(id.text);
+          if (hit !== undefined) return hit;
+        }
+        s = s.parent;
+      }
+      return null;
+    };
+    /** An identifier that names a key, a declaration or a type, not a value reference. */
+    const notAValue = (x: ts.Identifier): boolean => {
+      const p = x.parent;
+      if ((ts.isPropertySignature(p) || ts.isPropertyAssignment(p) || ts.isPropertyDeclaration(p) || ts.isMethodDeclaration(p)
+        || ts.isMethodSignature(p) || ts.isFunctionDeclaration(p) || ts.isParameter(p) || ts.isBindingElement(p)
+        || ts.isVariableDeclaration(p) || ts.isPropertyAccessExpression(p)) && (p as { name?: ts.Node }).name === x) return true;
+      let q: ts.Node | undefined = p;
+      while (q !== undefined && !ts.isStatement(q) && !ts.isFunctionLike(q)) {
+        if (ts.isTypeNode(q)) return true;
+        q = q.parent;
+      }
+      return false;
+    };
+    /** What a reference to this identifier starts: an imported starter, the relay package, the
+     *  global fetch, or a local alias of one. */
+    const starterOf = (id: ts.Identifier): string | null => {
+      const b = bound.get(id.text);
+      if (b && STARTERS[b[0]]?.has(b[1])) return `${b[0]}.${b[1]}`;
+      if (b && /packages\/relay\//.test(b[0]) && b[1] !== 'capabilities' && /^[a-z]/.test(b[1])) return `relay.${b[1]}`;
+      if (id.text === 'fetch' && !bound.has('fetch')) return 'fetch';
+      return aliasOf(id);
+    };
+    const startersIn = (node: ts.Node): string[] => {
+      const found: string[] = [];
+      const walk = (x: ts.Node): void => {
+        if (ts.isFunctionLike(x)) return;
+        // A call's result is not the starter: `const child = spawn(…)` names a child, not spawn.
+        if (ts.isCallExpression(x) || ts.isNewExpression(x) || ts.isAwaitExpression(x) || ts.isTypeOfExpression(x)) return;
+        if (ts.isIdentifier(x) && !notAValue(x)) {
+          const s = starterOf(x);
+          if (s !== null) found.push(s);
+        }
+        ts.forEachChild(x, walk);
+      };
+      walk(node);
+      return found;
+    };
+    const site = (n: ts.Node, what: string): void => {
+      const o = ownerName(n);
+      const line = sf.getLineAndCharacterOfPosition(n.getStart()).line + 1;
+      out.sites.push({ key: `${rel}#${o.name}`, what, file: rel, line, guarded: guardedBefore(o.body, n) });
+    };
     const follow = (spec: string): void => {
       if (spec.startsWith('.')) {
         const x = resolveLocal(file, spec);
@@ -168,6 +228,27 @@ export function inventory(entry: string = ENTRY): Inventory {
           out.namespaceImports.push(`${rel}: re-export from ${spec}`);
         }
       }
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && !ts.isFunctionLike(n.initializer)) {
+        const named = startersIn(n.initializer);
+        if (named.length > 0) {
+          const scope = scopeOf(n);
+          const map = aliases.get(scope) ?? new Map<string, string>();
+          map.set(n.name.text, named[0]!);
+          aliases.set(scope, map);
+        }
+      }
+      if (ts.isIdentifier(n) && !ts.isImportSpecifier(n.parent) && !ts.isImportClause(n.parent) && !ts.isNamespaceImport(n.parent)
+        && !ts.isShorthandPropertyAssignment(n.parent) === true && !notAValue(n)) {
+        const s = starterOf(n);
+        if (s !== null) {
+          // A reference that is not the callee of a call: passed or stored as a value.
+          let p: ts.Node = n;
+          while (ts.isParenthesizedExpression(p.parent) || ts.isBinaryExpression(p.parent) || ts.isConditionalExpression(p.parent)) p = p.parent;
+          const callee = ts.isCallExpression(p.parent) && p.parent.expression === p;
+          const aliasInit = ts.isVariableDeclaration(p.parent) && p.parent.initializer === p;
+          if (!callee && !aliasInit) site(n, `value ${s}`);
+        }
+      }
       if (ts.isCallExpression(n)) {
         const e = n.expression;
         const arg = n.arguments[0];
@@ -187,6 +268,7 @@ export function inventory(entry: string = ENTRY): Inventory {
           if (b && STARTERS[b[0]]?.has(b[1])) what = `${b[0]}.${b[1]}`;
           if (b && /packages\/relay\//.test(b[0])) what = `relay.${b[1]}`;
           if (e.text === 'fetch' && !bound.has('fetch')) what = 'fetch';
+          if (what === null) what = aliasOf(e);
           const runnerHere = RUNNERS[rel]?.has(e.text) === true && !bound.has(e.text);
           const runnerThere = b !== undefined && RUNNERS[b[0]]?.has(b[1]) === true;
           if (runnerHere || runnerThere) {
@@ -202,6 +284,9 @@ export function inventory(entry: string = ENTRY): Inventory {
               what = `runner.${e.text}(${words || (first ? '…' : n.arguments[0]?.getText().slice(0, 30) ?? '')})`;
             }
           }
+        } else if (ts.isParenthesizedExpression(e) || ts.isBinaryExpression(e) || ts.isConditionalExpression(e)) {
+          const named = startersIn(e);
+          if (named.length > 0) what = `${named[0]} (indirect)`;
         } else if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression)) {
           const obj = e.expression.text;
           const prop = e.name.text;

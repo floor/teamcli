@@ -33,6 +33,21 @@ describe('the hosted send path effect inventory', () => {
     expect(sorted(Object.keys(READS)).filter((k) => !unguarded.includes(k))).toEqual([]);
   });
 
+  // Review round 2, finding 2: starters reached through a local alias (`const fetchFn = input.fetch
+  // ?? fetch`) or an indirect callee (`(input.fetch ?? fetch)(…)`) are sites like direct calls. The
+  // two webhook POSTs are named here so a collector change cannot drop them silently.
+  test('the webhook POSTs, through an alias and an indirect callee, are listed and guarded', () => {
+    const want = [
+      'src/bus/webhook.ts#deliverWebhook fetch',
+      'src/bus/webhook.ts#postArrivalWebhook fetch (indirect)',
+      'src/bus/webhook.ts#finishLateWorker fetch',
+    ];
+    for (const key of want) {
+      const found = inv.sites.filter((s) => `${s.key} ${s.what}` === key);
+      expect({ key, present: found.length > 0, guarded: found.every((s) => s.guarded) }).toEqual({ key, present: true, guarded: true });
+    }
+  });
+
   test('the relay package is entered only through the guarded wrappers', () => {
     const relay = inv.sites.filter((s) => s.what.startsWith('relay.') && s.what !== 'relay.capabilities');
     for (const s of relay) expect({ site: `${s.key} ${s.what}`, guarded: s.guarded }).toEqual({ site: `${s.key} ${s.what}`, guarded: true });

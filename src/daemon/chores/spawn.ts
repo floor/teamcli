@@ -27,6 +27,7 @@ import {
   type ChoresHostMessage,
 } from './protocol.ts';
 import { writeChoresInherit } from './token.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 export type ChoresChildEvent =
   | { kind: 'message'; message: ChoresChildMessage }
@@ -171,6 +172,7 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
   const spawnProcess = input.spawn ?? spawn;
   let child: ReturnType<typeof spawn>;
   try {
+    hostedCommit('node:child_process.spawn');
     child = spawnProcess(process.execPath, [entry, '--inherited', nonce], {
       cwd: input.config.routes[0]?.root ?? dirname(entry),
       stdio: ['pipe', 'pipe', 'pipe'],

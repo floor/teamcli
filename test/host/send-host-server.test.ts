@@ -116,6 +116,10 @@ describe('the client', () => {
     const dist = join(base, 'dist');
     const { mkdirSync } = await import('node:fs');
     mkdirSync(join(dist, 'commands'), { recursive: true });
+    mkdirSync(join(base, 'packages', 'relay', 'host'), { recursive: true });
+    writeFileSync(join(base, 'packages', 'relay', 'index.js'), '// relay v1\n');
+    writeFileSync(join(base, 'packages', 'relay', 'package.json'), '{}\n');
+    writeFileSync(join(base, 'packages', 'relay', 'host', 'server.js'), '// relay host v1\n');
     writeFileSync(join(dist, 'cli.js'), '// entry\n');
     writeFileSync(join(dist, 'commands', 'send.js'), '// admission v1\n');
     writeBuildId(dist);
@@ -126,6 +130,33 @@ describe('the client', () => {
     expect(first).not.toBeNull();
     expect(second).not.toBeNull();
     expect(second).not.toBe(first);
+  });
+
+  // Review round 2, finding 1: the relay package runs from outside dist; a same-version rebuild
+  // that changes only relay code, with every dist byte unchanged, is another build, and an old
+  // host refuses the new client.
+  test('a rebuild that changes only the relay package is another build, and the old host hands it back', async () => {
+    const { writeBuildId } = await import('../../scripts/build.ts');
+    const { mkdirSync, mkdtempSync, realpathSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    // The package root sits outside the hashed dist, as the real relay package does.
+    const pkg = realpathSync(mkdtempSync(join(tmpdir(), 'team-relay-pkg-')));
+    mkdirSync(join(pkg, 'packages', 'relay', 'host'), { recursive: true });
+    writeFileSync(join(pkg, 'packages', 'relay', 'index.js'), '// stage v1\n');
+    writeFileSync(join(pkg, 'packages', 'relay', 'package.json'), '{}\n');
+    writeFileSync(join(pkg, 'packages', 'relay', 'host', 'server.js'), '// relay host v1\n');
+    // The fixture's dist is `base` (cli.js and build-id beside it); its bytes stay as they are.
+    writeBuildId(base, pkg);
+    const first = buildStampOf(join(base, 'cli.js'));
+    let runs = 0;
+    await start(async () => { runs += 1; return 0; });
+    expect((await line(['send', 'lead', 'hi'])).kind).toBe('ran');
+    writeFileSync(join(pkg, 'packages', 'relay', 'index.js'), '// stage v2\n');
+    writeBuildId(base, pkg);
+    expect(buildStampOf(join(base, 'cli.js'))).not.toBe(first);
+    const outcome = await line(['send', 'lead', 'hi']);
+    expect(outcome.kind).toBe('fallback');
+    expect(runs).toBe(1);
   });
 });
 

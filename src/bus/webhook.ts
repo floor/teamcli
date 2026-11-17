@@ -649,6 +649,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
       // A redirect is never followed: it would carry the secret to a destination the routine's
       // own address never named. The policy rides on the attempt, not on the request object, so a
       // row that names neither new field builds exactly the request object it always did.
+      hostedCommit('fetch');
       const response = await fetchFn(request.url, { ...prepared, redirect: 'error', signal: AbortSignal.timeout(policy.timeoutMs) });
       if (response.status >= 200 && response.status < 300) {
         if (claimDir !== null) finishClaim(claimDir, claimId, () => new Date(), input.root);
@@ -874,6 +875,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     // One request, built above. The signal is the policy max when the sender deadline is the
     // bound, so the injected request can still settle after this caller has returned. A tighter
     // row aborts at its own bound.
+    hostedCommit('fetch');
     const pending = (input.fetch ?? fetch)(request.url, {
       ...prepared,
       redirect: 'error',
