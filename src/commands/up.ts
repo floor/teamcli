@@ -91,7 +91,7 @@ import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/p
 import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsOnlyShell, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS, liveConversationElsewhere, restorePaneBusy, restoreProof, restoreRelaunch, restoreWorktreeOf, unreadyRestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
+import { CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS, liveConversationElsewhere, restorePaneBusy, restoreProof, restoreRelaunch, restoreWorktreeOf, unreadyRestoreProof, type RestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
 import { featureDialogClose, restoredPaneByConversation } from '../launch/reboot.ts';
 import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
@@ -821,6 +821,11 @@ export function planStartsProcess(planned: UpSeat): boolean {
   return launchWillRun(planned) || planned.repair !== undefined || planned.replacedPane !== undefined;
 }
 
+/** The conversation change a worktree proof authorized, for an op that must prove it again. */
+function reboundOf(proof: RestoreProof): { rebound?: { from: string; to: string } } {
+  return proof.kind === 'session' && proof.rebound !== undefined ? { rebound: proof.rebound } : {};
+}
+
 /**
  * The conversation a relaunch resumes once the pane proved it: the one id every reader takes.
  * The launch line reads `registry.sessionId` before `resume`, and the duplicate check reads
@@ -1501,7 +1506,7 @@ function seatPlan(
           workspace: recorded.workspace,
           launched: recorded.launched,
           cli: seat.cli,
-          ownLine: proven === null ? {} : { session: proven },
+          ownLine: proven === null ? {} : { session: proven, ...reboundOf(proof) },
         },
         ...resumed,
       };
@@ -1534,7 +1539,7 @@ function seatPlan(
           workspace: recorded.workspace,
           launched: recorded.launched,
           cli: seat.cli,
-          ownLine: { ...(proven === null ? {} : { session: proven }), endpoint: true },
+          ownLine: { ...(proven === null ? {} : { session: proven, ...reboundOf(proof) }), endpoint: true },
         },
         ...provenResume(planned, proven),
       };

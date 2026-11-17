@@ -2722,16 +2722,32 @@ export async function executePlan(
         // screen is left where it stands, and nothing is typed.
         const agentsNow = host.agentList?.(session) ?? null;
         const processNow = host.processInfo?.(session, op.pane) ?? null;
+        // A conversation change is proved again exactly as an adoption proves it: from the
+        // recorded binding, with the worktree and claim evidence read again now.
+        const rebound = op.rebound;
+        const worktreeNow = rebound === undefined ? undefined : options?.restoreWorktree?.(op.seat);
         const proof = restoreProof({
           seat: { name: op.seat, cli: op.cli },
           recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.launched },
           agents: agentsNow,
           process: processNow,
           foreground: host.foreground?.(session, op.pane) ?? null,
-          recordedSession: op.session,
+          recordedSession: rebound === undefined ? op.session : rebound.from,
           screen: host.paneText?.(session, op.pane) ?? null,
           ...(op.endpoint === true ? { allowSame: true } : {}),
+          ...(worktreeNow === undefined ? {} : { worktree: worktreeNow }),
         });
+        if (rebound !== undefined && (proof.kind !== 'session' || proof.rebound?.to !== rebound.to)) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, {
+            kind: 'left out',
+            reason: proof.kind === 'none'
+              ? proof.why
+              : `its conversation no longer proves the change the plan read (${rebound.from} to ${rebound.to}); nothing typed`,
+          });
+          break;
+        }
         // A dead-endpoint relaunch (`op.endpoint`) exists to give the seat a fresh managed
         // server, not to carry a conversation: the weak proof — the CLI alone at an idle
         // prompt — is enough there. A model or channel relaunch whose record has no

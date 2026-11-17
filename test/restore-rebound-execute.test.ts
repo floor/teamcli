@@ -34,7 +34,28 @@ function adopt(): Step[] {
   }];
 }
 
+function relaunch(endpoint: boolean): Step[] {
+  return [{
+    kind: 'run',
+    argv: [],
+    do: {
+      do: 'relaunch',
+      seat: SEAT,
+      cli: 'codex',
+      pane: PANE,
+      workspace: WORKSPACE,
+      launched: { shell: 100, cli: [200] },
+      session: NEW,
+      rebound: { from: OLD, to: NEW },
+      ...(endpoint ? { endpoint: true as const } : {}),
+    },
+  }];
+}
+
+let typed = 0;
+
 function world(cwd: string): { host: Host; renames: () => number; records: { seat: string; patch: Record<string, unknown> }[]; said: string[] } {
+  typed = 0;
   let renames = 0;
   let taken = false;
   const records: { seat: string; patch: Record<string, unknown> }[] = [];
@@ -44,7 +65,18 @@ function world(cwd: string): { host: Host; renames: () => number; records: { sea
     sessionUp: () => true,
     createWorkspace: () => ({ pane: PANE, workspace: WORKSPACE }),
     paneRun: () => true,
-    typeLine: async () => false,
+    typeLine: async () => {
+      typed += 1;
+      return false;
+    },
+    typeText: () => {
+      typed += 1;
+      return false;
+    },
+    sendKey: () => {
+      typed += 1;
+      return false;
+    },
     renameAgent: () => {
       renames += 1;
       taken = true;
@@ -113,3 +145,32 @@ test('without fresh evidence the change is never adopted as an exact-id proof', 
   expect(made.renames()).toBe(0);
   expect(made.records.filter((record) => record.patch.stage === 'ready')).toEqual([]);
 });
+
+for (const endpoint of [true, false]) {
+  const kind = endpoint ? 'a dead-endpoint relaunch' : 'a launcher, model or channel relaunch';
+
+  test(`${kind} with fresh evidence still proving the change reaches the exit`, async () => {
+    const made = world(OWN);
+    await executePlan(relaunch(endpoint), SESSION, made.host, { restoreWorktree: () => evidence() });
+    expect(typed).toBeGreaterThan(0);
+  });
+
+  test(`${kind}: a folder that left the seat's worktree since the plan types nothing`, async () => {
+    const made = world(OTHER);
+    await executePlan(relaunch(endpoint), SESSION, made.host, { restoreWorktree: () => evidence() });
+    expect(typed).toBe(0);
+    expect(made.said.join('')).toContain('left out');
+  });
+
+  test(`${kind}: a claim another seat's record made since the plan types nothing`, async () => {
+    const made = world(OWN);
+    await executePlan(relaunch(endpoint), SESSION, made.host, { restoreWorktree: () => evidence({ paneClaimed: true }) });
+    expect(typed).toBe(0);
+  });
+
+  test(`${kind}: no fresh evidence types nothing`, async () => {
+    const made = world(OWN);
+    await executePlan(relaunch(endpoint), SESSION, made.host);
+    expect(typed).toBe(0);
+  });
+}
