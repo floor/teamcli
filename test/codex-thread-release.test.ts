@@ -49,10 +49,37 @@ describe('waiting for a Codex conversation to be free', () => {
     expect(await waitCodexThreadFree({ sockets: ['shared', 'own'], threadId: ID, timeoutMs: 9000, pollMs: 3000, rpc: w.rpc, ...c })).toEqual({ free: false, heldBy: 'own', waitedMs: 9000 });
   });
 
-  test('an unreachable app-server holds nothing', async () => {
-    const w = world({ own: [[]] });
+  test('an app-server with nothing listening holds nothing; an unreadable one counts as holding', async () => {
     const c = clock();
-    expect((await waitCodexThreadFree({ sockets: ['gone', 'own'], threadId: ID, timeoutMs: 9000, pollMs: 3000, rpc: w.rpc, ...c })).free).toBe(true);
+    // `absent`: the socket is not there, or refuses the connection.
+    const absent = async () => ({ ok: false as const, why: 'no socket', replies: [], absent: true as const });
+    expect((await waitCodexThreadFree({ sockets: ['gone'], threadId: ID, timeoutMs: 9000, pollMs: 3000, rpc: absent, ...c })).free).toBe(true);
+    // A timeout, a refusal, or a malformed list is not proof of free (review round 6).
+    const failures = [
+      async () => ({ ok: false as const, why: 'no answer within 3000 ms', replies: [] }),
+      async () => ({ ok: true as const, replies: [{ ok: true as const, result: { data: 'nope' } }] }),
+      async () => ({ ok: true as const, replies: [{ ok: true as const, result: { data: [ID.length, 'x'], nextCursor: null } }] }),
+    ];
+    for (const rpc of failures) {
+      const d = clock();
+      const got = await waitCodexThreadFree({ sockets: ['own'], threadId: ID, timeoutMs: 9000, pollMs: 3000, rpc, ...d });
+      expect(got.free).toBe(false);
+      if (!got.free) expect(got.heldBy).toContain('unreadable');
+    }
+  });
+
+  test('every page is read: the conversation on a later page is held', async () => {
+    const pages: Record<string, { data: string[]; nextCursor: string | null }> = {
+      '': { data: ['a'], nextCursor: 'p2' },
+      p2: { data: ['b', ID], nextCursor: null },
+    };
+    const rpc = async (_socket: string, calls: RpcCall[]) => {
+      const cursor = (calls[0]?.params as { cursor?: string }).cursor ?? '';
+      return { ok: true as const, replies: [{ ok: true as const, result: pages[cursor] }] };
+    };
+    const c = clock();
+    const got = await waitCodexThreadFree({ sockets: ['shared'], threadId: ID, timeoutMs: 6000, pollMs: 3000, rpc, ...c });
+    expect(got).toEqual({ free: false, heldBy: 'shared', waitedMs: 6000 });
   });
 
   test('only ever asks which conversations are loaded: nothing is resumed, unsubscribed or unloaded', async () => {
@@ -71,8 +98,15 @@ describe('the lock screen', () => {
     expect(codexThreadLockedScreen(styled)).toBe(true);
   });
 
-  test('an idle Codex prompt, or the sentence quoted above a live prompt, is not', () => {
+  test('an idle Codex prompt, or the lock rows quoted in a dialog or above a composer, is not', () => {
     expect(codexThreadLockedScreen(IDLE)).toBe(false);
-    expect(codexThreadLockedScreen(`• It said: This conversation is open in another app\n${IDLE}`)).toBe(false);
+    const rows = LOCKED.split('\n').filter((row) => row.trim() !== '').slice(-4).join('\n');
+    const question = readFileSync(new URL('./fixtures/codex/0.167.0/question.txt', import.meta.url), 'utf8');
+    expect(codexThreadLockedScreen(`${rows}\n${question}`)).toBe(false);
+    expect(codexThreadLockedScreen(`${rows}\n${IDLE}`)).toBe(false);
+    // A composer between the transcript and the lock rows is a live input box: not the lock screen.
+    expect(codexThreadLockedScreen(`› a draft\n${rows}`)).toBe(false);
+    // Both phrases in one line of a reply are not the four rows.
+    expect(codexThreadLockedScreen(`• This conversation is open in another app; press ⌃c/q exit\n${IDLE}`)).toBe(false);
   });
 });

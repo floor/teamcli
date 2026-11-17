@@ -26,9 +26,14 @@ export type RpcReply = { ok: true; result: unknown } | { ok: false; error: strin
 /** One JSON-RPC session: initialize, initialized, then each call in order, each answered before
  *  the next is sent. Replies are returned in call order; a refused call ends the session there.
  *  The whole session is bounded by `timeoutMs`. */
-export function codexRpcSession(socketPath: string, calls: RpcCall[], timeoutMs = 3000): Promise<{ ok: true; replies: RpcReply[] } | { ok: false; why: string; replies: RpcReply[] }> {
+export type RpcSession = { ok: true; replies: RpcReply[] } | { ok: false; why: string; replies: RpcReply[]; absent?: true };
+
+/** One JSON-RPC session (see above). `absent`: nothing listens at the socket (no file, or
+ *  ECONNREFUSED / ENOENT on connect), which is the only failure that proves the app-server holds
+ *  nothing. */
+export function codexRpcSession(socketPath: string, calls: RpcCall[], timeoutMs = 3000): Promise<RpcSession> {
   const replies: RpcReply[] = [];
-  if (!existsSync(socketPath)) return Promise.resolve({ ok: false, why: 'the app-server socket is not there', replies });
+  if (!existsSync(socketPath)) return Promise.resolve({ ok: false, why: 'the app-server socket is not there', replies, absent: true });
   return new Promise((resolve) => {
     const socket = createConnection({ path: socketPath });
     const key = randomBytes(16).toString('base64');
@@ -37,7 +42,7 @@ export function codexRpcSession(socketPath: string, calls: RpcCall[], timeoutMs 
     let upgraded = false;
     let next = 0;
     let settled = false;
-    const done = (value: { ok: true; replies: RpcReply[] } | { ok: false; why: string; replies: RpcReply[] }): void => {
+    const done = (value: RpcSession): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -51,7 +56,12 @@ export function codexRpcSession(socketPath: string, calls: RpcCall[], timeoutMs 
       const call = calls[next]!;
       send({ id: `call-${String(next)}`, method: call.method, params: call.params });
     };
-    socket.on('error', (err: NodeJS.ErrnoException) => done({ ok: false, why: `the app-server socket failed (${err.code ?? 'error'})`, replies }));
+    socket.on('error', (err: NodeJS.ErrnoException) => done({
+      ok: false,
+      why: `the app-server socket failed (${err.code ?? 'error'})`,
+      replies,
+      ...(!upgraded && (err.code === 'ECONNREFUSED' || err.code === 'ENOENT') ? { absent: true as const } : {}),
+    }));
     socket.on('close', () => done({ ok: false, why: 'the app-server closed the connection', replies }));
     socket.on('connect', () => {
       socket.write(['GET /rpc HTTP/1.1', 'Host: localhost', 'Connection: Upgrade', 'Upgrade: websocket', 'Sec-WebSocket-Version: 13', `Sec-WebSocket-Key: ${key}`, '', ''].join('\r\n'));
@@ -95,24 +105,42 @@ export function codexRpcSession(socketPath: string, calls: RpcCall[], timeoutMs 
   });
 }
 
-function loadedIds(reply: RpcReply | undefined): string[] | null {
+/** One page of `thread/loaded/list`: every member a string, the cursor a string or null.
+ *  Anything else is not a reading. */
+function loadedPage(reply: RpcReply | undefined): { ids: string[]; next: string | null } | null {
   if (reply === undefined || !reply.ok) return null;
-  const data = (reply.result as { data?: unknown } | null)?.data;
-  return Array.isArray(data) ? data.filter((id): id is string => typeof id === 'string') : null;
+  const result = reply.result as { data?: unknown; nextCursor?: unknown } | null;
+  const data = result?.data;
+  if (!Array.isArray(data) || !data.every((id) => typeof id === 'string')) return null;
+  const next = result?.nextCursor;
+  if (next !== undefined && next !== null && typeof next !== 'string') return null;
+  return { ids: data as string[], next: typeof next === 'string' && next !== '' ? next : null };
 }
 
-/** Whether one app-server lists the conversation as loaded. An app-server that cannot be
- *  reached, or gives no list, cannot hold it for a TUI to collide with: `unreachable`. */
+/** The most pages one reading follows; a list longer than this is not read to its end. */
+const MAX_PAGES = 50;
+
+export type LoadedReading = 'loaded' | 'free' | 'absent' | { unknown: string };
+
+/** Whether one app-server lists the conversation as loaded, every page read. `absent`: nothing
+ *  listens there, so nothing is held. A failed, refused, malformed or unfinished reading is
+ *  `unknown`, never free: the app-server may hold the conversation all the same. */
 export async function codexThreadLoaded(
   socketPath: string,
   threadId: string,
   rpc: typeof codexRpcSession = codexRpcSession,
-): Promise<'loaded' | 'free' | 'unreachable'> {
-  const read = await rpc(socketPath, [{ method: 'thread/loaded/list', params: {} }]);
-  if (!read.ok) return 'unreachable';
-  const ids = loadedIds(read.replies[0]);
-  if (ids === null) return 'unreachable';
-  return ids.includes(threadId) ? 'loaded' : 'free';
+): Promise<LoadedReading> {
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const read = await rpc(socketPath, [{ method: 'thread/loaded/list', params: cursor === null ? {} : { cursor } }]);
+    if (!read.ok) return read.absent === true && page === 0 ? 'absent' : { unknown: read.why };
+    const got = loadedPage(read.replies[0]);
+    if (got === null) return { unknown: 'thread/loaded/list gave no valid list' };
+    if (got.ids.includes(threadId)) return 'loaded';
+    if (got.next === null) return 'free';
+    cursor = got.next;
+  }
+  return { unknown: `thread/loaded/list did not end within ${String(MAX_PAGES)} pages` };
 }
 
 export type ThreadWait = { free: true; waitedMs: number } | { free: false; heldBy: string; waitedMs: number };
@@ -140,7 +168,10 @@ export async function waitCodexThreadFree(input: {
   for (;;) {
     let heldBy: string | null = null;
     for (const socket of input.sockets) {
-      if ((await codexThreadLoaded(socket, input.threadId, input.rpc)) === 'loaded') { heldBy = socket; break; }
+      const reading = await codexThreadLoaded(socket, input.threadId, input.rpc);
+      if (reading === 'loaded') { heldBy = socket; break; }
+      // Fail closed: a reading that is not established counts as holding it.
+      if (typeof reading === 'object') { heldBy = `${socket} (unreadable: ${reading.unknown})`; break; }
     }
     const waitedMs = now() - started;
     if (heldBy === null) return { free: true, waitedMs };
@@ -149,13 +180,34 @@ export async function waitCodexThreadFree(input: {
   }
 }
 
-/** The Codex TUI's own screen for a conversation another app-server holds (codex-cli 0.167.0,
- *  captured in the reboot simulation): no composer, only retry, fork and exit keys. */
+/** The four rows that close the Codex TUI's lock screen (codex-cli 0.167.0, captured in the
+ *  reboot simulation), in order, as the last non-empty rows of the frame. */
+const LOCK_ROWS: readonly RegExp[] = [
+  /^■ This conversation is read-only or unavailable; no operation was sent\.$/u,
+  /^🔒\s+This conversation is open in another app(?:\s+r to retry)?$/u,
+  /^Close it there and press R to continue here\.$/u,
+  /^r retry\s+f fork\s+←\/esc command center\s+⌃c\/q exit\s+⌃t transcript$/u,
+];
+
+/**
+ * The Codex TUI's own screen for a conversation another app-server holds: the frame ends with
+ * exactly the four lock rows, nothing below them, and no composer row (`›` at the start of a row)
+ * anywhere after the transcript's last turn marker above them. A frame that only quotes the words
+ * — inside a dialog, above a live composer, or in a draft — is not this screen.
+ */
 export function codexThreadLockedScreen(screen: string | null | undefined): boolean {
   if (screen == null) return false;
-  // The shipped read is styled (`--format ansi`): the words are compared without their colours.
-  const tail = stripSgr(screen).split('\n').map((line) => line.trim()).filter((line) => line !== '').slice(-6).join('\n');
-  return /This conversation is open in another app/.test(tail) && /⌃c\/q exit/.test(tail);
+  // The shipped read is styled (`--format ansi`): the rows are compared without their colours.
+  const rows = stripSgr(screen).split('\n').map((line) => line.trim()).filter((line) => line !== '');
+  if (rows.length < LOCK_ROWS.length) return false;
+  const tail = rows.slice(-LOCK_ROWS.length);
+  if (!LOCK_ROWS.every((row, at) => row.test(tail[at]!))) return false;
+  // No input box between the transcript and the lock rows: the rows above them up to the last
+  // turn's own lines hold no composer prompt.
+  const above = rows.slice(0, -LOCK_ROWS.length);
+  const lastPrompt = above.map((row) => row.startsWith('›')).lastIndexOf(true);
+  const lastOutput = above.map((row) => row.startsWith('•') || row.startsWith('Worked for') || row.startsWith('■')).lastIndexOf(true);
+  return lastPrompt < lastOutput;
 }
 
 /** How long a Codex launch waits for its conversation to be released by another app-server
