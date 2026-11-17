@@ -590,14 +590,19 @@ async function wakeByWebhook(
 const LEAD_RECEIPT_MS = 5 * 60 * 1000;
 
 /** Starts the lead's receipt clock the first time a wake is due, and climbs once it expires
- *  while the drop is still unread. The mailbox write is the lead climb in status-events. */
-function noteLeadEpisode(
+ *  while the drop is still unread. The mailbox write is the lead climb in status-events.
+ *  RFC event-comms E3: the alarm never fires while the lead is working. A pass that sees the lead
+ *  `working` re-arms the clock instead (the clock restarts at the end of the turn it saw), so the
+ *  climb needs five minutes with no turn observed. A status the pass cannot read is not treated
+ *  as working: the legacy clock stands. */
+export function noteLeadEpisode(
   scene: RetryScene,
   seat: string,
   dropDir: string,
   id: string,
   nowMs: number,
   waking: boolean,
+  working = false,
 ): void {
   const path = join(dropDir, `${id}.lead-episode`);
   let at: number | undefined;
@@ -610,6 +615,17 @@ function noteLeadEpisode(
     at = undefined;
   }
   if (climbed) return;
+  if (working) {
+    // Mid-turn: no alarm, and the clock restarts so it counts from the end of this turn. An
+    // episode with no clock yet stays without one until a wake is due.
+    if (at === undefined) return;
+    try {
+      writeFileSync(path, `${JSON.stringify({ at: nowMs, climbed: false })}\n`, { mode: 0o600 });
+    } catch {
+      // A clock that cannot be re-armed still never climbs on this pass.
+    }
+    return;
+  }
   if (at === undefined) {
     if (!waking) return;
     at = nowMs;
@@ -727,7 +743,12 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       pending.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
       const oldest = pending[0];
       if (oldest !== undefined) {
-        noteLeadEpisode(scene, seat.name, dropDir, oldest.id, nowMs, false);
+        // The lead's own status in this pass's live snapshot: a lead seen working is mid-turn, and
+        // its alarm waits. Only the snapshot is read here (no extra pane or status read), so the
+        // wake below takes exactly the reads it took before.
+        const leadAgents = scene.live.agents.filter((agent) => agent.name === seat.name);
+        const leadWorking = leadAgents.length === 1 && leadAgents[0]?.status === 'working';
+        noteLeadEpisode(scene, seat.name, dropDir, oldest.id, nowMs, false, leadWorking);
       }
     }
     // A Claude seat has no typed wake of its own, so without this a message its channel push or

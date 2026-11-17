@@ -794,6 +794,30 @@ describe('the operator seat takes the team lead unread window', () => {
     }
   });
 
+  test('RFC event-comms E3: a lead working past the window gets no alarm and no keys; the clock restarts at that turn', async () => {
+    const { made, team } = world('', 'helper');
+    const dropDir = seed(made, 200 / 60, 'helper');
+    const first = leadSources([SCROLL_BACK, SCROLL_BACK, SCROLL_BACK, IDLE, IDLE, holding(WAKE_LINE), holding(WAKE_LINE), WORKING, WORKING]);
+    await wakeUnreadDrops(scene(made, team, [], first.sources, NOW, 'idle'), { unreadAfter: N });
+    expect(first.typed).toEqual([WAKE_LINE]);
+
+    // Six minutes on, the lead is mid-turn: no alarm, no key, and the clock restarts here.
+    const busy = leadSources([WORKING, WORKING]);
+    await wakeUnreadDrops(scene(made, team, [], busy.sources, new Date(NOW.getTime() + 6 * MIN), 'working'), { unreadAfter: N });
+    expect(busy.keys).toEqual([]);
+    expect(busy.typed).toEqual([]);
+    const held = JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { at?: unknown; climbed?: unknown };
+    expect(held).toEqual({ at: NOW.getTime() + 6 * MIN, climbed: false });
+
+    // Four minutes after that turn the lead is idle: still inside its new window, no alarm.
+    await wakeUnreadDrops(scene(made, team, [], leadSources([]).sources, new Date(NOW.getTime() + 10 * MIN), 'idle'), { unreadAfter: N });
+    expect((JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { climbed?: unknown }).climbed).toBe(false);
+
+    // Five minutes after that turn, idle and still unread: the alarm climbs once.
+    await wakeUnreadDrops(scene(made, team, [], leadSources([]).sources, new Date(NOW.getTime() + 11 * MIN), 'idle'), { unreadAfter: N });
+    expect((JSON.parse(readFileSync(join(dropDir, `${UNREAD}.lead-episode`), 'utf8')) as { climbed?: unknown }).climbed).toBe(true);
+  });
+
   test('five minutes after the first wake with no receipt, the episode climbs once and nothing more is typed', async () => {
     // The lead's receipt clock: the first wake starts it, a later pass with the message still
     // unread and unspent-of-nothing — its one wake is sent — climbs the episode marker once and

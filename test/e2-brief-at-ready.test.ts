@@ -8,7 +8,7 @@ import { offerBriefsAtReady } from '../src/launch/brief-at-ready.ts';
 import type { BriefDeliveryReport, BriefWalkPlan, CurrentBriefClaim } from '../src/launch/general-brief.ts';
 
 const CLAIM: CurrentBriefClaim = {
-  id: 'brief-1', at: '2026-11-17T20:00:00.000Z', incarnation: 'inc-1', epoch: 'ep-1', sha256: 'sha-1', attempt: 1, stage: 'ready',
+  id: 'brief-1', at: '2026-11-17T20:00:00.000Z', incarnation: 'inc-1', epoch: 'ep-1', sha256: 'sha-1', attempt: 1, stage: 'ready', superseded: [],
 };
 const plan = (seat: string, over: Record<string, unknown> = {}): BriefWalkPlan => ({
   seat,
