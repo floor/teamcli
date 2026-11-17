@@ -15,8 +15,12 @@ import { readScreen } from '../src/watch/screen.ts';
 const fixture = (name: string): string => readFileSync(new URL(`./fixtures/antigravity/1.5.10/${name}`, import.meta.url), 'utf8');
 
 describe('agy 1.5.10 permission-mode hint', () => {
-  test('the hint alone in the box is the empty idle prompt', () => {
-    expect(readScreen('antigravity', fixture('idle-auto-mode.txt')).kind).toBe('idle');
+  test('the hint alone in the box, in its captured grey, is the empty idle prompt', () => {
+    expect(readScreen('antigravity', fixture('idle-auto-mode-ansi.txt')).kind).toBe('idle');
+  });
+
+  test('the hint words on a plain read (no styling) are not trusted: they stay unsent (RFC event-comms E1)', () => {
+    expect(readScreen('antigravity', fixture('idle-auto-mode.txt')).kind).toBe('unsent');
   });
 
   test('more text after the hint stays unsent', () => {
@@ -49,7 +53,7 @@ function adopt(): Step[] {
   }];
 }
 
-function world(cwd: string, screen = fixture('idle-auto-mode.txt')): { host: Host; renames: () => number; records: Record<string, unknown>[] } {
+function world(cwd: string, screen = fixture('idle-auto-mode-ansi.txt')): { host: Host; renames: () => number; records: Record<string, unknown>[] } {
   let renames = 0;
   let taken = false;
   const records: Record<string, unknown>[] = [];

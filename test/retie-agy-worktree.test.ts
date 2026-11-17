@@ -31,7 +31,7 @@ const SPACE = 'fixture-space';
 const RECORDED = { shell: 100, cli: [200] };
 const RESTORED: PaneProcesses = { shell: 101, foreground: [201] };
 const APP_URL = 'unix:///tmp/fixture-app.sock';
-const IDLE = readFileSync(new URL('./fixtures/antigravity/1.5.10/idle-auto-mode.txt', import.meta.url), 'utf8');
+const IDLE = readFileSync(new URL('./fixtures/antigravity/1.5.10/idle-auto-mode-ansi.txt', import.meta.url), 'utf8');
 const UNSENT = readFileSync(new URL('./fixtures/codex/0.161.0/unsent.txt', import.meta.url), 'utf8');
 
 let base: string;
