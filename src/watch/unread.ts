@@ -440,6 +440,19 @@ function sendLinesOf(scene: RetryScene, home: string): Map<string, HistoryEntry>
   return lines;
 }
 
+/** The time of the first typed wake history records as delivered, per message id. Read once per
+ *  report, and only when a notice is due. */
+function deliveredTypedWakesOf(scene: RetryScene, home: string): Map<string, string> {
+  const woken = new Map<string, string>();
+  const read = readHistory(scene.team.project, scene.root, home);
+  if (!read.ok) return woken;
+  for (const entry of read.entries) {
+    if (woken.has(entry.id)) continue;
+    if (entry.outcome === 'delivered (typed wake)') woken.set(entry.id, entry.ts);
+  }
+  return woken;
+}
+
 /** Every leg name a history line's `via` can carry in this build: the catalogue's legs and the
  *  sender-posted webhook. A word outside it proves no position in the cascade. */
 const WALKED_LEGS: readonly string[] = [...DELIVERY_LEGS, 'webhook'];
@@ -1561,6 +1574,7 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
     : { root: scene.root, session: scene.session, to: leadName, label: leadName };
   const nowMs = scene.now.getTime();
   const at = scene.now.toISOString();
+  let deliveredWakes: Map<string, string> | undefined;
   for (const seat of scene.team.seats) {
     // A person reads their own mail; a stopped seat keeps it until its next start, and the
     // generic report already names the queue its absence leaves. The lead is the report's
@@ -1643,9 +1657,21 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
     const minutes = Math.max(1, Math.round(oldestAge / 60_000));
     const waits = `${String(count)} message${count === 1 ? '' : 's'} wait, oldest ${String(minutes)} min`;
     const where = `the drop is at ${join(dropDir, oldest.id)}`;
+    // This report types nothing, but a wake the send or a retry already delivered is named: a
+    // notice saying only "no wake line was typed" read as "the seat was never woken" when the
+    // send's own typed wake had landed minutes before (2026-11-17, an agy seat whose turn ran
+    // 3 min after the wake).
+    deliveredWakes ??= deliveredTypedWakesOf(scene, home);
+    const woken = deliveredWakes.get(oldest.id);
+    const typedWord = woken === undefined
+      ? 'no wake line was typed'
+      : `a typed wake was delivered at ${woken} and the seat has not read it since; this report typed nothing`;
+    // The screen words end in "no wake reached it": true of this pass, false of the message once
+    // a delivered wake is known, so the clause goes and only what the pass saw stays.
+    const word = woken === undefined ? reason.word : reason.word.replace(/, no wake reached it$/, '');
     const body = reason.ageMin === undefined
-      ? `${seat.name}: ${reason.word}; ${waits} - no wake line was typed; ${where}`
-      : `${seat.name}: ${reason.word}; ${waits} - the word has stood for ${String(reason.ageMin)} min; no wake line was typed; ${where}`;
+      ? `${seat.name}: ${word}; ${waits} - ${typedWord}; ${where}`
+      : `${seat.name}: ${word}; ${waits} - the word has stood for ${String(reason.ageMin)} min; ${typedWord}; ${where}`;
     // An episode whose named messages no longer all stand (one was read) is over: its marker was
     // given back above, and this pass claims the new one. The claim comes before the notice it
     // covers, so a crash between the two leaves a marker with nothing said rather than a notice
