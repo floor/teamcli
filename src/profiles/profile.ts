@@ -2526,10 +2526,22 @@ export function directConversationLaunch(cli: string, command: string): boolean 
   // The launch builder's literal marker changes neither the start folder nor the store.
   // Other assignments and wrapper programs remain unmeasured; quoted text is no assignment.
   const first = words[0]!;
-  const at = first.text === 'AGENT_UNATTENDED=1'
+  let at = first.text === 'AGENT_UNATTENDED=1'
     && command.slice(first.start, first.end) === 'AGENT_UNATTENDED=1' ? 1 : 0;
-  return words[at]?.text.split('/').pop() === binary;
+  // The team's forwarding wrapper (docs/guides/tools/as-floor.sh) sets commit identity and git
+  // variables and then execs its arguments: it changes neither the start folder nor the CLI's
+  // store (no cd, no CLAUDE_CONFIG_DIR), so the conversation the line resumes is read where the
+  // CLI will look for it. The 17 Nov reboot simulation's lead was launched through it, never took
+  // a turn (no transcript), and its resume failed at the CLI because the check was skipped.
+  const base = (word: ShellWord | undefined): string => word?.text.split('/').pop() ?? '';
+  if (FORWARD_SHELLS.has(base(words[at])) && FORWARDING_WRAPPERS.has(base(words[at + 1]))) at += 2;
+  else if (FORWARDING_WRAPPERS.has(base(words[at]))) at += 1;
+  return base(words[at]) === binary;
 }
+
+/** Wrappers measured to forward their arguments with the start folder and the CLI's store kept. */
+const FORWARDING_WRAPPERS = new Set(['as-floor.sh']);
+const FORWARD_SHELLS = new Set(['zsh', 'bash', 'sh']);
 
 /**
  * Whether the conversation a resume line names is on disk for its CLI, read before the line
