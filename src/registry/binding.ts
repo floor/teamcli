@@ -209,16 +209,59 @@ function callerStandsIn(io: BindingIo, team: TeamRecord): boolean {
 }
 
 /**
- * The team a command addresses when no flag names a file. The pane is asked
- * first: one team whose state records this caller on its pane is that root
- * and roster. None, or more than one, leaves `teamBinding` unchanged.
+ * The team a command that changes a team addresses when no flag names a file.
+ *
+ * A folder that is a registered place of one team is that team's, whoever runs there: a seat of
+ * another team placed on its own pane does not carry its own team into it. The command's own
+ * gate then judges the caller against the folder's team, so a caller with no standing there is
+ * refused, and the caller's own team is never the fallback (a `team down` run in a nested
+ * team's folder once stopped the outer team that placed the caller). Where no place holds the
+ * cwd, the pane is asked: one team whose state records this caller on its pane is that root and
+ * roster. None, or more than one, leaves `teamBinding` unchanged.
  */
 export function addressedTeam(home: string, cwd: string, seat: string | undefined, io?: BindingIo): TeamBinding {
+  if (io !== undefined) {
+    const placed = placedCallerTeam(home, io);
+    if (placed !== null) {
+      const folder = teamBinding(home, cwd, seat);
+      if (folder.kind === 'bound' && folder.by === 'place' && !sameTeam(folder.team, placed)) return folder;
+      // A folder two teams claim is the caller's own when its team is one of them.
+      if (folder.kind === 'ambiguous' && !folder.ids.includes(teamIdOfRecord(placed))) return folder;
+      return { kind: 'bound', team: placed, by: 'caller' };
+    }
+  }
+  return teamBinding(home, cwd, seat, io);
+}
+
+/**
+ * The pane-first reading `addressedTeam` used before folders won: the one team whose state
+ * records this caller on its pane, else the folder. Only a seat's own bootstrap reads it (the
+ * inbox setup a seat's CLI starts in its working folder), where the pane, not the folder, names
+ * the seat's team; no command that changes a team does.
+ */
+export function paneFirstTeam(home: string, cwd: string, seat: string | undefined, io?: BindingIo): TeamBinding {
   if (io !== undefined) {
     const placed = placedCallerTeam(home, io);
     if (placed !== null) return { kind: 'bound', team: placed, by: 'caller' };
   }
   return teamBinding(home, cwd, seat, io);
+}
+
+function teamIdOfRecord(team: TeamRecord): string {
+  return team.id ?? teamIdOf(team.root);
+}
+
+function sameTeam(a: TeamRecord, b: TeamRecord): boolean {
+  return teamIdOfRecord(a) === teamIdOfRecord(b);
+}
+
+/** Whether the folder is a registered place of a team other than the caller's placed one, so a
+ *  command that changes a team acts on the folder's team (`addressedTeam`), never the caller's.
+ *  A folder two teams claim counts as another team's only when the caller's team is not one. */
+export function folderOfAnotherTeam(home: string, cwd: string, seat: string | undefined, placed: TeamRecord): boolean {
+  const folder = teamBinding(home, cwd, seat);
+  if (folder.kind === 'bound') return folder.by === 'place' && !sameTeam(folder.team, placed);
+  return folder.kind === 'ambiguous' && !folder.ids.includes(teamIdOfRecord(placed));
 }
 
 /**

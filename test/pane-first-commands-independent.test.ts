@@ -22,7 +22,7 @@ import { loadTeamFile } from '../src/file/load.ts';
 import { setHerdrRun } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { registerAgent } from '../src/registry/agents.ts';
-import { addressedTeam, teamBinding } from '../src/registry/binding.ts';
+import { addressedTeam, paneFirstTeam, teamBinding } from '../src/registry/binding.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { resolveTarget } from '../src/send/resolve.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
@@ -162,11 +162,37 @@ function approveAlpha(w: World) {
 }
 
 for (const op of operations) {
-  test(`${op}: a recorded outer caller working in a nested team addresses the outer team`, async () => {
+  test(`${op}: a recorded outer caller working in a nested team's folder addresses that folder's team, never its own`, async () => {
+    const w = world();
+    // No charter here: a charter over Beta's root also covers the folder nested in it, and that
+    // owner coverage, not the caller's team, would then decide a config write.
+    const before = [bytes(w.alpha), bytes(w.beta), seats(w.alpha, 'alpha'), seats(w.beta, 'beta')];
+    const result = await invoke(op, w, caller());
+    // The caller stands in Beta only: Alpha's gate refuses it, and Beta is never the fallback.
+    expect(result.code, result.text).toBe(1);
+    expect(result.text).not.toContain('"project": "beta"');
+    expect([bytes(w.alpha), bytes(w.beta), seats(w.alpha, 'alpha'), seats(w.beta, 'beta')]).toEqual(before);
+    expect(w.effects).toEqual([]);
+  }, 20_000);
+
+  test(`${op}: a recorded caller in its own team's folder still addresses its own team`, async () => {
     const w = world();
     if (op === 'config') await charter(w, w.beta);
     const alpha = bytes(w.alpha);
-    const result = await invoke(op, w, caller());
+    const result = await invoke(op, w, caller(), w.beta);
+    expect(result.code, result.text).toBe(0);
+    expect(bytes(w.alpha)).toBe(alpha);
+    if (op === 'config') expect(bytes(w.beta)).toContain('label: changed');
+    else if (op === 'remove') expect(bytes(w.beta)).not.toContain('name: worker');
+    else expect(JSON.parse(result.out).project).toBe('beta');
+    expect(w.effects).toEqual([]);
+  }, 20_000);
+
+  test(`${op}: a recorded caller outside every team's folder still addresses its own team`, async () => {
+    const w = world();
+    if (op === 'config') await charter(w, w.beta);
+    const alpha = bytes(w.alpha);
+    const result = await invoke(op, w, caller(), w.away);
     expect(result.code, result.text).toBe(0);
     expect(bytes(w.alpha)).toBe(alpha);
     if (op === 'config') expect(bytes(w.beta)).toContain('label: changed');
@@ -197,13 +223,14 @@ for (const op of operations) {
     expect(w.effects).toEqual([]);
   }, 20_000);
 
-  test(`${op}: a charter covering the cwd team does not admit changes to the pane team`, async () => {
+  test(`${op}: a charter covering the cwd team admits a change to that team only, never the pane team`, async () => {
     const w = world(false);
     await charter(w, w.alpha);
-    const before = [bytes(w.alpha), bytes(w.beta), seats(w.alpha, 'alpha'), seats(w.beta, 'beta')];
+    const before = [bytes(w.beta), seats(w.beta, 'beta')];
     const result = await invoke(op, w, caller());
-    expect(result.code, result.text).toBe(1);
-    expect([bytes(w.alpha), bytes(w.beta), seats(w.alpha, 'alpha'), seats(w.beta, 'beta')]).toEqual(before);
+    if (result.code === 0 && op !== 'config' && op !== 'remove') expect(JSON.parse(result.out).project).toBe('alpha');
+    expect(result.text).not.toContain('"project": "beta"');
+    expect([bytes(w.beta), seats(w.beta, 'beta')]).toEqual(before);
     expect(w.effects).toEqual([]);
   }, 20_000);
 }
@@ -245,14 +272,14 @@ for (const scene of ['placed', 'unplaced', 'cwd-approval', 'cwd-charter'] as con
         writeFileSync(path, text.replace('name: worker\n', 'name: worker\n    label: edited\n'));
         return 0;
       } });
-    if (scene === 'placed' || scene === 'unplaced') {
+    if (scene === 'placed' || scene === 'unplaced' || scene === 'cwd-charter') {
       expect(code, io.out + io.err).toBe(0);
       expect(opened).toHaveLength(1);
-      expect(opened[0]).toContain(`project: ${scene === 'placed' ? 'beta' : 'alpha'}\n`);
-      const target = scene === 'placed' ? w.beta : w.alpha;
-      const other = scene === 'placed' ? w.alpha : w.beta;
-      expect(bytes(target)).toContain('label: edited');
-      expect(bytes(other)).toBe(scene === 'placed' ? before[0]! : before[1]!);
+      // The folder is Alpha's: the placed Beta caller edits Alpha (the Beta charter covers the
+      // folder nested in its root), never its own Beta record.
+      expect(opened[0]).toContain('project: alpha\n');
+      expect(bytes(w.alpha)).toContain('label: edited');
+      expect(bytes(w.beta)).toBe(before[1]!);
     } else {
       expect(code, io.out + io.err).toBe(1);
       expect(opened).toEqual([]);
@@ -262,7 +289,7 @@ for (const scene of ['placed', 'unplaced', 'cwd-approval', 'cwd-charter'] as con
   }, 20_000);
 }
 
-test('folder binding stays folder-first while command addressing asks the recorded pane first', () => {
+test('command addressing is folder-first for a folder another team holds; the pane reading is the bootstrap\'s alone', () => {
   const w = world();
   const io = testIo(w.alpha, caller());
   const folder = teamBinding(w.home, w.alpha, 'worker', io);
@@ -270,7 +297,13 @@ test('folder binding stays folder-first while command addressing asks the record
   expect(folder.kind).toBe('bound');
   expect(command.kind).toBe('bound');
   if (folder.kind === 'bound') expect(folder.team.root).toBe(w.alpha);
-  if (command.kind === 'bound') expect(command.team.root).toBe(w.beta);
+  if (command.kind === 'bound') expect(command.team.root).toBe(w.alpha);
+  const bootstrap = paneFirstTeam(w.home, w.alpha, 'worker', io);
+  expect(bootstrap.kind).toBe('bound');
+  if (bootstrap.kind === 'bound') expect(bootstrap.team.root).toBe(w.beta);
+  const away = addressedTeam(w.home, w.away, 'worker', io);
+  expect(away.kind).toBe('bound');
+  if (away.kind === 'bound') expect(away.team.root).toBe(w.beta);
 });
 
 test('a shared seat name outside every root is still refused without placement', async () => {
@@ -291,7 +324,7 @@ test('an explicit seat at team address keeps its target when the cwd is another 
 });
 
 for (const op of ['down', 'add', 'config'] as const) {
-  test(`${op}: an owner action approved only for Alpha cannot be spent against pane team Beta`, async () => {
+  test(`${op}: an owner action approved only for Alpha is spent on Alpha's folder, never against pane team Beta`, async () => {
     const w = world(false);
     seatOwner(w.home, w.store);
     const action: OwnerAction = op === 'down' ? 'team-down' : op === 'add' ? 'team-add' : 'team-config';
@@ -302,8 +335,12 @@ for (const op of ['down', 'add', 'config'] as const) {
     expect(approveOwnerAction(w.home, request.record.request_id, 'always', w.store, NOW()).ok).toBe(true);
     const before = [bytes(w.alpha), bytes(w.beta), seats(w.beta, 'beta')];
     const result = await invoke(op, w, caller(), w.alpha, ['--approval', request.record.request_id]);
-    expect(result.code, result.text).toBe(1);
-    expect([bytes(w.alpha), bytes(w.beta), seats(w.beta, 'beta')]).toEqual(before);
+    expect(result.text).not.toContain('"project": "beta"');
+    expect([bytes(w.beta), seats(w.beta, 'beta')]).toEqual([before[1], before[2]]);
+    // From a folder no team holds, the placed caller addresses Beta, and Alpha's approval refuses.
+    const away = await invoke(op, w, caller(), w.away, ['--approval', request.record.request_id]);
+    expect(away.code, away.text).toBe(1);
+    expect([bytes(w.beta), seats(w.beta, 'beta')]).toEqual([before[1], before[2]]);
     expect(w.effects).toEqual([]);
   }, 20_000);
 }

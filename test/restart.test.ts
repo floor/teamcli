@@ -1893,15 +1893,26 @@ describe('team restart <seat>', () => {
       return { fixture, head };
     }
 
-    test("the bare name from the main orchestrator's pane is its own seat; the address reaches the other team", async () => {
+    test("the bare name from the main orchestrator's own folder is its own seat; another team's folder, or the address, reaches that team", async () => {
       const { fixture, head } = addressWorld();
       const bare = makeHarness(fixture, { workerName: 'orchestrator' });
-      const bareIo = testIo(fixture.root);
+      const bareIo = testIo(head.root);
       bareIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
       expect(placedCallerTeam(fixture.home, bareIo)?.root).toBe(head.root);
       expect(await runRestart(['orchestrator'], bareIo, bare.sources)).toBe(1);
       expect(bareIo.err).toBe('team restart: the orchestrator cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
       expect(bare.did.closed).toEqual([]);
+
+      // Run in the other team's folder, the bare name is that folder's seat: a command that changes
+      // a team never carries the caller's own team into another team's folder.
+      const there = makeHarness(fixture, { workerName: 'orchestrator' });
+      const thereIo = testIo(fixture.root);
+      thereIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator', '--dry-run'], thereIo, there.sources), thereIo.err).toBe(0);
+      expect(thereIo.out).toContain('stop orchestrator in pane-old (free)\n');
+      expect(thereIo.out).toContain('herdr --session acme workspace create');
+      expect(thereIo.out + thereIo.err).not.toContain('cannot restart its own recorded pane');
+      expect(there.did.closed).toEqual([]);
 
       const dryRun = makeHarness(fixture, { workerName: 'orchestrator' });
       const dryIo = testIo(fixture.root);
