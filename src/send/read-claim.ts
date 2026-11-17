@@ -177,12 +177,36 @@ export function claimsOwnedBy(dropDir: string, owner: string, list: (folder: str
   return ids.sort();
 }
 
-/** Recovery's end of a cut-off claim. The dead holder's claim file goes first, while the owner file
- *  still turns every reader away; the owner file last. A reader that takes the bare claim between
- *  the two finds the owner file after taking it and lets it go. A crash between the two leaves the
- *  owner file, and the next recovery pass settles it again. */
-export function settleOwnedClaim(dropDir: string, id: string, owner: string): void {
-  if (ownerOf(dropDir, id) !== owner) return;
-  try { unlinkSync(join(dropDir, READ_CLAIMS, id)); } catch { /* gone */ }
-  settle(dropDir, id, owner);
+/** The file operations removing a claim uses: test seams for an unlink or fsync that fails. */
+export type ClaimFs = { unlink(path: string): void; fsyncFolder(folder: string): void };
+const realClaimFs: ClaimFs = {
+  unlink: (path) => unlinkSync(path),
+  fsyncFolder: (folder) => fsyncPath(folder, constants.O_RDONLY),
+};
+
+/** Step 5 of the relayed read lifecycle, always last: removes the claim `owner` holds on `id`,
+ *  durably. The dead holder's lock file goes first while the owner file still turns readers away,
+ *  then the owner file, then the folder is fsynced. True once neither stands (already removed
+ *  counts); false on any fault, leaving what remains for the next pass. Idempotent. */
+export function removeOwnedClaim(dropDir: string, id: string, owner: string, fs: Partial<ClaimFs> = {}): boolean {
+  const io = { ...realClaimFs, ...fs };
+  const standing = ownerOf(dropDir, id);
+  if (standing === 'unknown') return false;
+  if (standing !== owner) return true;
+  const folder = join(dropDir, READ_CLAIMS);
+  const gone = (path: string): boolean => {
+    try {
+      io.unlink(path);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT';
+    }
+  };
+  if (!gone(join(folder, id)) || !gone(ownerPath(dropDir, id))) return false;
+  try {
+    io.fsyncFolder(folder);
+    return true;
+  } catch {
+    return false;
+  }
 }

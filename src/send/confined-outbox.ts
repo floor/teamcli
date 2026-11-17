@@ -30,7 +30,7 @@ import type { Io } from '../io.ts';
 import { cliHookStatePath } from '../launch/cli-hook.ts';
 import { confinedSeatAt } from '../placement/confined.ts';
 import { isRecordSidecarName, recordNameOk } from './record.ts';
-import { claimsOwnedBy, relayClaimOwner, settleOwnedClaim } from './read-claim.ts';
+import { claimsOwnedBy, relayClaimOwner, removeOwnedClaim } from './read-claim.ts';
 
 export type OutboxCommand = 'send' | 'reply' | 'ack' | 'drops';
 
@@ -289,7 +289,14 @@ export type RelaySources = {
   stat?: (path: string) => { isFile(): boolean; isSymbolicLink(): boolean };
   /** Test seam: each durability point of the hand-over, in order. */
   trace?: (point: 'partial-fsync' | 'partial-folder-fsync' | 'result-fsync' | 'result-folder-fsync' | 'partial-removed') => void;
+  /** Test seam: called as each step of `finishTake` begins. A throw is a crash at that step. */
+  fault?: (step: FinishStep) => void;
+  /** Test seam: the unlink and folder fsync the lifecycle's steps use. */
+  fs?: Partial<{ unlink(path: string): void; fsyncFolder(folder: string): void }>;
 };
+
+/** The relayed read lifecycle after the hand-over, in order (rfc-event-comms E5). See `finishTake`. */
+export type FinishStep = 'seal' | 'publish' | 'discard' | 'remove' | 'retire';
 
 /** The most requests one pass runs, across every seat: the rest wait for the next pass. */
 export const RELAY_PER_PASS = 3;
@@ -356,17 +363,9 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
       }
       // The take is released only once its result stands: a failed publication leaves the
       // marker, and a later pass answers it as cut off.
-      if (publishResult(folder, id, result, seat, sources)) {
-        // A read whose seal could not be made left its claims standing: the saved output and the
-        // take stay, and the recovery pass seals them from it (the result already stands).
-        const left = claimsOwnedBy(join(dir, 'send-drops', session, seat), relayClaimOwner(folder, id));
-        if (left === null || left.length > 0) {
-          sources.log(`${seat}: outbox request ${id} left read claims unsealed; its saved output is kept for recovery`);
-        } else {
-          dropPartial(folder, id, sources.trace);
-          try { unlinkSync(taking); } catch { /* removed with the results */ }
-        }
-      }
+      // The run's own result enters the one lifecycle at its publish step. Any step that fails
+      // stops there; the take stays, and the recovery pass resumes from the last durable step.
+      finishTake(join(dir, 'send-drops', session, seat), seat, folder, id, sources, result);
       ran += 1;
     }
   }
@@ -380,7 +379,7 @@ function refusal(id: string, seat: string, sources: Pick<RelaySources, 'log' | '
 
 /** Writes a result beside its request: a new temporary file (never one already there, never
  *  through a link), then a rename into place. */
-function publishResult(folder: string, id: string, result: OutboxResult, seat: string, sources: Pick<RelaySources, 'log' | 'trace'>): boolean {
+function publishResult(folder: string, id: string, result: OutboxResult, seat: string, sources: Pick<RelaySources, 'log' | 'trace'> & { fsyncFolder?: (folder: string) => void }): boolean {
   // A fresh temporary name per attempt: one a crashed attempt left behind never blocks this one.
   const temp = join(folder, `.${id}.result.${randomUUID()}.tmp`);
   try {
@@ -394,7 +393,7 @@ function publishResult(folder: string, id: string, result: OutboxResult, seat: s
     sources.trace?.('result-fsync');
     renameSync(temp, join(folder, `${id}${RESULT_SUFFIX}`));
     // The result's name is durable before the saved output it replaces may be removed.
-    fsyncFolder(folder);
+    (sources.fsyncFolder ?? fsyncFolder)(folder);
     sources.trace?.('result-folder-fsync');
     return true;
   } catch (error) {
@@ -412,90 +411,138 @@ function readdirSafe(folder: string): string[] {
   }
 }
 
-/** A request taken by a pass that never finished it: the seat gets a result that says so. A read
- *  the run had claimed (src/send/read-claim.ts) is settled here and nowhere else: when its saved
- *  output holds the bodies, their receipts are sealed and that output is the result; when nothing
- *  was saved, the claim is voided, the messages stay unread, and no body is published. */
+/** A request taken by a pass that never finished it, or finished it only in part: the lifecycle
+ *  resumes from its last durable step. A take whose result stands resumes at once; one with no
+ *  result is answered from its saved output once it is stale. */
 function recoverTaken(dropDir: string, seat: string, folder: string, names: readonly string[], nowMs: number, sources: RelaySources): void {
   for (const name of names) {
     if (!name.endsWith('.taking')) continue;
     const id = name.slice(0, -'.taking'.length);
     if (!/^[0-9a-f-]{36}$/.test(id)) continue;
     const path = join(folder, name);
-    const owner = relayClaimOwner(folder, id);
-    // A take whose result already stands is finished: its claims are settled by what that result
-    // published, and then only its marker is left to remove.
-    if (names.includes(`${id}${RESULT_SUFFIX}`)) {
-      if (settleClaims(dropDir, seat, owner, () => readPartial(folder, id, sources.stat), sources) === false) continue;
-      dropPartial(folder, id, sources.trace);
-      try { unlinkSync(path); } catch { /* gone already */ }
-      continue;
+    if (!names.includes(`${id}${RESULT_SUFFIX}`)) {
+      try {
+        if (nowMs - lstatSync(path).mtimeMs < TAKEN_STALE_MS) continue;
+      } catch {
+        continue;
+      }
+      sources.log(`outbox request ${id} was cut off while it ran; its outcome is unknown`);
     }
-    try {
-      if (nowMs - lstatSync(path).mtimeMs < TAKEN_STALE_MS) continue;
-    } catch {
-      continue;
-    }
-    sources.log(`outbox request ${id} was cut off while it ran; its outcome is unknown`);
-    // What the run had already handed over is answered with it, never replaced by an empty result.
-    const handed = readPartial(folder, id, sources.stat);
-    if (handed === null) {
-      sources.log(`outbox request ${id}: its saved output cannot be read now; kept for a later pass`);
-      continue;
-    }
-    // Bodies saved whole are sealed before they are published, so the result that carries them
-    // is their one exposure; a claim whose body was not saved whole is voided first, and its
-    // message stays unread for the next reader.
-    const settled = settleClaims(dropDir, seat, owner, () => handed, sources);
-    if (settled === false) continue;
-    // An earlier build's unframed output proves no body whole: beside claims of this request it is
-    // withheld, so a voided claim's body is never published. The decision is made durable before
-    // the first publish attempt by discarding that file (folder fsynced): a retry after a failed
-    // publish finds no legacy output to bring back.
-    const withhold = settled === 'claims' && handed.legacy !== '';
-    if (withhold && !discardLegacy(folder, id)) {
-      sources.log(`outbox request ${id}: its unframed saved output could not be discarded; kept for a later pass`);
-      continue;
-    }
-    const out = withhold ? handed.text.slice(handed.legacy.length) : handed.text;
-    if (publishResult(folder, id, {
+    finishTake(dropDir, seat, folder, id, sources, undefined, nowMs);
+  }
+}
+
+/**
+ * The relayed read lifecycle, one ordered sequence (rfc-event-comms E5, review round 8). The
+ * hand-over's own steps come first, in the read:
+ *   1. claim: the id's claim names this request in `<id>.owner`, durable (file and folder fsynced)
+ *      before any output (`claimRead`);
+ *   2. save: each stdout write is a whole chunk, durable, naming the ids it holds whole
+ *      (`appendPartial`).
+ * Then this function, in order, each step durable and idempotent:
+ *   3. seal: every owned id saved whole has its receipt sealed and flushed as the seat's read; a
+ *      receipt already standing is flushed again;
+ *   3b. publish: the result stands (the run's own, or built from the saved chunks, without an
+ *      earlier build's unframed output while any claim stands);
+ *   4. discard: the saved chunks and any unframed output are removed, the folder fsynced;
+ *   5. remove: every claim this request owns is removed (lock, owner file, folder fsynced), last.
+ *   Then the take is retired.
+ * A step that fails stops here and keeps everything after it: the claims stay the request's, and
+ * the next pass resumes from the last durable step. An owned id saved whole is never read again
+ * (its receipt is sealed before its body is published); one not saved whole is never published,
+ * and its claim's removal leaves it unread for the next reader.
+ */
+function finishTake(dropDir: string, seat: string, folder: string, id: string, sources: RelaySources, given?: OutboxResult, nowMs?: number): boolean {
+  const owner = relayClaimOwner(folder, id);
+  const fsx = {
+    unlink: sources.fs?.unlink ?? ((path: string) => unlinkSync(path)),
+    fsyncFolder: sources.fs?.fsyncFolder ?? fsyncFolder,
+  };
+  const stop = (why: string): boolean => {
+    sources.log(`${seat}: outbox request ${id}: ${why}; kept for a later pass`);
+    return false;
+  };
+  const owned = claimsOwnedBy(dropDir, owner);
+  if (owned === null) return stop('its read claims cannot be read now');
+  const saved = readPartial(folder, id, sources.stat);
+  if (saved === null) return stop('its saved output cannot be read now');
+  // 3. seal
+  sources.fault?.('seal');
+  const handed = owned.filter((one) => saved.ids.includes(one));
+  if (handed.length > 0 && !sources.seal(seat, handed, owner)) return stop('a read receipt could not be sealed now');
+  // 3b. publish
+  sources.fault?.('publish');
+  const resultPath = join(folder, `${id}${RESULT_SUFFIX}`);
+  let standing: boolean;
+  try {
+    const held = lstatSync(resultPath);
+    if (held.isSymbolicLink() || !held.isFile()) return stop('its result name is held by something that is not a file');
+    standing = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return stop('its result cannot be read now');
+    standing = false;
+  }
+  if (!standing) {
+    const out = owned.length > 0 ? saved.text.slice(saved.legacy.length) : saved.text;
+    const result: OutboxResult = given ?? {
       id,
       code: 1,
       out,
       err: out === ''
         ? 'team: the relay stopped while running this request; whether it was sent is unknown — check before sending again\n'
         : 'team: the relay stopped after this output was handed over; what it read is above\n',
-      at: new Date(nowMs).toISOString(),
-    }, id, sources) === false) continue;
-    dropPartial(folder, id, sources.trace);
-    try { unlinkSync(path); } catch { /* the sweep removes it */ }
+      at: new Date(nowMs ?? sources.now().getTime()).toISOString(),
+    };
+    if (!publishResult(folder, id, result, seat, { ...sources, fsyncFolder: fsx.fsyncFolder })) return false;
+  } else {
+    // A result that stands may be one whose folder flush failed: it counts only once durable.
+    try {
+      fsx.fsyncFolder(folder);
+    } catch {
+      return stop('its result could not be made durable now');
+    }
   }
+  // 4. discard
+  sources.fault?.('discard');
+  if (!discardSaved(folder, id, fsx)) return stop('its saved output could not be discarded now');
+  sources.trace?.('partial-removed');
+  // 5. remove, always last
+  sources.fault?.('remove');
+  for (const one of owned) {
+    if (!removeOwnedClaim(dropDir, one, owner, fsx)) return stop('a read claim could not be removed now');
+  }
+  // the take is retired
+  sources.fault?.('retire');
+  try {
+    fsx.unlink(join(folder, `${id}.taking`));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return stop('its take could not be retired now');
+  }
+  return true;
 }
 
-/** Settles the read claims `owner` still holds. An id whose body the saved output holds whole
- *  has its receipt sealed (it goes out in the result); every other owned id is voided, so its
- *  message stays unread and no part of its body is published. 'none' when it held no claims,
- *  'claims' when it settled some; false keeps everything for a later pass: claims or saved output
- *  that cannot be read now, or a seal that could not be made. */
-function settleClaims(dropDir: string, seat: string, owner: string, output: () => Saved | null, sources: RelaySources): false | 'none' | 'claims' {
-  const owned = claimsOwnedBy(dropDir, owner);
-  if (owned === null) {
-    sources.log(`${seat}: the read claims cannot be read now; the cut-off request is kept for a later pass`);
+/** Step 4: removes every saved chunk and any unframed output of the request, then fsyncs the
+ *  folder. True once none stands; false on any fault, keeping what remains. Idempotent. */
+function discardSaved(folder: string, id: string, fsx: { unlink(path: string): void; fsyncFolder(folder: string): void }): boolean {
+  let names: string[];
+  try {
+    names = chunkNames(folder, id);
+  } catch {
     return false;
   }
-  if (owned.length === 0) return 'none';
-  const saved = output();
-  if (saved === null) {
-    sources.log(`${seat}: a cut-off read's output cannot be read now; its claims are kept for a later pass`);
+  for (const name of [`${id}${PARTIAL_SUFFIX}`, ...names]) {
+    try {
+      fsx.unlink(join(folder, name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+    }
+  }
+  try {
+    fsx.fsyncFolder(folder);
+    return true;
+  } catch {
     return false;
   }
-  const handed = owned.filter((one) => saved.ids.includes(one));
-  if (handed.length > 0 && !sources.seal(seat, handed, owner)) {
-    sources.log(`${seat}: a cut-off read's receipts could not be sealed now; its claims are kept for a later pass`);
-    return false;
-  }
-  for (const one of owned) settleOwnedClaim(dropDir, one, owner);
-  return 'claims';
 }
 
 function identityOf(folder: string): string | null {
@@ -609,30 +656,7 @@ function readPartial(folder: string, id: string, stat?: RelaySources['stat']): S
   return saved;
 }
 
-/** Discards an earlier build's unframed saved output, durably: false keeps it for a later pass. */
-function discardLegacy(folder: string, id: string): boolean {
-  try {
-    unlinkSync(join(folder, `${id}${PARTIAL_SUFFIX}`));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
-  }
-  try {
-    fsyncFolder(folder);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
-function dropPartial(folder: string, id: string, trace?: RelaySources['trace']): void {
-  try { unlinkSync(join(folder, `${id}${PARTIAL_SUFFIX}`)); } catch { /* none was written */ }
-  let names: string[] = [];
-  try { names = chunkNames(folder, id); } catch { /* none */ }
-  for (const name of names) {
-    try { unlinkSync(join(folder, name)); } catch { /* gone */ }
-  }
-  trace?.('partial-removed');
-}
 
 async function checkedRun(dir: string, path: string, id: string, seat: string, session: string, sources: RelaySources): Promise<OutboxResult> {
   const at = sources.now();

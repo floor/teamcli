@@ -859,7 +859,9 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
       expect({ body: automaticResult.body, detail }).toEqual({ body: markedBody, detail });
       expect({ manualOut: manualResult.out.includes(BODY), detail }).toEqual({ manualOut: false, detail });
     } else {
-      expect({ served: automaticResult.served, detail }).toEqual({ served: 'already-served', detail });
+      // The loser either finds the winner's receipt, or meets the winner's read claim while the
+      // receipt is being published (the one claim both readers take): no body either way.
+      expect({ served: automaticResult.served === 'busy' ? 'already-served' : automaticResult.served, detail }).toEqual({ served: 'already-served', detail });
       expect({ manualOut: manualResult.out.includes(BODY), detail }).toEqual({ manualOut: true, detail });
     }
     // One signed read receipt stands, it verifies, and no publisher's temp is left behind.

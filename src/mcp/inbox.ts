@@ -921,27 +921,30 @@ export function readMessage(
     return alreadyServed();
   }
   if (handover?.receipt === 'after') {
+    // A named owner's claim is never removed by the reader: it stays the relayed read's through its
+    // seal, its saved output's discard, and its removal, which the relay does last
+    // (src/send/confined-outbox.ts `finishTake`). The reader only lets go of the lock.
+    const owned = handover.owner !== undefined;
+    const done = (): void => {
+      if (!owned) {
+        release();
+        return;
+      }
+      if (released) return;
+      released = true;
+      claim.keep();
+    };
     return {
       ok: true,
       body,
       seal: () => {
-        let sealed = false;
         try {
-          const wrote = publish();
-          sealed = wrote === true;
-          return sealed;
+          return publish() === true;
         } finally {
-          // A named owner's claim is released only once its receipt stands (sealed now, or the id
-          // already served). A seal that could not be made keeps the owner file: the claim stays
-          // its recovery's, and no later reader serves the body that was already handed over.
-          if (sealed || handover.owner === undefined || receiptHeldNow()) release();
-          else if (!released) {
-            released = true;
-            claim.keep();
-          }
+          done();
         }
       },
-      release,
+      release: done,
     };
   }
   let wrote: InboxRead | true;
@@ -965,10 +968,23 @@ export function readMessage(
  * would have sealed, a launch brief's binding included. The body it returns is not shown again.
  * True once the id is read (sealed now, or already served).
  */
-export function sealRecoveredRead(target: InboxTarget, id: string, home: string, brief: BriefRead, owner: string): boolean {
+export function sealRecoveredRead(
+  target: InboxTarget,
+  id: string,
+  home: string,
+  brief: BriefRead,
+  owner: string,
+  flush: (path: string, folder: string) => boolean = flushReceipt,
+): boolean {
   const got = readMessage(target, id, home, brief, undefined, { receipt: 'after', owner, adopt: true });
-  if (!got.ok) return got.served === 'already-served';
-  return got.seal?.() === true;
+  if (got.ok) return got.seal?.() === true;
+  if (got.served !== 'already-served') return false;
+  // A receipt already stands: it may be this read's own whose flush failed. It counts only once it
+  // is durable, so it is flushed again here.
+  for (const name of [receiptPath(target.dropDir, id), receiptFile(target.dropDir, id, 'replied')]) {
+    if (heldAt(name).kind === 'file') return flush(name, target.dropDir);
+  }
+  return false;
 }
 
 /**

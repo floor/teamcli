@@ -308,8 +308,8 @@ test('a recovery seal that fails keeps the owner: a later reader gets no body, t
   if (!after.ok) expect(after.served).toBe('already-served');
 });
 
-// Hestia, round 6: unframed output withheld beside a voided claim is discarded before the first
-// publish attempt, so a retry after a failed publish cannot bring it back.
+// Hestia, round 6: unframed output withheld beside a voided claim stays withheld across a failed
+// publish: the claim that justifies withholding it is removed only after the output is discarded.
 test('withheld unframed output stays withheld across a failed publish', async () => {
   const made = open();
   const id = 'c1a10000-0000-4000-8000-00000000000a';
@@ -328,7 +328,8 @@ test('withheld unframed output stays withheld across a failed publish', async ()
   await relayOutboxes(made.dir, SESSION, [SEAT], failing);
   expect(existsSync(result)).toBe(false);
   expect(existsSync(join(folder, `${request}.taking`))).toBe(true);
-  expect(existsSync(join(folder, `${request}.partial`))).toBe(false);
+  // The claim is removed last: it still stands, so the retry withholds the unframed output too.
+  expect(claimsOwnedBy(target(made).dropDir, owner)).toEqual([id]);
   await relayOutboxes(made.dir, SESSION, [SEAT], recovery(made));
   const out = (JSON.parse(readFileSync(result, 'utf8')) as { out: string }).out;
   expect(out).not.toContain(id);
