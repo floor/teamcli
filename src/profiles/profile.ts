@@ -2518,49 +2518,62 @@ function fail(line: number, message: string): never {
 }
 
 /** Only a direct CLI line uses the measured conversation store; wrappers keep resume intact. */
-export function directConversationLaunch(cli: string, command: string, home: string = homedir()): boolean {
+export function directConversationLaunch(cli: string, command: string, recorded?: string, home: string = homedir()): boolean {
   const binary = profileFor(cli)?.binary;
-  const words = shellWords(command);
-  if (binary === undefined || plainBodyOf(command) === null || words === null
-    || words.length === 0 || words.some((word) => word.expands)) return false;
-  // The launch builder's literal marker changes neither the start folder nor the store.
-  // Other assignments and wrapper programs remain unmeasured; quoted text is no assignment.
-  const first = words[0]!;
-  let at = first.text === 'AGENT_UNATTENDED=1'
-    && command.slice(first.start, first.end) === 'AGENT_UNATTENDED=1' ? 1 : 0;
-  // The team's forwarding wrapper is read through only when the word names that very file
-  // (resolved, links followed) and the file still holds the measured recipe: commit identity and
-  // git variables set, then `exec "$@"` — no cd, no config directory, no HOME. The 17 Nov reboot
-  // simulation's lead ran through it, never took a turn, and its resume failed at the CLI because
-  // every wrapper was unmeasured. A same-named script elsewhere, or this one changed to move the
-  // folder or the store, stays unmeasured (review round 6).
-  const base = (word: ShellWord | undefined): string => word?.text.split('/').pop() ?? '';
-  const forwarder = (word: ShellWord | undefined): boolean => word !== undefined && measuredForwarder(word.text, home);
-  if (FORWARD_SHELLS.has(base(words[at])) && forwarder(words[at + 1])) at += 2;
-  else if (forwarder(words[at])) at += 1;
-  return base(words[at]) === binary;
+  const words = launchWords(command);
+  if (binary === undefined || words === null) return false;
+  let at = words.at;
+  // A forwarding wrapper in front of the CLI is read through only when it is the very file the
+  // seat's own recorded launch line runs (both resolved, links followed) and that file holds the
+  // forwarding recipe: `exec "$@"`, and no cd, config directory or HOME. The 17 Nov reboot
+  // simulation's lead ran through such a wrapper, never took a turn, and its resume failed at the
+  // CLI because every wrapper was unmeasured. A wrapper the record does not name, or one that
+  // moves the folder or the store, stays unmeasured (review round 6). No path is built in here.
+  const wrapper = wrapperAt(words.list, at, binary);
+  if (wrapper !== null) {
+    const recordedWords = recorded === undefined ? null : launchWords(recorded);
+    const recordedWrapper = recordedWords === null ? null : wrapperAt(recordedWords.list, recordedWords.at, binary);
+    if (recordedWrapper === null || !sameForwarder(wrapper.path, recordedWrapper.path, home)) return false;
+    at = wrapper.next;
+  }
+  return baseOf(words.list[at]) === binary;
 }
 
-/** The forwarding wrapper measured to keep the start folder and the CLI's store, by its place
- *  under the home folder (docs/guides/tools/as-floor.sh in the floor checkout). */
-const MEASURED_FORWARDER = ['Code', 'floor', 'docs', 'guides', 'tools', 'as-floor.sh'] as const;
 const FORWARD_SHELLS = new Set(['zsh', 'bash', 'sh']);
+const baseOf = (word: ShellWord | undefined): string => word?.text.split('/').pop() ?? '';
 
-/** Whether `word` (a path as the line writes it; `~/` is the home folder) is the measured
- *  forwarding wrapper itself, and its text still the measured recipe. */
-export function measuredForwarder(word: string, home: string): boolean {
-  if (word.split('/').pop() !== MEASURED_FORWARDER[MEASURED_FORWARDER.length - 1]) return false;
-  const written = word.startsWith('~/') ? join(home, word.slice(2)) : word;
-  if (!written.startsWith('/')) return false;
-  let actual: string;
-  let known: string;
-  try {
-    actual = realpathSync(written);
-    known = realpathSync(join(home, ...MEASURED_FORWARDER));
-  } catch {
-    return false;
+/** A line's words with the launch builder's literal marker skipped, or null for a line whose
+ *  words cannot be read plainly. */
+function launchWords(command: string): { list: ShellWord[]; at: number } | null {
+  const words = shellWords(command);
+  if (plainBodyOf(command) === null || words === null || words.length === 0 || words.some((word) => word.expands)) return null;
+  const first = words[0]!;
+  // The launch builder's literal marker changes neither the start folder nor the store.
+  const at = first.text === 'AGENT_UNATTENDED=1' && command.slice(first.start, first.end) === 'AGENT_UNATTENDED=1' ? 1 : 0;
+  return { list: words, at };
+}
+
+/** A wrapper script in front of the CLI (`[shell] <script> <binary> …`), as the line writes its
+ *  path, and the index of the CLI word after it; null when the CLI word is first. */
+function wrapperAt(words: readonly ShellWord[], at: number, binary: string): { path: string; next: number } | null {
+  if (baseOf(words[at]) === binary) return null;
+  if (FORWARD_SHELLS.has(baseOf(words[at])) && words[at + 1] !== undefined && baseOf(words[at + 2]) === binary) {
+    return { path: words[at + 1]!.text, next: at + 2 };
   }
-  if (actual !== known) return false;
+  if (words[at] !== undefined && baseOf(words[at + 1]) === binary) return { path: words[at]!.text, next: at + 1 };
+  return null;
+}
+
+/** Whether two written paths (`~/` is the home folder) are the same file, and that file holds
+ *  the forwarding recipe. */
+export function sameForwarder(written: string, recorded: string, home: string): boolean {
+  const resolve = (word: string): string | null => {
+    const path = word.startsWith('~/') ? join(home, word.slice(2)) : word;
+    if (!path.startsWith('/')) return null;
+    try { return realpathSync(path); } catch { return null; }
+  };
+  const actual = resolve(written);
+  if (actual === null || actual !== resolve(recorded)) return false;
   let text: string;
   try { text = readFileSync(actual, 'utf8'); } catch { return false; }
   return /^\s*exec "\$@"\s*$/m.test(text)
@@ -2578,8 +2591,8 @@ export function measuredForwarder(word: string, home: string): boolean {
  * took a turn left no file, and `claude --resume <id>` then said "No conversation found with
  * session ID"). Null for a CLI or wrapper launch whose store is not measured: resume stays intact.
  */
-export function conversationOnDisk(cli: string, cwd: string, id: string, env: NodeJS.ProcessEnv = process.env, command?: string): boolean | null {
-  if (command !== undefined && !directConversationLaunch(cli, command, env.HOME && env.HOME !== '' ? env.HOME : homedir())) return null;
+export function conversationOnDisk(cli: string, cwd: string, id: string, env: NodeJS.ProcessEnv = process.env, command?: string, recorded?: string): boolean | null {
+  if (command !== undefined && !directConversationLaunch(cli, command, recorded, env.HOME && env.HOME !== '' ? env.HOME : homedir())) return null;
   if (cli !== 'claude-code' || id === '' || cwd === '') return null;
   const config = env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR !== '' ? env.CLAUDE_CONFIG_DIR : join(homedir(), '.claude');
   return existsSync(join(config, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${id}.jsonl`));

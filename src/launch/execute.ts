@@ -120,7 +120,8 @@ export type Host = {
    */
   stopManagedCodexEndpoint?(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   /** Whether the conversation a resume line names is on disk for its CLI; null when unknown. */
-  conversationExists?(cli: string, cwd: string, id: string, command?: string): boolean | null;
+  /** `recorded`: the seat's own recorded launch line (src/profiles/profile.ts directConversationLaunch). */
+  conversationExists?(cli: string, cwd: string, id: string, command?: string, recorded?: string): boolean | null;
   /**
    * Registers the seat's team inbox with its CLI, run in the seat's folder directly before the
    * launch command. `session` is the launch's own, which narrows the registry to the team the
@@ -1774,8 +1775,11 @@ export async function executePlan(
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.
         const resumeTarget = namedResumeTarget(op.cli ?? '', command);
-        if (resumeTarget && op.cwd !== undefined && directConversationLaunch(op.cli ?? '', command)
-          && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget, command) === false) {
+        // The seat's own recorded launch line: the record's, else the signed line this launch
+        // records. A wrapper in front of the CLI is measured only against it.
+        const recordedLine = host.seatStates?.(session)?.[op.seat]?.launch_line ?? op.recordLine;
+        if (resumeTarget && op.cwd !== undefined && directConversationLaunch(op.cli ?? '', command, recordedLine)
+          && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget, command, recordedLine) === false) {
           const fresh = withoutResume(op.cli ?? '', command);
           if (fresh !== null) {
             freshFrom = resumeTarget;
