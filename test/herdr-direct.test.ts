@@ -1,10 +1,11 @@
 // The terminal host's read calls over its own socket: which CLI calls are answered that way, which
 // socket is certain enough to use, and, against a host process on a scratch socket, the same
 // `result` the CLI reads, an error answer thrown, and every unusable answer handed back to the CLI.
-import { existsSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { directRequestOf, directSocketOf, herdrDirect, herdrDirectBound } from '../src/herdr-direct.ts';
+import { fallbackBudgetMs, paneProcessInfo, setHerdrSyncReadLimitForTests } from '../src/herdr.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
 
@@ -30,6 +31,16 @@ describe('the calls answered over the socket', () => {
     ]) {
       expect(directRequestOf(args)).toBeNull();
     }
+  });
+});
+
+describe('the CLI fallback shares the read limit', () => {
+  test('what is left of the limit, and nothing once it is spent', () => {
+    expect(fallbackBudgetMs(10_000, 0)).toBe(10_000);
+    expect(fallbackBudgetMs(10_000, 9_700)).toBe(300);
+    expect(fallbackBudgetMs(10_000, 10_000)).toBeNull();
+    expect(fallbackBudgetMs(10_000, 12_000)).toBeNull();
+    expect(fallbackBudgetMs(400, -5)).toBe(400);
   });
 });
 
@@ -72,6 +83,7 @@ createServer((socket) => {
     const req = JSON.parse(buf);
     const pane = req.params.pane_id;
     if (pane === 'silent') return;
+    if (pane === 'garbage-late') { setTimeout(() => socket.end('not json\\n'), 300); return; }
     if (pane === 'late') {
       // Two early pieces, the last one past a 400 ms deadline but inside one fresh 400 ms read.
       const text = JSON.stringify({ id: req.id, result: { late: true } }) + '\\n';
@@ -101,7 +113,7 @@ createServer((socket) => {
 describe.if(live)('against a host on a scratch socket', () => {
   let base = '';
   let host: ReturnType<typeof Bun.spawn> | null = null;
-  const saved = { HOME: process.env.HOME, XDG: process.env.XDG_CONFIG_HOME };
+  const saved = { HOME: process.env.HOME, XDG: process.env.XDG_CONFIG_HOME, PATH: process.env.PATH };
 
   beforeAll(async () => {
     base = fixtureBase('hd-');
@@ -109,6 +121,17 @@ describe.if(live)('against a host on a scratch socket', () => {
     mkdirSync(dirname(socket), { recursive: true });
     host = Bun.spawn(['bun', '-e', HOST, socket], { stdout: 'pipe', stderr: 'ignore' });
     for (let i = 0; i < 200 && !existsSync(socket); i++) await Bun.sleep(10);
+    // A herdr CLI for the fallback: it answers `close` at once and sleeps 2 s on anything else.
+    const bin = join(base, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'herdr'), `#!/bin/sh
+case "$*" in
+  *close*) printf '{"result":{"from":"cli"}}\\n' ;;
+  *) sleep 2; printf '{"result":{"from":"cli-late"}}\\n' ;;
+esac
+`);
+    chmodSync(join(bin, 'herdr'), 0o755);
+    process.env.PATH = `${bin}:${saved.PATH ?? ''}`;
     process.env.HOME = base;
     delete process.env.XDG_CONFIG_HOME;
   });
@@ -117,6 +140,8 @@ describe.if(live)('against a host on a scratch socket', () => {
     host?.kill();
     if (saved.HOME === undefined) delete process.env.HOME; else process.env.HOME = saved.HOME;
     if (saved.XDG !== undefined) process.env.XDG_CONFIG_HOME = saved.XDG;
+    process.env.PATH = saved.PATH;
+    setHerdrSyncReadLimitForTests(undefined);
     discardFixtures([base], { roots: [dirname(base)] });
   });
 
@@ -175,6 +200,21 @@ describe.if(live)('against a host on a scratch socket', () => {
     expect(answer).toBeUndefined();
     expect(code).toBe('ETIMEDOUT');
     expect(Date.now() - started).toBeLessThan(600);
+  });
+
+  test('a fallback after a socket answer it could not use gets only the time left', () => {
+    setHerdrSyncReadLimitForTests(400);
+    try {
+      const started = Date.now();
+      // The socket answers garbage at ~300 ms: the CLI then has ~100 ms, not a fresh 400, and
+      // its 2 s answer is cut off.
+      expect(paneProcessInfo('garbage-late', 'fixture')).toBeNull();
+      expect(Date.now() - started).toBeLessThan(600);
+      // A connection closed at once leaves nearly the whole limit: the CLI answers in time.
+      expect(paneProcessInfo('close', 'fixture')).toEqual({ from: 'cli' });
+    } finally {
+      setHerdrSyncReadLimitForTests(undefined);
+    }
   });
 
   test('a host that never answers is a timeout, not a second try', () => {
