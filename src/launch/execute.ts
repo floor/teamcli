@@ -19,7 +19,7 @@ import { ownStartFolderProblem } from '../worktree/place.ts';
 import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { writeCursorCommandDeny } from './grok-command-deny.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
-import { restoreProof, type RestoreWorktree } from './restore-proof.ts';
+import { paneInOwnWorktree, restoreProof, type RestoreWorktree } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
 import { appendOnLaunchLine } from './cli-scope.ts';
 import { codexCommandHasFlag, codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
@@ -664,7 +664,10 @@ export type ExecuteOptions = {
   /** A fresh read of a seat's worktree evidence (its folder, every other seat's, and whether
    *  another seat's record names its pane), for an adoption that changes the seat's conversation:
    *  the evidence that authorized the change is read again before the record is written. */
-  restoreWorktree?(seat: string): RestoreWorktree | undefined;
+  restoreWorktree?(seat: string, pane: string): RestoreWorktree | undefined;
+  /** A fresh read of whether a seat has no recorded conversation at all (no registry binding, no
+   *  state copy, nothing refused). An id-less worktree adoption is only for that case. */
+  restoreBindingAbsent?(seat: string): boolean;
 };
 
 /** Runs a plan. Steps carry the operation beside the command the dry run prints. */
@@ -2253,7 +2256,7 @@ export async function executePlan(
         // worktree and claim evidence read again now: a folder or a competing record that moved
         // since the plan refuses the adoption, never an exact-id proof on the new id.
         const rebound = op.rebound;
-        const worktreeNow = rebound === undefined ? undefined : options?.restoreWorktree?.(op.seat);
+        const worktreeNow = rebound === undefined ? undefined : options?.restoreWorktree?.(op.seat, op.pane);
         const proof = restoreProof({
           seat: { name: op.seat, cli: op.cli },
           recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.recordedLaunched },
@@ -2281,6 +2284,18 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: proof.why });
           break;
         }
+        // The worktree stood in for a conversation id the CLI never reports: it is read again now,
+        // with the pane's folder from this same host reading and the claims from disk.
+        if (op.worktreeProof === true) {
+          const entryNow = agentsNow?.find((agent) => agent.pane === op.pane);
+          if (proof.kind !== 'cli' || options?.restoreBindingAbsent?.(op.seat) !== true
+            || !paneInOwnWorktree(entryNow?.cwd, options?.restoreWorktree?.(op.seat, op.pane))) {
+            held = true;
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: "its pane no longer stands in the seat's own worktree as the plan read it; left as the host restored it" });
+            break;
+          }
+        }
         // The rename is the host's verified one, and where the host lists its agents the list is
         // read once more here: a call that returns true but leaves no name listed is held, and
         // the seat is left as the host restored it.
@@ -2305,7 +2320,7 @@ export async function executePlan(
         if (op.unready !== undefined) {
           const screenNow = host.paneText?.(session, op.pane) ?? null;
           const statusNow = agentsNow?.find((agent) => agent.pane === op.pane)?.status;
-          const atPrompt = proof.kind === 'session' && screenNow !== null && screenNow !== ''
+          const atPrompt = (proof.kind === 'session' || (op.worktreeProof === true && proof.kind === 'cli')) && screenNow !== null && screenNow !== ''
             && statusNow !== 'working' && readScreen(op.cli, screenNow).kind === 'idle';
           if (!atPrompt) {
             recordSeat(op.seat, {
@@ -2725,7 +2740,7 @@ export async function executePlan(
         // A conversation change is proved again exactly as an adoption proves it: from the
         // recorded binding, with the worktree and claim evidence read again now.
         const rebound = op.rebound;
-        const worktreeNow = rebound === undefined ? undefined : options?.restoreWorktree?.(op.seat);
+        const worktreeNow = rebound === undefined ? undefined : options?.restoreWorktree?.(op.seat, op.pane);
         const proof = restoreProof({
           seat: { name: op.seat, cli: op.cli },
           recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.launched },

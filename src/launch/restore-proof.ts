@@ -364,6 +364,10 @@ export function restoreWorktreeOf(
   root: string,
   held: Pick<SessionState, 'seats' | 'worktrees'> | undefined,
   seatName: string,
+  /** The pane an operation will act on. Given, the claim is read for that pane, and the seat's
+   *  own record must still name it: a record that moved off it, or is gone, no longer authorizes
+   *  the pane, and that reads as claimed. Absent, the seat's recorded pane is read. */
+  forPane?: string,
 ): RestoreWorktree | undefined {
   const folderOf = (seat: Pick<Seat, 'name' | 'cwd'>): string | undefined => {
     const recorded = worktreeOf(held, seat.name)?.path;
@@ -379,8 +383,10 @@ export function restoreWorktreeOf(
     .filter((candidate) => candidate.name !== seatName)
     .map(folderOf)
     .filter((folder): folder is string => folder !== undefined);
-  const pane = held?.seats[seatName]?.pane;
-  const paneClaimed = pane !== undefined
+  const ownPane = held?.seats[seatName]?.pane;
+  const pane = forPane ?? ownPane;
+  const claimedByOther = pane !== undefined
     && Object.entries(held?.seats ?? {}).some(([name, record]) => name !== seatName && record.pane === pane);
-  return { own, others, paneClaimed };
+  const ownRecordLeft = forPane !== undefined && ownPane !== forPane;
+  return { own, others, paneClaimed: claimedByOther || ownRecordLeft };
 }

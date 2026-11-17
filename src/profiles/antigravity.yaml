@@ -365,3 +365,7 @@ screen:
       - equals: ''
       - equals: '/tasks shows your open tasks'
       - equals: '/tasks shows workflows, subagents and terminals in one place'
+      # agy 1.5.10 draws the permission mode in the empty box after shift+tab (seen on floor's
+      # tester-gemini, 2026-11-17): `> Auto mode: edits & safe commands auto-approved (shift+tab
+      # to cycle)`. The same words with more text stay text.
+      - equals: 'Auto mode: edits & safe commands auto-approved (shift+tab to cycle)'
