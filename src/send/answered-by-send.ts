@@ -57,8 +57,10 @@ export type AnsweredBySendOutcome =
 
 /** The first history line each message id has: the sender's own walk, which names the leg that
  *  carried it. Later lines about the same message are retries and promotions, not deliveries. */
-function firstLinesOf(project: string, root: string, home: string): Map<string, HistoryEntry> | null {
-  const read = readHistory(project, root, home);
+function firstLinesOf(project: string, root: string, home: string, ids: ReadonlySet<string>): Map<string, HistoryEntry> | null {
+  // Only the hinted ids are looked up, so only their lines are parsed; each id's first line is
+  // the same one a full read finds.
+  const read = readHistory(project, root, home, ids);
   if (!read.ok) return null;
   const lines = new Map<string, HistoryEntry>();
   for (const entry of read.entries) {
@@ -81,7 +83,7 @@ export function markAnsweredBySend(input: AnsweredBySendInput): AnsweredBySendOu
   // The one index read: the sender's newest staged records, or nothing. No tree is listed.
   const hints = readUnreadHint(dropDir, sender);
   if (hints.length === 0) return { kind: 'none' };
-  const lines = firstLinesOf(project, root, home);
+  const lines = firstLinesOf(project, root, home, new Set(hints.map((hint) => hint.id)));
   if (lines === null) return { kind: 'unavailable', reason: 'history' };
   const sentAt = Date.parse(at);
   if (Number.isNaN(sentAt)) return { kind: 'none' };

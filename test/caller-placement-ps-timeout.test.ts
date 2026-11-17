@@ -4,11 +4,12 @@
 // bound.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { placeCaller, readAncestors, readWithPs } from '../src/caller.ts';
 import * as processTools from '../src/process-tools-adapter.ts';
 import { createProcessToolsAdapter } from '../src/process-tools-adapter.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { setKernelProcessForTests } from '../src/process-kernel.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
 
@@ -26,7 +27,14 @@ const KEEPER: HerdrAgent = {
 let scratchParent: string | undefined;
 const made: string[] = [];
 
+// These cases are about the `ps` table read; the macOS kernel reader that answers first when it
+// can is turned off for them (its own cases are in test/kernel-process-walk.test.ts).
+beforeEach(() => {
+  setKernelProcessForTests(null);
+});
+
 afterEach(() => {
+  setKernelProcessForTests(undefined);
   discardFixtures(made.splice(0), { roots: scratchParent === undefined ? [] : [scratchParent] });
 });
 

@@ -1,4 +1,5 @@
 import { execProcessToolSync } from './process-tools-adapter.ts';
+import { kernelProcess } from './process-kernel.ts';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename } from 'node:path';
@@ -796,8 +797,31 @@ function readProcForWalk(pid: number): ReturnType<ReadProcess> {
   }
 }
 
+// The same walk from the kernel's own table (macOS under Bun): every step read with
+// `kernelProcess`, the name taken from argv[0] exactly as `ps -o comm=` prints it. Undefined when
+// any step cannot be read that way, so the caller walks the `ps` snapshot instead and a partial
+// kernel chain is never used.
+function walkKernelAncestors(pid: number): Process[] | undefined {
+  const out: Process[] = [];
+  let at = pid;
+  for (let depth = 0; depth < 64; depth++) {
+    if (at <= 1) return out;
+    const found = kernelProcess(at);
+    if (found === undefined) return undefined;
+    const name = processName(found.argv0);
+    if (!name) return undefined;
+    out.push({ pid: at, name });
+    at = found.ppid;
+  }
+  return undefined;
+}
+
 function walkAncestors(pid: number, read: ReadProcess, note: (cause: string) => void): Process[] | null {
   if (pid <= 1) { note(`start pid ${pid}`); return []; }
+  if (read === readWithPs) {
+    const kernel = walkKernelAncestors(pid);
+    if (kernel !== undefined) return kernel;
+  }
   try {
     const step: ReadProcess = read === readWithPs
       ? (() => {

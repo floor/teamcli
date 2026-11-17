@@ -1,4 +1,5 @@
 import { traceChildStep } from './diagnostics/child-steps.ts';
+import { herdrDirect } from './herdr-direct.ts';
 import { traceBeatWork } from './diagnostics/beat-work.ts';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -101,10 +102,35 @@ function run(args: string[], session?: string): unknown {
   return traceChildStep(`terminal-host ${args.slice(0, 2).join(' ')}`, () => runMeasured(args, session));
 }
 
+/** The one limit a synchronous read has, socket and CLI fallback together. */
+const SYNC_READ_LIMIT_MS = 10_000;
+let syncReadLimitMs = SYNC_READ_LIMIT_MS;
+
+/** Tests only: the synchronous read limit (undefined restores 10 s). */
+export function setHerdrSyncReadLimitForTests(ms: number | undefined): void {
+  syncReadLimitMs = ms ?? SYNC_READ_LIMIT_MS;
+}
+
+/** What the CLI fallback may still wait after the socket attempt took `elapsedMs` of `limitMs`:
+ *  the rest of the same limit, or null once it is spent. Exported for tests. */
+export function fallbackBudgetMs(limitMs: number, elapsedMs: number): number | null {
+  const left = limitMs - Math.max(0, elapsedMs);
+  return left >= 1 ? Math.floor(left) : null;
+}
+
 function runMeasured(args: string[], session?: string): unknown {
   if (customRun) return customRun(args, session);
+  // The read-only calls go over the host's socket when the CLI's own socket is certain; the
+  // answer is the same `result` the CLI prints. Any other case starts the CLI, as before. The
+  // two share one limit: a fallback after a socket attempt waits only for what is left of it.
+  const limit = syncReadLimitMs;
+  const started = Date.now();
+  const direct = traceBeatWork('terminal-host read (socket)', () => herdrDirect(args, session, limit));
+  if (direct !== undefined) return direct.result;
+  const budget = fallbackBudgetMs(limit, Date.now() - started);
+  if (budget === null) throw Object.assign(new Error('the terminal host did not answer in time'), { code: 'ETIMEDOUT' });
   const full = session ? ['--session', session, ...args] : args;
-  const out = traceBeatWork('terminal-host read (sync)', () => execFileSync('herdr', full, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }));
+  const out = traceBeatWork('terminal-host read (sync)', () => execFileSync('herdr', full, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: budget }));
   return (JSON.parse(out) as { result?: unknown }).result;
 }
 
