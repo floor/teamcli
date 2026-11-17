@@ -462,7 +462,7 @@ export const realSources: UpSources = {
 /** The reason the hold `up --no-launch` places carries. */
 export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]\n       team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]\n       team up --retie [--dry-run] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\nA seat that names a launcher uses its resolved argv as the base line and still places the profile launch words on it. A seat without one keeps its launch line. --resolve-launch is accepted for compatibility and changes nothing. A resolution that cannot be placed refuses that seat and starts it nowhere.\n\n--retie is the repair after a machine restart: in a running session it re-ties every seat whose restored pane proves it (renamed back, its record re-tied), and launches, closes, relaunches and sweeps nothing. A seat it would have started is listed and left as it is.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]\n       team up <seat>... [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]\n       team up --retie [--dry-run] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]\n\nteam up <seat>... starts or repairs only the named seats and leaves every other seat, the watch, the bus and every sweep as they are. A plain team up leaves a seat stopped on its own while its team runs (only its handle retained, its teammates running) for this form to start.\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\nA seat that names a launcher uses its resolved argv as the base line and still places the profile launch words on it. A seat without one keeps its launch line. --resolve-launch is accepted for compatibility and changes nothing. A resolution that cannot be placed refuses that seat and starts it nowhere.\n\n--retie is the repair after a machine restart: in a running session it re-ties every seat whose restored pane proves it (renamed back, its record re-tied), and launches, closes, relaunches and sweeps nothing. A seat it would have started is listed and left as it is.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -1899,6 +1899,43 @@ function seatPlan(
           ...(resumedSession === undefined ? {} : { resume: resumedSession }),
         };
       }
+      // A ready seat whose own launched process still runs on its recorded pane, in its recorded
+      // workspace, but whose host name is gone (a host restore drops names; `team status` reads
+      // it `wrong name`): the pane is renamed back, by the adoption's own proof run again at
+      // execution with the recorded process accepted. Nothing is launched, typed or closed. A
+      // pane named for anything else is not this seat's to rename.
+      if (named === undefined && verdict === 'same' && recorded.pane && recorded.workspace && recorded.launched
+        && paneEntry !== undefined && paneEntry.name === null) {
+        const proof = restoreProof({
+          seat,
+          recorded: { stage: 'ready', pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched },
+          agents,
+          process: processes[seat.name] ?? null,
+          foreground: foregroundOf(recorded.pane),
+          recordedSession: continuitySession ?? undefined,
+          screen: screenOf(recorded.pane),
+          allowSame: true,
+        });
+        const next = launchedIdentity(processes[seat.name] ?? null);
+        if (proof.kind !== 'none' && next !== null) {
+          return {
+            ...planned,
+            stage: 'ready',
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            adopted: {
+              pane: recorded.pane,
+              workspace: recorded.workspace,
+              recordedLaunched: recorded.launched,
+              launched: next,
+              via: proof.kind,
+              sentence: `its host name was gone and its own launched process still runs there; ${proof.sentence}`,
+              sameProcess: true,
+              ...(proof.kind === 'session' && continuitySession !== null ? { session: continuitySession } : {}),
+            },
+          };
+        }
+      }
       const listed = named ?? known.find((agent) => agent.pane === recorded.pane);
       return {
         ...planned,
@@ -1908,6 +1945,21 @@ function seatPlan(
       };
     }
     return planned;
+  }
+  // A record that never reached ready while the very process its launch started still runs on
+  // its pane (a CLI herdr does not detect never shows the prompt the launch waits for): that pane
+  // is not a shell to type the launch line into. The seat is left out, nothing typed; a restart
+  // is the repair. Herdr not listing an agent there proves nothing about the process. A pane
+  // herdr does list keeps the launch's own finishing path (its idle wait and rules).
+  if (verdict === 'same' && recorded.pane && recorded.workspace && !named && !onPane) {
+    return {
+      ...planned,
+      stage: recorded.stage,
+      pane: recorded.pane,
+      workspace: recorded.workspace,
+      agentLive: true,
+      liveHold: `its launched process still runs in pane ${recorded.pane} but never reached ready; nothing typed into it (team restart ${seat.name} relaunches it)`,
+    };
   }
   const workspaceLive =
     recorded.workspace && workspaces ? workspaces.some((workspace) => workspace.id === recorded.workspace) : null;
@@ -2563,8 +2615,17 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     if (json) collect(text);
     else out.stderr(text);
   };
-  const clientProblem = args.error === undefined && args.rest.length === 0 ? clientInvocationProblem(args) : null;
-  const badInvocation = Boolean(args.error || args.rest.length || clientProblem !== null);
+  // `team up <seat>…`: the run starts or repairs the named seats and leaves every other seat,
+  // and the team's sweeps, exactly as they are. It is the ordinary run otherwise, with the same
+  // admission; it takes none of the forms that act on a whole team or on another door's terms.
+  const scopeProblem = args.rest.length > 0 && (args.flags.has('all') || args.flags.has('retie') || args.values.rebind !== undefined
+    || ['client', 'key', 'general', 'team'].some((name) => args.values[name] !== undefined))
+    ? 'team up <seat> names the seats of one team to start; it takes no --all, --retie, --rebind or client flags'
+    : null;
+  const clientProblem = args.error === undefined ? scopeProblem ?? clientInvocationProblem(args) : null;
+  const badInvocation = Boolean(args.error || clientProblem !== null);
+  const scopedSeats = new Set(args.rest);
+  const scoped = scopedSeats.size > 0;
   const dry = args.flags.has('dry-run');
   // `--no-launch`: seats get their rules and nothing else — no general seat brief is dropped in
   // their folder and no launch-line inbox route names a brief epoch.
@@ -2652,7 +2713,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     if (badInvocation) {
       refuse(io, json, 'up', {
         id: 'up.invocation',
-        message: plainText(args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem!)),
+        message: plainText(args.error ?? clientProblem!),
         repair: null,
         usage: USAGE,
       });
@@ -3357,6 +3418,10 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // a run with nothing to start reads no policy.
   let launchRule: EntityModelRule | null = null;
   const ruleOf = (): EntityModelRule => (launchRule ??= readEntityModelRule(sources.home, team));
+  const undeclared = [...scopedSeats].filter((name) => !team.seats.some((seat) => seat.name === name));
+  if (undeclared.length > 0) {
+    refusals.push({ id: 'up.seat', message: `no declared seat ${undeclared.map(plainText).join(', ')}; nothing was started` });
+  }
   for (const seat of team.seats) {
     const held = recorded?.seats[seat.name];
     const declaresChannel = channelLaunchEnabled(held?.launch_line) || channelLaunchEnabled(seat.launch);
@@ -3470,6 +3535,25 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       const kept: UpSeat = { ...planned };
       delete kept.sweep;
       planned = kept;
+    }
+    // `team up <seat>`: a seat this run does not name is left exactly as it is — nothing launched,
+    // closed, relaunched, renamed or swept for it.
+    if (scoped && !scopedSeats.has(seat.name)) {
+      if (!planned.human) {
+        const kept: UpSeat = { ...planned };
+        delete kept.sweep;
+        delete kept.closeLeftover;
+        seats.push({ ...kept, stopped: true, retieSkip: 'not named in this run; left as it is' });
+        continue;
+      }
+    } else if (!scoped && !retie && !planned.stopped && !planned.human && held === undefined
+      && recorded?.retained_seats?.[seat.name] !== undefined && Object.keys(recorded.seats).length > 0 && state === 'running') {
+      // A seat stopped on its own while its team runs (`remove --keep`, a restart that did not
+      // finish): only its handle is retained, and its teammates still hold records. A plain
+      // `team up` does not start it again behind the lead's back; naming it does. A whole-team
+      // `team down` retains every seat and leaves none recorded, so a later `up` starts them all.
+      seats.push({ ...planned, stopped: true, retieSkip: `stopped on its own while the team runs; start it with team up ${seat.name}` });
+      continue;
     }
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
@@ -3603,7 +3687,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // edited by hand. Their workspaces are vacated and nothing this run starts replaces them, so
   // the plan sweeps them after its own steps — each close re-reads the host first.
   const declaredNames = new Set(team.seats.map((seat) => seat.name));
-  const vacated: { seat: string; workspace: string; pane?: string; cli?: string; orphan?: true }[] = internal?.restoreMissingOnly === true || retie ? [] : Object.entries(recorded?.seats ?? {})
+  const vacated: { seat: string; workspace: string; pane?: string; cli?: string; orphan?: true }[] = internal?.restoreMissingOnly === true || retie || scoped ? [] : Object.entries(recorded?.seats ?? {})
     .filter(([vacatedName, held]) => !declaredNames.has(vacatedName) && held.workspace !== undefined)
     .map(([vacatedName, held]) => ({
       seat: vacatedName,
@@ -3662,7 +3746,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // The team's event bus: started beside the watch unless the file sets `bus.autostart: false`,
   // and only when the bus does not already answer. A world that cannot probe it plans none.
   // `--retie` starts and closes nothing: no Bus, no stray Bus sweep.
-  const startBus = !retie && team.bus?.autostart !== false && sources.busAlive !== undefined;
+  const startBus = !retie && !scoped && team.bus?.autostart !== false && sources.busAlive !== undefined;
   const busAlive = startBus ? await sources.busAlive!(root) : false;
   // One Bus per team. A workspace already carrying the Bus's label is reused rather than
   // duplicated, and any extra labelled workspace is a stray that closes only after the live Bus
@@ -3762,7 +3846,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       )
     : null;
   // `--retie` signals no process: a stale watch waits for a plain `team up`.
-  const watchPid = identity?.kind === 'verified' && !retie ? identity.pid : null;
+  const watchPid = identity?.kind === 'verified' && !retie && !scoped ? identity.pid : null;
   const watchHold = sitting.kind === 'pane' && identity?.kind === 'unproven'
     ? `watch: ${identity.why}; nothing was signalled and no replacement is started`
     : null;
@@ -3868,7 +3952,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
 
   /** The legacy watch workspaces this run closes, or would close on a dry run: only when the
    *  daemon's hosted watch owns this route. A pane watch still holding a workspace keeps it. */
-  const legacyWatchWorkspaces = (launch: Launch): string[] => sitting.kind !== 'hosted' || retie
+  const legacyWatchWorkspaces = (launch: Launch): string[] => sitting.kind !== 'hosted' || retie || scoped
     ? []
     : closableLegacyWatchWorkspaces({
         label: watchLabel(team.project),
@@ -4065,6 +4149,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // exit: up.never-approved
     // exit: up.doctor
     // exit: up.machine
+    // exit: up.seat
     // exit: up.herdr
     // exit: up.stopped
     // exit: up.agents
@@ -4965,7 +5050,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     });
     // A dead bus is started in its own process, with no owner at a terminal. The up process does
     // not serve the bus: that process would die when up exits. A test leaves superviseBus unset.
-    if (sources.superviseBus === true && !retie) {
+    if (sources.superviseBus === true && !retie && !scoped) {
       try {
         await spawnInheritedBus(root, sources.home);
       } catch {

@@ -87,7 +87,7 @@ type Did = { typed: string[]; pasted: string[]; closed: string[]; created: numbe
  *  from the ones the seat's state recorded, exactly as a host restore leaves it. */
 function makeHarness(
   fixture: Fixture,
-  opts: { liveSession: string },
+  opts: { liveSession: string; oldName?: string | null },
 ): { sources: RestartSources; did: Did } {
   const did: Did = { typed: [], pasted: [], closed: [], created: 0, runs: [] };
   let workerAlive = true;
@@ -100,7 +100,7 @@ function makeHarness(
     const list = [];
     if (workerAlive) {
       list.push({
-        name: 'worker', agent: 'codex', pane: 'pane-old', workspace: 'ws-old', status: 'idle',
+        name: opts.oldName === undefined ? 'worker' : opts.oldName, agent: 'codex', pane: 'pane-old', workspace: 'ws-old', status: 'idle',
         cwd: fixture.root, session: opts.liveSession,
       });
     }
@@ -225,7 +225,7 @@ function makeHarness(
 /** A seat restored by the host: its state has the launched pids and the pane, and no session
  *  copy. The registry holds the conversation it resumed; herdr's live agent reports that same
  *  session (`liveSession` changes only the conversation the pane is running). */
-function restored(liveSession = 'ses_codex') {
+function restored(liveSession = 'ses_codex', oldName: string | null = 'worker') {
   const fixture = makeFixture();
   updateState(fixture.dir, (state) => {
     const session = (state.sessions.acme ??= emptySession());
@@ -258,7 +258,7 @@ function restored(liveSession = 'ses_codex') {
     lifecycle: 'running',
     by: 'team up',
   });
-  return { fixture, run: makeHarness(fixture, { liveSession }) };
+  return { fixture, run: makeHarness(fixture, { liveSession, oldName }) };
 }
 
 const recordedSession = (fixture: Fixture) =>
@@ -320,5 +320,41 @@ describe('a host-restored Codex seat keeps its registry conversation', () => {
     expect(doc.error.id).toBe('restart.replaced');
     expect(doc.error.repair).toBe('team restart worker --abandon');
     expect(run.did.closed).toEqual([]);
+  });
+});
+
+// The 2026-11-17 restart: a Codex seat whose app-server died with the machine came back under
+// herdr's resume with its pids and its herdr name gone. `team restart` refused it as "not the
+// signed seat"; it now takes that pane by the same proof `team up` adopts it by.
+describe('a host-restored Codex pane that lost its herdr name', () => {
+  test('its recorded conversation proves the pane: the restart closes it and relaunches the seat', async () => {
+    const { fixture, run } = restored('ses_codex', null);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.out + io.err).toBe(0);
+    expect(run.did.closed).toContain('ws-old');
+    expect(run.did.created).toBe(1);
+    expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
+    expect(recordedSession(fixture)).toBe('ses_codex');
+  });
+
+  test('an unnamed pane running another conversation is still refused, with nothing closed', async () => {
+    const { fixture, run } = restored('ses_other', null);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toContain('has a process in its old pane that is not the signed seat; left as it is');
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(run.did.runs).toEqual([]);
+  });
+
+  test('a pane named for another seat is never taken by the proof', async () => {
+    const { fixture, run } = restored('ses_codex', 'someone-else');
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.runs).toEqual([]);
   });
 });

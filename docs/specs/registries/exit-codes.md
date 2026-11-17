@@ -512,6 +512,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `up.pending` | a seat was left short of ready | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
 | `up.placement` | a seat has nowhere to start | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
 | `up.run-lock` | another session-mutating run is holding the session | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
+| `up.seat` | `team up <seat>` names a seat the file does not declare | added in this release | none | command `up`; exit `1` |
 | `up.server` | the session's server did not start | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
 | `up.stopped` | the session is stopped | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
 | `up.unknown` | a running agent is not in this file's state | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |

@@ -14,7 +14,7 @@ import { shellWords } from '../launch/shell-words.ts';
 import { plainLine } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { refuse, writeJson } from '../output/index.ts';
-import { addressedTeam } from '../registry/binding.ts';
+import { paneFirstTeam } from '../registry/binding.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 import { CHANNEL_FLAG, CHANNEL_SERVER, channelLaunchEnabled } from './channel.ts';
@@ -51,7 +51,7 @@ function setupRoot(home: string, cwd: string, io?: Io): string | null {
       return cwd;
     }
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-  const binding = addressedTeam(home, cwd, undefined, io);
+  const binding = paneFirstTeam(home, cwd, undefined, io);
   if (binding.kind === 'unreadable' || binding.kind === 'ambiguous') throw new ConfigRefusal(binding.message);
   return binding.kind === 'bound' ? resolve(binding.team.root) : null;
 }

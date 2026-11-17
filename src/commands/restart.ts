@@ -108,7 +108,8 @@ import { livePlacement } from '../send/placement.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
 import { approvalStanding, findStore, readApproval, type Ceilings, type Standing } from '../store/store.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
-import { placedCallerTeam, teamBinding, teamHoldsSeat } from '../registry/binding.ts';
+import { folderOfAnotherTeam, placedCallerTeam, teamBinding, teamHoldsSeat } from '../registry/binding.ts';
+import { restoreProof } from '../launch/restore-proof.ts';
 import { findTeams, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { parseSpec } from '../send/resolve.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
@@ -382,11 +383,15 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       return configuration(out, json, `${plainLine(spec)}: team "${plainLine(address.scope)}" records no session; nothing was restarted`);
     }
   }
-  // The pane is asked before the folder. One team whose state records this caller on its pane
-  // is the team, and the launched pointer is not read. None leaves the folder binding. A `--file`
-  // still names its file. On the folder path only a place that holds the cwd is the team: a
-  // caller binding from that path still falls through to the pointer.
-  const paneTeam = addressed !== null ? addressed : args.values.file === undefined ? placedCallerTeam(home, io) : null;
+  // A folder that is another team's registered place is that team's: the caller's own team is
+  // not carried into it (`addressedTeam`). Otherwise the pane is asked before the folder: one
+  // team whose state records this caller on its pane is the team, and the launched pointer is
+  // not read. None leaves the folder binding. A `--file` still names its file. On the folder
+  // path only a place that holds the cwd is the team: a caller binding from that path still
+  // falls through to the pointer.
+  const callerTeam = addressed === null && args.values.file === undefined ? placedCallerTeam(home, io) : null;
+  const folderWins = callerTeam !== null && folderOfAnotherTeam(home, io.cwd, name, callerTeam);
+  const paneTeam = addressed !== null ? addressed : folderWins ? null : callerTeam;
   const binding = paneTeam !== null
     ? { kind: 'bound' as const, team: paneTeam, by: 'caller' as const }
     : args.values.file === undefined
@@ -1931,11 +1936,32 @@ function inspectSeat(
   // the caller has said what to do with whatever now runs in front of the launch line. Every
   // other doubt — no name on that pane, or no flag — is left as it is.
   const takeable = abandon && listedOnRecorded !== undefined;
-  if (
-    ((verdict === 'replaced' && continuity !== 'restored')
-      || (continuity === 'doubt' && recorded?.workspace && recorded.pane && recorded.launched))
-    && !takeable
-  ) {
+  const doubted = ((verdict === 'replaced' && continuity !== 'restored')
+    || (continuity === 'doubt' && recorded?.workspace && recorded.pane && recorded.launched))
+    && !takeable;
+  // The pane the host restored after a machine restart, its name and pids gone (a Codex seat
+  // whose app-server died with the machine is the common case): the same proof `team up` adopts
+  // such a pane by — the recorded pane and workspace, no other seat's name on it, the declared
+  // CLI in front, and the recorded conversation live on it — makes it this seat's pane, and the
+  // restart closes and relaunches it as its own. Anything else stays the refusal below.
+  let restored: HerdrAgent | undefined;
+  if (doubted && verdict === 'replaced' && recorded?.pane && recorded.workspace && recorded.launched && recorded.stage === 'ready') {
+    const proof = restoreProof({
+      seat: declared,
+      recorded: { stage: recorded.stage, pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, ...(recorded.waiting === undefined ? {} : { waiting: recorded.waiting }) },
+      agents,
+      process: proc,
+      foreground: sources.foreground(session, recorded.pane),
+      recordedSession: draftCapture ? continuitySession : recorded.agent_session,
+      screen: sources.screenText(session, recorded.pane, declared.cli) ?? null,
+    });
+    const elsewhere = agents.some((item) => item.name === name && item.pane !== recorded.pane);
+    // Only the strong proof closes a pane: the conversation the records bind is the one the pane
+    // runs. The weak one (the CLI alone at an idle prompt) is enough to rename a pane back, never
+    // to close it.
+    if (proof.kind === 'session' && proof.rebound === undefined && !elsewhere) restored = agents.find((item) => item.pane === recorded.pane);
+  }
+  if (doubted && restored === undefined) {
     return { kind: 'replaced', takeable: listedOnRecorded !== undefined };
   }
 
@@ -1943,7 +1969,7 @@ function inspectSeat(
   if (matched.length > 1) {
     return { kind: 'busy', message: `${name}: herdr lists more than one agent of this name; left as it is` };
   }
-  const agent = matched[0];
+  const agent = matched[0] ?? restored;
   if (!agent) {
     return { kind: 'ok', agent: undefined, where: 'free', exitInBox: false, atExitQuestion: false, brokenScreen: false };
   }

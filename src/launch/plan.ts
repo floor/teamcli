@@ -327,6 +327,10 @@ export type Op =
        *  is read at its idle prompt immediately before the write. The value is the stage the
        *  record holds, kept as it is when the prompt is not proven. */
       unready?: 'launched' | 'named' | 'ready';
+      /** A ready seat whose own launched process still runs on its recorded pane and whose host
+       *  name is gone: the execute's proof accepts that recorded process (`allowSame`) and only
+       *  the name is put back. */
+      sameProcess?: true;
     }
   | { do: 'watch'; label: string; command: string; file?: string }
   /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. A reused
@@ -589,6 +593,8 @@ export interface UpSeat {
     sentence: string;
     /** The record never reached ready: see the adopt op's `unready`. */
     unready?: 'launched' | 'named' | 'ready';
+    /** See the adopt op's `sameProcess`. */
+    sameProcess?: true;
   };
   /** A bound registry policy. Its launch/model are authoritative over the team file. */
   registry?: { launch: string; model: string; version: string; sessionId?: string };
@@ -656,6 +662,9 @@ export interface UpSeat {
   grantKeep?: string;
   /** Automatic restore keeps a live or unmeasured original pane and its record untouched. */
   restoreKeep?: { reason: string; uncertain: boolean };
+  /** The seat's own launched process still runs on its recorded pane, short of ready: nothing is
+   *  typed into it, and the seat is left out with this reason (the run does not fail on it). */
+  liveHold?: string;
   /** `team up --retie` left this seat out: the plan would have launched, closed or relaunched
    *  it. The seat is carried as `stopped` so no step reaches it; this is the line said for it. */
   retieSkip?: string;
@@ -1229,6 +1238,7 @@ export function upPlan(input: UpInput): Step[] {
           ...(seat.adopted.rebound === undefined ? {} : { rebound: seat.adopted.rebound }),
           ...(seat.adopted.worktreeProof === true ? { worktreeProof: true as const } : {}),
           ...(seat.adopted.unready === undefined ? {} : { unready: seat.adopted.unready }),
+          ...(seat.adopted.sameProcess === true ? { sameProcess: true as const } : {}),
         },
       });
       // The plan's own line. It carries no `do`: the re-tie is the run step above, so a walk
@@ -1261,6 +1271,14 @@ export function upPlan(input: UpInput): Step[] {
           ...(seat.restored.workspace === undefined ? {} : { workspace: seat.restored.workspace }),
           agentSession: seat.restored.session,
         },
+      });
+      continue;
+    }
+    if (seat.liveHold) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: ${seat.liveHold}`,
+        do: { do: 'record', seat: seat.name, record: { kind: 'left out', reason: seat.liveHold } },
       });
       continue;
     }

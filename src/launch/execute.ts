@@ -693,6 +693,25 @@ export async function executePlan(
   const closing = options?.isClosing ?? (() => false);
   const places = new Map<string, Place>();
   const dropped = new Set<string>();
+  // Seats whose launch preconditions (machine load, ceilings) were checked before their CLI was
+  // exited or their pane closed in place. The launch that follows the exit does not ask again: a
+  // load reading that crossed in the seconds between would leave the seat a bare shell, half
+  // stopped. A seat is either refused while it still runs, or relaunched.
+  const allowedBeforeExit = new Set<string>();
+  const allowLaunch = (seat: string): string | null => (allowedBeforeExit.has(seat) ? null : host.allow(seat));
+  /** The launch preconditions, asked before a step that stops the seat's running CLI. A refusal
+   *  leaves the seat running as it is, out of this run; nothing is typed or closed. */
+  const allowBeforeExit = (seat: string): boolean => {
+    const why = host.allow(seat);
+    if (why) {
+      if (restoreSeatNames.has(seat)) held = true;
+      dropped.add(seat);
+      final(seat, { kind: 'left out', reason: `${why}; left running, nothing typed` });
+      return false;
+    }
+    allowedBeforeExit.add(seat);
+    return true;
+  };
   // A seat whose channel could not be prepared still launches. The reason is said and logged
   // once, and the command that runs does not carry the channel.
   const channelAside = new Map<string, string>();
@@ -1438,7 +1457,7 @@ export async function executePlan(
         if (op.seat) reportProgress(op.seat, 'launching');
         if (op.seat && op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
         if (op.seat) {
-          const why = host.allow(op.seat);
+          const why = allowLaunch(op.seat);
           if (why) {
             if (restoreSeatNames.has(op.seat)) held = true;
             dropped.add(op.seat);
@@ -1646,7 +1665,7 @@ export async function executePlan(
           // words: a seat that lacks its rules must be explainable after the scrollback is gone.
           host.log(op.seat, op.notice);
         }
-        const why = host.allow(op.seat);
+        const why = allowLaunch(op.seat);
         if (why) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: why });
@@ -2324,6 +2343,7 @@ export async function executePlan(
           recordedSession: rebound === undefined ? op.session : rebound.from,
           screen: host.paneText?.(session, op.pane) ?? null,
           ...(worktreeNow === undefined ? {} : { worktree: worktreeNow }),
+          ...(op.sameProcess === true ? { allowSame: true } : {}),
         });
         if (rebound !== undefined && (proof.kind !== 'session' || proof.rebound?.to !== rebound.to)) {
           held = true;
@@ -2782,6 +2802,9 @@ export async function executePlan(
       }
       case 'relaunch': {
         reportProgress(op.seat, 'launching');
+        // The launch preconditions come first: the exit below must never run for a seat whose
+        // relaunch would then be refused (a load reading over the gate left a bare shell).
+        if (!allowBeforeExit(op.seat)) break;
         // The plan found a restored pane that is not the seat's running form: the bare CLI on a
         // seat whose own line starts a wrapper (adopting it would leave the wrapper's settings
         // behind), or a Codex seat whose recorded managed endpoint died with the host (adopting
@@ -3037,6 +3060,8 @@ export async function executePlan(
       }
       case 'repair': {
         reportProgress(op.seat, 'launching');
+        // As for a relaunch: the close below stops the seat, so its launch must be allowed first.
+        if (!allowBeforeExit(op.seat)) break;
         // The pane holds a process team did not launch (or no CLI at all): the workspace is
         // closed with no key and no text sent into it, the seat's launch state is cleared, and
         // the steps after this one launch the seat fresh, exactly as for a seat never launched.
