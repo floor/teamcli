@@ -33,7 +33,12 @@ export type BootRoute = { root: string; team: string; session: string };
 /** The observation: this boot's id, when, and the routes whose session read running. */
 export type SessionsRunning = { boot: string; at: number; running: BootRoute[] };
 /** One queued route, with the record of its last refused or failed attempt (retryable). */
-export type QueueEntry = BootRoute & { tries?: number; last?: string };
+export type QueueEntry = BootRoute & {
+  tries?: number;
+  last?: string;
+  /** A server an earlier attempt spawned that was not up in time: never spawn another while it lives. */
+  child?: { pid: number; start: number | null };
+};
 /** The work for one boot: built from the observation of boot `from`; routes still to start
  *  (each with its last failure, if any), and those settled (started or invalidated). */
 export type BootQueue = { boot: string; from: string; pending: QueueEntry[]; settled: { route: BootRoute; outcome: string }[] };
@@ -107,8 +112,17 @@ export function readBootQueue(home: string): BootQueue | null {
     session: one.session as string,
     ...(typeof one.tries === 'number' && Number.isInteger(one.tries) && one.tries > 0 ? { tries: one.tries } : {}),
     ...(typeof one.last === 'string' && one.last !== '' ? { last: one.last } : {}),
+    ...(childOf(one.child) === null ? {} : { child: childOf(one.child) as NonNullable<QueueEntry['child']> }),
   }));
   return { boot, from, pending: entries, settled: settled as BootQueue['settled'] };
+}
+
+function childOf(value: unknown): QueueEntry['child'] | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { pid, start } = value as Record<string, unknown>;
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 1) return null;
+  if (start !== null && (typeof start !== 'number' || !Number.isFinite(start))) return null;
+  return { pid, start: start as number | null };
 }
 
 export function writeBootQueue(home: string, queue: BootQueue): boolean {

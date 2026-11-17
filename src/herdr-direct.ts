@@ -216,6 +216,26 @@ export function herdrDirect(args: readonly string[], session: string | undefined
   return { result: record.result };
 }
 
+/**
+ * Whether a session's server answers on its own socket right now, read synchronously and bounded
+ * by `timeoutMs` (short: a boot start's last look before its spawn). 'answers' when it replies,
+ * 'silent' when nothing listens (no socket file, or a refused connect: a server a restart
+ * killed), 'unknown' when this process cannot tell (no reader, an uncertain socket path, or no
+ * reply in time). A caller that must not start a second server treats 'unknown' as a refusal.
+ */
+export function sessionAnswersNow(session: string, timeoutMs = 300): 'answers' | 'silent' | 'unknown' {
+  const socketPath = directSocketOf(session);
+  if (socketPath === null) return 'unknown';
+  if (bound === undefined) bound = bind();
+  if (bound === null) return 'unknown';
+  const line = `${JSON.stringify({ id: `team:probe:${String(process.pid)}:${String(nextId++)}`, method: 'workspace.list', params: {} })}\n`;
+  try {
+    return bound(socketPath, line, timeoutMs) === undefined ? 'silent' : 'answers';
+  } catch {
+    return 'unknown';
+  }
+}
+
 /** Whether the socket reader is bound in this process (for tests). */
 export function herdrDirectBound(): boolean {
   if (bound === undefined) bound = bind();

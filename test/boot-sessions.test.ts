@@ -95,7 +95,13 @@ function world(opts: {
   failWrites?: boolean;
   /** Sessions whose server never comes up. */
   dead?: Set<string>;
+  /** Runs while the start awaits its read of the terminal host. */
+  duringRead?: (session: string) => Promise<void> | void;
+  /** Sessions whose server is spawned but not up within the bound (the child lives on). */
+  slow?: Set<string>;
 }) {
+  const spawns: string[] = [];
+  const live = new Set<number>();
   const started: string[] = [];
   const attempts: string[] = [];
   const logs: string[] = [];
@@ -118,15 +124,30 @@ function world(opts: {
       const route = routes.find((one) => one.root === root);
       return route === undefined ? { boot: opts.boot, hosted: { problem: 'the root is no longer hosted' }, registry: null } : good(route, opts.boot);
     },
-    start: async (session) => {
+    factsNow: (root) => {
+      if (opts.facts !== undefined) return opts.facts(root);
+      const route = routes.find((one) => one.root === root);
+      return route === undefined ? { boot: opts.boot, hosted: { problem: 'the root is no longer hosted' }, registry: null } : good(route, opts.boot);
+    },
+    start: async (session, proveNow) => {
       attempts.push(session);
-      if (!stopped.has(session)) return 'not-stopped';
-      if (opts.dead?.has(session) === true) return 'failed';
+      // The start's own read of the host, then the proof, then the spawn: as startStoppedServer.
+      await opts.duringRead?.(session);
+      if (!stopped.has(session)) return { kind: 'not-stopped' };
+      if (!proveNow()) return { kind: 'refused' };
+      spawns.push(session);
+      if (opts.slow?.has(session) === true) {
+        // Spawned, not up within the bound: the child lives on with this pid.
+        live.add(4242);
+        return { kind: 'failed', child: { pid: 4242, start: 1_000 } };
+      }
+      if (opts.dead?.has(session) === true) return { kind: 'failed' };
       started.push(session);
       stopped.delete(session);
       running.add(session);
-      return 'started';
+      return { kind: 'started' };
     },
+    childLive: (child) => live.has(child.pid) && child.start === 1_000,
     hosted: () => routes,
     lifecycleProblem: () => null,
     loadPerCore: () => (loads.length > 0 ? loads.shift() as number : 1),
@@ -139,7 +160,7 @@ function world(opts: {
     budgetMs: 30 * 60_000,
     observeEveryMs: 10_000,
   };
-  return { deps, started, attempts, logs, stopped, running, limitWaits: (n: number) => { maxWaits = n; waits = 0; } };
+  return { deps, started, attempts, spawns, live, logs, stopped, running, limitWaits: (n: number) => { maxWaits = n; waits = 0; } };
 }
 
 test('after a restart, only the registered routes that ran are started, and an unrelated session never is', async () => {
@@ -222,4 +243,65 @@ test('the observer records only hosted routes whose session runs', async () => {
   w.limitWaits(1);
   await runBootWork(w.deps);
   expect(readSessionsRunning(home)).toEqual({ boot: BOOT_B, at: 10_000, running: [FLOOR] });
+});
+
+test('a team taken down while the start reads the host is refused at the spawn, and stays pending', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+  let lifecycle = 'running';
+  const w = world({
+    boot: BOOT_B,
+    stopped: new Set(['floor']),
+    facts: () => ({ ...good(FLOOR), registry: { ...FLOOR, lifecycle } }),
+    // The proof before the start passes; during the start's own read the team goes down.
+    duringRead: () => { lifecycle = 'stopped'; },
+  });
+  w.limitWaits(2);
+  await runBootWork(w.deps);
+  expect(w.attempts.length >= 1).toBe(true);
+  expect(w.started).toEqual([]);
+  expect(w.stopped.has('floor')).toBe(true);
+  expect(readBootQueue(home)?.pending[0]?.last).toBe('the registry team is stopped');
+});
+
+test('a session rebound while the start reads the host is refused at the spawn', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+  let session = 'floor';
+  const w = world({
+    boot: BOOT_B,
+    stopped: new Set(['floor']),
+    facts: () => ({ ...good(FLOOR), registry: { ...FLOOR, session, lifecycle: 'running' } }),
+    duringRead: () => { session = 'floor-new'; },
+  });
+  w.limitWaits(2);
+  await runBootWork(w.deps);
+  expect(w.started).toEqual([]);
+  expect(readBootQueue(home)?.pending[0]?.last).toBe('the registry names session "floor-new", not "floor"');
+});
+
+test('a server spawned but not up in time is never doubled: retries wait for it, and it settles once up', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor']), slow: new Set(['floor']) });
+  w.limitWaits(4);
+  await runBootWork(w.deps);
+  // One spawn only, across every pass; the queue keeps the child and says why it waits.
+  expect(w.spawns).toEqual(['floor']);
+  const entry = readBootQueue(home)?.pending[0];
+  expect(entry?.child).toEqual({ pid: 4242, start: 1_000 });
+  expect(entry?.last).toBe('its server from an earlier attempt is still starting');
+  // A same-boot daemon resumes: the child is still alive and now up, so it settles, unspawned.
+  const v = world({ boot: BOOT_B, running: new Set(['floor']) });
+  v.live.add(4242);
+  v.limitWaits(2);
+  await runBootWork(v.deps);
+  expect(v.spawns).toEqual([]);
+  expect(readBootQueue(home)?.settled.map((one) => one.outcome)).toEqual(['started (by an earlier attempt)']);
+});
+
+test('once the earlier attempt\'s server is gone, the record clears and a fresh start may run', async () => {
+  writeBootQueue(home, { boot: BOOT_B, from: BOOT_A, pending: [{ ...FLOOR, child: { pid: 4242, start: 1_000 }, tries: 1 }], settled: [] });
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor']) });
+  w.limitWaits(2);
+  await runBootWork(w.deps);
+  expect(w.spawns).toEqual(['floor']);
+  expect(w.started).toEqual(['floor']);
 });

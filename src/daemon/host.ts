@@ -37,6 +37,7 @@ import { createRestoreAttachWatch, sessionsRunningMap, type RestorePending } fro
 import { restoreLifecycleProblem } from '../launch/restore-lifecycle.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive, readState, type State } from '../state.ts';
+import { processStartOf } from '../launch/codex-endpoint.ts';
 import { probeDaemonSocket, probeDaemonSocketReading, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
@@ -3114,6 +3115,31 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     };
     // Production only: an injected runner (a test) never starts a terminal-host server.
     const bootSessionsEnabled = input.bootSessions !== false && typeof input.restoreSweep !== 'function';
+    // The root's hosted route with its team file read again now, and the registry's entry for
+    // that root read again now. Synchronous, so the start's last proof awaits nothing.
+    const factsNow = (root: string, boot: string | null): StartFacts => {
+      const route = routes.find((one) => one.root === root);
+      let hosted: StartFacts['hosted'];
+      if (route === undefined) hosted = { problem: 'the root is no longer hosted' };
+      else {
+        const change = hostedRouteChange(route);
+        hosted = change === null ? { root: route.root, team: route.team, session: route.session } : { problem: change };
+      }
+      let registry: StartFacts['registry'] = null;
+      try {
+        const canonical = realpathSync(root);
+        const memo = currentRunMemo();
+        memo?.teamsTolerant.delete(home);
+        memo?.teamsStrict.delete(home);
+        const record = getTeam(home, teamIdOf(canonical));
+        if (record !== null && realpathSync(record.root) === canonical) {
+          registry = { root: canonical, team: record.project, session: record.session, lifecycle: record.lifecycle };
+        }
+      } catch {
+        registry = null;
+      }
+      return { boot, hosted, registry };
+    };
     const bootDeps = (): BootRunDeps => ({
       bootId: () => bootId(),
       readObserved: () => readSessionsRunning(home),
@@ -3121,33 +3147,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       writeQueue: (queue) => writeBootQueue(home, queue),
       writeObserved: (record) => writeSessionsRunning(home, record),
       sessions: () => sessionsRunningMap(() => sessionListAsync({ signal: restoreAbort.signal })),
-      start: (session) => startStoppedServer(session, { signal: restoreAbort.signal }),
-      // Read at the moment of each start: this boot's id, the root's hosted route with its team
-      // file read again now, and the registry's entry for that root read again now.
-      facts: async (root): Promise<StartFacts> => {
-        const boot = await bootId();
-        const route = routes.find((one) => one.root === root);
-        let hosted: StartFacts['hosted'];
-        if (route === undefined) hosted = { problem: 'the root is no longer hosted' };
-        else {
-          const change = hostedRouteChange(route);
-          hosted = change === null ? { root: route.root, team: route.team, session: route.session } : { problem: change };
-        }
-        let registry: StartFacts['registry'] = null;
-        try {
-          const canonical = realpathSync(root);
-          const memo = currentRunMemo();
-          memo?.teamsTolerant.delete(home);
-          memo?.teamsStrict.delete(home);
-          const record = getTeam(home, teamIdOf(canonical));
-          if (record !== null && realpathSync(record.root) === canonical) {
-            registry = { root: canonical, team: record.project, session: record.session, lifecycle: record.lifecycle };
-          }
-        } catch {
-          registry = null;
-        }
-        return { boot, hosted, registry };
-      },
+      start: (session, proveNow) => startStoppedServer(session, { signal: restoreAbort.signal }, proveNow, processStartOf),
+      // The same process only: alive, and (when one was read) the same start time, so a reused
+      // pid is never taken for the earlier attempt's server.
+      childLive: (child) => pidAlive(child.pid) && (child.start === null || processStartOf(child.pid) === child.start),
+      // Read at the moment of each start: this boot's id, then the synchronous facts.
+      facts: async (root): Promise<StartFacts> => factsNow(root, await bootId()),
+      factsNow: (root, boot) => factsNow(root, boot),
       hosted: () => routes.map((route) => ({ root: route.root, team: route.team, session: route.session })),
       lifecycleProblem: (root, team) => restoreLifecycleProblem(home, root, team),
       loadPerCore: () => (loadavg()[0] ?? 0) / Math.max(1, cpus().length),

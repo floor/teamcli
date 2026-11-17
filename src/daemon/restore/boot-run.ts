@@ -21,6 +21,7 @@ import {
   type SessionsRunning,
   type StartFacts,
 } from './boot-sessions.ts';
+import type { StoppedServerStart } from '../../herdr.ts';
 
 export type BootRunDeps = {
   bootId: () => Promise<string | null>;
@@ -32,8 +33,14 @@ export type BootRunDeps = {
   sessions: () => Promise<ReadonlyMap<string, boolean> | null>;
   /** The live facts for a root, read fresh (team file, registry, boot id). */
   facts: (root: string) => Promise<StartFacts>;
-  /** Starts a session that reads stopped and resolves once the server is up (or why not). */
-  start: (session: string) => Promise<'started' | 'not-stopped' | 'unread' | 'failed'>;
+  /** The same facts read synchronously (team file and registry now; the boot id given), for the
+   *  proof the start runs with nothing awaited between it and the spawn. */
+  factsNow: (root: string, boot: string | null) => StartFacts;
+  /** Starts a session that reads stopped and resolves once the server is up (or why not).
+   *  `proveNow` runs after the start's last await, immediately before the spawn. */
+  start: (session: string, proveNow: () => boolean) => Promise<StoppedServerStart>;
+  /** Whether a server an earlier attempt spawned still lives: same pid, same start time. */
+  childLive: (child: { pid: number; start: number | null }) => boolean;
   /** The routes the daemon hosts now (for the observation only; starts use `facts`). */
   hosted: () => readonly BootRoute[];
   /** Why the registered team may not be restored, or null (observation filter). */
@@ -97,12 +104,43 @@ export async function workBootQueue(deps: BootRunDeps, queue: BootQueue): Promis
     let startedOne = false;
     for (const route of [...queue.pending]) {
       if (deps.loadPerCore() > deps.loadMaxPerCore) break;
-      const problem = startProblem(route, queue.boot, await deps.facts(route.root));
+      // A server an earlier attempt spawned is never doubled: while it lives, the route waits
+      // for it (and settles once its session reads running); once it is gone, the record clears.
+      const entry = queue.pending.find((one) => same(one, route));
+      if (entry?.child !== undefined) {
+        if (deps.childLive(entry.child)) {
+          if ((await deps.sessions())?.get(route.session) === true) settle(route, 'started (by an earlier attempt)');
+          else note(route, 'its server from an earlier attempt is still starting');
+          continue;
+        }
+        delete entry.child;
+        save(`${route.session}: the earlier attempt's server is gone`);
+      }
+      const facts = await deps.facts(route.root);
+      const problem = startProblem(route, queue.boot, facts);
       if (problem !== null) {
         note(route, problem);
         continue;
       }
-      const outcome = await deps.start(route.session);
+      // The proof is taken again inside the start, after its last await and right before the
+      // spawn: a stop, rebind or removal during the start's own reads refuses it.
+      let late: string | null = null;
+      const result = await deps.start(route.session, () => {
+        late = startProblem(route, queue.boot, deps.factsNow(route.root, facts.boot));
+        return late === null;
+      });
+      const outcome = result.kind;
+      if (outcome === 'refused') {
+        note(route, late ?? 'the proof failed at the start');
+        continue;
+      }
+      if (result.kind === 'failed' && result.child !== undefined) {
+        // Spawned but not up in time: its pid and start time are kept, so no retry doubles it.
+        const kept = queue.pending.find((one) => same(one, route));
+        if (kept !== undefined) kept.child = result.child;
+        note(route, 'its server did not come up in time; that server is watched, not doubled');
+        continue;
+      }
       if (outcome === 'started') {
         deps.log(`restore: session ${route.session} started again after the machine restart`);
         settle(route, 'started');
