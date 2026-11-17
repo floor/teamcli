@@ -52,7 +52,7 @@ import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.
 import { MESSAGE_DOMAIN, verifyDomain, type Json } from '../store/keys.ts';
 import { legacyReceiptMatches, messagePayload } from '../commands/messages.ts';
 import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE } from './drop-folder.ts';
-import { archiveMonth, INBOX_READ_KEEP_MS } from './inbox-retention.ts';
+import { archiveMonth, LEGACY_READ_KEEP_MS } from './inbox-retention.ts';
 import { sameFolder } from './record.ts';
 
 /** The mailbox the owner's notices are kept in; never archived (see the header). */
@@ -321,7 +321,7 @@ function judge(j: Judge, id: string, recordPath: string, receiptPath: string | n
     // A receipt that is not this record's proof: neither read nor plainly unread; it stays.
     if (!legacyReceiptMatches(receiptPath, j.seat, id, j.root, j.session, j.key)) return { kind: 'stay', reason: 'record-does-not-verify', month };
     const readMs = receiptAt(receiptPath);
-    return Number.isFinite(readMs) && j.nowMs - readMs > INBOX_READ_KEEP_MS
+    return Number.isFinite(readMs) && j.nowMs - readMs > LEGACY_READ_KEEP_MS
       ? { kind: 'move', month, unread: false }
       : { kind: 'stay', reason: 'too-recent', month };
   }

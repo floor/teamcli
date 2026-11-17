@@ -1,7 +1,7 @@
 // Moves settled inbox mail out of the live seat folder.
 //
 // A read and an acknowledgement are different. A read receipt — including one that names the
-// channel, and one that names no reader — waits seven days. An acknowledgement is separate
+// channel, and one that names no reader — waits two days. An acknowledgement is separate
 // evidence: the note `team ack` writes, a lead's clearance, or a reply. That moves at once.
 // Unread mail stays. Nothing is deleted. Receipts are placed in
 // `<root>/.agents/send-drops/<session>/<seat>/archive/<YYYY-MM>/` first and the record last,
@@ -46,8 +46,14 @@ export function ackNotePath(folder: string, id: string): string {
   return join(folder, `${id}.ack.json`);
 }
 
-/** A read receipt younger than this stays in the live folder unless the message was acknowledged. */
-export const INBOX_READ_KEEP_MS = 7 * 86_400_000;
+/** A read receipt younger than this stays in the live folder unless the message was acknowledged.
+ *  Two days, not seven: every pass of the watch and the inbox lists and stats the whole live
+ *  folder, and on 2026-11-17 three quarters of a busy checkout's live mail (3,526 of 4,454 read
+ *  records) was read two to seven days earlier. A moved message is still found by id, so
+ *  `team reply`, `team show` and the receipts work on it as before. */
+export const INBOX_READ_KEEP_MS = 2 * 86_400_000;
+/** The older store keeps its seven days: it is listed, not scanned, on every pass. */
+export const LEGACY_READ_KEEP_MS = 7 * 86_400_000;
 
 const MONTH = /^(\d{4})-(\d{2})$/;
 const ID_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
