@@ -462,7 +462,7 @@ export const realSources: UpSources = {
 /** The reason the hold `up --no-launch` places carries. */
 export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]\n       team up <seat>... [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]\n       team up --retie [--dry-run] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]\n\nteam up <seat>... starts or repairs only the named seats and leaves every other seat, the watch, the bus and every sweep as they are. A plain team up leaves a seat stopped on its own while its team runs (only its handle retained, its teammates running) for this form to start.\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\nA seat that names a launcher uses its resolved argv as the base line and still places the profile launch words on it. A seat without one keeps its launch line. --resolve-launch is accepted for compatibility and changes nothing. A resolution that cannot be placed refuses that seat and starts it nowhere.\n\n--retie is the repair after a machine restart: in a running session it re-ties every seat whose restored pane proves it (renamed back, its record re-tied), and launches, closes, relaunches and sweeps nothing. A seat it would have started is listed and left as it is.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]\n       team up <seat>... [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]\n       team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]\n       team up --retie [--dry-run] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]\n\nteam up <seat>... starts or repairs only the named seats and leaves every other seat, the watch, the bus and every sweep as they are.\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\nA seat that names a launcher uses its resolved argv as the base line and still places the profile launch words on it. A seat without one keeps its launch line. --resolve-launch is accepted for compatibility and changes nothing. A resolution that cannot be placed refuses that seat and starts it nowhere.\n\n--retie is the repair after a machine restart: in a running session it re-ties every seat whose restored pane proves it (renamed back, its record re-tied), and launches, closes, relaunches and sweeps nothing. A seat it would have started is listed and left as it is.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -2621,7 +2621,11 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   const scopeProblem = args.rest.length > 0 && (args.flags.has('all') || args.flags.has('retie') || args.values.rebind !== undefined
     || ['client', 'key', 'general', 'team'].some((name) => args.values[name] !== undefined))
     ? 'team up <seat> names the seats of one team to start; it takes no --all, --retie, --rebind or client flags'
-    : null;
+    // `--no-launch` places a hold on the whole team; a run that leaves every other seat as it is
+    // cannot place one.
+    : args.rest.length > 0 && args.flags.has('no-launch')
+      ? 'team up <seat> takes no --no-launch: a quiet start holds the whole team, and this form leaves every other seat as it is'
+      : null;
   const clientProblem = args.error === undefined ? scopeProblem ?? clientInvocationProblem(args) : null;
   const badInvocation = Boolean(args.error || clientProblem !== null);
   const scopedSeats = new Set(args.rest);
@@ -3546,14 +3550,6 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         seats.push({ ...kept, stopped: true, retieSkip: 'not named in this run; left as it is' });
         continue;
       }
-    } else if (!scoped && !retie && !planned.stopped && !planned.human && held === undefined
-      && recorded?.retained_seats?.[seat.name] !== undefined && Object.keys(recorded.seats).length > 0 && state === 'running') {
-      // A seat stopped on its own while its team runs (`remove --keep`, a restart that did not
-      // finish): only its handle is retained, and its teammates still hold records. A plain
-      // `team up` does not start it again behind the lead's back; naming it does. A whole-team
-      // `team down` retains every seat and leaves none recorded, so a later `up` starts them all.
-      seats.push({ ...planned, stopped: true, retieSkip: `stopped on its own while the team runs; start it with team up ${seat.name}` });
-      continue;
     }
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
@@ -4433,6 +4429,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     };
     const briefSeats = noLaunch ? [] : team.seats
       .filter((seat) => !restoreKept.has(seat.name))
+      // `team up <seat>`: the brief goes to the named seats only, never to a seat this run leaves.
+      .filter((seat) => !scoped || scopedSeats.has(seat.name))
       .filter((seat) => launchedSeats.includes(seat.name)
         || (recorded?.seats[seat.name] === undefined && !claimStands(seat.name)))
       .map((seat) => seat.name);
@@ -4462,7 +4460,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         state: recorded ?? emptySession(),
         attributed: briefSeats,
         // A sweep's protected seats must not be added back by the brief rollout path.
-        onlyAttributed: internal?.restoreMissingOnly === true,
+        // A scoped run's unnamed seats must not be added back by it either.
+        onlyAttributed: internal?.restoreMissingOnly === true || scoped,
       });
       await walkBriefDeliveries(briefs, { dir, home: sources.home });
       for (const delivery of briefs.deliveries) {

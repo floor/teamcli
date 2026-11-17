@@ -308,15 +308,37 @@ function retainHelper(): void {
   });
 }
 
-test('a plain team up leaves a seat stopped on its own while its team runs', async () => {
+test('a retained seat beside a running teammate is still started by a plain team up (a partial start stays retryable)', async () => {
+  // The shape after a whole-team down and a start that launched one seat, then stopped (the load
+  // gate, an interrupt): the other seat holds only its retained handle. A retry starts it.
+  record();
+  retainHelper();
+  const dry = testIo(root, { kind: 'owner' });
+  await runUp(['--dry-run'], dry, sources(SESSION_ID, { processes: SAME }).sources);
+  expect(dry.out).toContain('--label helper ');
+  expect(dry.out).not.toContain('helper: not named');
+});
+
+test('team up <seat> takes no --no-launch: a quiet start would hold the whole team', async () => {
+  record();
+  const made = sources(SESSION_ID, { processes: SAME });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp(['helper', '--no-launch'], io, made.sources)).toBe(2);
+  expect(io.err).toContain('team up <seat> takes no --no-launch');
+  expect(readState(dir).hold).toBeUndefined();
+  expect(made.trace.runs).toEqual([]);
+});
+
+test('team up <seat> delivers the general brief to the named seat only', async () => {
+  // The worker runs with no current brief claim: a plain run would deliver it one. A run that
+  // names helper leaves the worker exactly as it is.
   record();
   retainHelper();
   const made = sources(SESSION_ID, { processes: SAME });
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources), io.out + io.err).toBe(0);
-  expect(io.out + io.err).toContain('helper: stopped on its own while the team runs; start it with team up helper');
-  expect(made.trace.created.filter((label) => label === 'helper')).toEqual([]);
-  expect(made.trace.runs).toEqual([]);
+  await runUp(['helper'], io, made.sources);
+  const briefs = readState(dir).sessions[SESSION]?.briefs ?? {};
+  expect(Object.keys(briefs)).not.toContain(SEAT);
 });
 
 test('team up <seat> starts the named seat and leaves every other seat as it is', async () => {
