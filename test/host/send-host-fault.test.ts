@@ -18,6 +18,7 @@ test('a host killed after the record write and before its answer leaves the clie
   made.push(base);
   const cliEntry = join(base, 'cli.js');
   writeFileSync(cliEntry, '// a build\n');
+  writeFileSync(join(base, 'build-id'), `${'b'.repeat(64)}\n`);
   const child = spawn(process.execPath, [join(import.meta.dir, '..', 'helpers', 'send-host-fault-child.ts'), base, cliEntry, String(process.pid)], { stdio: ['ignore', 'pipe', 'pipe'] });
   let errText = '';
   child.stderr.on('data', (chunk) => { errText += String(chunk); });

@@ -13,6 +13,7 @@ import { connect, createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { machineConfigDir } from '../daemon/paths.ts';
 import { version } from '../version.ts';
+import { clientBuildStamp } from './client.ts';
 import { peerReader, socketFd, type PeerReader } from './peer.ts';
 import { HOST_PROTOCOL_VERSION, isHostRequest, runHostedLine, type HostAnswer, type HostPeer, type HostRequest, type HostRunDeps } from './run.ts';
 
@@ -31,14 +32,10 @@ export function sendHostSocketPath(home: string): string {
   return join(machineConfigDir(home), 'send-host.sock');
 }
 
-/** The build stamp a client and the host compare: the version and the CLI entry's own digest,
- *  the same file the records' build identity is read from. */
-export function buildStampOf(cliEntry: string): string {
-  try {
-    return `${version()}+${createHash('sha256').update(readFileSync(realpathSync(cliEntry))).digest('hex').slice(0, 16)}`;
-  } catch {
-    return `${version()}+unread`;
-  }
+/** The build stamp a client and the host compare: the version and the build identity, one digest
+ *  over every emitted file (client.ts `clientBuildStamp`). Null when it cannot be read. */
+export function buildStampOf(cliEntry: string): string | null {
+  return clientBuildStamp(cliEntry);
 }
 
 type Entry = {
@@ -90,6 +87,7 @@ export async function startSendHost(options: SendHostOptions): Promise<SendHost>
   const log = options.log ?? (() => {});
   const window = options.queueWindowMs ?? QUEUE_WINDOW_MS;
   const build = buildStampOf(options.cliEntry);
+  if (build === null) throw new Error('the build identity cannot be read; the send host does not start');
   const ownUid = typeof process.getuid === 'function' ? process.getuid() : -1;
   if (reader === null) throw new Error('the kernel peer reader cannot be bound here; the send host does not start');
 
@@ -160,14 +158,33 @@ export async function startSendHost(options: SendHostOptions): Promise<SendHost>
     void pump();
   };
 
-  const accept = (socket: Socket, line: string): void => {
-    if (stopping !== null) { answer(socket, fallbackOf('the send host is stopping')); return; }
+  /** The client as the kernel names it the moment the connection is accepted, before any request
+   *  byte is read (rfc-bus-send-server §2.3 item 7): its credentials and its process start. Null
+   *  when either cannot be read; such a connection is never served. */
+  type AtConnect = { cred: { uid: number; pid: number }; first: NonNullable<ReturnType<PeerReader['process']>> } | null;
+  const identityOf = (socket: Socket): AtConnect => {
     const fd = socketFd(socket);
     const cred = fd === null ? null : reader.credentials(fd);
-    if (cred === null) { answer(socket, fallbackOf('the client could not be read from the kernel')); return; }
-    if (cred.uid !== ownUid) { socket.destroy(); return; }
+    if (cred === null) return null;
     const first = reader.process(cred.pid);
-    if (first === null || first.uid !== ownUid) { answer(socket, fallbackOf('the client process could not be read')); return; }
+    if (first === null) return null;
+    return { cred, first };
+  };
+
+  const accept = (socket: Socket, line: string, atConnect: AtConnect): void => {
+    if (stopping !== null) { answer(socket, fallbackOf('the send host is stopping')); return; }
+    if (atConnect === null) { answer(socket, fallbackOf('the client could not be read from the kernel when it connected')); return; }
+    const { cred, first } = atConnect;
+    if (cred.uid !== ownUid) { socket.destroy(); return; }
+    if (first.uid !== ownUid) { answer(socket, fallbackOf('the client process could not be read')); return; }
+    // The same process now as at connect: an inherited socket whose first process is gone, or
+    // whose pid was handed to another process before the request arrived, is never served.
+    const again = identityOf(socket);
+    if (again === null || again.cred.pid !== cred.pid || again.cred.uid !== cred.uid
+      || again.first.startSec !== first.startSec || again.first.startUsec !== first.startUsec || again.first.ppid !== first.ppid) {
+      answer(socket, fallbackOf('the client is not the process that connected'));
+      return;
+    }
     if (reader.confined(cred.pid)) { answer(socket, fallbackOf('the client is confined by a sandbox')); return; }
     let request: unknown;
     try { request = JSON.parse(line); } catch { answer(socket, fallbackOf('the request is not JSON')); return; }
@@ -214,6 +231,7 @@ export async function startSendHost(options: SendHostOptions): Promise<SendHost>
   };
 
   const server = createServer((socket) => {
+    const atConnect = identityOf(socket);
     let buffer = '';
     let taken = false;
     socket.setEncoding('utf8');
@@ -224,7 +242,7 @@ export async function startSendHost(options: SendHostOptions): Promise<SendHost>
       const end = buffer.indexOf('\n');
       if (end < 0) return;
       taken = true;
-      accept(socket, buffer.slice(0, end));
+      accept(socket, buffer.slice(0, end), atConnect);
     });
     socket.on('error', () => { /* a client that went away; its entry is cleaned on close */ });
   });

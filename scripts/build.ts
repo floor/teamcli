@@ -8,7 +8,8 @@
 //
 //   bun run build
 import { spawnSync } from 'node:child_process';
-import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -73,6 +74,21 @@ export function markBinExecutable(root: string): void {
   chmodSync(join(root, bin), 0o755);
 }
 
+/** Writes `dist/build-id`: one sha256 over every emitted file's relative path and bytes, in
+ *  sorted order. The warm send host and its client compare it, so a rebuild that changes any
+ *  module is another build (src/host/client.ts `clientBuildStamp`). */
+export function writeBuildId(outDir: string): void {
+  const files: string[] = [];
+  walkFiles(outDir, (file) => { files.push(file); });
+  const hash = createHash('sha256');
+  for (const file of files.map((path) => relative(outDir, path)).filter((path) => path !== 'build-id').sort()) {
+    hash.update(`${file}\0`);
+    hash.update(readFileSync(join(outDir, file)));
+    hash.update('\0');
+  }
+  writeFileSync(join(outDir, 'build-id'), `${hash.digest('hex')}\n`);
+}
+
 function build(): void {
   rmSync('dist', { recursive: true, force: true });
 
@@ -90,6 +106,8 @@ function build(): void {
       copyFileSync(join('src', 'profiles', name), join('dist', 'profiles', name));
     }
   }
+
+  writeBuildId(join(process.cwd(), 'dist'));
 
   try {
     preserveExecutableOutputs(join(process.cwd(), 'src'), join(process.cwd(), 'dist'));

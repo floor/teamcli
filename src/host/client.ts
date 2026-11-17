@@ -8,8 +8,7 @@
 import { connect } from 'node:net';
 import { lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
 import { readFileSync, realpathSync } from 'node:fs';
 import { version } from '../version.ts';
 
@@ -39,12 +38,19 @@ export type ClientInput = {
   answerWindowMs?: number;
 };
 
-/** The same stamp the host computes (server.ts `buildStampOf`), without importing the server. */
-export function clientBuildStamp(cliEntry: string): string {
+/** The build identity file `scripts/build.ts` writes beside the CLI entry: one digest over every
+ *  emitted file (path and bytes), so a rebuild that changes any module, not only the entry, is
+ *  another build. */
+export const BUILD_ID_FILE = 'build-id';
+
+/** The same stamp the host computes (server.ts `buildStampOf`), without importing the server.
+ *  Null when the build identity cannot be read: such a client never submits to the host. */
+export function clientBuildStamp(cliEntry: string): string | null {
   try {
-    return `${version()}+${createHash('sha256').update(readFileSync(realpathSync(cliEntry))).digest('hex').slice(0, 16)}`;
+    const id = readFileSync(join(dirname(realpathSync(cliEntry)), BUILD_ID_FILE), 'utf8').trim();
+    return /^[0-9a-f]{64}$/.test(id) ? `${version()}+${id}` : null;
   } catch {
-    return `${version()}+unread`;
+    return null;
   }
 }
 
@@ -59,7 +65,9 @@ export async function tryHost(input: ClientInput): Promise<ClientOutcome> {
   } catch {
     return { kind: 'not-submitted', why: 'no send host socket' };
   }
-  const frame = `${JSON.stringify({ v: 1, build: clientBuildStamp(input.cliEntry), argv: input.argv, cwd: input.cwd, env: input.env, tty: input.tty })}\n`;
+  const stamp = clientBuildStamp(input.cliEntry);
+  if (stamp === null) return { kind: 'not-submitted', why: 'the build identity cannot be read' };
+  const frame = `${JSON.stringify({ v: 1, build: stamp, argv: input.argv, cwd: input.cwd, env: input.env, tty: input.tty })}\n`;
   return new Promise((settle) => {
     let submitted = false;
     let settled = false;

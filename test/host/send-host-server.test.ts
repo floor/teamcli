@@ -74,6 +74,7 @@ beforeEach(() => {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'send-host-')));
   cliEntry = join(base, 'cli.js');
   writeFileSync(cliEntry, '// a build\n');
+  writeFileSync(join(base, 'build-id'), `${'a'.repeat(64)}\n`);
 });
 
 afterEach(async () => {
@@ -96,8 +97,35 @@ describe('the client', () => {
     expect(runs).toBe(1);
   });
 
-  test('the build stamp is the same on both sides for the same entry', () => {
-    expect(buildStampOf(cliEntry)).toMatch(/\+[0-9a-f]{16}$/);
+  test('the build stamp is the same on both sides for the same build identity, and absent without one', () => {
+    expect(buildStampOf(cliEntry)).toMatch(/\+a{64}$/);
+    rmSync(join(base, 'build-id'));
+    expect(buildStampOf(cliEntry)).toBeNull();
+  });
+
+  test('a client without a readable build identity never submits', async () => {
+    let runs = 0;
+    await start(async () => { runs += 1; return 0; });
+    rmSync(join(base, 'build-id'));
+    expect((await line(['send', 'lead', 'hi'])).kind).toBe('not-submitted');
+    expect(runs).toBe(0);
+  });
+
+  test('a rebuild that changes only a non-entry module is another build', async () => {
+    const { writeBuildId } = await import('../../scripts/build.ts');
+    const dist = join(base, 'dist');
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(dist, 'commands'), { recursive: true });
+    writeFileSync(join(dist, 'cli.js'), '// entry\n');
+    writeFileSync(join(dist, 'commands', 'send.js'), '// admission v1\n');
+    writeBuildId(dist);
+    const first = buildStampOf(join(dist, 'cli.js'));
+    writeFileSync(join(dist, 'commands', 'send.js'), '// admission v2\n');
+    writeBuildId(dist);
+    const second = buildStampOf(join(dist, 'cli.js'));
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
   });
 });
 
@@ -124,7 +152,8 @@ describe('handed back before anything runs', () => {
   test('another build', async () => {
     let runs = 0;
     await start(async () => { runs += 1; return 0; });
-    writeFileSync(cliEntry, '// another build\n');
+    // The installed build changed after the host started: the client reads the new identity.
+    writeFileSync(join(base, 'build-id'), `${'c'.repeat(64)}\n`);
     const outcome = await line(['send', 'lead', 'hi']);
     expect(outcome.kind).toBe('fallback');
     expect(runs).toBe(0);
@@ -162,6 +191,29 @@ describe('the queue', () => {
     expect((await first).kind).toBe('ran');
     await Bun.sleep(50);
     expect(ran).toEqual(['first']);
+  });
+
+  test('a frame from a process other than the one that connected is handed back and never runs (pid reuse)', async () => {
+    let runs = 0;
+    let start2 = 2n;
+    const swapping: PeerReader = { ...reader(), process: () => ({ ppid: process.ppid, uid: process.getuid!(), startSec: 1n, startUsec: start2 }) };
+    await start(async () => { runs += 1; return 0; }, { reader: swapping });
+    const { connect } = await import('node:net');
+    const client = connect(join(base, 'h.sock'));
+    await new Promise<void>((settle) => client.once('connect', () => settle()));
+    await Bun.sleep(30);
+    // The pid now names a process that started later: the connecting one is gone.
+    start2 = 3n;
+    const env: Record<string, string> = {};
+    if (process.env.HOME !== undefined) env.HOME = process.env.HOME;
+    if (process.env.TMPDIR !== undefined) env.TMPDIR = process.env.TMPDIR;
+    let reply = '';
+    client.setEncoding('utf8');
+    client.on('data', (chunk: string) => { reply += chunk; });
+    client.write(`${JSON.stringify({ v: 1, build: buildStampOf(cliEntry), argv: ['send', 'lead', 'x'], cwd: base, env, tty: { stdin: false, stdout: false, stderr: false } })}\n`);
+    await new Promise<void>((settle) => client.once('close', () => settle()));
+    expect(JSON.parse(reply.trim())).toEqual({ v: 1, kind: 'fallback', why: 'the client is not the process that connected' });
+    expect(runs).toBe(0);
   });
 
   test('a client that leaves while queued is removed and never runs', async () => {
