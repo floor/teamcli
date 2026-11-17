@@ -903,6 +903,9 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     expect(unit).not.toContain('/repo');
     expect(unit).toContain('RunAtLoad');
     expect(unit).toContain('KeepAlive');
+    // Delivery runs in the daemon: never the background class, which starves its event loop.
+    expect(unit).toMatch(/<key>ProcessType<\/key>\s*<string>Interactive<\/string>/);
+    expect(unit).not.toContain('<string>Background</string>');
     expect(calls[0]?.[0]).toBe('launchctl');
     expect(calls[0]?.slice(1, 3)).toEqual(['bootstrap', 'gui/501']);
     expect(calls[0]?.[3]).toBe(installed.unitPath);

@@ -72,6 +72,11 @@ function namesAuthorization(text: string): boolean {
     .some((entry) => entry[1] === '--general' || entry[1] === '--key');
 }
 
+/** The unit runs as `Interactive`, the class apps run in. `Background` confines the daemon and
+ *  every child it starts to the efficiency cores at the lowest priority and throttles its disk
+ *  reads: on a loaded machine the event loop then waited seconds for each turn, and every send,
+ *  read receipt and wake waited with it. The daemon's own work is small; what it serves is the
+ *  seats' delivery, which a person is waiting on. */
 function unitText(home: string, label: string, program: string[], path?: string): string {
   const args = program.map((arg) => `    <string>${escapeXml(arg)}</string>`).join('\n');
   // The unit sets HOME, TMPDIR and the XDG directories to the home it serves so the process and
@@ -108,7 +113,7 @@ ${env}  <key>RunAtLoad</key>
     <false/>
   </dict>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Interactive</string>
   <key>WorkingDirectory</key>
   <string>${escapeXml(home)}</string>
   <key>StandardOutPath</key>
