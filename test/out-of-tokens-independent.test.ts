@@ -28,7 +28,7 @@ import { discardFixtures } from './fixture-cleanup.ts';
 import { NOW, fake, owner, quietNative, world, type World } from './send-native-fixtures.ts';
 
 const PANE = 'pane-lead';
-const LIMIT = "There's an issue with the selected model (k3-256k)";
+const LIMIT = 'Usage limit reached';
 
 const owned: string[] = [];
 afterEach(() => {

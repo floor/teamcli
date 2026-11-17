@@ -91,7 +91,7 @@ import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/p
 import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsOnlyShell, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS, liveConversationElsewhere, restorePaneBusy, restoreProof, restoreRelaunch, restoreWorktreeOf, unreadyRestoreProof, type RestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
+import { CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS, liveConversationElsewhere, restoredBypassesLauncher, restorePaneBusy, restoreProof, restoreRelaunch, restoreWorktreeOf, unreadyRestoreProof, type RestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
 import { featureDialogClose, restoredPaneByConversation } from '../launch/reboot.ts';
 import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
@@ -1180,6 +1180,39 @@ function seatPlan(
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
       const vacated = vacatedWorkspace(workspaces, movedWorkspace, movedRecord.workspace, movedPane);
+      // Moved by the host and resumed bare: a launcher seat lost what its launcher sets, a Codex
+      // seat lost its managed endpoint. Relaunched where the host moved it, carrying the
+      // conversation; a working, unsent or dialog pane is held and said.
+      const movedEndpointGone = endpointRelaunch(seat, movedRecord, planned.launch);
+      if (recorded.launched && (restoredBypassesLauncher(effectiveSeatOf(seat, planned)) || movedEndpointGone)) {
+        const held = replacedScreenRefusal(seat, candidate.pane, screenOf, candidate.status);
+        if (held) {
+          return {
+            ...planned,
+            stage: 'ready',
+            sessionDoubt: held.why,
+            ...(held.working ? { doubtWorking: true } : {}),
+          };
+        }
+        const resumeHold = uncarryableResume(planned, continuitySession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return {
+          ...planned,
+          pane: candidate.pane,
+          workspace: movedRecord.workspace,
+          // The identity the record proves, not the one the pane holds now: execution re-proves
+          // the host's replacement of that recorded process before it types anything.
+          repair: {
+            pane: candidate.pane,
+            workspace: movedRecord.workspace,
+            launched: recorded.launched,
+            cli: seat.cli,
+            ownLine: { session: continuitySession, ...(movedEndpointGone ? { endpoint: true } : { launcherBypass: true }) },
+          },
+          resume: continuitySession,
+          ...(vacated === undefined ? {} : { sweep: vacated }),
+        };
+      }
       return {
         ...planned,
         stage: 'ready',
@@ -1261,6 +1294,39 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
+      // The structural proof, never screen text: this branch is a pane whose process is not the
+      // one team launched (the host restored it), and the seat's line runs a launcher that sets
+      // what the CLI needs (an endpoint, a key) and then execs it. A host restore resumes the
+      // bare CLI, so the launcher's settings are gone (17 Nov: every DeepSeek turn failed on the
+      // model). It is exited in place and launched again from its own line, carrying the
+      // conversation; a working, unsent or dialog pane is held and said, and execution re-proves
+      // both conditions before any key.
+      if (recorded.pane && restoredBypassesLauncher(effectiveSeatOf(seat, planned))) {
+        const held = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
+        if (held) {
+          return {
+            ...planned,
+            stage: 'ready',
+            sessionDoubt: held.why,
+            ...(held.working ? { doubtWorking: true } : {}),
+          };
+        }
+        const resumeHold = uncarryableResume(planned, restoredSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return {
+          ...planned,
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          repair: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            launched: recorded.launched,
+            cli: seat.cli,
+            ownLine: { session: restoredSession, launcherBypass: true },
+          },
+          resume: restoredSession,
+        };
+      }
       // The record declares the channel and nothing is answering. An idle pane is exited in
       // place and launched again from that line; a working, unsent, or dialog pane stays.
       if (
@@ -1419,6 +1485,37 @@ function seatPlan(
       screen: screenOf(recorded.pane),
     });
     const next = unready === null ? null : launchedIdentity(processes[seat.name] ?? null);
+    // The proof says the pane is the seat, but a host restore runs the bare CLI (a process team
+    // did not launch): a launcher seat lost what its launcher sets, and a Codex seat lost its managed endpoint (its control socket
+    // is gone, so every push leg answers ENOENT: material's operator after the 17 Nov restart).
+    // Either is exited in place and launched again from its own line, carrying the conversation.
+    const endpointGone = unready !== null && next !== null && endpointRelaunch(seat, recorded, planned.launch);
+    if (unready !== null && next !== null && (restoredBypassesLauncher(effectiveSeatOf(seat, planned)) || endpointGone)) {
+      const held = replacedScreenRefusal(seat, recorded.pane, screenOf, agents?.find((agent) => agent.pane === recorded.pane)?.status);
+      if (held) {
+        return {
+          ...planned,
+          stage: 'ready',
+          sessionDoubt: held.why,
+          ...(held.working ? { doubtWorking: true } : {}),
+        };
+      }
+      const resumeHold = uncarryableResume(planned, continuitySession);
+      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      return {
+        ...planned,
+        pane: recorded.pane,
+        workspace: recorded.workspace,
+        repair: {
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          launched: recorded.launched,
+          cli: seat.cli,
+          ownLine: { session: continuitySession, ...(endpointGone ? { endpoint: true } : { launcherBypass: true }) },
+        },
+        resume: continuitySession,
+      };
+    }
     if (unready !== null && next !== null) {
       return {
         ...planned,

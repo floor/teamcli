@@ -46,7 +46,7 @@ import { featureDialog, featureDialogClose } from './reboot.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { processStartOf } from '../watch/pane.ts';
-import { readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
+import { classifyComposer, readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
@@ -2767,7 +2767,28 @@ export async function executePlan(
           break;
         }
         const listedNow = agentsNow?.find((agent) => agent.pane === op.pane && (agent.name === null || agent.name === op.seat));
-        const screenKind = (): ScreenKind => host.classify(session, op.pane, op.cli);
+        // A launcher-bypass relaunch is authorised by structure, never by screen text, and the
+        // structure is proven again here, right before any key: the seat's record still names the
+        // launch the plan read (nothing launched it since), and the pane still holds a process
+        // team did not launch. Either changed: nothing is typed.
+        if (op.launcherBypass === true) {
+          const storedNow = host.seatStates?.(session)?.[op.seat]?.launched;
+          const sameRecord = storedNow !== undefined && JSON.stringify(storedNow) === JSON.stringify(op.launched);
+          if (!sameRecord || seatProcessVerdict(storedNow, processNow) !== 'replaced') {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: 'its record or its process changed since the plan; nothing typed' });
+            break;
+          }
+        }
+        // That relaunch may also exit a provider-error screen (a turn that failed on the model),
+        // but only while the composer itself is empty: a draft, a dialog or a working turn is
+        // still refused below, and no other repair widens.
+        const composerEmpty = (frame: string | null | undefined): boolean =>
+          frame != null && frame !== '' && classifyComposer(op.cli, frame.split('\n')).kind === 'idle';
+        const screenKind = (): ScreenKind => {
+          const read = host.classify(session, op.pane, op.cli);
+          return read === 'provider error' && op.launcherBypass === true && composerEmpty(host.paneText?.(session, op.pane)) ? 'idle' : read;
+        };
         const kind = screenKind();
         if (listedNow?.status === 'working' || kind === 'working') {
           // A seat that came back working is left to finish its turn: nothing is typed and the
@@ -2833,7 +2854,12 @@ export async function executePlan(
               // composer rows are exactly the exit word. A working turn, a transcript mention,
               // or any other draft does not get Enter.
               const frame = host.paneText?.(session, op.pane) ?? undefined;
-              const beforeEnter = launchKind(readScreen(op.cli, frame).kind);
+              const frameKind = launchKind(readScreen(op.cli, frame).kind);
+              // The exit word not drawn yet on a provider-error screen reads as that error; only a
+              // launcher-bypass repair, and only with an empty composer, counts it as idle.
+              const beforeEnter = frameKind === 'provider error' && op.launcherBypass === true && composerEmpty(frame)
+                ? 'idle'
+                : frameKind;
               const composerIsExit = beforeEnter === 'unsent' && boxHoldsText(op.cli, exitWord, frame);
               const pressed = (beforeEnter === 'idle' || composerIsExit) && (await host.pressEnter?.(session, op.pane)) === true;
               if (!pressed) {

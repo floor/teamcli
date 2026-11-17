@@ -370,7 +370,6 @@ describe('a walled seat keeps the note without a wake', () => {
 const SHIPPED = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse', 'jules'] as const;
 
 const LIMIT_TAILS = [
-  "There's an issue with the selected model (k3-256k)\n❯ ",
   'Usage limit reached\n❯ ',
   'Request rejected (429)\n❯ ',
   'weekly quota exhausted\n❯ ',
@@ -420,12 +419,15 @@ function onceHarness(): { ctx: CheckContext; finish: () => void } {
 }
 
 describe('an out-of-tokens screen is not idle or done', () => {
-  test('each shipped CLI reads the model-issue screen as out of tokens, never idle or done', () => {
+  // 17 Nov: the model-issue sentence is a launch or model fault (a seat resumed without its
+  // launcher's endpoint), never quota. It reads as a provider error on the model, not idle or
+  // done, and never out of tokens.
+  test('each shipped CLI reads the model-issue screen as a model fault, never out of tokens, idle or done', () => {
     const tail = "There's an issue with the selected model (k3-256k)\n❯ ";
     for (const cli of SHIPPED) {
       const screen = readScreen(cli, tail);
-      expect(screen, cli).toEqual({ kind: 'rate limit', reset: null, reason: 'out of tokens' });
-      expect(outOfTokensState(screen)).toBe('out of tokens');
+      expect(screen, cli).toEqual({ kind: 'provider error', reason: 'model' });
+      expect(outOfTokensState(screen)).toBeNull();
     }
   });
 
@@ -440,12 +442,12 @@ describe('an out-of-tokens screen is not idle or done', () => {
   });
 
   test('the status word is out of tokens, and a quoted sentence above the live box is not', () => {
-    const live = readScreen('claude-code', "There's an issue with the selected model (k3-256k)\n❯ ");
+    const live = readScreen('claude-code', 'Usage limit reached\n❯ ');
     expect(outOfTokensState(live)).toBe('out of tokens');
     expect(outOfTokensState(live)).not.toBe('idle');
     expect(outOfTokensState(live)).not.toBe('done');
     const quoted = [
-      "There's an issue with the selected model (k3-256k)",
+      'Usage limit reached',
       'I answered it before the tests ran, so this is the box after.',
       '',
       claudeBox(''),

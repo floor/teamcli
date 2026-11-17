@@ -4,7 +4,7 @@
 // runs on the plain form, and the styling tells a greyed suggestion from typed text.
 import { readFileSync } from 'node:fs';
 import { stripSgr } from '../ansi.ts';
-import { outOfTokensReset, outOfTokensTail } from '../quota/token-fallback.ts';
+import { modelFaultTail, outOfTokensReset, outOfTokensTail } from '../quota/token-fallback.ts';
 import { classifyLines, composerBox, composeLines, foldMarked, foldOf, questionTextOf, statusRowOf, type Box, type Fold, type QuestionReading, type ReadClock, type ScreenOptions } from './screen-core.ts';
 import type { ScreenData, VersionRange } from './screen-data.ts';
 import { quotaFor } from '../profiles/profile.ts';
@@ -52,8 +52,10 @@ export type Screen =
                                      // and this screen; an operator's to act on otherwise
   | { kind: 'vendor notice' }        // the CLI's own notice, an update screen for one: carried
                                      // only by a captured, versioned record, and never answered
-  | { kind: 'provider error' }       // the CLI's provider failed mid-response and the prompt is
-                                     // back: a transient error, never typed into
+  | { kind: 'provider error'; reason?: 'model' } // the CLI's provider failed mid-response and
+                                     // the prompt is back: a transient error, never typed into;
+                                     // `model`: the turn failed on the model itself (a launch or
+                                     // model fault, never quota)
   | { kind: 'rate limit'; reset: Reset | null; reason?: string } // a usage limit, with the reset the
                                      // screen names and how it words it, or null when it names none;
                                      // a matched rule may also name an action the screen requires
@@ -175,6 +177,10 @@ export function withOutOfTokens(cli: string, text: string, screen: Screen, optio
   if (!data) return screen;
   if (screen.kind === 'unknown' && (screen.provenance !== undefined || screen.matched !== undefined)) return screen;
   if (screen.kind !== 'idle' && screen.kind !== 'unknown' && screen.kind !== 'unsent' && screen.kind !== 'scroll back') return screen;
+  // A draft in the box stays unsent: the model-fault reading never hides typed text.
+  if ((screen.kind === 'idle' || screen.kind === 'unknown') && modelFaultTail(cli, text) && !limitTailIsHistory(data, text, options)) {
+    return { kind: 'provider error', reason: 'model' };
+  }
   if (!outOfTokensTail(cli, text)) return screen;
   if (limitTailIsHistory(data, text, options)) return screen;
   const value = outOfTokensReset(text);

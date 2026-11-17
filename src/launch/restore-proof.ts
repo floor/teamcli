@@ -240,6 +240,28 @@ export function restorePaneBusy(cli: string, screen: string | null, status: stri
 export type RestoreRelaunch = 'launcher' | 'model' | 'channel';
 
 /**
+ * Whether a seat runs through something the host's own restore does not re-run: a launcher
+ * script in front of the CLI, a file that lets the launcher choose the model, or a Claude Code
+ * seat on the shipped launcher with a provider other than Anthropic (its endpoint and key are set
+ * in front of the CLI). A host restart resumes the bare CLI without them, and every turn then
+ * fails on the model ("There's an issue with the selected model (deepseek-flash)", material's and
+ * floor's DeepSeek seats after the 17 Nov restart). The launchers exec the CLI, so the process
+ * table cannot show them; the proof is the pane's process not being the one team launched, read
+ * with this. Such a seat is launched again from its own line, never adopted where it stands.
+ */
+export function restoredBypassesLauncher(
+  seat: Pick<Seat, 'cli'> & { launch?: string; modelFrom?: Seat['modelFrom']; launcher?: string; vendor?: string },
+): boolean {
+  const providerLaunch = seat.cli === 'claude-code' && seat.launcher === 'claude-code'
+    && seat.vendor !== undefined && seat.vendor !== 'anthropic';
+  return providerLaunch || seat.launch !== undefined && usesLauncher({
+    cli: seat.cli,
+    launch: seat.launch,
+    ...(seat.modelFrom === undefined ? {} : { modelFrom: seat.modelFrom }),
+  });
+}
+
+/**
  * Why a proven restored seat is launched again from its recorded line. A launcher or a model
  * that is not the record's is a mismatch even when the pane is busy: the caller holds it and
  * types nothing. A channel the record declares, with no live answer, is a mismatch only while
@@ -262,13 +284,7 @@ export function restoreRelaunch(input: {
   // the provider's endpoint and key set in front of the CLI. A host restart resumes the CLI
   // without them, and every turn then fails on the model (vlist's DeepSeek reviewer, 2026-11-12),
   // so it is launched again from its own line, as a wrapper-script seat is.
-  const providerLaunch = input.seat.cli === 'claude-code' && input.seat.launcher === 'claude-code'
-    && input.seat.vendor !== undefined && input.seat.vendor !== 'anthropic';
-  const launcher = providerLaunch || launch !== undefined && usesLauncher({
-    cli: input.seat.cli,
-    launch,
-    ...(input.seat.modelFrom === undefined ? {} : { modelFrom: input.seat.modelFrom }),
-  });
+  const launcher = restoredBypassesLauncher(input.seat);
   const channel = input.channelQuiet && (channelLaunchEnabled(launch) || channelLaunchEnabled(input.recordedLaunch));
   if (!launcher && !input.modelDiffers && !channel) return null;
   if (restorePaneBusy(input.seat.cli, input.screen, input.status)) {

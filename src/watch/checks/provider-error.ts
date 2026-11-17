@@ -12,7 +12,7 @@ import type { Reset, Screen } from '../screen.ts';
 // exactly as the screen words it (a clock after `at`, a span after `in`), or saying plainly that
 // the screen names none.
 
-type Held = { kind: 'provider error' } | { kind: 'rate limit'; reset: Reset | null; reason?: string };
+type Held = { kind: 'provider error'; reason?: 'model' } | { kind: 'rate limit'; reset: Reset | null; reason?: string };
 
 function held(screen: Screen): Held | null {
   if (screen.kind === 'provider error') return screen;
@@ -29,6 +29,9 @@ function accountOf(seat: SeatObservation): string | null {
 }
 
 function textOf(name: string, account: string | null, state: Held): string {
+  if (state.kind === 'provider error' && state.reason === 'model') {
+    return `${name} fails on its model ("issue with the selected model"): a launch or model fault, not quota; a seat restored without its launcher is relaunched by team up`;
+  }
   if (state.kind === 'provider error') return `${name} shows a provider error: connection lost, and no capture names a retry`;
   if (state.reason !== undefined) return `${name} ${state.reason}`;
   const on = account === null ? '' : ` on ${account}`;
