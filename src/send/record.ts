@@ -980,42 +980,20 @@ export function readClose(path: string, expectedId?: string): CloseRead {
   return { ok: true, close };
 }
 
-/** One checkout's resolved folder, reused across the receipts of a pass. A pass over a busy
- *  inbox checks thousands of receipts against the same checkout, and resolving it each time was
- *  a third of the pass (measured 2026-11-17: 4,400 resolutions, 52 ms of a 140 ms pass). The
- *  resolved folder scopes the cache key below, so a reuse must still name the same directory:
- *  every reuse stats the root (following links) and compares the directory's device and inode
- *  with the ones recorded when it was resolved. A link retargeted to another checkout names
- *  another directory, so the folder is resolved again and the old checkout's cached receipt
- *  never matches the new scope. One stat is much cheaper than a resolve of every component. */
-const realRootCache = new Map<string, { real: string; dev: number; ino: number }>();
-
-function realRootOf(root: string): string {
-  let now: { dev: number; ino: number };
+/** The directory a path names, as device and inode, following links; null when it cannot be
+ *  read. For folders this is exactly `sameFolder`'s test: two paths resolve to the same canonical
+ *  folder when, and only when, they name the same directory. One stat is a fraction of a resolve. */
+function folderIdentity(at: string): string | null {
   try {
-    const stat = statSync(root);
-    now = { dev: stat.dev, ino: stat.ino };
+    const stat = statSync(at);
+    return `${String(stat.dev)}:${String(stat.ino)}`;
   } catch {
-    return root;
+    return null;
   }
-  const cached = realRootCache.get(root);
-  if (cached !== undefined && cached.dev === now.dev && cached.ino === now.ino) return cached.real;
-  let real: string;
-  try {
-    real = realpathSync(root);
-    const resolved = statSync(real);
-    // The folder resolved is the one just stat'ed: a retarget between the two reads is not kept.
-    if (resolved.dev !== now.dev || resolved.ino !== now.ino) return real;
-  } catch {
-    return root;
-  }
-  if (realRootCache.size >= 64) realRootCache.clear();
-  realRootCache.set(root, { real, ...now });
-  return real;
 }
 
 const RECEIPT_STAMP_CACHE_LIMIT = 8192;
-const receiptStampCache = new Map<string, { stamp: string; scope: string }>();
+const receiptStampCache = new Map<string, { stamp: string; scope: string; payloadRoot: string }>();
 const keyPrintMemo = new WeakMap<KeyObject, string>();
 
 /** Stable fingerprint of a key's public half for in-memory stamp caches. */
@@ -1075,12 +1053,16 @@ export function receiptHolds(
   if (process.getuid !== undefined && held.uid !== process.getuid()) return false;
   const stamp = fileStatStamp(path);
   const keyPrint = stamp !== null ? keyPrintForCache(key) : '';
-  const rootReal = realRootOf(context.root);
+  // The checkout scopes a cached yes by the directory it names now, never by a remembered name:
+  // a hit also needs the receipt's own signed root to name that same directory now, which is the
+  // fresh `sameFolder` test below. A checkout that cannot be read caches nothing.
+  const rootIdentity = folderIdentity(context.root);
   const briefScope = brief === undefined ? '' : `${brief.incarnation}\0${brief.sha256}\0${brief.epoch}`;
-  const scope = `${keyPrint}\0${id}\0${status}\0${context.to}\0${context.session}\0${rootReal}\0${briefScope}`;
+  const scope = `${keyPrint}\0${id}\0${status}\0${context.to}\0${context.session}\0${rootIdentity ?? ''}\0${briefScope}`;
   if (stamp !== null && keyPrint !== '') {
     const cached = receiptStampCache.get(path);
-    if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
+    if (cached !== undefined && rootIdentity !== null && cached.stamp === stamp && cached.scope === scope
+      && folderIdentity(cached.payloadRoot) === rootIdentity) {
       return true;
     }
   }
@@ -1109,7 +1091,7 @@ export function receiptHolds(
   }
   if (stamp !== null && keyPrint !== '') {
     if (receiptStampCache.size >= RECEIPT_STAMP_CACHE_LIMIT) receiptStampCache.clear();
-    receiptStampCache.set(path, { stamp, scope });
+    if (rootIdentity !== null) receiptStampCache.set(path, { stamp, scope, payloadRoot: payload.root });
   }
   return true;
 }

@@ -73,3 +73,26 @@ test('a link retargeted to another checkout while warm refuses the old checkout\
   // The checkout it names now is the other one; its own path still refuses a receipt for root.
   expect(receiptHolds(otherPath, ID, 'read', { ...viaLink, root: s.other }, key)).toBe(false);
 });
+
+test('a checkout moved with its identity, the link then retargeted to it, refuses the stale signed root at once', () => {
+  const s = scene();
+  const key = messageKeyOf(s.home);
+  // The receipt names checkout A by its own path; the reader comes through the link.
+  const written = writeReceipt(s.dropDir, signReceiptPayload(readReceipt(s.root), s.home), s.home);
+  if (!written.ok) throw new Error(written.reason);
+  const viaLink = { to: 'lead', root: s.link, session: 'acme' };
+  const linkedPath = receiptFile(join(s.link, '.agents', 'send-drops', 'acme', 'lead'), ID, 'read');
+  expect(receiptHolds(linkedPath, ID, 'read', viaLink, key)).toBe(true);
+  expect(receiptHolds(linkedPath, ID, 'read', viaLink, key)).toBe(true);
+  // A moves to C (same device and inode), and the link follows it. The receipt file, its path
+  // through the link and its stamp are unchanged; the signed root A no longer names that folder.
+  const moved = `${s.root}-moved`;
+  renameSync(s.root, moved);
+  const next = `${s.link}.next`;
+  symlinkSync(moved, next);
+  renameSync(next, s.link);
+  expect(receiptHolds(linkedPath, ID, 'read', viaLink, key)).toBe(false);
+  // A folder at A again is another directory: still refused.
+  mkdirSync(s.root);
+  expect(receiptHolds(linkedPath, ID, 'read', viaLink, key)).toBe(false);
+});
