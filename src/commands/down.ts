@@ -1145,6 +1145,18 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       return 1;
     }
     try {
+      // The reading that made this run idle was taken before the lock: read it again under the
+      // lock. A session started in between (the daemon's boot start holds this same lock across
+      // its spawn) is not stopped by an idle run, and no stop is recorded for it.
+      if (idleLock !== null && sources.sessionRunning(session) !== false) {
+        refuse(io, json, 'down', {
+          id: 'down.started',
+          message: `session ${session} started while this run waited for its lock; nothing was recorded (run team down again to stop it)`,
+          repair: null,
+        });
+        // exit: down.started
+        return 1;
+      }
       remember();
       noteStopped();
       noteSessionEmpty();

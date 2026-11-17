@@ -104,7 +104,8 @@ describe('a listed team with no config record', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await underRegistry(() => runDown([], io, sources));
     expect(code).toBe(0);
-    expect(seen).toEqual(['docs']);
+    // Read once to choose the idle path, and once more under the run lock before it records.
+    expect(seen).toEqual(['docs', 'docs']);
     expect(io.out).toContain('session docs is not running: nothing to stop');
     expect(io.out).not.toContain('floor-docs');
     expect(io.out).toContain(FILE_FALLBACK_LISTED);
@@ -212,7 +213,8 @@ describe('a migrated config record that omits session', () => {
     await underRegistry(async () => {
       const stopped = testIo(root, { kind: 'owner' });
       expect(await runDown([], stopped, down)).toBe(0);
-      expect(seen).toEqual(['docs']);
+      // Read once to choose the idle path, and once more under the run lock before it records.
+      expect(seen).toEqual(['docs', 'docs']);
       expect(stopped.out).toContain('session docs is not running: nothing to stop');
       expect(stopped.out).not.toContain('floor-docs');
 

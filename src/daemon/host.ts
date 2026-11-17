@@ -27,7 +27,7 @@ import { getTeam, noteStoppedTeamRunning, readTeams, teamIdOf } from '../registr
 import { currentRunMemo } from '../run-memo.ts';
 import type { TeamFile } from '../file/types.ts';
 import { paneProcessesAsync, sessionListAsync, sessionRunningAsync, startStoppedServer, type PaneProcesses } from '../herdr.ts';
-import { bootId, readBootQueue, readSessionsRunning, writeBootQueue, writeSessionsRunning, type StartFacts } from './restore/boot-sessions.ts';
+import { bootId, dropSessionsRunning, readBootQueue, readSessionsRunning, writeBootQueue, writeSessionsRunning, type StartFacts } from './restore/boot-sessions.ts';
 import { runBootWork, type BootRunDeps } from './restore/boot-run.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -3147,6 +3147,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       readQueue: () => readBootQueue(home),
       writeQueue: (queue) => writeBootQueue(home, queue),
       writeObserved: (record) => writeSessionsRunning(home, record),
+      dropObserved: () => dropSessionsRunning(home),
       sessions: () => sessionsRunningMap(() => sessionListAsync({ signal: restoreAbort.signal })),
       start: (session, hooks) => startStoppedServer(session, { signal: restoreAbort.signal }, hooks, processStartOf),
       // Gone only on proof: no such process, or a different start time read (a reused pid). A

@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   bootId,
+  dropSessionsRunning,
   bootQueuePath,
   planBootQueue,
   readBootQueue,
@@ -93,6 +94,8 @@ function world(opts: {
   load?: number[];
   facts?: (root: string) => StartFacts;
   failWrites?: boolean;
+  /** Only the observation cannot be written (the queue can). */
+  failObserve?: boolean;
   /** Sessions whose server never comes up. */
   dead?: Set<string>;
   /** Runs while the start awaits its read of the terminal host. */
@@ -121,7 +124,8 @@ function world(opts: {
     readObserved: () => readSessionsRunning(home),
     readQueue: () => readBootQueue(home),
     writeQueue: (queue) => (opts.failWrites === true ? false : writeBootQueue(home, queue)),
-    writeObserved: (record) => (opts.failWrites === true ? false : writeSessionsRunning(home, record)),
+    writeObserved: (record) => (opts.failWrites === true || opts.failObserve === true ? false : writeSessionsRunning(home, record)),
+    dropObserved: () => dropSessionsRunning(home),
     sessions: async () => new Map<string, boolean>([...[...stopped].map((name): [string, boolean] => [name, false]), ...[...running].map((name): [string, boolean] => [name, true])]),
     facts: async (root) => {
       if (opts.facts !== undefined) return opts.facts(root);
@@ -418,4 +422,44 @@ test('the socket probe proves absence only for a missing or refused socket', asy
   // A file that is not a socket: not proof of absence.
   writeFileSync(join(dir, 'plain'), '');
   expect(probe(join(dir, 'plain'))).not.toBe('listening');
+});
+
+const SHARED: BootRoute = { root: '/w/docs', team: 'docs', session: 'floor' };
+
+test('two roots sharing one terminal session make one start: one spawn across both routes and a restart', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR, SHARED] });
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor']), slow: new Set(['floor']), hosted: [FLOOR, SHARED, MATERIAL] });
+  w.limitWaits(4);
+  await runBootWork(w.deps);
+  const v = world({ boot: BOOT_B, stopped: new Set(['floor']), slow: new Set(['floor']), hosted: [FLOOR, SHARED, MATERIAL] });
+  v.live.add(4242);
+  v.limitWaits(3);
+  await runBootWork(v.deps);
+  expect(w.spawns.length + v.spawns.length).toBe(1);
+  expect(readBootQueue(home)?.pending.map((one) => one.session)).toEqual(['floor']);
+});
+
+test('a shared session\'s start is owned across entries: a second entry for it never spawns while the first holds a child', async () => {
+  writeBootQueue(home, { boot: BOOT_B, from: BOOT_A, pending: [{ ...FLOOR, child: { pid: 4242, start: 1_000 } }, { ...SHARED }], settled: [] });
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor']), hosted: [FLOOR, SHARED], childState: () => 'alive' });
+  w.limitWaits(3);
+  await runBootWork(w.deps);
+  expect(w.spawns).toEqual([]);
+});
+
+test('an observation that can no longer be written is removed: the next restart restores nothing stale', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+  // This boot: nothing to restore (already its queue), but every observation write fails.
+  writeBootQueue(home, { boot: BOOT_B, from: BOOT_A, pending: [], settled: [] });
+  const w = world({ boot: BOOT_B, running: new Set(['floor']), failObserve: true });
+  w.limitWaits(1);
+  await runBootWork(w.deps);
+  expect(readSessionsRunning(home)).toBeNull();
+  expect(w.logs.join('\n')).toContain('it was removed, so the next restart brings no session back');
+  // The next boot finds no evidence and starts nothing (a session stopped by hand stays stopped).
+  const next = world({ boot: BOOT_C, stopped: new Set(['floor']) });
+  next.limitWaits(2);
+  await runBootWork(next.deps);
+  expect(next.spawns).toEqual([]);
+  expect(dropSessionsRunning(home)).toBe(true);
 });

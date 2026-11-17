@@ -29,6 +29,8 @@ export type BootRunDeps = {
   readQueue: () => BootQueue | null;
   writeQueue: (queue: BootQueue) => boolean;
   writeObserved: (record: SessionsRunning) => boolean;
+  /** Removes the observation (stale once it can no longer be written). True when it is gone. */
+  dropObserved: () => boolean;
   /** The terminal host's sessions, name to running; null when it did not answer. */
   sessions: () => Promise<ReadonlyMap<string, boolean> | null>;
   /** The live facts for a root, read fresh (team file, registry, boot id). */
@@ -110,8 +112,10 @@ export async function workBootQueue(deps: BootRunDeps, queue: BootQueue): Promis
       if (deps.loadPerCore() > deps.loadMaxPerCore) break;
       // A server an earlier attempt spawned (or reserved) is never doubled: while it lives, or
       // while it cannot be told to be gone, the route waits for it (and settles once its session
-      // reads running). Only a proven exit or a reused pid clears the record.
-      const entry = queue.pending.find((one) => same(one, route));
+      // reads running). Only a proven exit or a reused pid clears the record. Ownership is per
+      // terminal session: any pending entry for this session holding a child owns its start.
+      const entry = queue.pending.find((one) => one.session === route.session && one.child !== undefined)
+        ?? queue.pending.find((one) => same(one, route));
       if (entry?.child !== undefined) {
         const state = entry.child.pid === null ? 'unknown' : deps.childState({ pid: entry.child.pid, start: entry.child.start });
         if (state !== 'gone') {
@@ -214,7 +218,17 @@ export async function observeRunning(deps: BootRunDeps, boot: string): Promise<v
     if (sessions === null) continue;
     const running = deps.hosted().filter((route) => sessions.get(route.session) === true && deps.lifecycleProblem(route.root, route.team) === null);
     const ok = deps.writeObserved({ boot, at: deps.now(), running: [...running] });
-    if (!ok && !failing) deps.log('restore: the running-sessions record could not be written; the next restart may not bring sessions back');
+    if (!ok) {
+      // An observation that can no longer be kept current is stale evidence: a session stopped
+      // since would be restarted from it. It is removed, so the next restart restores nothing
+      // rather than something stopped on purpose.
+      const dropped = deps.dropObserved();
+      if (!failing) {
+        deps.log(dropped
+          ? 'restore: the running-sessions record could not be written; it was removed, so the next restart brings no session back until it is written again'
+          : 'restore: the running-sessions record could not be written or removed; the next restart may restore from an older record');
+      }
+    }
     if (ok && failing) deps.log('restore: the running-sessions record is written again');
     failing = !ok;
   }

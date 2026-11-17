@@ -22,7 +22,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execText } from '../../child.ts';
-import { renameSync, writeFileSync } from '../../host/guarded-fs.ts';
+import { renameSync, unlinkSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { machineConfigDir } from '../paths.ts';
 
 export const SESSIONS_RUNNING_FILE = 'sessions-running.json';
@@ -91,6 +91,16 @@ export function readSessionsRunning(home: string): SessionsRunning | null {
   if (typeof boot !== 'string' || boot === '' || typeof at !== 'number' || !Number.isFinite(at)) return null;
   if (!Array.isArray(running) || !running.every(isRoute)) return null;
   return { boot, at, running: uniqueRoutes(running) };
+}
+
+/** Removes the observation. True when it is gone (or was never there). */
+export function dropSessionsRunning(home: string): boolean {
+  try {
+    unlinkSync(sessionsRunningPath(home));
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
 }
 
 export function writeSessionsRunning(home: string, record: SessionsRunning): boolean {
@@ -164,7 +174,11 @@ export function planBootQueue(
   if (stored !== null && stored.boot === boot) return { queue: stored, isNew: false };
   if (observed === null || observed.boot === boot) return null;
   if (stored !== null && stored.from === observed.boot) return null;
-  return { queue: { boot, from: observed.boot, pending: uniqueRoutes(observed.running), settled: [] }, isNew: true };
+  // One start per terminal session: routes that share a session are one entry (the first),
+  // so no two routes can each start a server for the same session.
+  const bySession: BootRoute[] = [];
+  for (const route of uniqueRoutes(observed.running)) if (!bySession.some((one) => one.session === route.session)) bySession.push(route);
+  return { queue: { boot, from: observed.boot, pending: bySession, settled: [] }, isNew: true };
 }
 
 /** The live facts a start is proven against, read fresh at the moment of the start. */
