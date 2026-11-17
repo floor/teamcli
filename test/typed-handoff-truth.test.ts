@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runSend } from '../src/commands/send.ts';
+import { realHost, runSend } from '../src/commands/send.ts';
 import { serveWakeChild } from '../src/daemon/wake/child.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { startSendDaemon, type SendDaemonHandle, type WakeHandoff } from '../src/send/daemon.ts';
@@ -49,6 +49,14 @@ async function handed() {
   const marker = () => JSON.parse(readFileSync(`${staged}.fallback.json`, 'utf8')) as FallbackMarker;
   return { made, team: loaded.team, host, io, request, staged, marker };
 }
+
+describe('the real host returns at the handoff', () => {
+  // A send to a typed seat is not held for the wake child's walk: the daemon's acceptance is the
+  // send's ending, and the outcome lands in the history, the trace and the log (2026-11-17).
+  test('handedWaitMs is zero', () => {
+    expect(realHost.handedWaitMs).toBe(0);
+  });
+});
 
 describe('typed handoff outcome truth', () => {
   test('acceptance returns immediately with a pending fallback status and attempt', async () => {
