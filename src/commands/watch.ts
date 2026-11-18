@@ -133,8 +133,6 @@ import {
 } from '../watch/status-events.ts';
 import { mailTreeIn, seatMailDirIn } from '../queue/mail-tree.ts';
 import { floorState } from '../queue/floor.ts';
-import { isRecordSidecarName, recordNameOk } from '../send/record.ts';
-import { DROP_MONTH_ARCHIVE } from '../send/drop-folder.ts';
 
 export {
   classifyPromptKind,
@@ -2948,7 +2946,7 @@ export async function relayConfinedOutboxes(
       // E7b revision 3 (carrier 4): an older requester (outbox protocol 1) never settles mail on a
       // root that is not proven dark: every ack and reply it relays is refused, whatever it names,
       // with the one pointer to the installed command. A proven-dark root serves it as before.
-      // It is refused too whenever the seat's stamped folder holds any live record or cannot be read,
+      // It is refused too whenever the seat's stamped folder holds any entry at all or cannot be read,
       // whatever the floor: after a rollback to dark, stamped mail stays stamped until it settles.
       if (protocol === 1 && (command === 'ack' || command === 'reply')
         && (floorState(root, home).kind !== 'dark' || stampedFolderHolds(seatMailDirIn(dir, session, caller.name, 'stamped')))) {
@@ -2972,16 +2970,15 @@ export async function relayConfinedOutboxes(
   });
 }
 
-/** Whether a seat's stamped folder holds a live record, or stands and cannot be read (fail
- *  closed). No folder holds none. Names are only listed, never resolved. */
+/** Whether a seat's stamped folder holds anything at all (a record, a sidecar, `.exposures`, its
+ *  month archive), or stands and cannot be read: fail closed, with no name classified and no id
+ *  looked up. Only an absent or empty folder holds nothing. */
 export function stampedFolderHolds(folder: string): boolean {
-  let names: string[];
   try {
-    names = readdirSync(folder);
+    return readdirSync(folder).length > 0;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== 'ENOENT';
   }
-  return names.some((name) => !name.startsWith('.') && recordNameOk(name) && !isRecordSidecarName(name) && name !== DROP_MONTH_ARCHIVE);
 }
 
 /** The one line an older requester's relayed ack or reply gets on a root not proven dark. */

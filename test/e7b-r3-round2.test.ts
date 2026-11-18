@@ -4,7 +4,7 @@
 //   3. an older requester's (protocol 1) relayed ack or reply is refused on a root not proven dark.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -226,7 +226,7 @@ describe('finding 2: the era rides with the message into history, not the floor 
 // not proven dark, with no id resolution; on a proven-dark root protocol 1 works as before.
 // Driven through the watch's real relay run (relayConfinedOutboxes, the real handlers behind it).
 describe('round 3: protocol-1 ack and reply through the real relay run', () => {
-  async function relayed(active: boolean, command: 'ack' | 'reply' = 'ack', rollback = false): Promise<{ result: { code: number; err: string }; dirs: { legacy: string; stamped: string }; id: string; cleanup: () => void }> {
+  async function relayed(active: boolean, command: 'ack' | 'reply' = 'ack', rollback = false, archiveOnly = false): Promise<{ result: { code: number; err: string }; dirs: { legacy: string; stamped: string }; id: string; cleanup: () => void }> {
     const made = nativeFixtureWorld(['typed']);
     updateState(made.dir, (state) => {
       state.sessions.acme = { seats: { helper: { stage: 'ready', pane: 'w1:p1' } }, worktrees: {} };
@@ -239,6 +239,15 @@ describe('round 3: protocol-1 ack and reply through the real relay run', () => {
     const id = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e91';
     const payload: RecordPayload = { kind: 'message', id, to: 'helper', to_id: null, root: made.root, session: 'acme', at: new Date().toISOString(), body: SECRET, from: 'lead', from_id: null, rule: 'the owner', thread: id };
     expect(writeRecord(dirs.legacy, signRecord(active ? stampedPayload(payload, made.home) : payload, made.home)).ok).toBe(true);
+    if (archiveOnly) {
+      // As retention leaves a stopped seat's unread mail: the record in archive/<month>/unread/,
+      // and nothing else in the seat's stamped folder but that archive.
+      const unread = join(dirs.stamped, 'archive', '2026-11', 'unread');
+      mkdirSync(unread, { recursive: true, mode: 0o700 });
+      renameSync(join(dirs.stamped, id), join(unread, id));
+      if (existsSync(join(dirs.stamped, '.exposures'))) renameSync(join(dirs.stamped, '.exposures'), join(unread, '.exposures'));
+      expect(readdirSync(dirs.stamped)).toEqual(['archive']);
+    }
     if (rollback) expect(deactivate(made.root, made.home).kind).toBe('dark');
     const folder = outboxFolder(made.dir, 'acme', 'helper', 1)!;
     mkdirSync(folder, { recursive: true, mode: 0o700 });
@@ -267,6 +276,20 @@ describe('round 3: protocol-1 ack and reply through the real relay run', () => {
       expect(run.result.code).not.toBe(0);
       expect(run.result.err).toContain(protocol1Refusal('ack'));
       expect(readdirSync(run.dirs.stamped).filter((name) => name.startsWith(`${run.id}.`))).toEqual([]);
+    } finally {
+      run.cleanup();
+    }
+  });
+
+  test('round 5: an archive-only stamped mailbox after a rollback: a protocol-1 reply is refused and writes nothing', async () => {
+    const run = await relayed(true, 'reply', true, true);
+    try {
+      expect(run.result.code).not.toBe(0);
+      expect(run.result.err).toContain(protocol1Refusal('reply'));
+      const unread = join(run.dirs.stamped, 'archive', '2026-11', 'unread');
+      expect(readdirSync(unread).filter((name) => name.startsWith(`${run.id}.`))).toEqual([]);
+      expect(readdirSync(run.dirs.stamped)).toEqual(['archive']);
+      expect(readdirSync(run.dirs.legacy).filter((name) => name.startsWith(run.id))).toEqual([]);
     } finally {
       run.cleanup();
     }
