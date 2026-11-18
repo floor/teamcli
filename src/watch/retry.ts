@@ -54,7 +54,7 @@ import { wakeStep } from '../send/steps.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
-import { leadAckReceiptAt } from '../send/record.ts';
+import { leadAckReceiptAt, recordStampAt, stampedSettled } from '../send/record.ts';
 import type { TypedWakeResult } from '../send/typed-wake.ts';
 import { markTaken } from '../send/taken.ts';
 import { verifiedPayloadOf, wakeTrigger } from '../send/wake.ts';
@@ -123,7 +123,7 @@ export type RetryScene = {
   resendStamped?(seat: Seat, dropDir: string, id: string): Promise<string | null>;
   /** The event legs the seat's own resolved order permits a re-offer on (`permittedEventLegs`):
    *  the send walk's own answer, exclusions included. Absent, the unread pass re-offers nothing. */
-  eventLegs?(seat: string): { channel: boolean; socket: boolean; why?: string };
+  eventLegs?(seat: string): { channel: boolean; socket: boolean; typed?: boolean; why?: string };
   /** The pass's shared mail reading: the folds' unread and unacked lists, already taken once.
    *  Absent, this pass takes its own — the same answer, read once more in the pass. */
   mail?: MailPass;
@@ -783,6 +783,17 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
           });
         }
         scene.say(`${seat.name}: ${heldWords(drop)} was cleared by ${cleared.by}`, false);
+        return false;
+      }
+      // E7b: a stamped record is never on this ladder, neither retried nor given up on: the one
+      // re-send scheduler owes it (src/queue/resend.ts). Its marker is only cleaned up once the
+      // record is settled (its recipient's ack or reply, or a clearance).
+      if (recordStampAt(dropDir, drop.id) === true) {
+        const key = scene.home === undefined ? null : messageKeyState(scene.home);
+        if (key !== null && key.kind === 'key'
+          && stampedSettled(dropDir, drop.id, { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator }, key.key)) {
+          clearPending(dropDir, drop.id);
+        }
         return false;
       }
       if (claim === null || drop.from !== GENERAL_BRIEF_FROM) return true;

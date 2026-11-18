@@ -70,7 +70,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -3860,9 +3860,11 @@ async function postSeatWebhook(
   team: TeamFile | null,
   project?: string,
   body?: string,
+  again = false,
 ): Promise<SenderPostOutcome> {
   try {
     return await postArrivalWebhook({
+      ...(again ? { again: true } : {}),
       seat,
       webhook,
       team,
@@ -5967,6 +5969,9 @@ export async function walkReplyDelivery(input: {
    *  resolved them from a signed binding: the socket leg then makes the same record check a
    *  send's own walk makes before it dials (running, same CLI, team, session and seat). */
   recipient?: { agentId: string; teamId: string };
+  /** The re-send scheduler's walk (E7b): the webhook posts again, and only a post this walk made
+   *  counts as the leg that took it. */
+  resend?: true;
 }): Promise<ReplyWalkResult> {
   const seatName = input.seat;
   const from = input.payload.from;
@@ -6164,7 +6169,9 @@ export async function walkReplyDelivery(input: {
       }
       // The reply's own write never posts an arrival, so a record already at the id is the
       // normal state here and no reason to skip the post: the claim decides who posts.
-      const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body);
+      // A re-send (E7b) posts again whatever an earlier post left: its claim, never the posted
+      // mark, decides who posts, and a mark from an earlier post is no delivery of this attempt.
+      const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body, input.resend === true);
       const ms = input.host.now().getTime() - startedAt;
       if (posted.kind === 'posted') {
         return ended({ via: 'webhook', walked: true, unconfirmed: false, summary: `${seatName}: delivered (webhook, ${String(posted.ms)} ms)` });
@@ -6172,7 +6179,7 @@ export async function walkReplyDelivery(input: {
       if (posted.kind === 'unknown') {
         return ended({ via: 'webhook', walked: true, unconfirmed: true, summary: `${seatName}: sent (unconfirmed) (webhook, ${String(ms)} ms)` });
       }
-      if (posted.kind === 'none' && (posted.why === 'claim-held' || posted.why === 'already-posted')) {
+      if (posted.kind === 'none' && input.resend !== true && (posted.why === 'claim-held' || posted.why === 'already-posted')) {
         const postedAlready = posted.why === 'already-posted';
         return ended({
           via: 'webhook',
@@ -6892,7 +6899,14 @@ async function deliverSocketFrame(
 }
 
 /** The event legs a seat's own resolved order lets a watch re-offer a stored message on. */
-export type PermittedEventLegs = { channel: boolean; socket: boolean; why?: string };
+export type PermittedEventLegs = {
+  channel: boolean;
+  socket: boolean;
+  /** Whether the walk would type the seat's profile wake (E7b: the re-send scheduler then types it
+   *  through the watch's own guarded wake, never through the walk). */
+  typed?: boolean;
+  why?: string;
+};
 
 /**
  * The event legs a send to this seat would walk right now, read by the send's own order
@@ -6944,7 +6958,7 @@ export function permittedEventLegs(input: {
     now: input.now,
   });
   if (plan.human) return { channel: false, socket: false, why: 'its pane is a human\'s' };
-  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket') };
+  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket'), typed: plan.walkingTyped && plan.chosen.includes('typed') };
 }
 
 /** The result of the watch's one socket redelivery for a channel push no receipt confirmed. */
@@ -7029,8 +7043,9 @@ export async function redeliverChannelOnSocket(input: {
  * The re-send scheduler's adapter (rfc-event-comms E7b, R3.4; src/queue/resend.ts): one stamped,
  * unsettled record offered once more through the receiving seat's current resolved delivery walk
  * — the walk a reply and a client send take (`walkReplyDelivery`), with every leg's own rules: a
- * Codex seat's native queue, the cross-session socket, the webhook, a profile's typed wake, a
- * headless resume, and the bus inbox under them. Each leg that carries the body takes the next
+ * Codex seat's native queue, the cross-session socket, the webhook (posted again), a headless
+ * resume, and the bus inbox under them. The watch binds the walk no pane writer: a re-send's typed
+ * wake is the watch's own guarded one (src/watch/unread.ts). Each leg that carries the body takes the next
  * numbered copy itself (`legBody`, the socket frame); the drop leg carries nothing new, so a
  * drop-only seat's next copy is its own next inbox read. The walk writes no second record (every
  * leg finds the stored one at its id), waits for no receipt, and prints nothing; one history
@@ -7052,7 +7067,9 @@ export async function resendStampedRecord(input: {
 }): Promise<string | null> {
   const { dir, root, project, session, seat, cli, dropDir, id, team } = input;
   const payload = verifiedPayloadOf(dropDir, id, input.host.home);
-  if (payload === null || !isStampedPayload(payload) || payload.to !== seat || payload.session !== session) return null;
+  // The record must be bound to this checkout, seat and session: the message key is the home's,
+  // so a genuine record of another checkout could otherwise verify here under the same names.
+  if (payload === null || !isStampedPayload(payload) || payload.to !== seat || payload.session !== session || !sameFolder(payload.root, root)) return null;
   // The offer waits for nothing: no receipt grace after a queue takes it, no channel push wait.
   const host: SendHost = { ...input.host, inboxGraceMs: 0, channelGraceMs: 0 };
   const quiet: Io = { stdout: () => {}, stderr: () => {}, cwd: root, env: {}, stdinIsTTY: false };
@@ -7060,6 +7077,9 @@ export async function resendStampedRecord(input: {
     ? teamIdOf(root)
     : getAgent(host.home, payload.from_id)?.reach.team ?? teamIdOf(root);
   const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: team });
+  // The frame names the sender: its own label in this team's file when it is a seat of this team,
+  // never the receiving seat's.
+  const senderLabel = fromTeam === teamIdOf(root) && team.seats.some((one) => one.name === payload.from) ? labelNameOf(team, payload.from) : null;
   const walk = await walkReplyDelivery({
     io: quiet,
     host,
@@ -7072,10 +7092,11 @@ export async function resendStampedRecord(input: {
     payload,
     naming,
     file: team,
-    sender: { teamId: fromTeam, project: team.project, label: labelNameOf(team, seat) },
+    sender: { teamId: fromTeam, project: team.project, label: senderLabel },
     address: null,
     who: 'watch',
-    identityHeader: frameIdentityHeader(payload, naming, fromTeam, team.project, labelNameOf(team, seat)),
+    identityHeader: frameIdentityHeader(payload, naming, fromTeam, team.project, senderLabel),
+    resend: true,
   });
   const via = walk.walked && walk.via !== 'drop' && walk.endpointBlocked === undefined ? walk.via : null;
   appendHistory(project, root, host.home, {

@@ -1972,16 +1972,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, nativeWorking: new Set(workingSinceNow.keys()),
               ...(mail === undefined ? {} : { mail }),
               socketRedeliver,
-              // E7b (R3.4): the re-send scheduler's adapter, the seat's own resolved walk. A watch
-              // whose sources carry no typed wake binds none here either.
+              // E7b (R3.4): the re-send scheduler's adapter, the seat's own resolved walk. It binds
+              // no pane writer: a re-send's typed wake is the watch's own guarded one
+              // (src/watch/unread.ts `resendTyped`), never the walk's.
               resendStamped: (seat: Seat, dropDir: string, id: string) => {
-                const { typedWake: _bound, ...rest } = realHost;
-                const host: SendHost = {
-                  ...rest,
-                  home: sources.home ?? realHost.home,
-                  now: sources.now,
-                  ...(sources.typedWake === undefined || realHost.typedWake === undefined ? {} : { typedWake: realHost.typedWake }),
-                };
+                const { typedWake: _unbound, ...rest } = realHost;
+                const host: SendHost = { ...rest, home: sources.home ?? realHost.home, now: sources.now };
                 return resendStampedRecord({ host, dir, root, project: team.project, session, seat: seat.name, cli: seat.cli, dropDir, id, team });
               },
               eventLegs: (seat: string) => permittedEventLegs({ dir, root, home: sources.home ?? realHost.home, session, seat, team, now: sources.now }),

@@ -1,15 +1,16 @@
 // rfc-event-comms E7b (R3.4): the one re-send scheduler. Every stamped record that is not settled
 // is offered again through the seat's current adapter after its backoff (60 s, doubling, capped at
 // 30 minutes, no attempt cap, no last day), whatever leg the seat takes: a Codex seat's native
-// queue, a profile's typed wake, the cross-session socket, the development channel, or none at all
-// (a drop-only seat, whose next copy is its own next inbox read). Only an ack, a reply or a
-// clearance settles a record; a dark root has nothing for the scheduler.
+// queue, a profile's typed wake (the watch's own guarded one), the cross-session socket, the
+// webhook, the development channel, or none at all (a drop-only seat, whose next copy is its own
+// next inbox read). Only an ack, a reply or a clearance settles a record; a dark root has nothing
+// for the scheduler. Each attempt is reserved durably and exclusively before it is dispatched.
 //
 // The live finding this pins (2026-11-18, a test team): a stamped message to a Codex seat that was
 // not acknowledged got copy 1 on its native leg and no copy 2 in 11 minutes, because only the
 // Claude channel and socket ladders re-sent a stamped copy.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as send from '../src/commands/send.ts';
@@ -19,18 +20,20 @@ import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { listenerPath, readMessage } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { activate, type FloorActor } from '../src/queue/floor.ts';
-import { backoffMs, copyHistory, EXPOSURES, offerLedger, resendDue, takeCopyNumber } from '../src/queue/handover.ts';
+import { attemptLedger, backoffMs, copyHistory, EXPOSURES, reserveAttempt, resendDue, takeCopyNumber } from '../src/queue/handover.ts';
 import { seatMailDirIn } from '../src/queue/mail-tree.ts';
-import { resendCandidates, resendPass, type ResendSeat } from '../src/queue/resend.ts';
+import { channelOwnsSeat, resendCandidates, resendPass, type ResendSeat } from '../src/queue/resend.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { readHistory } from '../src/send/history.ts';
+import { markPending, PENDING_MAX_AGE_MS, readPending } from '../src/send/pending.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { signRecord, stampedPayload, writeRecord, type RecordPayload } from '../src/send/record.ts';
-import type { TypedWakeHost } from '../src/send/typed-wake.ts';
+import type { TypedWakeResult } from '../src/send/typed-wake.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
 import { wakeUnreadDrops } from '../src/watch/unread.ts';
-import type { RetryScene } from '../src/watch/retry.ts';
+import { retryHeldDrops, type RetryScene, type RetrySources } from '../src/watch/retry.ts';
 import { testIo } from './helpers.ts';
 import { fake, world, type World } from './send-native-fixtures.ts';
 
@@ -39,6 +42,7 @@ const MIN = 60_000;
 const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
 const ID = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e71';
 const ID2 = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e72';
+const RESEND_NOTE = /^message \S+ · delivery (\d+)/;
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -62,10 +66,11 @@ function keyOf(home: string) {
 }
 
 /** A stamped record from `lead` to `seat`, through the record writer (it lands in the stamped
- *  folder). Returns the seat's legacy folder, the one every reader starts from. */
-function stamped(at: { root: string; dir: string; home: string }, seat: string, id: string, body = `body of ${id}`): string {
+ *  folder). `root` is the checkout the record is bound to (this one unless a scene says).
+ *  Returns the seat's legacy folder, the one every reader starts from. */
+function stamped(at: { root: string; dir: string; home: string }, seat: string, id: string, body = `body of ${id}`, root = at.root): string {
   const payload: RecordPayload = {
-    kind: 'message', id, to: seat, to_id: null, root: at.root, session: SESSION, at: new Date().toISOString(),
+    kind: 'message', id, to: seat, to_id: null, root, session: SESSION, at: new Date().toISOString(),
     body, from: 'lead', from_id: null, rule: 'the owner', thread: id,
   };
   const signed = signRecord(stampedPayload(payload, at.home), at.home);
@@ -91,16 +96,17 @@ function seatOf(at: { root: string; home: string }, dropDir: string, seat: strin
   return { dropDir, context: { to: seat, root: at.root, session: SESSION, lead: 'lead' }, key: keyOf(at.home) };
 }
 
-/** Moves the record's whole delivery history (its copies, the offer ledger and the record's own
+/** Moves the record's whole delivery history (its copies, its attempts and the record's own
  *  arrival) `ms` into the past, as if that much time had gone by. */
 function age(folder: string, id: string, ms: number): void {
   const history = join(folder, EXPOSURES, id);
   if (existsSync(history)) {
     for (const name of readdirSync(history)) {
       const path = join(history, name);
-      if (name === '.offers') {
-        const ledger = JSON.parse(readFileSync(path, 'utf8')) as { n: number; at: string };
-        writeFileSync(path, `${JSON.stringify({ v: 1, n: ledger.n, at: new Date(Date.parse(ledger.at) - ms).toISOString() })}\n`);
+      if (/^\.attempt-\d+$/.test(name)) {
+        const attempt = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown> & { at: string };
+        chmodSync(path, 0o600);
+        writeFileSync(path, `${JSON.stringify({ ...attempt, at: new Date(Date.parse(attempt.at) - ms).toISOString() })}\n`);
         continue;
       }
       const at = new Date(Date.now() - ms);
@@ -122,10 +128,26 @@ function nativeQueue(): { route: NonNullable<SendHost['nativeRoute']>; copies: s
 }
 
 const headerOf = (text: string | undefined): string => (text ?? '').split('\n')[0] ?? '';
+const numberOf = (text: string | undefined): number | null => {
+  const match = RESEND_NOTE.exec(headerOf(text));
+  return match === null ? null : Number(match[1]);
+};
 
+function teamOf(at: World) {
+  const loaded = loadTeamFile(at.root, { home: at.home });
+  if (!loaded.ok) throw new Error('fixture team failed to load');
+  return loaded.team;
+}
+
+/** The adapter the watch binds: the seat's resolved walk, with no pane writer. */
+function adapter(at: World, host: SendHost, cli: string, seat: string, dropDir: string) {
+  const team = teamOf(at);
+  const { typedWake: _unbound, ...rest } = host;
+  return (id: string) => send.resendStampedRecord({ host: rest, dir: at.dir, root: at.root, project: team.project, session: SESSION, seat, cli, dropDir, id, team });
+}
 
 describe('the schedule: from the delivery history, 60 s doubling to 30 minutes, no cap, no last day', () => {
-  test('backoff after each attempt, counted from the newest copy or offer', () => {
+  test('the send\'s delivery is attempt one; a copy only moves the clock; each scheduler attempt doubles the wait', async () => {
     const at = made(['native']);
     activateRoot(at);
     const dropDir = stamped(at, 'native', ID);
@@ -134,18 +156,18 @@ describe('the schedule: from the delivery history, 60 s doubling to 30 minutes, 
     // No copy yet: the send's own delivery is not doubled; one first backoff from arrival.
     expect(resendDue(folder, ID, now + 59_000, now)).toBe(false);
     expect(resendDue(folder, ID, now + 60_000, now)).toBe(true);
-    // Copy 1 now: due 60 s on, not before.
+    // Copy 1 (the send's): due 60 s after it.
     expect(takeCopyNumber(dropDir, ID, 'native')).toBe(1);
     expect(resendDue(folder, ID, now + 30_000, now)).toBe(false);
     expect(resendDue(folder, ID, now + 61_000, now)).toBe(true);
-    // Copy 2: the wait doubles to 120 s.
-    expect(takeCopyNumber(dropDir, ID, 'native')).toBe(2);
-    expect(resendDue(folder, ID, now + 119_000, now)).toBe(false);
-    expect(resendDue(folder, ID, now + 121_000, now)).toBe(true);
+    // A seat's own read (copy 2) moves the clock, not the count: still 60 s.
+    expect(takeCopyNumber(dropDir, ID, 'read')).toBe(2);
+    expect(resendDue(folder, ID, now + 59_000, now)).toBe(false);
+    expect(resendDue(folder, ID, now + 61_000, now)).toBe(true);
     expect([1, 2, 3, 4, 5, 6, 10, 40].map(backoffMs)).toEqual([60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000, 1_800_000, 1_800_000]);
   });
 
-  test('an offer that carried no copy still counts as an attempt and spaces the next one', async () => {
+  test('copy 1, then an offer that carried nothing: the next waits 120 s, then 240 s; no cap', async () => {
     const at = made(['native']);
     activateRoot(at);
     const dropDir = stamped(at, 'native', ID);
@@ -155,46 +177,70 @@ describe('the schedule: from the delivery history, 60 s doubling to 30 minutes, 
     const offers: string[] = [];
     const none = async (id: string) => { offers.push(id); return null; };
     const t0 = Date.now() + 61_000;
-    expect(await resendPass(seat, t0, none)).toEqual([{ id: ID, copy: null, via: null }]);
-    expect(offerLedger(folder, ID)).toEqual({ offers: 1, lastMs: t0 });
-    // Copy 1 and the offer are one attempt each: the wait stays 60 s, from the newest of them.
-    await resendPass(seat, t0 + 59_000, none);
+    expect(await resendPass(seat, t0, none, 'test')).toEqual([{ id: ID, attempt: 1, copy: null, via: null }]);
+    expect(attemptLedger(folder, ID).attempts).toBe(1);
+    await resendPass(seat, t0 + 119_000, none, 'test');
     expect(offers).toHaveLength(1);
-    await resendPass(seat, t0 + 60_000, none);
+    await resendPass(seat, t0 + 120_500, none, 'test');
     expect(offers).toHaveLength(2);
-    expect(offerLedger(folder, ID).offers).toBe(2);
-    // Two attempts: 120 s.
-    await resendPass(seat, t0 + 60_000 + 119_000, none);
+    await resendPass(seat, t0 + 120_500 + 239_000, none, 'test');
     expect(offers).toHaveLength(2);
-    await resendPass(seat, t0 + 60_000 + 120_000, none);
+    let t = t0 + 120_500 + 240_500;
+    await resendPass(seat, t, none, 'test');
     expect(offers).toHaveLength(3);
-    // No cap: twenty offers on, the wait is 30 minutes and it is still offered.
-    let t = t0 + 60_000 + 120_000;
     for (let n = 0; n < 20; n += 1) {
-      t += 30 * MIN;
-      await resendPass(seat, t, none);
+      t += 30 * MIN + 1_000;
+      await resendPass(seat, t, none, 'test');
     }
     expect(offers).toHaveLength(23);
-    expect(resendDue(folder, ID, t + 30 * MIN - 1, null)).toBe(false);
-    expect(resendDue(folder, ID, t + 30 * MIN, null)).toBe(true);
+    expect(resendDue(folder, ID, t + 29 * MIN, null)).toBe(false);
+    expect(resendDue(folder, ID, t + 30 * MIN + 1_000, null)).toBe(true);
   });
 
-  test('no last day: a record weeks old is still due; an ack, a reply or a clearance ends it', async () => {
+  test('a crash after the reservation and before the offer still counts and spaces the attempt', () => {
     const at = made(['native']);
     activateRoot(at);
     const dropDir = stamped(at, 'native', ID);
     const folder = stampedFolder(at, 'native');
-    age(folder, ID, 30 * 24 * 60 * MIN);
+    takeCopyNumber(dropDir, ID, 'native');
+    const t0 = Date.now() + 61_000;
+    expect(reserveAttempt(folder, ID, 'watch', t0)).toBe(1);
+    // The process dies here: no offer, no outcome. A restarted host reads the reservation.
+    expect(resendDue(folder, ID, t0 + 119_000, null)).toBe(false);
+    expect(resendDue(folder, ID, t0 + 120_000, null)).toBe(true);
+    expect(existsSync(join(folder, EXPOSURES, ID, '.attempt-1.done'))).toBe(false);
+  });
+
+  test('two hosts at one due boundary dispatch the attempt once', async () => {
+    const at = made(['native']);
+    activateRoot(at);
+    const dropDir = stamped(at, 'native', ID);
+    takeCopyNumber(dropDir, ID, 'native');
+    const seat = seatOf(at, dropDir, 'native');
+    const offers: string[] = [];
+    const slow = (host: string) => async (id: string) => { offers.push(`${host}:${id}`); await new Promise((resolve) => setTimeout(resolve, 20)); return host; };
+    const t = Date.now() + 61_000;
+    const [watch, channel] = await Promise.all([resendPass(seat, t, slow('watch'), 'watch'), resendPass(seat, t, slow('channel'), 'channel')]);
+    expect(offers).toHaveLength(1);
+    expect(watch.length + channel.length).toBe(1);
+    expect(attemptLedger(stampedFolder(at, 'native'), ID).attempts).toBe(1);
+  });
+
+  test('no last day: a record weeks old is still due; an ack ends it', async () => {
+    const at = made(['native']);
+    activateRoot(at);
+    const dropDir = stamped(at, 'native', ID);
+    age(stampedFolder(at, 'native'), ID, 30 * 24 * 60 * MIN);
     const seat = seatOf(at, dropDir, 'native');
     expect(resendCandidates(seat, Date.now())).toEqual([ID]);
     ack(at, dropDir, 'native', ID);
     expect(resendCandidates(seat, Date.now() + 60 * MIN)).toEqual([]);
     const offered: string[] = [];
-    expect(await resendPass(seat, Date.now() + 60 * MIN, async (id) => { offered.push(id); return 'native'; })).toEqual([]);
+    expect(await resendPass(seat, Date.now() + 60 * MIN, async (id) => { offered.push(id); return 'native'; }, 'test')).toEqual([]);
     expect(offered).toEqual([]);
   });
 
-  test('a writer-side read (the leg\'s own copy) does not settle: the record stays due', async () => {
+  test('a writer-side read (the leg\'s own copy) does not settle: the record stays due', () => {
     const at = made(['native']);
     activateRoot(at);
     const dropDir = stamped(at, 'native', ID);
@@ -217,34 +263,45 @@ describe('the schedule: from the delivery history, 60 s doubling to 30 minutes, 
     age(dropDir, ID, 60 * MIN);
     expect(existsSync(stampedFolder(at, 'native'))).toBe(false);
     const offered: string[] = [];
-    expect(await resendPass(seatOf(at, dropDir, 'native'), Date.now(), async (id) => { offered.push(id); return 'native'; })).toEqual([]);
+    expect(await resendPass(seatOf(at, dropDir, 'native'), Date.now(), async (id) => { offered.push(id); return 'native'; }, 'test')).toEqual([]);
     expect(offered).toEqual([]);
     expect(existsSync(join(dropDir, EXPOSURES))).toBe(false);
   });
 });
 
+type SceneOptions = {
+  seat?: string;
+  cli?: string;
+  pane?: string;
+  ownPane?: string | null;
+  typedWake?: RetrySources['typedWake'];
+  said?: string[];
+};
+
 /** The watch's unread pass, as the daemon runs it, for the fixture team, at `now`. The re-send
- *  adapter is the real one (`resendStampedRecord`) over a send host whose Codex queue records. */
-function passScene(at: World, now: Date, host: SendHost, said: string[] = []): RetryScene {
-  const loaded = loadTeamFile(at.root, { home: at.home });
-  if (!loaded.ok) throw new Error('fixture team failed to load');
-  const team = loaded.team;
-  const live: Live = { running: true, agents: [{ name: 'native', agent: 'codex', pane: 'pane-native', workspace: 'w', status: 'idle', cwd: null }], workspaces: [], screens: {} };
+ *  adapter is the real one (`resendStampedRecord`, bound with no pane writer, as the watch binds
+ *  it) over `host`. */
+function passScene(at: World, now: Date, host: SendHost, options: SceneOptions = {}): RetryScene {
+  const team = teamOf(at);
+  const seat = options.seat ?? 'native';
+  const live: Live = { running: true, agents: [{ name: seat, agent: options.cli ?? 'codex', pane: options.pane ?? `pane-${seat}`, workspace: 'w', status: 'idle', cwd: null }], workspaces: [], screens: {} };
   const resendStampedRecord = (send as unknown as Record<string, unknown>).resendStampedRecord as typeof send.resendStampedRecord | undefined;
+  const { typedWake: _unbound, ...rest } = host;
   return {
-    dir: at.dir, session: SESSION, root: at.root, home: at.home, team, live, ownPane: null, now,
-    say: (text) => { said.push(text); },
+    dir: at.dir, session: SESSION, root: at.root, home: at.home, team, live, ownPane: options.ownPane ?? null, now,
+    say: (text) => { options.said?.push(text); },
     sources: {
       screen: () => null,
       status: () => 'idle',
-      typeText: () => { throw new Error('the pass must not type into a pane here'); },
-      pressEnter: () => { throw new Error('the pass must not submit a pane here'); },
+      typeText: () => { throw new Error('the pass must not type through the raw writer'); },
+      pressEnter: () => { throw new Error('the pass must not submit through the raw writer'); },
       sleep: async () => {},
+      ...(options.typedWake === undefined ? {} : { typedWake: options.typedWake }),
     },
-    eventLegs: (seat: string) => send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat, team, now: () => now }),
+    eventLegs: (one: string) => send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat: one, team, now: () => now }),
     // The build before the fix has no re-send adapter: the pass then offers nothing (the finding).
     ...(resendStampedRecord === undefined ? {} : {
-      resendStamped: (seat, dropDir, id) => resendStampedRecord({ host: { ...host, now: () => now }, dir: at.dir, root: at.root, project: team.project, session: SESSION, seat: seat.name, cli: seat.cli, dropDir, id, team }),
+      resendStamped: (one, dropDir, id) => resendStampedRecord({ host: { ...rest, now: () => now }, dir: at.dir, root: at.root, project: team.project, session: SESSION, seat: one.name, cli: one.cli, dropDir, id, team }),
     }),
   };
 }
@@ -260,9 +317,9 @@ describe('the finding: a stamped copy to a Codex seat on its native leg, not ack
     const host = fake(at, { nativeRoute: queue.route });
     const t0 = Date.now();
     const said: string[] = [];
-    await wakeUnreadDrops(passScene(at, new Date(t0 + 30_000), host, said), { unreadAfter: 600 });
+    await wakeUnreadDrops(passScene(at, new Date(t0 + 30_000), host, { said }), { unreadAfter: 600 });
     expect(queue.copies).toEqual([]);
-    await wakeUnreadDrops(passScene(at, new Date(t0 + 61_000), host, said), { unreadAfter: 600 });
+    await wakeUnreadDrops(passScene(at, new Date(t0 + 61_000), host, { said }), { unreadAfter: 600 });
     expect(queue.copies.map(headerOf)).toEqual([`message ${ID} · delivery 2 — a re-send; an earlier delivery of this message may already have arrived or may still arrive`]);
     expect(queue.copies[0]).toContain(`body of ${ID}`);
     expect(queue.copies[0]).toContain(`team ack ${ID}`);
@@ -270,7 +327,7 @@ describe('the finding: a stamped copy to a Codex seat on its native leg, not ack
     // The next wait is 120 s from that offer.
     await wakeUnreadDrops(passScene(at, new Date(t0 + 61_000 + 119_000), host), { unreadAfter: 600 });
     expect(queue.copies).toHaveLength(1);
-    await wakeUnreadDrops(passScene(at, new Date(t0 + 61_000 + 120_000), host), { unreadAfter: 600 });
+    await wakeUnreadDrops(passScene(at, new Date(t0 + 61_000 + 121_000), host), { unreadAfter: 600 });
     expect(queue.copies.map(headerOf)[1]).toStartWith(`message ${ID} · delivery 3 — a re-send`);
     expect(copyHistory(dropDir, ID)).toMatchObject({ copies: 3 });
     // The recipient's ack ends the re-sends.
@@ -294,24 +351,44 @@ describe('the finding: a stamped copy to a Codex seat on its native leg, not ack
     expect(existsSync(stampedFolder(at, 'native'))).toBe(false);
     expect(existsSync(join(dropDir, EXPOSURES))).toBe(false);
   });
+
+  test('a record bound to another checkout, under the same session and seat names, is never re-sent here', async () => {
+    const at = made(['native']);
+    activateRoot(at);
+    const other = made(['native']);
+    activateRoot(other);
+    const dropDir = stamped(at, 'native', ID, 'foreign', other.root);
+    const queue = nativeQueue();
+    const via = await adapter(at, fake(at, { nativeRoute: queue.route }), 'codex', 'native', dropDir)(ID);
+    expect(via).toBeNull();
+    expect(queue.copies).toEqual([]);
+    expect(copyHistory(dropDir, ID)).toMatchObject({ copies: 0 });
+  });
 });
 
-/** Runs the scheduler with the real adapter for one seat until three copies stand or `passes`
- *  passes are spent, advancing the clock past each wait. */
-async function threeOffers(at: World, seat: string, cli: string, host: SendHost, dropDir: string): Promise<{ results: Awaited<ReturnType<typeof resendPass>>[] }> {
-  const loaded = loadTeamFile(at.root, { home: at.home });
-  if (!loaded.ok) throw new Error('fixture team failed to load');
-  const team = loaded.team;
+/** Two passes of the scheduler with the real adapter, the clock moved past each wait. */
+async function twoOffers(at: World, seat: string, offer: (id: string) => Promise<string | null>, dropDir: string): Promise<Awaited<ReturnType<typeof resendPass>>[]> {
   const results: Awaited<ReturnType<typeof resendPass>>[] = [];
-  const folder = stampedFolder(at, seat);
   for (let n = 0; n < 2; n += 1) {
-    // Past the wait of every attempt so far.
-    age(folder, ID, 31 * MIN);
-    results.push(await resendPass(seatOf(at, dropDir, seat), Date.now(), (id) => send.resendStampedRecord({
-      host, dir: at.dir, root: at.root, project: team.project, session: SESSION, seat, cli, dropDir, id, team,
-    })));
+    age(stampedFolder(at, seat), ID, 31 * MIN);
+    results.push(await resendPass(seatOf(at, dropDir, seat), Date.now(), offer, 'watch'));
   }
-  return { results };
+  return results;
+}
+
+/** A guarded typed wake that records each line and always confirms it. */
+function typedSeam(lines: string[], result: Partial<TypedWakeResult> = {}): NonNullable<RetrySources['typedWake']> {
+  return async (_pane, line, _cli, _session, options) => {
+    if (options?.beforeFirstKey !== undefined && !options.beforeFirstKey()) return { delivered: false, typed: false, tries: 0, reason: 'the attempt could not be recorded' } as TypedWakeResult;
+    lines.push(line);
+    return { delivered: true, typed: true, tries: 1, reason: 'the working screen showed', ...result } as TypedWakeResult;
+  };
+}
+
+/** The seat's recorded pane and session, as `team up` leaves them (the incarnation the wake
+ *  fence reads). */
+function recordPane(at: World, seat: string, pane: string): void {
+  writeFileSync(join(at.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { [seat]: { stage: 'ready', pane, agent_session: `session-of-${seat}` } }, worktrees: {} } } })}\n`);
 }
 
 describe('every leg type takes copies 2 and 3, numbered', () => {
@@ -321,68 +398,75 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     const dropDir = stamped(at, 'native', ID);
     takeCopyNumber(dropDir, ID, 'native');
     const queue = nativeQueue();
-    const { results } = await threeOffers(at, 'native', 'codex', fake(at, { nativeRoute: queue.route }), dropDir);
-    expect(results).toEqual([[{ id: ID, copy: 2, via: 'native' }], [{ id: ID, copy: 3, via: 'native' }]]);
-    expect(queue.copies.map(headerOf).map((line) => line.slice(0, `message ${ID} · delivery 2`.length))).toEqual([`message ${ID} · delivery 2`, `message ${ID} · delivery 3`]);
+    const results = await twoOffers(at, 'native', adapter(at, fake(at, { nativeRoute: queue.route }), 'codex', 'native', dropDir), dropDir);
+    expect(results).toEqual([[{ id: ID, attempt: 1, copy: 2, via: 'native' }], [{ id: ID, attempt: 2, copy: 3, via: 'native' }]]);
+    expect(queue.copies.map(numberOf)).toEqual([2, 3]);
   });
 
-  test('typed (a profile\'s typed wake into an idle pane: Antigravity\'s agent prompt)', async () => {
+  test('typed: the watch\'s own guarded wake (Antigravity), numbered copies with the attempt token', async () => {
+    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    activateRoot(at);
+    recordPane(at, 'agy', 'pane-agy');
+    const dropDir = stamped(at, 'agy', ID, 'short');
+    takeCopyNumber(dropDir, ID, 'typed');
+    const lines: string[] = [];
+    const host = fake(at, { agents: () => [{ name: 'agy', pane: 'pane-agy', cli: 'agy' }] });
+    const t0 = Date.now();
+    for (const offset of [61_000, 61_000 + 121_000]) {
+      await wakeUnreadDrops(passScene(at, new Date(t0 + offset), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines) }), { unreadAfter: 600 });
+    }
+    expect(lines.map(numberOf)).toEqual([2, 3]);
+    expect(lines[0]).toContain(`team ack ${ID}`);
+    expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(2);
+  });
+
+  test('typed, guarded: a replaced pane, the watch\'s own pane and an unconfirmed earlier attempt type nothing', async () => {
     const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
     activateRoot(at);
     const dropDir = stamped(at, 'agy', ID, 'short');
     takeCopyNumber(dropDir, ID, 'typed');
-    const fixtures = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.12');
-    const idle = readFileSync(join(fixtures, 'idle.txt'), 'utf8');
-    const working = readFileSync(join(fixtures, 'working-synthetic.txt'), 'utf8');
-    const prompted: string[] = [];
-    const wake = (): TypedWakeHost => {
-      let mine = 0;
-      return {
-        read: () => (mine > 0 ? working : idle),
-        type: () => false,
-        enter: () => false,
-        prompt: (_pane, line) => { prompted.push(line); mine += 1; return true; },
-        wait: async () => {},
-      };
-    };
-    const host = fake(at, { agents: () => [{ name: 'agy', pane: 'pane-agy', cli: 'agy' }], typedWake: wake, wakeVerifyMs: 50, wakePollMs: 1 });
-    const { results } = await threeOffers(at, 'agy', 'antigravity', host, dropDir);
-    expect(results).toEqual([[{ id: ID, copy: 2, via: 'typed' }], [{ id: ID, copy: 3, via: 'typed' }]]);
-    expect(prompted.map(headerOf).map((line) => line.slice(0, `message ${ID} · delivery 2`.length))).toEqual([`message ${ID} · delivery 2`, `message ${ID} · delivery 3`]);
-    expect(prompted[0]).toContain(`team ack ${ID}`);
+    const host = fake(at, { agents: () => [] });
+    const lines: string[] = [];
+    // The seat's recorded pane is another one now: the pane the pass saw is no longer the seat's.
+    recordPane(at, 'agy', 'pane-other');
+    await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines) }), { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+    // The pane is the watch's own.
+    recordPane(at, 'agy', 'pane-agy');
+    age(stampedFolder(at, 'agy'), ID, 31 * MIN);
+    await wakeUnreadDrops(passScene(at, new Date(), host, { seat: 'agy', cli: 'agy', ownPane: 'pane-agy', typedWake: typedSeam(lines) }), { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+    // An attempt whose keys landed and that nothing confirmed: it is not retyped inside its backoff
+    // (the wake fence, E6/E7b).
+    age(stampedFolder(at, 'agy'), ID, 31 * MIN);
+    await wakeUnreadDrops(passScene(at, new Date(), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines, { delivered: false, typed: true, reason: 'no working screen' }) }), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    age(stampedFolder(at, 'agy'), ID, 31 * MIN);
+    const said: string[] = [];
+    await wakeUnreadDrops(passScene(at, new Date(), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), said }), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
   });
 
-  test('typed, a body whose numbered copy does not fit the wake: the pointer is typed, no number is taken, the read is the copy', async () => {
+  test('typed, a numbered copy too long for the wake (Muse, 200 bytes): the pointer is typed, no number taken, the read is the copy', async () => {
     const at = made(['typed'], [{ name: 'typist', role: 'implementer', cli: 'muse', launch: 'muse' }]);
     activateRoot(at);
+    recordPane(at, 'typist', 'pane-typist');
     const dropDir = stamped(at, 'typist', ID, 'short');
-    const idle = readFileSync(join(import.meta.dir, 'fixtures', 'muse', '1.4.11', 'idle.txt'), 'utf8');
-    const working = readFileSync(join(import.meta.dir, 'fixtures', 'muse', '1.4.11', 'working-synthetic.txt'), 'utf8');
-    const typed: string[] = [];
-    const wake = (): TypedWakeHost => {
-      const state = { enters: 0, typed: 0 };
-      return {
-        read: () => (state.enters > 0 ? working : state.typed > 0 ? idle.replace('❯\n', `❯ ${typed.at(-1) ?? ''}\n`) : idle),
-        type: (_pane, text) => { typed.push(text); state.typed += 1; return true; },
-        enter: () => { state.enters += 1; return true; },
-        wait: async () => {},
-      };
-    };
-    const host = fake(at, { agents: () => [{ name: 'typist', pane: 'pane-typist', cli: 'muse' }], typedWake: wake, wakeVerifyMs: 50, wakePollMs: 1 });
-    const { results } = await threeOffers(at, 'typist', 'muse', host, dropDir);
-    expect(results).toEqual([[{ id: ID, copy: null, via: 'typed' }], [{ id: ID, copy: null, via: 'typed' }]]);
-    expect(typed).toHaveLength(2);
-    for (const line of typed) {
-      expect(line).toContain(`--id ${ID}`);
-      expect(line).not.toContain('short');
-    }
+    const lines: string[] = [];
+    await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), fake(at, { agents: () => [] }), { seat: 'typist', cli: 'muse', typedWake: typedSeam(lines) }), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`--id ${ID}`);
+    expect(lines[0]).not.toContain('short');
+    expect(copyHistory(dropDir, ID)).toMatchObject({ copies: 0 });
     const shown = readMessage({ dropDir, root: at.root, session: SESSION, seat: 'typist' }, ID, at.home);
     if (!shown.ok) throw new Error('the read failed');
     expect(headerOf(shown.body)).toBe(`message ${ID} · delivery 1`);
   });
 
-  test('socket (a Claude seat that accepts cross-session frames)', async () => {
+  test('socket (a Claude seat that accepts cross-session frames); the frame names the sender, never the receiver\'s persona', async () => {
     const at = made(null);
+    const file = join(at.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('    name: helper\n', '    name: helper\n    label: "Persona Zed"\n'));
     const path = cliHookSettingsPath(at.dir, SESSION, 'helper');
     if (path === null) throw new Error('the fixture declares no settings path for helper');
     mkdirSync(dirname(path), { recursive: true });
@@ -394,11 +478,37 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     const dropDir = stamped(at, 'helper', ID);
     takeCopyNumber(dropDir, ID, 'socket');
     const host = fake(at, { agents: () => [{ name: 'helper', pane: 'pane-helper', cli: 'claude' }] });
-    const { results } = await threeOffers(at, 'helper', 'claude-code', host, dropDir);
-    expect(results).toEqual([[{ id: ID, copy: 2, via: 'socket' }], [{ id: ID, copy: 3, via: 'socket' }]]);
+    const results = await twoOffers(at, 'helper', adapter(at, host, 'claude-code', 'helper', dropDir), dropDir);
+    expect(results).toEqual([[{ id: ID, attempt: 1, copy: 2, via: 'socket' }], [{ id: ID, attempt: 2, copy: 3, via: 'socket' }]]);
     expect(host.frames).toHaveLength(2);
     expect(host.frames[0]).toContain(`message ${ID} · delivery 2 — a re-send`);
     expect(host.frames[1]).toContain(`message ${ID} · delivery 3 — a re-send`);
+    for (const frame of host.frames) expect(frame).not.toContain('Persona Zed');
+  });
+
+  test('webhook: an earlier 2xx does not stand for a re-send; every attempt is a new request', async () => {
+    const hits: string[] = [];
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async (request) => { hits.push(await request.text()); return Response.json({ ok: true }); } });
+    cleanups.push(() => server.stop(true));
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'e7b-resend-hook-')));
+    cleanups.push(() => rmSync(base, { recursive: true, force: true }));
+    writeFileSync(join(base, 'url'), `http://127.0.0.1:${server.port}/routine\n`);
+    writeFileSync(join(base, 'secret'), 'synthetic-secret-value\n', { mode: 0o600 });
+    const at = made(['socket', 'drop'], [{ name: 'iris', role: 'remote', webhook: { urlFile: join(base, 'url'), secretFile: join(base, 'secret') } }]);
+    activateRoot(at);
+    const dropDir = stamped(at, 'iris', ID);
+    const offer = adapter(at, fake(at, { agents: () => [] }), 'claude-code', 'iris', dropDir);
+    // The send's own post, a 2xx.
+    expect(await offer(ID)).toBe('webhook');
+    expect(hits).toHaveLength(1);
+    const results = await twoOffers(at, 'iris', offer, dropDir);
+    expect(results.map((one) => one.map((r) => r.via))).toEqual([['webhook'], ['webhook']]);
+    expect(hits).toHaveLength(3);
+    // The ack ends it.
+    ack(at, dropDir, 'iris', ID);
+    age(stampedFolder(at, 'iris'), ID, 31 * MIN);
+    expect(await resendPass(seatOf(at, dropDir, 'iris'), Date.now(), offer, 'watch')).toEqual([]);
+    expect(hits).toHaveLength(3);
   });
 
   test('drop-only: an offer carries nothing, and the seat\'s own reads are copies 2 and 3; the ack ends it', async () => {
@@ -412,15 +522,40 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     };
     expect(headerOf(read())).toBe(`message ${ID} · delivery 1`);
     const host = fake(at, { agents: () => [] });
-    const { results } = await threeOffers(at, 'helper', 'claude-code', host, dropDir);
-    // The adapter's walk ends in the mailbox: no copy, no number taken, the offers counted.
-    expect(results).toEqual([[{ id: ID, copy: null, via: null }], [{ id: ID, copy: null, via: null }]]);
+    const results = await twoOffers(at, 'helper', adapter(at, host, 'claude-code', 'helper', dropDir), dropDir);
+    // The adapter's walk ends in the mailbox: no copy, no number taken, the attempts counted.
+    expect(results).toEqual([[{ id: ID, attempt: 1, copy: null, via: null }], [{ id: ID, attempt: 2, copy: null, via: null }]]);
     expect(host.frames).toEqual([]);
-    expect(offerLedger(stampedFolder(at, 'helper'), ID).offers).toBe(2);
+    expect(attemptLedger(stampedFolder(at, 'helper'), ID).attempts).toBe(2);
     expect(headerOf(read())).toStartWith(`message ${ID} · delivery 2 — a re-send`);
     expect(headerOf(read())).toStartWith(`message ${ID} · delivery 3 — a re-send`);
     ack(at, dropDir, 'helper', ID);
     expect(resendCandidates(seatOf(at, dropDir, 'helper'), Date.now() + 60 * MIN)).toEqual([]);
+  });
+});
+
+describe('no legacy ladder handles a stamped record', () => {
+  test('the held-drop retry neither retries nor gives up a stamped marker, before or past its cutoff; settlement clears it', async () => {
+    const at = made(['drop']);
+    activateRoot(at);
+    const dropDir = stamped(at, 'helper', ID);
+    const old = new Date(Date.now() - 10 * MIN).toISOString();
+    markPending(dropDir, { ts: old, from: 'lead', to: 'helper', body: `body of ${ID}`, id: ID, leg: 'channel' });
+    expect(readPending(dropDir).map((one) => one.id)).toEqual([ID]);
+    const redelivered: string[] = [];
+    const scene = (now: Date): RetryScene => ({
+      ...passScene(at, now, fake(at), { seat: 'helper', cli: 'claude' }),
+      socketRedeliver: async (_dir, drop) => { redelivered.push(drop.id); return { ok: true }; },
+    });
+    await retryHeldDrops(scene(new Date()));
+    await retryHeldDrops(scene(new Date(Date.now() + PENDING_MAX_AGE_MS + 60 * MIN)));
+    expect(redelivered).toEqual([]);
+    expect(readPending(dropDir).map((one) => one.id)).toEqual([ID]);
+    const history = readHistory('acme', at.root, at.home);
+    expect(history.ok && history.entries.some((entry) => entry.id === ID)).toBe(false);
+    ack(at, dropDir, 'helper', ID);
+    await retryHeldDrops(scene(new Date()));
+    expect(readPending(dropDir)).toEqual([]);
   });
 });
 
@@ -514,19 +649,20 @@ seats:
     await until(() => existsSync(listenerPath(at.dropDir)));
     await until(() => notices(stream.replies).length >= 1);
     expect(notices(stream.replies).map(headerOf)).toEqual([`message ${ID2} · delivery 1`]);
-    // Inside the 60 s wait nothing more is pushed.
+    // Inside the wait (attempt 1 done: 120 s) nothing more is pushed.
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(notices(stream.replies)).toHaveLength(1);
-    age(folder, ID2, 61_000);
+    age(folder, ID2, 121_000);
     await until(() => notices(stream.replies).length >= 2);
     expect(headerOf(notices(stream.replies)[1])).toStartWith(`message ${ID2} · delivery 2 — a re-send`);
-    age(folder, ID2, 121_000);
+    age(folder, ID2, 241_000);
     await until(() => notices(stream.replies).length >= 3);
     expect(headerOf(notices(stream.replies)[2])).toStartWith(`message ${ID2} · delivery 3 — a re-send`);
-    // The watch's pass leaves this seat to its server: its live channel leads the walk.
+    // The ownership rule gives this seat to its server: the watch's pass offers nothing for it.
     const loaded = loadTeamFile(at.root, { home: at.home });
     if (!loaded.ok) throw new Error('fixture team failed to load');
-    expect(send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat: 'lead', team: loaded.team, now: () => new Date() }).channel).toBe(true);
+    const legs = send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat: 'lead', team: loaded.team, now: () => new Date() });
+    expect(channelOwnsSeat({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', walkTakesChannel: legs.channel })).toBe(true);
     const offered: string[] = [];
     const scene: RetryScene = {
       dir: at.dir, session: SESSION, root: at.root, home: at.home, team: loaded.team, ownPane: null, now: new Date(Date.now() + 60 * MIN),
@@ -535,7 +671,7 @@ seats:
       eventLegs: (seat: string) => send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat, team: loaded.team, now: () => new Date() }),
       resendStamped: async (_seat, _dropDir, id) => { offered.push(id); return null; },
     };
-    await wakeUnreadDrops(scene, { unreadAfter: 600, noNudge: false });
+    await wakeUnreadDrops(scene, { unreadAfter: 600 });
     expect(offered).toEqual([]);
     // The ack ends the pushes.
     ack(at, at.dropDir, 'lead', ID2);
@@ -544,5 +680,17 @@ seats:
     expect(notices(stream.replies)).toHaveLength(3);
     stream.end();
     expect(await running).toBe(0);
+  });
+
+  test('a live listener of an older level owns nothing: the watch offers for the seat', () => {
+    const at = channelPlace();
+    mkdirSync(at.dropDir, { recursive: true, mode: 0o700 });
+    const marker = { v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, channel: true, ts: new Date().toISOString() };
+    writeFileSync(listenerPath(at.dropDir), `${JSON.stringify({ ...marker, level: 2 })}\n`);
+    expect(channelOwnsSeat({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', walkTakesChannel: true })).toBe(false);
+    writeFileSync(listenerPath(at.dropDir), `${JSON.stringify({ ...marker, level: 3 })}\n`);
+    expect(channelOwnsSeat({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', walkTakesChannel: true })).toBe(true);
+    // The walk does not take the channel: the watch owns the seat whatever the listener is.
+    expect(channelOwnsSeat({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', walkTakesChannel: false })).toBe(false);
   });
 });

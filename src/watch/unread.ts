@@ -82,7 +82,7 @@ import {
   type WakeMark,
 } from '../send/wake-marker.ts';
 import { markPending, pendingDropPath } from '../send/pending.ts';
-import { isRead, isReadOrCleared, readRecord, recordFile, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { isRead, isReadOrCleared, isStampedPayload, readRecord, recordFile, sameFolder, signRecord, stampedSettled, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
@@ -93,7 +93,8 @@ import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus,
 import { climbUnreadLead } from './status-events.ts';
 import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutcome } from '../queue/wake-attempt.ts';
 import { floorPass } from '../queue/floor.ts';
-import { resendPass } from '../queue/resend.ts';
+import { channelOwnsSeat, resendPass } from '../queue/resend.ts';
+import { legBody, legText, typedWakeMaxFor } from '../send/readable-wake.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { readState } from '../state.ts';
@@ -773,21 +774,81 @@ export function noteLeadEpisode(
 /**
  * The watch's host for the one re-send scheduler (src/queue/resend.ts): every stamped record of
  * the seat that is not settled and is due by its history is offered once more through the seat's
- * current adapter (`scene.resendStamped`, the seat's resolved delivery walk). A seat whose live
- * development channel leads its walk is left to its own channel server, which runs the same
- * scheduler for it: only that process can write to the seat's session.
+ * current adapter (`scene.resendStamped`, the seat's resolved delivery walk, which types nothing).
+ * When no leg of that walk took it and the walk would type, the typed wake is the watch's own
+ * guarded one (`resendTyped`). A seat the ownership rule gives to its channel server
+ * (`channelOwnsSeat`) is left to that server.
  */
 async function resendStampedDrops(scene: RetryScene, seat: Seat, key: KeyObject, nowMs: number): Promise<void> {
   const resend = scene.resendStamped;
   if (resend === undefined) return;
-  if (scene.eventLegs?.(seat.name).channel === true) return;
+  const legs = scene.eventLegs?.(seat.name);
   const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
+  if (channelOwnsSeat({ dropDir, root: scene.root, session: scene.session, seat: seat.name, walkTakesChannel: legs?.channel === true })) return;
   const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
-  const results = await resendPass({ dropDir, context, key }, nowMs, (id) => resend(seat, dropDir, id));
+  const results = await resendPass({ dropDir, context, key }, nowMs, async (id) => {
+    const via = await resend(seat, dropDir, id);
+    if (via !== null || legs?.typed !== true) return via;
+    return (await resendTyped(scene, seat, dropDir, id, key, nowMs)) ? 'typed' : null;
+  }, 'watch');
   for (const one of results) {
     const carried = one.copy === null ? 'no copy was carried' : `delivery ${String(one.copy)}`;
     const leg = one.via === null ? '' : ` on the ${one.via}`;
     scene.say(`${seat.name}: message ${one.id} is not acknowledged; offered again${leg} (${carried})`, false);
+  }
+}
+
+/**
+ * A re-send's typed wake, under every guard the watch's own typed retry keeps: the one live pane
+ * the pass saw for the seat (never the watch's own), the hourly line cap, the seat lock, and under
+ * that lock a fresh proof that the seat's recorded pane is still this pane and is not back at its
+ * shell; then the wake-attempt fence (E6): an earlier attempt whose keys may have landed blocks a
+ * retype, and this attempt is recorded before its first key. The line is the numbered copy when
+ * it fits the wake, else the pointer. True only when the wake module confirmed the delivery.
+ */
+async function resendTyped(scene: RetryScene, seat: Seat, dropDir: string, id: string, key: KeyObject, nowMs: number): Promise<boolean> {
+  const home = scene.home;
+  const typedWake = scene.sources.typedWake;
+  if (home === undefined || typedWake === undefined) return false;
+  const payload = payloadOf(dropDir, id, home);
+  if (payload === null || !isStampedPayload(payload) || payload.to !== seat.name || payload.session !== scene.session || !sameFolder(payload.root, scene.root)) return false;
+  const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
+  const pane = agents.length === 1 ? agents[0]?.pane : undefined;
+  if (pane === undefined || pane === scene.ownPane) return false;
+  if (typedLinesWithinHour(dropDir, nowMs) >= WAKE_LINES_PER_HOUR) return false;
+  const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
+  if (!('release' in lock)) return false;
+  try {
+    let recorded: string | undefined;
+    try {
+      recorded = readState(scene.dir).sessions[scene.session]?.seats[seat.name]?.pane;
+    } catch {
+      recorded = undefined;
+    }
+    if (recorded !== pane) return false;
+    if (isBareShellPane(scene.dir, scene.session, seat.name, passPaneProcesses(scene, pane))) return false;
+    const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
+    const scope = { root: scene.root, session: scene.session, seat: seat.name, incarnation: seatIncarnation(scene.dir, scene.session, seat.name, pane) };
+    const target = { msg_id: id, seq: queuePlaceOf(dropDir, id)?.seq ?? null };
+    const gate: GateOutcome = attemptGate(scope, target, home, {
+      settled: (one) => one === id && stampedSettled(dropDir, id, context, key),
+      scrollback: () => passPaneScreen(scene, pane),
+    });
+    if (gate.kind === 'blocked') {
+      scene.say(`${seat.name}: ${gate.why}; no re-send line was typed`, false);
+      return false;
+    }
+    const handle = prepareAttemptAs(scope, target, home, gate.create);
+    if (handle === null && gate.create === 'enforce') return false;
+    const token = handle !== null && gate.create === 'enforce' ? ` ${tokenText(handle.attempt.token)}` : '';
+    const body = legBody(payload, home, 'typed', dropDir, typedWakeMaxFor(seat.cli) - Buffer.byteLength(token, 'utf8'), 'typed');
+    const line = `${legText(body, payload)}${token}`;
+    const typed = await typedWake(pane, line, seat.cli, scene.session, handle === null ? undefined : { beforeFirstKey: handle.emit });
+    handle?.settle(typed);
+    if (typed.typed) noteTypedLine(dropDir, nowMs);
+    return typed.delivered;
+  } finally {
+    lock.release();
   }
 }
 
