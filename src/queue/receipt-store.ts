@@ -13,8 +13,8 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { createExclusive, readFence, type DurableFaults } from './durable.ts';
-import { verifiedQueuePlaceOf } from './append.ts';
+import { createExclusive, readFence, removeDurable, type DurableFaults } from './durable.ts';
+import { queueBaseOf, queuePlaceOf, verifiedQueuePlaceOf } from './append.ts';
 
 export const QUEUE_RECEIPT_DOMAIN = 'team-queue-receipt-v1\n';
 
@@ -184,18 +184,96 @@ export function shadowQueueReceipt(input: {
   kind: QueueReceiptKind;
   actor: { kind: ReceiptActorKind; name: string };
   home: string;
-}): WriteReceiptOutcome | 'unplaced' {
+}): WriteReceiptOutcome | 'unplaced' | 'pending' {
   try {
-    // Only a proved placement is signed: a committed, verifying entry holding this msg_id.
-    const place = verifiedQueuePlaceOf(input.dropDir, input.msgId, { root: input.root, session: input.session, seat: input.seat }, input.home);
-    if (place === null) return 'unplaced';
-    return writeQueueReceipt(
-      { root: input.root, session: input.session, seat: input.seat, generation: place.generation, seq: place.seq, msg_id: input.msgId },
-      input.kind,
-      input.actor,
-      input.home,
-    );
+    const written = placeAndWrite(input);
+    if (written !== 'unplaced') return written;
+    // The id is indexed but its placement cannot be proved right now (the queue lock is held, or
+    // the journal is not yet proved durable): the decision is never skipped. A durable pending
+    // marker beside the queue records it, and the next holder of the lock (or the reconcile pass)
+    // drains it in order, writing the receipt exactly once (`drainPendingReceipts`).
+    if (queuePlaceOf(input.dropDir, input.msgId) === null) return 'unplaced';
+    return writePending(input) ? 'pending' : 'failed';
   } catch {
     return 'failed';
   }
+}
+
+type PendingInput = Parameters<typeof shadowQueueReceipt>[0];
+
+function placeAndWrite(input: PendingInput): WriteReceiptOutcome | 'unplaced' {
+  // Only a proved placement is signed: a committed, verifying entry holding this msg_id.
+  const place = verifiedQueuePlaceOf(input.dropDir, input.msgId, { root: input.root, session: input.session, seat: input.seat }, input.home);
+  if (place === null) return 'unplaced';
+  return writeQueueReceipt(
+    { root: input.root, session: input.session, seat: input.seat, generation: place.generation, seq: place.seq, msg_id: input.msgId },
+    input.kind,
+    input.actor,
+    input.home,
+  );
+}
+
+const PENDING = 'pending-receipts';
+const PENDING_NAME = /^\d{13}\.[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$/;
+
+function pendingFolder(dropDir: string): string | null {
+  const base = queueBaseOf(dropDir);
+  return base === null ? null : join(base, PENDING);
+}
+
+function writePending(input: PendingInput): boolean {
+  const folder = pendingFolder(input.dropDir);
+  if (folder === null || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.msgId)) return false;
+  const marker = { msg_id: input.msgId, kind: input.kind, actor: input.actor, root: input.root, session: input.session, seat: input.seat };
+  // One marker per (message, kind): a second contention for the same decision finds it standing.
+  const existing = listPending(folder).find(name => name.slice(14) === `${input.msgId}.${input.kind}.json`);
+  if (existing !== undefined) return true;
+  const outcome = createExclusive(join(folder, `${String(Date.now()).padStart(13, '0')}.${input.msgId}.${input.kind}.json`), `${JSON.stringify(marker)}\n`);
+  return outcome === 'created' || outcome === 'exists';
+}
+
+function listPending(folder: string): string[] {
+  try {
+    return readdirSync(folder).filter(name => PENDING_NAME.test(name)).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Drains a seat's pending dual writes in order (oldest first). Each marker is retried: a proved
+ * placement writes the receipt (one file per receipt, never replaced, so a repeat finds it and
+ * answers `exists`), then the marker is removed durably. A marker whose placement still cannot be
+ * proved, or whose write or removal fails, stays for the next pass. Called with no queue lock held.
+ */
+export function drainPendingReceipts(dropDir: string, home: string): { written: number; left: number } {
+  const folder = pendingFolder(dropDir);
+  if (folder === null) return { written: 0, left: 0 };
+  let written = 0;
+  let left = 0;
+  for (const name of listPending(folder)) {
+    const path = join(folder, name);
+    const text = readFence(path);
+    let marker: { msg_id?: unknown; kind?: unknown; actor?: { kind?: unknown; name?: unknown }; root?: unknown; session?: unknown; seat?: unknown } | null = null;
+    try {
+      marker = text === null || text === '' ? null : JSON.parse(text);
+    } catch {
+      marker = null;
+    }
+    if (marker === null || typeof marker.msg_id !== 'string' || typeof marker.kind !== 'string' || typeof marker.root !== 'string'
+      || typeof marker.session !== 'string' || typeof marker.seat !== 'string' || typeof marker.actor?.kind !== 'string' || typeof marker.actor?.name !== 'string') {
+      left += 1;
+      continue;
+    }
+    const outcome = placeAndWrite({
+      dropDir, root: marker.root, session: marker.session, seat: marker.seat, msgId: marker.msg_id,
+      kind: marker.kind as QueueReceiptKind, actor: { kind: marker.actor.kind as ReceiptActorKind, name: marker.actor.name }, home,
+    });
+    if ((outcome === 'written' || outcome === 'exists') && removeDurable(path) === 'removed') {
+      if (outcome === 'written') written += 1;
+      continue;
+    }
+    left += 1;
+  }
+  return { written, left };
 }

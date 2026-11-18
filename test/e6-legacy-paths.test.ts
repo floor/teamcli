@@ -15,9 +15,9 @@ import { exposeBody } from '../src/queue/exposure.ts';
 import { claimRead, ownerOfClaim } from '../src/send/read-claim.ts';
 import { legBody, recordDeliveredBody, settleLegBody } from '../src/send/readable-wake.ts';
 import { receiptPath } from '../src/mcp/inbox.ts';
-import { entryMsgIdAt, verifiedQueuePlaceOf } from '../src/queue/append.ts';
-import { existsSync, readFileSync } from 'node:fs';
-import { derivedProgress, readQueueReceipts } from '../src/queue/receipt-store.ts';
+import { appendRecovered, entryMsgIdAt, verifiedQueuePlaceOf } from '../src/queue/append.ts';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { derivedProgress, drainPendingReceipts, readQueueReceipts } from '../src/queue/receipt-store.ts';
 import { currentGenerationName } from '../src/queue/append.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import { LEAD_ACK_PREFIX } from '../src/send/record.ts';
@@ -184,6 +184,81 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
     if ('release' in writer) writer.release();
     expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).not.toBe(null);
+  });
+
+  test('a malformed interior journal line (the corruption branch) proves nothing', () => {
+    const at = place();
+    message(at, M1);
+    message(at, M2);
+    const generation = currentGenerationName(at.dropDir)!;
+    const journal = join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'journal.jsonl');
+    const lines = readFileSync(journal, 'utf8').trimEnd().split('\n');
+    writeFileSync(journal, `${[lines[0], 'not json', ...lines.slice(1)].join('\n')}\n`);
+    expect(verifiedQueuePlaceOf(at.dropDir, M2, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
+  });
+
+  test('a failed commit flush poisons the journal: no proof until a later holder flushes it, and a failing flush keeps it poisoned', () => {
+    const at = place();
+    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
+    const record = signRecord({
+      kind: 'message', id: M1, to: 'lead', to_id: null, root: at.root, session: SESSION,
+      at: '2026-11-18T00:00:00.000Z', body: 'b', from: 'worker', from_id: null, rule: 'the owner', thread: M1,
+    }, at.home);
+    let calls = 0;
+    // The reserve line flushes; the committed line is written whole and its flush fails.
+    const failCommit = () => { calls += 1; if (calls >= 2) throw new Error('EIO'); };
+    appendDeliverySync({ dropDir: at.dropDir, record }, () => {
+      writeFileSync(join(at.dropDir, M1), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+      return { ok: true, value: true };
+    }, { home: at.home, syncJournal: failCommit });
+    const generation = currentGenerationName(at.dropDir)!;
+    const marker = join(base, generation, 'poisoned');
+    expect(existsSync(marker)).toBe(true);
+    expect(readFileSync(join(base, generation, 'journal.jsonl'), 'utf8')).toContain('"committed"');
+    // The next opener whose flush fails too stays out and leaves the journal poisoned.
+    const second = appendRecovered(at.dropDir, { root: at.root, session: SESSION, seat: 'lead' }, M1, { home: at.home, syncJournal: () => { throw new Error('EIO'); } });
+    expect(second.kind).toBe('skipped');
+    expect(existsSync(marker)).toBe(true);
+    // A holder whose flush succeeds establishes durability, removes the marker, then proves.
+    expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).not.toBe(null);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test('a read published while another holder has the queue lock leaves a pending dual write, drained to exactly one receipt', () => {
+    const at = place();
+    message(at, M1);
+    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
+    const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    expect('release' in holder).toBe(true);
+    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
+    expect(existsSync(receiptPath(at.dropDir, M1))).toBe(true);
+    const pending = join(base, 'pending-receipts');
+    expect(readdirSync(pending).length).toBe(1);
+    const generation = currentGenerationName(at.dropDir)!;
+    const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
+    const binding = { root: at.root, session: SESSION, seat: 'lead', generation };
+    // Still held: the drain proves nothing and keeps the marker.
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 1 });
+    if ('release' in holder) holder.release();
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0 });
+    expect(readdirSync(pending).length).toBe(0);
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 0 });
+    const receipts = readQueueReceipts(binding, at.home, entryAt)!;
+    expect(receipts.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
+  });
+
+  test('the next holder of the queue lock drains the pending dual writes when it lets go', () => {
+    const at = place();
+    message(at, M1);
+    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
+    const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
+    if ('release' in holder) holder.release();
+    message(at, M2);
+    expect(readdirSync(join(base, 'pending-receipts')).length).toBe(0);
+    const generation = currentGenerationName(at.dropDir)!;
+    const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
+    expect(readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
   });
 
   test('a placement whose journal line is only reserved is not proved', () => {

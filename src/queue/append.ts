@@ -31,6 +31,8 @@ import { basename, dirname, join } from 'node:path';
 import { acquireLockAt, type LockSteps } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readNoFollow } from '../send/history.ts';
+import { createExclusive, removeDurable } from './durable.ts';
+import { drainPendingReceipts } from './receipt-store.ts';
 import { recordFile, sameFolder, signedRecordOf, verifyRecord, type SignedRecord } from '../send/record.ts';
 
 /** The domain a queue entry is signed over. */
@@ -82,6 +84,8 @@ export type QueueOptions = {
   trace?: (point: 'record-fsync' | 'record-folder-fsync' | 'entry' | 'committed') => void;
   /** Test seam: a failing record flush. */
   syncRecord?: (path: string) => void;
+  /** Test seam: the journal flush (the writer's commit boundary and the durability check). */
+  syncJournal?: (fd: number) => void;
   /** Test seam: the metadata read of the queue's own files (journal, pointer). */
   stat?: (path: string) => { isFile(): boolean; isSymbolicLink(): boolean };
   lock?: Partial<LockSteps>;
@@ -188,14 +192,55 @@ function openJournal(path: string, flags: number): number {
   return fd;
 }
 
-function appendLine(path: string, line: JournalLine): void {
+/** The marker a failed journal flush leaves in its generation folder: the journal's tail is not
+ *  known to be durable. Nothing in it is proof until a later holder of the lock flushes the whole
+ *  journal successfully and removes the marker (`journalDurable`). */
+const POISONED = 'poisoned';
+
+function appendLine(path: string, line: JournalLine, sync: (fd: number) => void = fsyncSync): void {
   const fd = openJournal(path, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND);
   try {
     writeAll(fd, `${JSON.stringify(line)}\n`);
-    fsyncSync(fd);
+    try {
+      sync(fd);
+    } catch (error) {
+      // The line may sit in the cache without being durable: mark the journal poisoned before the
+      // lock is let go, so no later reader takes that line as proof on its own.
+      createExclusive(join(dirname(path), POISONED), `${new Date().toISOString()}\n`);
+      throw error;
+    }
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * Called with the queue lock held, before any line of the journal is used as proof or appended
+ * after: makes everything visible in the journal durable now. A previous holder may have written a
+ * whole line and then died, or failed its flush, with the line only in the cache; flushing it here
+ * establishes durability under this lock. A flush that fails marks (or keeps) the journal poisoned
+ * and answers false: nothing in it proves anything (fail closed). After a successful flush, the
+ * poisoned marker is removed durably; a marker that cannot be removed also answers false.
+ */
+function journalDurable(folder: string, sync: (fd: number) => void = fsyncSync): boolean {
+  const journal = join(folder, 'journal.jsonl');
+  const marker = join(folder, POISONED);
+  let fd: number;
+  try {
+    fd = openJournal(journal, constants.O_RDONLY);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+    return removeDurable(marker) === 'removed';
+  }
+  try {
+    sync(fd);
+  } catch {
+    createExclusive(marker, `${new Date().toISOString()}\n`);
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+  return removeDurable(marker) === 'removed';
 }
 
 function plainFolder(path: string): boolean {
@@ -403,7 +448,7 @@ function line(locked: Locked, seq: number, msgId: string, opKey: string, state: 
 }
 
 function writeJournal(locked: Locked, next: JournalLine): void {
-  appendLine(locked.journalPath, next);
+  appendLine(locked.journalPath, next, locked.options.syncJournal);
   locked.folded.last.set(next.seq, next);
   if (next.seq > locked.folded.head) locked.folded.head = next.seq;
   if (next.state === 'committed') locked.folded.committedIds.set(next.msg_id, next.seq);
@@ -526,11 +571,17 @@ function open(dropDir: string, target: Omit<Target, 'dropDir'>, options: QueueOp
       }
       log(`queue ${target.session}/${target.seat}: cut a torn journal tail at byte ${String(journal.tornAt)}`);
     }
+    if (!journalDurable(generation.folder, options.syncJournal)) {
+      lock.release();
+      return { skipped: 'the journal could not be made durable (poisoned)' };
+    }
     const locked: Locked = {
       base, target: { dropDir, ...target }, generation, journalPath, folded: fold(journal.lines), options, log, now,
     };
     recover(locked);
-    return { locked, release: () => lock.release() };
+    // The next holder of the lock drains the seat's pending dual writes once it lets the lock go
+    // (a drain proves each placement under the lock again, so it never runs while this one holds).
+    return { locked, release: () => { lock.release(); drainAfterRelease(dropDir, options); } };
   } catch (error) {
     lock.release();
     throw error;
@@ -627,6 +678,14 @@ export async function appendDelivery<T>(input: AppendInput, write: () => Promise
     }
   } finally {
     release();
+  }
+}
+
+function drainAfterRelease(dropDir: string, options: QueueOptions): void {
+  try {
+    drainPendingReceipts(dropDir, options.home);
+  } catch (error) {
+    options.log?.(`queue: the pending receipts could not be drained (${(error as Error).message})`);
   }
 }
 
@@ -799,6 +858,7 @@ function committedInJournal(folder: string, seq: number, msgId: string): boolean
   }
   if (!('release' in lock)) return false;
   try {
+    if (!journalDurable(folder)) return false;
     const journal = readJournal(join(folder, 'journal.jsonl'));
     if (journal.unreadable === true || journal.corrupt || journal.tornAt !== null) return false;
     const lines = journal.lines.filter(line => line.seq === seq);
