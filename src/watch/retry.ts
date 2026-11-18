@@ -129,7 +129,7 @@ export type RetryScene = {
   resendStamped?(seat: Seat, dropDir: string, id: string, typedRequest: () => boolean, startAfter?: 'typed'): Promise<string | null>;
   /** The event legs the seat's own resolved order permits a re-offer on (`permittedEventLegs`):
    *  the send walk's own answer, exclusions included. Absent, the unread pass re-offers nothing. */
-  eventLegs?(seat: string): { channel: boolean; socket: boolean; why?: string };
+  eventLegs?(seat: string): { channel: boolean; socket: boolean; pointer?: boolean; why?: string };
   /** The pass's shared mail reading: the folds' unread and unacked lists, already taken once.
    *  Absent, this pass takes its own — the same answer, read once more in the pass. */
   mail?: MailPass;

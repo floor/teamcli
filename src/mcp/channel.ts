@@ -83,7 +83,7 @@ export const CHANNEL_READ_BY = 'channel';
 /** The one sentence the server gives its client when the channel is on. The model acknowledges
  *  the id from the notification's meta in the same turn, before it reads or acts on anything. */
 export const CHANNEL_INSTRUCTIONS =
-  'When a channel notification arrives, call the ack tool with the id from its meta in the same handling turn, before you read the message or act on it.';
+  'When a channel notification arrives, call the ack tool with the id and offer from its meta in the same handling turn, before you read the message or act on it.';
 
 type ChannelSpan = { start: number; end: number };
 

@@ -1,5 +1,7 @@
 import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
-import { TYPED_REQUESTED } from '../queue/resend.ts';
+import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
+import { withSignedIdentity } from '../comms/identity.ts';
+import { claudeAdapterRoot, TYPED_REQUESTED } from '../queue/resend.ts';
 import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
@@ -23,14 +25,13 @@ import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { nudgeBusNoWait } from '../bus/server.ts';
 import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
-import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, readAncestors, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
 import { placedCallerTeam } from '../registry/binding.ts';
 import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { NOT_A_REPO } from '../file/load.ts';
-import { labelPersona } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, beginHerdrSnapshot, endHerdrSnapshot, evictHerdrAgentList, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
@@ -71,7 +72,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, stampedSettlement, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -84,7 +85,7 @@ import { deliveryChainOf, deliveryInboxLed, DeliveryChainUnreadable, type Delive
 import { messagingStoreChainOf, StoreChainUnreadable } from '../send/store.ts';
 import { cascadeOrder, cascadeWalk, legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { webhookRefusal } from '../send/webhook.ts';
-import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
+import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import {
   deliverCodexNativeRoute,
   deliverHeadlessResumeRoute,
@@ -1168,7 +1169,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // frame keeps the socket out until its declaration is re-confirmed.
   const socketWord = input.declared?.inbound;
   const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(input.dir, input.session, input.seat)), inbound);
-  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
+  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null && !socketSuppressed(input.root, input.home);
   const declaredOrder = Object.values(input.rawChain).some((word) => word !== undefined && word.length > 0);
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
   // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
@@ -1312,6 +1313,16 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   const eventLegs: WalkLeg[] = cascade.filter((leg) => !isTypingLeg(leg) || (walkingTyped && leg === 'typed'));
   if (!eventLegs.includes('drop')) eventLegs.push('drop');
   const typingSetAside = ordered.filter((leg) => isTypingLeg(leg) && !(walkingTyped && leg === 'typed'));
+  // The Claude adapter (§2.1): on an active root a claude-code receiver's declared order is
+  // ignored. Its walk is the channel when its listener serves one (the channel server pushes the
+  // copy with its offer), then the drop; the scheduler's pointer covers a seat whose channel is
+  // not proven. No socket and no typed leg is walked from here.
+  const adapterRoot = !human && claudeAdapterRoot(input.cli, input.root, input.home, input.declared?.webhook !== undefined);
+  if (adapterRoot) {
+    const live = channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
+    eventLegs.splice(0, eventLegs.length, ...(live ? ['channel', 'drop'] as WalkLeg[] : ['drop'] as WalkLeg[]));
+    typingSetAside.splice(0, typingSetAside.length);
+  }
   const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop' && leg !== 'webhook');
   const chosen: readonly WalkLeg[] = human ? (webhookWalked ? ['webhook', 'drop'] : ['drop']) : eventLegs;
   return {
@@ -2114,7 +2125,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // carried by every leg and retried. A send that keeps no record (`messaging.store: none`) has no
   // stored copy to retry or acknowledge, so it stays on legacy delivery (unstamped).
   const unstamped = recordOf(msgId, to, body, from, admission, host.modelDriftNotice?.at ?? host.now().toISOString(), subject === '' ? undefined : subject);
-  const record = store === 'none' ? unstamped : stampedPayload(unstamped, host.home);
+  const record = store === 'none' ? unstamped : withSignedIdentity(stampedPayload(unstamped, host.home), host.home);
   const callerRoot = { root, session: team.session };
   if (dry) {
     // A dry run reports the same ordered legs a real send would, but it can only say whether each
@@ -2624,6 +2635,11 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
             via: 'drop',
             failed: [...failures],
           });
+          // A stamped record's wait still ends on its settlement (the Claude adapter §3): the
+          // durable copy is the recipient's, and no second leg starts.
+          if (wait && isStampedPayload(record)) {
+            return finishThreadWait(io, dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'drop', timeoutS, host, report, startedAt, failures, to.sentAs, why, callerRoot);
+          }
           return sentUnconfirmed(io, label, report, ms, 'drop');
         }
       }
@@ -2810,6 +2826,14 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: `${to.cli} sessions have no cross-session socket` }));
         continue;
       }
+      // The Claude adapter §1: no new delivery dials a socket on an E7b-active root, read from the
+      // receiving root's floor state at this delivery. A dark root keeps the leg as before.
+      if (socketSuppressed(to.root, host.home)) {
+        failures.push(`socket: ${SOCKET_OFF_ON_ACTIVE}`);
+        markLeg('socket', 'skipped', SOCKET_OFF_ON_ACTIVE);
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: SOCKET_OFF_ON_ACTIVE }));
+        continue;
+      }
       if (!SOCKET_SEND) {
         failures.push('socket: this build does not carry the cross-session socket');
         markLeg('socket', 'skipped', 'this build does not carry the cross-session socket');
@@ -2854,22 +2878,15 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
         break;
       }
-      // The accepted frame opens with the sender's identity line alone. `#682` pinned that shape:
-      // no summary, no rule. The message-display line is the typed wake's, where the seat reads
-      // it in its own composer; an agent handling a socket frame has the whole signed record.
-      const identityHeader = frameIdentityHeader(
-        record,
-        naming,
-        fileTeamId,
-        team.project,
-        caller.kind === 'seat' ? labelNameOf(team, caller.name) : null,
-      );
+      // The accepted frame opens with the sender's identity line, read from the record alone
+      // (src/comms/identity.ts). The message-display line is the typed wake's, where the seat
+      // reads it in its own composer; an agent handling a socket frame has the whole signed record.
       const socketStore = store === 'parallel'
         ? { mode: 'parallel' as const, settle: settleStaged }
         : store === 'none'
           ? { mode: 'none' as const }
           : { mode: 'first' as const, staged: stagedRecordOf() };
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, identityHeader, human, true, socketStore);
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, human, true, socketStore);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -3318,7 +3335,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     const dialled = !isStampedPayload(record) && existsSync(daemonSock)
       && (handoff || (!to.cross && compose === null && typedWake === null && !wait));
     if (dialled) await ensureEpisode();
-    const daemonRequest = { v: 1 as const, op: 'send' as const, id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) };
+    const daemonRequest = { v: 1 as const, op: 'send' as const, id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) };
     let viaDaemon = dialled ? await requestDaemon(daemonSock, daemonRequest) : null;
     // A typed handoff the endpoint dropped without answering (the daemon restarts an endpoint
     // that missed its probes, and a restart closes the connection) is asked again once the
@@ -4779,15 +4796,32 @@ function findThreadReply(
  * Waits up to `timeoutMs` for a verified reply record on `sentPayload.thread`, looking once,
  * then every `pollMs`. A timeout of zero is the one look and no wait at all.
  */
+/** The receiving team's lead seat, whose clearance settles a stamped record; null when unread. */
+function leadAt(root: string, home: string): string | null {
+  try {
+    const loaded = readTeamConfig(root, { home });
+    return loaded.ok && loaded.team.orchestrator !== '' ? loaded.team.orchestrator : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A stamped record's settlement other than a reply, as `--wait` reports it (§3). */
+type SettledReport = { kind: 'acked' } | { kind: 'cleared'; by: string };
+
 async function awaitThreadReply(
   roots: readonly { root: string; session: string }[],
   sentPayload: RecordPayload,
   home: string,
   timeoutMs: number,
   pollMs = INBOX_POLL_MS,
-): Promise<ThreadReply | null> {
+  /** A stamped record's settlement: the wait ends on it too. */
+  settled?: () => SettledReport | null,
+): Promise<ThreadReply | SettledReport | null> {
   const immediate = findThreadReply(roots, sentPayload, home);
   if (immediate !== null) return immediate;
+  const first = settled?.() ?? null;
+  if (first !== null) return first;
   const deadline = Date.now() + timeoutMs;
   for (let left = deadline - Date.now(); left > 0; left = deadline - Date.now()) {
     await new Promise((resolve) => {
@@ -4795,6 +4829,8 @@ async function awaitThreadReply(
     });
     const found = findThreadReply(roots, sentPayload, home);
     if (found !== null) return found;
+    const done = settled?.() ?? null;
+    if (done !== null) return done;
   }
   return null;
 }
@@ -4831,7 +4867,21 @@ async function finishThreadWait(
     ? [{ root, session }, extraRoot]
     : [{ root, session }];
   const waitMs = host.waitMs ?? timeoutS * 1000;
-  const found = await awaitThreadReply(roots, payload, host.home, waitMs);
+  // The Claude adapter §3: a stamped record's wait also ends on its settlement — the recipient's
+  // ack or a lead's or the owner's clearance — never on a read, which is only a copy.
+  const lead = isStampedPayload(payload) ? leadAt(root, host.home) : null;
+  const stampedContext = { to: seatName, root, session, ...(lead === null ? {} : { lead }) };
+  const settledNow = isStampedPayload(payload)
+    ? (): SettledReport | null => {
+        const key = messageKeyState(host.home);
+        if (key.kind !== 'key') return null;
+        const settled = stampedSettlement(dropDir, payload.id, stampedContext, key.key);
+        return settled === null || settled.kind === 'answered' ? null : settled;
+      }
+    : undefined;
+  const raced = await awaitThreadReply(roots, payload, host.home, waitMs, INBOX_POLL_MS, settledNow);
+  const found = raced !== null && 'reply' in raced ? raced : null;
+  const settledBy = raced !== null && 'kind' in raced ? raced : null;
   if ((via === 'mcp-inbox' || via === 'drop' || via === 'channel') && (found !== null || receiptHeld(dropDir, payload.id, { to: seatName, root, session }, host.home, claimBindingIn(root, session, seatName, payload.id)))) {
     clearPending(dropDir, payload.id);
   }
@@ -4865,6 +4915,18 @@ async function finishThreadWait(
       ...failed,
     });
     return answered(io, seatName, found, report, via, payload.thread);
+  }
+  if (settledBy !== null) {
+    const outcome = settledBy.kind === 'acked' ? 'delivered (acked)' : `cleared by ${settledBy.by}`;
+    logLine(dir, 'send', who, `${seatName}: ${outcome}`, host.now());
+    appendHistory(project, root, host.home, { ...entry, outcome, ...(note !== undefined ? { note } : {}), ms: host.now().getTime() - startedAt, via, ...failed });
+    const summary = withId(`${seatName}: ${outcome}`, report);
+    if (report.json) writeAction(io, report, { status: 'delivered', summary, channel: via, thread: payload.thread });
+    else {
+      openText(io, report);
+      io.stdout(`${summary}\n`);
+    }
+    return 0;
   }
   logLine(dir, 'send', who, `${seatName}: timeout (sent, no reply on the thread within ${String(timeoutS)}s; the thread stays open)`, host.now());
   appendHistory(project, root, host.home, {
@@ -5030,7 +5092,9 @@ async function deliverDropped(
   const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken', project, staged);
   if (stored.ok) {
     stored.release();
-    if (human && wait) {
+    // A stamped record's wait ends on its settlement (the Claude adapter §3): the stored copy is
+    // the message, and the scheduler's offers follow it.
+    if ((human || isStampedPayload(payload)) && wait) {
       return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
     }
     const ms = host.now().getTime() - startedAt;
@@ -5116,6 +5180,11 @@ async function deliverDropped(
     ...failed,
   });
   report.sent = msgId;
+  // A stamped record queued behind a busy seat is durable: its wait ends on its settlement (the
+  // Claude adapter §3), and no second leg starts.
+  if (wait && isStampedPayload(payload)) {
+    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, 'queued behind a busy seat', extraRoot);
+  }
   return human ? queuedBusy(io, dir, who, seatName, 'drop', msgId, { held: stored.busy, startedAt: stored.startedAt }, host, report, startedAt)
     : notDelivered(io, dir, who, label, 'no live route', host, report);
 }
@@ -5738,10 +5807,6 @@ export async function walkBriefDelivery(input: {
   return { via: null, walked: true, exit: 1, failures };
 }
 
-/** The sender display name for a client send's socket frame: the person's client, named as the
- *  person (`Client Grok Bot (owner relay):`). */
-const CLIENT_FRAME_HEADER = CLIENT_SLICE_DISPLAY_NAME;
-
 /**
  * The client send's own walk, after the grant wrote its drop: the same signed record, carried
  * through the receiving seat's resolved delivery order by the walk a reply makes
@@ -5829,10 +5894,9 @@ async function deliverClientRecord(
     payload: record,
     naming,
     file: team,
-    sender: { teamId: target.teamId, project, label: null },
+    sender: { teamId: target.teamId, project },
     address: agentRecord?.reach.address ?? null,
     who: from,
-    identityHeader: CLIENT_FRAME_HEADER,
     // The grant's bound recipient: the socket is dialed only while the registry still records
     // that agent running on this seat, CLI, session and team, as a seat send's dial requires.
     recipient: { agentId: target.recipientId, teamId: target.teamId },
@@ -5957,17 +6021,14 @@ export async function walkReplyDelivery(input: {
   naming: SenderNaming;
   /** The receiving team file when the caller already read it; null reads it here. */
   file: TeamFile | null;
-  /** The replying side's own identity: the team it stands in, its project, and the label its
-   *  file writes on it (a seat's; null for the owner). */
-  sender: { teamId: string; project: string; label: string | null };
+  /** The replying side's own team and project. Its name on every leg is the record's own
+   *  identity (src/comms/identity.ts). */
+  sender: { teamId: string; project: string };
   /** The receiving seat's registry address, when the caller resolved one: the socket's first
    *  candidate. */
   address: string | null;
   /** The caller's log tag, as every leg logs it. */
   who: string;
-  /** The socket frame's identity line, when the carrier names its sender itself: a client send
-   *  names the person's client. Absent, the line is the sending seat's, read from `naming`. */
-  identityHeader?: string;
   /** The receiving seat's registry id and the team key its record is filed under, when the caller
    *  resolved them from a signed binding: the socket leg then makes the same record check a
    *  send's own walk makes before it dials (running, same CLI, team, session and seat). */
@@ -6227,6 +6288,10 @@ export async function walkReplyDelivery(input: {
         failures.push(`socket: ${cli} sessions have no cross-session socket`);
         continue;
       }
+      if (socketSuppressed(input.root, input.host.home)) {
+        failures.push(`socket: ${SOCKET_OFF_ON_ACTIVE}`);
+        continue;
+      }
       if (!SOCKET_SEND) {
         failures.push('socket: this build does not carry the cross-session socket');
         continue;
@@ -6240,11 +6305,9 @@ export async function walkReplyDelivery(input: {
         continue;
       }
       await ensureStaged();
-      const identityHeader = input.identityHeader
-        ?? frameIdentityHeader(input.payload, input.naming, input.sender.teamId, input.sender.project, input.sender.label);
       const attempt = await deliverSocketFrame(
         input.dir, input.who, from, aim, input.payload, failures, input.host, report, startedAt,
-        false, inbound, identityHeader, false, false, { mode: 'first', staged: stagedRecordOf() },
+        false, inbound, false, false, { mode: 'first', staged: stagedRecordOf() },
       );
       if (attempt.kind === 'delivered') {
         return ended({ via: 'socket', walked: true, unconfirmed: false, summary: `${seatName}: delivered (socket)` });
@@ -6651,43 +6714,6 @@ type SocketAttempt =
 const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending session's own SendMessage";
 
 /**
- * The human name a seat's written label carries: the text before its middle dot, trimmed. A label
- * the file writes reads `<name> · <role>` — the workspace title `up` gives it — and its first half
- * is the name people call the seat by. A written label with no middle dot is the name whole. A
- * seat with no written label has no such name: the stored label is its model and version, and its
- * workspace title its seat name and role, so the seat name stands in its place. Display only.
- */
-export function labelNameOf(team: TeamFile, seat: string): string | null {
-  const found = team.seats.find((one) => one.name === seat);
-  return found === undefined ? null : labelPersona(found);
-}
-
-/**
- * The sender's display name for an accepted socket frame: the nickname the registry (or the
- * seat's own setting) holds, the name its written label carries before the middle dot, then the
- * seat name. Display only: the signed record below it is the message, and the record's body keeps
- * its own `from … — admitted by: …` line. A registry that cannot answer reads as no nickname, so
- * a frame always names its sender.
- */
-function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, senderTeam: string, _teamName: string, labelName: string | null): string {
-  let name = '';
-  try {
-    name = senderNickname(
-      // This is a frame header for the sender's own team. Omitting the id keeps senderNickname's
-      // team lookup pinned here even if a stale or foreign roster also repeats that id.
-      { seat: record.from, team: senderTeam },
-      naming,
-    ) ?? '';
-  } catch {
-    // A registry that cannot answer is no nickname.
-  }
-  // A nickname wins; then the name the seat's written label carries; then the seat name, so the
-  // line always names its sender.
-  if (name === '') name = labelName ?? '';
-  return name === '' ? record.from : name;
-}
-
-/**
  * The default path's first leg: one frame on the target's cross-session socket, nothing typed.
  * The address is resolved first — the registry's recorded one while it is still live, else the pane's
  * own processes — and a write the socket takes is the send: this channel has no
@@ -6717,8 +6743,6 @@ async function deliverSocketFrame(
   startedAt: number,
   wait = false,
   inbound: InboundDeclaration = { policy: null, declaredAt: null, source: null },
-  /** The display line the frame opens with; empty, the body alone. */
-  header = '',
   /** True for a person-pane seat: no reader line, a person answers in its client. */
   personPane = false,
   /** False for a caller that writes the walk's one history line itself (the reply's own
@@ -6738,6 +6762,8 @@ async function deliverSocketFrame(
     staged?: StagedForWalk | null;
   },
 ): Promise<SocketAttempt> {
+  // The Claude adapter §1, at the frame itself: an active root is never dialed.
+  if (socketSuppressed(to.root, host.home)) return { kind: 'fallback', reason: SOCKET_OFF_ON_ACTIVE };
   const msgId = payload.id;
   const body = payload.body;
   report.sent = msgId;
@@ -6757,12 +6783,10 @@ async function deliverSocketFrame(
     : compact
       ? compactReaderLine(msgId, existingIds)
       : readerLine(msgId, existingIds);
-  const normalizedDisplay = header === '' ? null : header === 'owner' ? 'the owner' : header;
   let content = attributedBody(body, from, {
     record: payload,
     home: host.home,
     root: to.root,
-    displayName: normalizedDisplay,
     rule: payload.rule,
     compact: false,
   });
@@ -6863,6 +6887,8 @@ async function deliverSocketFrame(
   if (dialProof?.kind !== 'path' || dialProof.path !== first.path || inboundStaleReason(inbound, first.path) !== null) {
     return { kind: 'fallback', reason: 'the socket placement changed before delivery', socketUnusable: true };
   }
+  // The Claude adapter §1, at the dial itself: the staging and placement reads above were awaited.
+  if (socketSuppressed(to.root, host.home)) return { kind: 'fallback', reason: SOCKET_OFF_ON_ACTIVE };
   let usedAddress = first.path;
   let taken = await relayDeliver(
     { route: 'socket', socket: first.path, runtime: to.cli, copy },
@@ -6875,7 +6901,7 @@ async function deliverSocketFrame(
     (host as SnapshotSendHost).evictAgents?.(to.session);
     const retried = socketPathFor(host, { ...to, address: null }, found.pane);
     const live = retried?.kind === 'path' ? retried.path : null;
-    if (live !== null && live !== first.path && inboundStaleReason(inbound, live) === null) {
+    if (live !== null && live !== first.path && inboundStaleReason(inbound, live) === null && !socketSuppressed(to.root, host.home)) {
       usedAddress = live;
       taken = await relayDeliver({ route: 'socket', socket: live, runtime: to.cli, copy }, message, { now: host.now, dial: host.deliver });
     }
@@ -6928,7 +6954,15 @@ async function deliverSocketFrame(
 }
 
 /** The event legs a seat's own resolved order lets a watch re-offer a stored message on. */
-export type PermittedEventLegs = { channel: boolean; socket: boolean; why?: string };
+export type PermittedEventLegs = {
+  channel: boolean;
+  socket: boolean;
+  /** The Claude adapter's typed pointer (§2.4): permitted unless the pane is a person's or the
+   *  seat's declared order leaves the `typed` word out (the protected pane's binding, signed in
+   *  its team file or settings). Absent reads as not permitted. */
+  pointer?: boolean;
+  why?: string;
+};
 
 /**
  * The event legs a send to this seat would walk right now, read by the send's own order
@@ -6979,8 +7013,17 @@ export function permittedEventLegs(input: {
     overrides: read.overrides,
     now: input.now,
   });
-  if (plan.human) return { channel: false, socket: false, why: 'its pane is a human\'s' };
-  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket') };
+  if (plan.human) return { channel: false, socket: false, pointer: false, why: 'its pane is a human\'s' };
+  // The protected panes take no key, and wait for their hook or a pull:
+  // - the entity's main orchestrator, which runs in the owner's pane by design: the orchestrator
+  //   of the team whose project is the entity itself. It is found by its role in the signed team
+  //   file, never guessed from a pane, and no order opts it in;
+  // - a person's pane (above);
+  // - any seat whose declared order leaves the `typed` word out.
+  // Every other seat, other teams' leads included, takes the pointer through the guarded seam.
+  const mainOrchestrator = input.team.entity !== null && input.team.project === input.team.entity && input.seat === input.team.orchestrator;
+  const pointer = !mainOrchestrator && (!plan.declaredOrder || plan.ordered.includes('typed'));
+  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket'), pointer };
 }
 
 /** The result of the watch's one socket redelivery for a channel push no receipt confirmed. */
@@ -7013,6 +7056,7 @@ export async function redeliverChannelOnSocket(input: {
 }): Promise<ChannelRedelivery> {
   const { host, dir, root, project, session, seat, cli, dropDir, drop } = input;
   if (cli !== 'claude-code') return { ok: false, reason: `${cli} sessions have no cross-session socket` };
+  if (socketSuppressed(root, host.home)) return { ok: false, reason: SOCKET_OFF_ON_ACTIVE };
   if (!SOCKET_SEND) return { ok: false, reason: 'this build does not carry the cross-session socket' };
   const payload = verifiedPayloadOf(dropDir, drop.id, host.home);
   if (payload === null) return { ok: false, reason: "its signed record does not verify with this home's key" };
@@ -7029,7 +7073,6 @@ export async function redeliverChannelOnSocket(input: {
     ? teamIdOf(root)
     : getAgent(host.home, payload.from_id)?.reach.team ?? teamIdOf(root);
   const report: Report = { json: false, seat, sent: payload.id, project, session, from_team: fromTeam };
-  const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: input.team });
   const to: Aim = {
     seat,
     agentId: payload.to_id,
@@ -7054,7 +7097,6 @@ export async function redeliverChannelOnSocket(input: {
     host.now().getTime(),
     false,
     inbound,
-    frameIdentityHeader(payload, naming, fromTeam, input.team.project, labelNameOf(input.team, seat)),
     false,
   );
   if (attempt.kind === 'delivered') return { ok: true };
@@ -7105,8 +7147,6 @@ export async function resendStampedRecord(input: {
   const boundTeam = payload.from_id === null ? null : getAgent(host.home, payload.from_id)?.reach.team ?? null;
   const fromTeam = boundTeam ?? teamIdOf(root);
   const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: team });
-  const senderLabel = boundTeam === teamIdOf(root) && team.seats.some((one) => one.name === payload.from) ? labelNameOf(team, payload.from) : null;
-  const identityHeader = boundTeam === null ? payload.from : frameIdentityHeader(payload, naming, boundTeam, team.project, senderLabel);
   const walk = await walkReplyDelivery({
     io: quiet,
     host,
@@ -7119,10 +7159,9 @@ export async function resendStampedRecord(input: {
     payload,
     naming,
     file: team,
-    sender: { teamId: fromTeam, project: team.project, label: senderLabel },
+    sender: { teamId: fromTeam, project: team.project },
     address: null,
     who: 'watch',
-    identityHeader,
     resend: true,
     typedRequest: input.typedRequest ?? (() => false),
     ...(input.startAfter === undefined ? {} : { startAfter: input.startAfter }),

@@ -15,6 +15,7 @@ import { recordDeliveredBody } from '../send/readable-wake.ts';
 // message. `inbox_read` and reply also settle it through their ordinary read paths. Without
 // the flag, MCP is client-pull and the seat notices a message when it calls `inbox_check`, with
 // the drop-folder watch as the bounded fall-back.
+import { listenerKeyOf, newOfferToken, proveOffer } from '../comms/offer.ts';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -32,9 +33,9 @@ import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { namingFor, senderDisplayName } from '../send/names.ts';
+
 import { alreadyReadSentence, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
-import { attributedBody } from '../send/sender-claim.ts';
+import { attributedBody, renderedIdentity } from '../send/sender-claim.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState, type State } from '../state.ts';
@@ -83,7 +84,7 @@ import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
-import { channelOwnsSeat, resendCandidates, resendPass } from '../queue/resend.ts';
+import { channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { heldAt } from '../held.ts';
@@ -286,6 +287,9 @@ type Serving = {
    *  relaunched seat's left-over process is inert, not a second reader. */
   alive?: () => string | null;
   channelMark?: (dropDir: string, id: string) => boolean;
+  /** This server's listener incarnation (`<pid>@<marker ts>`), when it serves the channel: the
+   *  key its offers are pushed under and its token-ack log is filed by (src/comms/offer.ts). */
+  listenerKey?: string;
 };
 
 /** Whether two roots are the same folder once links are resolved, as the inbox checks do. */
@@ -336,10 +340,13 @@ function toolList(serving: Serving): unknown[] {
   if (serving.channel) {
     tools.push({
       name: 'ack',
-      description: 'Acknowledge a channel message by its meta id. Writes the same signed read receipt as `team ack`, with read_by channel. Call it in the same turn the notification arrives.',
+      description: 'Acknowledge a channel message by the id and offer from its meta. Writes the same signed read receipt as `team ack`, with read_by channel. Call it in the same turn the notification arrives.',
       inputSchema: {
         type: 'object',
-        properties: { id: { type: 'string', description: 'the id from the channel notification meta' } },
+        properties: {
+          id: { type: 'string', description: 'the id from the channel notification meta' },
+          offer: { type: 'string', description: 'the offer from the channel notification meta, when it carries one' },
+        },
         required: ['id'],
         additionalProperties: false,
       },
@@ -403,14 +410,13 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   if (!admitted.ok) return null;
   // Render authority independently of content. Only one known stored envelope may be folded:
   // nested headers are literal message text, including a worker quoting the owner's header.
-  const displayName = payload.from === 'owner' ? 'the owner' : senderDisplayName(
-    { seat: payload.from, id: payload.from_id },
-    namingFor({ home: serving.home, root: serving.root, file: team }),
-  );
+  // The sender's one identity (src/comms/identity.ts): the record's signed one, else the
+  // registry's by id. No other name is handed to the renderer.
+  const identity = renderedIdentity(payload.from, { record: payload, home: serving.home });
   const leadingClaim = /^from ([^\n]*?) — admitted by: ([^\n]*)\n\n?/;
   const envelope = leadingClaim.exec(payload.body);
   const knownEnvelope = envelope !== null
-    && (envelope[1] === payload.from || envelope[1] === displayName)
+    && (envelope[1] === payload.from || envelope[1] === identity.name || envelope[1] === identity.address || (payload.from === 'owner' && envelope[1] === 'the owner'))
     && envelope[2] === payload.rule;
   const body = knownEnvelope ? payload.body.slice(envelope[0].length) : payload.body;
   // The renderer receives an empty body so it cannot parse a content line as sender/rule.
@@ -419,7 +425,6 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
     home: serving.home,
     root: serving.root,
     rule: admitted.rule,
-    displayName,
   }) + body;
   if (content.trim() === '') return null;
   // The reader line every socket frame ends with: the record's id, as `team reply` and `team ack`
@@ -577,8 +582,12 @@ function watchChannel(
       if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(dropDir, id)?.seq ?? null);
       // E7b: a stamped record's copy is numbered immediately before the line leaves; a history
       // that cannot be written sends nothing now, and the redelivery pass offers it again.
+      // The Claude adapter §2.2: the copy carries a fresh offer token in its meta, kept beside the
+      // copy's number with this listener's key. The token is the only thing an ack can prove by.
+      let offer: string | null = null;
       if (recordStampAt(dropDir, id) === true) {
-        const n = takeCopyNumber(dropDir, id, 'channel');
+        offer = serving.listenerKey === undefined ? null : newOfferToken();
+        const n = takeCopyNumber(dropDir, id, 'channel', Date.now(), offer === null || serving.listenerKey === undefined ? undefined : { token: offer, listener: serving.listenerKey });
         if (n === null) return 'skip' as const;
         push.content = wrapCopy(push.content, id, n);
       }
@@ -596,7 +605,8 @@ function watchChannel(
       });
       if (!reserved || channelAborted(dropDir, id)) return 'skip' as const;
       if (!recordChannelEmitted(dropDir, id, new Date().toISOString())) return 'skip' as const;
-      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
+      // The push marker keeps the meta without the token: no reader of the marker sees it.
+      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: offer === null ? push : { content: push.content, meta: { ...push.meta, offer } } }));
       const marked = serving.channelMark
         ? serving.channelMark(dropDir, id)
         : markChannelNotified(dropDir, id);
@@ -866,6 +876,12 @@ function watchChannel(
     if (team === null) return false;
     const { permittedEventLegs } = await import('../commands/send.ts');
     const legs = permittedEventLegs({ dir: join(serving.root, '.agents'), root: serving.root, home: serving.home, session: serving.session, seat: serving.seat, team, now: () => new Date() });
+    const declared = team.seats.find((one) => one.name === serving.seat);
+    // The Claude adapter (§2.3): on an active root this server re-sends nothing. Its push of each
+    // new arrival is the channel offer; an offer that stays unsettled for 90 s makes the seat
+    // unproven, and the next attempt is the watch's pointer. A channel re-push would move no
+    // deadline and prove nothing.
+    if (claudeAdapterRoot(declared?.cli ?? 'claude-code', serving.root, serving.home, declared?.webhook !== undefined)) return false;
     return channelOwnsSeat({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, walkTakesChannel: legs.channel });
   };
   const redeliverPass = (): void => {
@@ -960,6 +976,10 @@ function ackTool(args: unknown, serving: Serving): unknown {
   if (outcome.kind === 'unwritten') {
     return toolError(`${id}: not acknowledged: the read receipt could not be written; call ack again`);
   }
+  // The Claude adapter §2.2: an ack carrying the offer of a channel copy this listener pushed
+  // proves the channel reaches the session; any other ack settles and proves nothing.
+  const offer = typeof args === 'object' && args !== null ? (args as Record<string, unknown>).offer : undefined;
+  if (serving.listenerKey !== undefined && offer !== undefined) proveOffer(dropDir, id, offer, serving.listenerKey, { root: serving.root, session: serving.session, seat: serving.seat, key: key.key });
   return toolText(JSON.stringify({ acknowledged: id, written: outcome.kind === 'published' }));
 }
 
@@ -1865,6 +1885,7 @@ export async function runMcpServe(
     channel,
     brief,
     ...(host.channelMark === undefined ? {} : { channelMark: host.channelMark }),
+    ...(channel ? { listenerKey: listenerKeyOf(listener) } : {}),
     // Re-proved on every use, not only at start: the seat may be stopped, replaced or relaunched
     // while this process lives, and a launcher-written config that names it again must not make
     // the old process a reader of the new seat. The team file itself is read again: the

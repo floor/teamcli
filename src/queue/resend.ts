@@ -24,8 +24,10 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { join } from 'node:path';
 import { stampedListing } from './mail-tree.ts';
 import { ACTOR_LEVEL } from './floor.ts';
-import { copyHistory, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
+import { attemptTimes, backoffMs, copyHistory, firstChannelOffer, newestOffer, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
+import { floorState } from './floor.ts';
 import { inboxLive } from '../mcp/inbox.ts';
+import { listenerKeyOf, offerAcks } from '../comms/offer.ts';
 import { isRecordSidecarName, recordStampAt, stampedSettled, type StatusContext } from '../send/record.ts';
 
 /** At most this many records are offered to one seat in one pass; the rest stay due. */
@@ -36,7 +38,77 @@ const RECORD_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 /** One seat as the scheduler reads it: its legacy seat folder (the stamped one is found from it),
  *  the context its settlement is read under (`to` and `session` name the seat), the message key,
  *  and the team's `.agents` folder, where the seat lock lives. */
-export type ResendSeat = { dropDir: string; context: StatusContext; key: KeyObject; agentsDir: string };
+export type ResendSeat = {
+  dropDir: string;
+  context: StatusContext;
+  key: KeyObject;
+  agentsDir: string;
+  /** The Claude adapter (§2.3), for a claude-code seat on an active root: whether the seat is
+   *  unproven now. A record whose newest offer went by the channel is then due at once. */
+  unproven?: () => boolean;
+  /** Only these records are offered (the Claude adapter: a proven seat's overdue records). */
+  only?: ReadonlySet<string>;
+};
+
+/** How long a channel offer may stay unsettled before the seat is unproven (§2.3). */
+export const CHANNEL_OVERDUE_MS = 90_000;
+
+/** Why a claude-code seat's channel is not proven, or null when it is (the doctor's words). */
+export type ChannelUnproven = 'no listener' | 'unproven since launch' | 'overdue offer';
+
+/**
+ * The Claude adapter's one fact, read live at each decision (§2.1): a live inbox listener of this
+ * level for the seat declares the channel, that listener's token-ack log holds at least one ack
+ * that carried a valid offer (src/comms/offer.ts), and no channel offer of this seat is overdue —
+ * a record still unsettled 90 s after its newest offer started (the attempt's reservation, or the
+ * record's arrival for the send's own first offer) with no proving ack from this listener for a
+ * copy taken after that start. Nothing is stored; every unknown reads as not proven.
+ */
+export function channelUnproven(input: { dropDir: string; root: string; session: string; seat: string; context: StatusContext; key: KeyObject; nowMs: number }): ChannelUnproven | null {
+  const live = inboxLive(input.dropDir, input.root, input.session, input.seat);
+  if (!live.live || live.listener.channel !== true || (live.listener.level ?? 0) < ACTOR_LEVEL) return 'no listener';
+  const listenerKey = listenerKeyOf(live.listener);
+  const acks = offerAcks(input.dropDir, listenerKey, { root: input.root, session: input.session, seat: input.seat, key: input.key });
+  if (acks.length === 0) return 'unproven since launch';
+  const overdue = overdueChannelRecords(input);
+  if (overdue === 'unreadable') return 'overdue offer';
+  // A proving ack from this listener taken after an overdue offer's start: the channel works for
+  // new traffic again. The overdue record itself stays owed a pointer (`overdueChannelRecords`).
+  for (const start of overdue.values()) if (!acks.some((ack) => ack.atMs >= start)) return 'overdue offer';
+  return null;
+}
+
+/**
+ * The seat's stamped records whose first outstanding channel offer is overdue (§2.3): unsettled
+ * 90 s after that offer started (the record's arrival, or the earliest channel attempt). A pointer
+ * or a later push never moves the deadline, and a proving ack for another message never excuses
+ * it: each stays owed a pointer until it settles. Maps id to that start; `unreadable` for a
+ * stamped folder that cannot be listed.
+ */
+export function overdueChannelRecords(input: { dropDir: string; context: StatusContext; key: KeyObject; nowMs: number }): Map<string, number> | 'unreadable' {
+  const out = new Map<string, number>();
+  const listing = stampedListing(input.dropDir);
+  if (listing === 'unreadable') return 'unreadable';
+  if (listing === null) return out;
+  for (const name of listing.names) {
+    if (name.startsWith('.') || isRecordSidecarName(name) || !RECORD_NAME.test(name)) continue;
+    let arrived: number;
+    try {
+      const stat = lstatSync(join(listing.folder, name));
+      if (!stat.isFile()) continue;
+      arrived = stat.mtimeMs;
+    } catch {
+      continue;
+    }
+    if (recordStampAt(listing.folder, name) !== true) continue;
+    const start = firstChannelOffer(listing.folder, name, arrived);
+    // An unreadable history authorizes nothing: the record is not listed as overdue.
+    if (start === null || start === 'unknown' || input.nowMs - start < CHANNEL_OVERDUE_MS) continue;
+    if (stampedSettled(listing.folder, name, input.context, input.key)) continue;
+    out.set(name, start);
+  }
+  return out;
+}
 
 /** The seat's stamped records that are unsettled and due now, oldest arrival first. */
 export function resendCandidates(seat: ResendSeat, nowMs: number): string[] {
@@ -66,14 +138,57 @@ export function resendCandidates(seat: ResendSeat, nowMs: number): string[] {
  * A live listener of an older build, which cannot see the stamped folder, owns nothing: the watch
  * offers for that seat.
  */
-export function channelOwnsSeat(input: { dropDir: string; root: string; session: string; seat: string; walkTakesChannel: boolean }): boolean {
+export function channelOwnsSeat(input: {
+  dropDir: string;
+  root: string;
+  session: string;
+  seat: string;
+  walkTakesChannel: boolean;
+  /** The Claude adapter (§2.1): for a claude-code seat on an active root, ownership is
+   *  `channelUnproven(...) === null`, read live; the walk's answer is not asked. */
+  adapter?: { cli: string; webhook?: boolean; home: string; context: StatusContext; key: KeyObject; nowMs: number };
+}): boolean {
+  if (input.adapter !== undefined && claudeAdapterRoot(input.adapter.cli, input.root, input.adapter.home, input.adapter.webhook === true)) {
+    return channelUnproven({ dropDir: input.dropDir, root: input.root, session: input.session, seat: input.seat, context: input.adapter.context, key: input.adapter.key, nowMs: input.adapter.nowMs }) === null;
+  }
   if (!input.walkTakesChannel) return false;
   const live = inboxLive(input.dropDir, input.root, input.session, input.seat);
   return live.live && live.listener.channel === true && (live.listener.level ?? 0) >= ACTOR_LEVEL;
 }
 
+/** Whether the Claude adapter decides this seat's offers: a claude-code seat with a pane (a seat
+ *  that declares a webhook row is a routine, reached by its webhook as before) on a root that is
+ *  not dark (an unreadable floor reads as active, as the stamp does). */
+export function claudeAdapterRoot(cli: string, root: string, home: string, webhook = false): boolean {
+  if (cli !== 'claude-code' || webhook) return false;
+  try {
+    return floorState(root, home).kind !== 'dark';
+  } catch {
+    return true;
+  }
+}
+
 function dueNow(folder: string, id: string, seat: ResendSeat, nowMs: number, arrived: number): boolean {
-  return recordStampAt(folder, id) === true && !stampedSettled(folder, id, seat.context, seat.key) && resendDue(folder, id, nowMs, arrived);
+  if (seat.only !== undefined && !seat.only.has(id)) return false;
+  if (recordStampAt(folder, id) !== true || stampedSettled(folder, id, seat.context, seat.key)) return false;
+  // The Claude adapter's seats (the watch binds `unproven`, or the proven seat's `only` set) keep
+  // the pointer clock alone (§2.3): an unreadable history declines the attempt before any other
+  // history read; the first pointer since the first channel offer is due at once while the seat is
+  // unproven, or at that offer's 90 s deadline once it is proven; each later one waits
+  // `backoffMs(1 + pointers)` from the newest pointer attempt. A copy never moves this clock.
+  if (seat.only !== undefined || seat.unproven !== undefined) {
+    const start = firstChannelOffer(folder, id, arrived);
+    const attempts = attemptTimes(folder, id);
+    if (start === 'unknown' || attempts === 'unknown') return false;
+    const pointers = attempts.filter((one) => !one.channel && (start === null || one.atMs >= start));
+    if (pointers.length === 0) {
+      if (seat.only !== undefined) return start !== null && nowMs - start >= CHANNEL_OVERDUE_MS;
+      return seat.unproven !== undefined && seat.unproven();
+    }
+    const newest = Math.max(...pointers.map((one) => one.atMs));
+    return nowMs - newest >= backoffMs(1 + pointers.length);
+  }
+  return resendDue(folder, id, nowMs, arrived);
 }
 
 /**

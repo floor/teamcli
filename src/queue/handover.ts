@@ -21,8 +21,8 @@
 //
 // This module is inside the comms boundary: only the legs and the deliberate readers call it,
 // and no other module writes under `.exposures/` (test/handover-boundary.test.ts).
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createExclusive, ensureFolder } from './durable.ts';
 import { seatFolderOf } from '../send/drop-folder.ts';
 
@@ -84,18 +84,214 @@ export function copyHistory(dropDir: string, id: string): CopyHistory | 'unknown
  * Takes the next delivery number for one copy, durably, immediately before it leaves. Null when
  * the history cannot be read or written: the caller sends no copy now (the record stays due).
  */
-export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs: number = Date.now()): number | null {
+export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs: number = Date.now(), offer?: ChannelOffer): number | null {
   const folder = historyFolder(dropDir, id);
   if (!ensureFolder(join(seatFolderOf(dropDir, id), EXPOSURES)) || !ensureFolder(folder)) return null;
   const seen = copyHistory(dropDir, id);
   if (seen === 'unknown') return null;
+  // A channel copy keeps its offer token and the listener that pushed it beside its number
+  // (the Claude adapter §2.2). No reader prints a history entry.
+  const extra = leg === 'channel' && offer !== undefined ? { offer: offer.token, listener: offer.listener } : {};
   for (let n = seen.copies + 1; n <= seen.copies + 8; n++) {
-    const made = createExclusive(join(folder, String(n)), `${JSON.stringify({ v: 1, n, leg, at: new Date(nowMs).toISOString() })}\n`);
+    const made = createExclusive(join(folder, String(n)), `${JSON.stringify({ v: 1, n, leg, at: new Date(nowMs).toISOString(), ...extra })}\n`);
     if (made === 'created') return n;
     if (made === 'failed') return null;
     // `exists`: a rival took n; try the next number.
   }
   return null;
+}
+
+/** Whether `path` is a real folder: present, a directory, and not a link. */
+export function realFolder(path: string): boolean {
+  try {
+    const held = lstatSync(path);
+    return held.isDirectory() && !held.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the whole folder chain of a message's history is real folders, from the mail tree
+ *  down (`<tree>/<session>/<seat>/.exposures/<id>`): no link anywhere on it. */
+export function historyChainReal(dropDir: string, id: string): boolean {
+  const seat = seatFolderOf(dropDir, id);
+  return [dirname(dirname(seat)), dirname(seat), seat, join(seat, EXPOSURES), historyFolder(dropDir, id)].every(realFolder);
+}
+
+/** The largest proof or history entry read: these are a few hundred bytes. */
+const ENTRY_MAX = 16_384;
+
+/** A regular file's text, opened without following a final link and bounded in size; null for
+ *  a link, a folder, a device, a fifo, an oversized file or any read failure. */
+export function readRegularNoFollow(path: string): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const held = fstatSync(fd);
+    if (!held.isFile() || held.size > ENTRY_MAX) return null;
+    const buffer = Buffer.alloc(held.size);
+    const read = readSync(fd, buffer, 0, buffer.length, 0);
+    return read === buffer.length ? buffer.toString('utf8') : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+/** The offer a channel copy carries (the Claude adapter §2.2): a fresh random token, and the
+ *  listener incarnation that pushed it (`<pid>@<listener ts>`). */
+export type ChannelOffer = { token: string; listener: string };
+
+/** One channel copy's offer, as its history entry keeps it. */
+export type OfferedCopy = { n: number; token: string; listener: string; atMs: number };
+
+/** The channel copies of one message that carry an offer token, in number order. A history that
+ *  cannot be read, and an entry that cannot be parsed, offer nothing. */
+export function offeredCopies(dropDir: string, id: string): OfferedCopy[] {
+  const folder = historyFolder(dropDir, id);
+  // Confined to the seat's own tree: every folder from the mail tree down is real, never a link,
+  // and each entry is a bounded regular file opened without following a link.
+  if (!historyChainReal(dropDir, id)) return [];
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return [];
+  }
+  const out: OfferedCopy[] = [];
+  for (const name of names) {
+    const match = COPY_NAME.exec(name);
+    if (match === null) continue;
+    try {
+      const text = readRegularNoFollow(join(folder, name));
+      if (text === null) continue;
+      const entry = JSON.parse(text) as { leg?: unknown; offer?: unknown; listener?: unknown; at?: unknown };
+      if (entry.leg !== 'channel' || typeof entry.offer !== 'string' || typeof entry.listener !== 'string') continue;
+      const atMs = Date.parse(typeof entry.at === 'string' ? entry.at : '');
+      out.push({ n: Number(match[1]), token: entry.offer, listener: entry.listener, atMs: Number.isFinite(atMs) ? atMs : 0 });
+    } catch {
+      continue;
+    }
+  }
+  return out.sort((a, b) => a.n - b.n);
+}
+
+/** The scheduler's reserved attempts, with their times, in number order (withdrawn ones out). */
+export function attemptTimes(dropDir: string, id: string): { k: number; atMs: number; channel: boolean }[] | 'unknown' {
+  const folder = historyFolder(dropDir, id);
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : 'unknown';
+  }
+  // Read only inside the seat tree, bounded and without following a link: an entry that cannot be
+  // read that way makes the whole ledger unknown, and an unknown authorizes no new effect.
+  if (!historyChainReal(dropDir, id)) return 'unknown';
+  const present = new Set(names);
+  const out: { k: number; atMs: number; channel: boolean }[] = [];
+  for (const name of names) {
+    const match = ATTEMPT_NAME.exec(name);
+    if (match === null) continue;
+    const text = readRegularNoFollow(join(folder, name));
+    if (text === null) return 'unknown';
+    let done: { via?: unknown; withdrawn?: unknown } | null = null;
+    if (present.has(`${name}.done`)) {
+      const doneText = readRegularNoFollow(join(folder, `${name}.done`));
+      if (doneText === null) return 'unknown';
+      try {
+        done = JSON.parse(doneText) as { via?: unknown; withdrawn?: unknown };
+      } catch {
+        return 'unknown';
+      }
+      if (done.withdrawn === true) continue;
+    }
+    let entry: { at?: unknown; host?: unknown };
+    try {
+      entry = JSON.parse(text) as { at?: unknown; host?: unknown };
+    } catch {
+      return 'unknown';
+    }
+    const at = Date.parse(entry.at as string);
+    if (!Number.isFinite(at)) return 'unknown';
+    // A channel attempt: reserved by the channel server, or noted as taken by the channel.
+    out.push({ k: Number(match[1]), atMs: at, channel: entry.host === 'channel' || done?.via === 'channel' });
+  }
+  return out.sort((a, b) => a.k - b.k);
+}
+
+/** The legs the message's numbered copies left through, in number order. */
+export function copyLegs(dropDir: string, id: string): CopyLeg[] | 'unknown' {
+  const folder = historyFolder(dropDir, id);
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : 'unknown';
+  }
+  if (!historyChainReal(dropDir, id)) return 'unknown';
+  const legs: { n: number; leg: CopyLeg }[] = [];
+  for (const name of names) {
+    const match = COPY_NAME.exec(name);
+    if (match === null) continue;
+    const text = readRegularNoFollow(join(folder, name));
+    if (text === null) return 'unknown';
+    try {
+      const leg = (JSON.parse(text) as { leg?: unknown }).leg;
+      if (typeof leg === 'string') legs.push({ n: Number(match[1]), leg: leg as CopyLeg });
+    } catch {
+      return 'unknown';
+    }
+  }
+  return legs.sort((a, b) => a.n - b.n).map((one) => one.leg);
+}
+
+/** The legs a send's own first offer takes when it is not the adapter's channel push. */
+const OTHER_FIRST_LEGS: readonly CopyLeg[] = ['typed', 'native', 'socket', 'webhook'];
+
+/**
+ * Whether the send's own first offer went by the channel: its first offering copy is not one of
+ * another adapter's legs. A seat's own reads and the scheduler's pointers come after the first
+ * offer and never stand for it, and a push that stalled before its number left no copy at all. A
+ * history that cannot be read reads as the channel, so the seat is held unproven, not trusted.
+ */
+function firstOfferByChannel(dropDir: string, id: string): boolean {
+  const legs = copyLegs(dropDir, id);
+  if (legs === 'unknown') return true;
+  const first = legs.find((leg) => leg !== 'read' && leg !== 'pointer');
+  return first === undefined || !OTHER_FIRST_LEGS.includes(first);
+}
+
+/**
+ * The message's newest offer (the Claude adapter §2.3, the one clock): its start and whether it
+ * went by the channel. With scheduler attempts, it is the newest attempt: its reservation time,
+ * and channel when the channel server reserved it or noted it taken. Without any, it is the
+ * send's own first offer at the record's arrival.
+ */
+export function newestOffer(dropDir: string, id: string, arrivedMs: number): { startMs: number; channel: boolean } {
+  const read = attemptTimes(dropDir, id);
+  // An unknown ledger moves no clock and changes no adapter: the record waits for its backoff.
+  if (read === 'unknown') return { startMs: arrivedMs, channel: false };
+  const attempts = read;
+  const newest = attempts.reduce<{ k: number; atMs: number; channel: boolean } | null>((best, one) => (best === null || one.k > best.k ? one : best), null);
+  if (newest !== null) return { startMs: newest.atMs, channel: newest.channel };
+  return { startMs: arrivedMs, channel: firstOfferByChannel(dropDir, id) };
+}
+
+/**
+ * The start of the message's first channel offer that is still outstanding (§2.3): the send's own
+ * first offer at arrival when it went by the channel, else the earliest channel attempt. A later
+ * offer — a pointer, or another channel push — never moves this deadline. Null when no offer of
+ * the message went by the channel.
+ */
+export function firstChannelOffer(dropDir: string, id: string, arrivedMs: number): number | null | 'unknown' {
+  const attempts = attemptTimes(dropDir, id);
+  const legs = copyLegs(dropDir, id);
+  if (attempts === 'unknown' || legs === 'unknown') return 'unknown';
+  if (firstOfferByChannel(dropDir, id)) return arrivedMs;
+  const channel = attempts.filter((one) => one.channel).map((one) => one.atMs);
+  return channel.length === 0 ? null : Math.min(...channel);
 }
 
 /**
@@ -131,13 +327,15 @@ export function attemptLedger(dropDir: string, id: string): AttemptLedger {
     attempts += 1;
     let at = Number.NaN;
     try {
-      at = Date.parse((JSON.parse(readFileSync(join(folder, name), 'utf8')) as { at?: unknown }).at as string);
+      // Bounded and without following a link: a fifo or a device is never opened for a read.
+      const text = readRegularNoFollow(join(folder, name));
+      if (text !== null) at = Date.parse((JSON.parse(text) as { at?: unknown }).at as string);
     } catch {
       // Read by its file time below.
     }
     if (!Number.isFinite(at)) {
       try {
-        at = statSync(join(folder, name)).mtimeMs;
+        at = lstatSync(join(folder, name)).mtimeMs;
       } catch {
         continue;
       }
@@ -162,7 +360,8 @@ export function reserveAttempt(dropDir: string, id: string, host: string, nowMs:
 
 function withdrawn(path: string): boolean {
   try {
-    return (JSON.parse(readFileSync(path, 'utf8')) as { withdrawn?: unknown }).withdrawn === true;
+    const text = readRegularNoFollow(path);
+    return text !== null && (JSON.parse(text) as { withdrawn?: unknown }).withdrawn === true;
   } catch {
     return false;
   }
@@ -213,7 +412,10 @@ export function takeExactCopyNumber(dropDir: string, id: string, leg: CopyLeg, n
  * arrival (`arrivedMs`). So copy 1 then an offer that carried nothing waits 120 s, and a crash
  * after a reservation still spaces the next one.
  */
-export function resendDue(dropDir: string, id: string, nowMs: number, arrivedMs: number | null): boolean {
+export function resendDue(dropDir: string, id: string, nowMs: number, arrivedMs: number | null, adapterChanged = false): boolean {
+  // The Claude adapter §2.3: a record whose newest offer went by the channel, at a seat that is
+  // now unproven, is due at once, so the pointer follows within one sweep.
+  if (adapterChanged) return true;
   const seen = copyHistory(dropDir, id);
   const lastCopy = seen === 'unknown' ? null : seen.lastMs;
   const ledger = attemptLedger(dropDir, id);

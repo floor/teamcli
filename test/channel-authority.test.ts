@@ -332,7 +332,7 @@ describe('channel admitted attribution preserves content', () => {
         const content = feed.replies.find((one) => one.method === 'notifications/claude/channel')!.params.content;
         // The header's stamp is the stored record's own time, not the reading session's clock:
         // the helper plants the record ten seconds before the world's now.
-        expect(content).toBe(`worker · worker@local · ${stampOf(new Date(sent.at))} · admitted: to orchestrator\n\n${userContent}\n\n${readerLine(sent.id, existingRecordIdsIn(drop(target, 'lead')))}`);
+        expect(content).toBe(`worker · worker@local · Test 1 · ${stampOf(new Date(sent.at))} · admitted: to orchestrator\n\n${userContent}\n\n${readerLine(sent.id, existingRecordIdsIn(drop(target, 'lead')))}`);
         expect(feed.replies.filter((one) => one.method === 'notifications/claude/channel')).toHaveLength(1);
       } finally {
         feed.end();
@@ -358,7 +358,7 @@ describe('channel admitted attribution preserves content', () => {
       await until(() => feed.replies.some((one) => one.method === 'notifications/claude/channel'));
       const notification = feed.replies.find((one) => one.method === 'notifications/claude/channel')!.params;
       expect(notification.meta.from).toBe('worker');
-      expect(notification.content).toBe(`worker@local · worker@local · ${stampOf(w.now)} · admitted: reply\n\n${literal}\n\n${readerLine(payload.id, existingRecordIdsIn(drop(target, 'worker')))}`);
+      expect(notification.content).toBe(`worker · worker@local · Test 1 · ${stampOf(w.now)} · admitted: reply\n\n${literal}\n\n${readerLine(payload.id, existingRecordIdsIn(drop(target, 'worker')))}`);
       expect(readFileSync(join(drop(target, 'worker'), payload.id), 'utf8')).toContain('a cross-team answer');
     } finally {
       feed.end();

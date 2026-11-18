@@ -399,7 +399,7 @@ describe('3. compact header folding and sender kind opening words across render 
         from_client: { client_id: 'grok-bot', grant_id: 'grant-01' },
         rule: CLIENT_RULE,
         rawBody: 'Owner relay ping.\n',
-        expectedHeader: 'Grok Bot · 2026-11-05 14:00Z · admitted: owner relay',
+        expectedHeader: 'Grok Bot · client:grok-bot (grant grant-01) · 2026-11-05 14:00Z · admitted: owner relay',
         messageText: 'Grok Bot · 2026-11-05 14:00Z · admitted: owner relay\n\nOwner relay ping.\n',
       },
       {
@@ -408,8 +408,8 @@ describe('3. compact header folding and sender kind opening words across render 
         from_id: f.agents.gemini,
         rule: TO_ORCH_RULE,
         rawBody: `from Argon — admitted by: ${TO_ORCH_RULE}\n\nGemini lane green.\n`,
-        expectedHeader: 'Argon · builder-gemini@acme · 2026-11-05 14:00Z · admitted: to orchestrator',
-        messageText: 'Argon · builder-gemini@acme · 2026-11-05 14:00Z · admitted: to orchestrator\n\nGemini lane green.\n',
+        expectedHeader: 'Argon · builder-gemini@acme · Gemini 4 Argon 1 · 2026-11-05 14:00Z · admitted: to orchestrator',
+        messageText: 'Argon · builder-gemini@acme · Gemini 4 Argon 1 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nGemini lane green.\n',
       },
       {
         id: '33333333-0000-4000-8000-000000000003',
@@ -417,8 +417,8 @@ describe('3. compact header folding and sender kind opening words across render 
         from_id: f.agents.codex,
         rule: TO_ORCH_RULE,
         rawBody: `from Cora — admitted by: ${TO_ORCH_RULE}\n\nCodex lane green.\n`,
-        expectedHeader: 'Cora · builder-codex@acme · 2026-11-05 14:00Z · admitted: to orchestrator',
-        messageText: 'Cora · builder-codex@acme · 2026-11-05 14:00Z · admitted: to orchestrator\n\nCodex lane green.\n',
+        expectedHeader: 'Cora · builder-codex@acme · GPT Sol 6 · 2026-11-05 14:00Z · admitted: to orchestrator',
+        messageText: 'Cora · builder-codex@acme · GPT Sol 6 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nCodex lane green.\n',
       },
       {
         id: '44444444-0000-4000-8000-000000000004',
@@ -426,8 +426,8 @@ describe('3. compact header folding and sender kind opening words across render 
         from_id: f.agents.grok,
         rule: TO_ORCH_RULE,
         rawBody: `from Hyperion — admitted by: ${TO_ORCH_RULE}\n\nGrok lane green.\n`,
-        expectedHeader: 'Hyperion · builder-grok@acme · 2026-11-05 14:00Z · admitted: to orchestrator',
-        messageText: 'Hyperion · builder-grok@acme · 2026-11-05 14:00Z · admitted: to orchestrator\n\nGrok lane green.\n',
+        expectedHeader: 'Hyperion · builder-grok@acme · Grok 4.7 · 2026-11-05 14:00Z · admitted: to orchestrator',
+        messageText: 'Hyperion · builder-grok@acme · Grok 4.7 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nGrok lane green.\n',
       },
       {
         id: '55555555-0000-4000-8000-000000000005',
@@ -435,8 +435,8 @@ describe('3. compact header folding and sender kind opening words across render 
         from_id: f.agents.claude,
         rule: TO_ORCH_RULE,
         rawBody: `from Bea — admitted by: ${TO_ORCH_RULE}\n\nClaude lane green.\n`,
-        expectedHeader: 'Bea · builder-claude@acme · 2026-11-05 14:00Z · admitted: to orchestrator',
-        messageText: 'Bea · builder-claude@acme · 2026-11-05 14:00Z · admitted: to orchestrator\n\nClaude lane green.\n',
+        expectedHeader: 'Bea · builder-claude@acme · Claude Sonnet 5.5 · 2026-11-05 14:00Z · admitted: to orchestrator',
+        messageText: 'Bea · builder-claude@acme · Claude Sonnet 5.5 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nClaude lane green.\n',
       },
     ];
 
@@ -503,7 +503,7 @@ describe('3. compact header folding and sender kind opening words across render 
     );
     const dropsIo = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
     expect(await runDrops(['--read', '--seat', 'orchestrator', '--session', 'acme'], dropsIo, { home: f.home })).toBe(0);
-    expect(dropsIo.out).toContain('Argon · builder-gemini@acme · 2026-11-05 14:00Z · admitted: to orchestrator\n\nGemini lane green.');
+    expect(dropsIo.out).toContain('Argon · builder-gemini@acme · Gemini 4 Argon 1 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nGemini lane green.');
     expect(dropsIo.out).not.toContain('— admitted by:');
 
     rmSync(f.dropDir, { recursive: true, force: true });
@@ -523,7 +523,7 @@ describe('3. compact header folding and sender kind opening words across render 
     );
     const msgIo = testIo(f.root, { kind: 'owner' });
     expect(await runMessages([], msgIo, { home: f.home, now: () => NOW })).toBe(0);
-    expect(msgIo.out).toContain('Cora · builder-codex@acme · 2026-11-05 14:00Z · admitted: to orchestrator\n\nCodex lane green.');
+    expect(msgIo.out).toContain('Cora · builder-codex@acme · GPT Sol 6 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nCodex lane green.');
     expect(msgIo.out).not.toContain('— admitted by:');
   });
 

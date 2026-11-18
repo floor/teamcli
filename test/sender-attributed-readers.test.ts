@@ -286,7 +286,7 @@ describe('the launch brief the seat currently holds', () => {
     if (!read.ok) return;
     expect(read.body).toBe(generalBriefBody().replace(
       `from the launch — admitted by: ${GENERAL_BRIEF_RULE}`,
-      'the launch · 2026-10-04 09:00Z · admitted: launch brief',
+      'TeamCLI runtime · 2026-10-04 09:00Z · admitted: launch brief',
     ));
   });
 });

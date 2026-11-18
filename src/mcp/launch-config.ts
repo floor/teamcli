@@ -1,5 +1,6 @@
 // A Claude channel's project config belongs to one seat and one claimed launch. No CLI home,
 // shared lobby config or trust store is read or written here.
+import { socketSuppressed } from '../queue/floor.ts';
 import { randomBytes } from 'node:crypto';
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { mkdirSync, openSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
@@ -17,6 +18,8 @@ import { getTeam, registeredRootOf, teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 import { CHANNEL_SERVER } from './channel.ts';
 import { inboxServeArgs, selfRunner } from './register.ts';
+import { namesRuntimeCopy } from '../launch/cli-hook.ts';
+import { readInstalledProgram } from '../daemon/runtime-entry.ts';
 import { addJsonName, setJsonValue } from './json-text.ts';
 
 type ChannelSeat = { name?: string; cli: string; cwd?: string; launch?: string; channelOff?: boolean; human?: boolean; stopped?: boolean };
@@ -31,7 +34,7 @@ export function channelLobbyFolder(lobby: string, seat: ChannelSeat & { name: st
   return claudeChannelSeat(seat) ? join(lobby, seat.name) : lobby;
 }
 
-function samePlace(left: string, right: string): boolean {
+export function samePlace(left: string, right: string): boolean {
   const a = resolve(left);
   const b = resolve(right);
   try {
@@ -57,6 +60,19 @@ export function channelPairPresent(dir: string, seat: string): boolean {
     };
     if (settings.enableAllProjectMcpServers === true) return true;
     return Array.isArray(settings.enabledMcpjsonServers) && settings.enabledMcpjsonServers.includes(CHANNEL_SERVER);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the folder's team-inbox entry names a retained daemon runtime copy as its server: a
+ *  pair a later install may break (the Claude adapter §5). */
+export function channelPairNamesRuntimeCopy(dir: string): boolean {
+  try {
+    const mcp = JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf8')) as { mcpServers?: Record<string, unknown> };
+    const server = mcp.mcpServers?.[CHANNEL_SERVER] as { command?: unknown; args?: unknown } | undefined;
+    const words = [server?.command, ...(Array.isArray(server?.args) ? server.args : [])];
+    return words.some((word) => typeof word === 'string' && namesRuntimeCopy(word));
   } catch {
     return false;
   }
@@ -99,13 +115,19 @@ export function channelLaunchFallback(
   team: Pick<TeamFile, 'trust' | 'orchestrator' | 'operator'>,
   seat: ChannelSeat & { name: string; cwd: string },
   root: string,
+  /** The home the root's floor state is read under: on an E7b-active root no socket is dialed
+   *  (the Claude adapter §1), so the warning names the pointer instead. Absent, the dark words. */
+  home?: string,
 ): string | undefined {
   if (!claudeChannelSeat(seat)) return undefined;
+  const fallback = home !== undefined && socketSuppressed(root, home)
+    ? 'no proven channel: pointer wakes until the next `team restart`'
+    : 'socket delivery remains available';
   if (isLegacyTrust(team.trust)) {
-    return 'its channel needs the current trust form. Launching without the channel; socket delivery remains available. Move trust to the current absolute-path form, or set channel: off to silence this warning.';
+    return `its channel needs the current trust form. Launching without the channel; ${fallback}. Move trust to the current absolute-path form, or set channel: off to silence this warning.`;
   }
   if (isLeadSeat(team, seat.name) && samePlace(resolve(root, seat.cwd), root) && !channelPairPresent(root, seat.name)) {
-    return "its project folder has no channel pair for this seat. Launching without the channel; socket delivery remains available. Add the seat's channel pair in this folder, or move the lead's cwd to opt in.";
+    return `its project folder has no channel pair for this seat. Launching without the channel; ${fallback}. Add the seat's channel pair in this folder, or move the lead's cwd to opt in.`;
   }
   return undefined;
 }
@@ -210,7 +232,22 @@ export type ChannelPairPlan = {
   approvalFolder: Seen | null;
   documents: ChannelWrite[];
 };
-export type ChannelPairScope = { root: string; seat: string; session: string; cwd: string; epoch?: string };
+export type ChannelPairScope = {
+  root: string; seat: string; session: string; cwd: string; epoch?: string;
+  /** The home whose installed-program record names the stable entry, when this run's own CLI is
+   *  a retained daemon runtime copy (`team mcp setup` run by a daemon-hosted step). */
+  home?: string;
+};
+
+/** The stable CLI entry a checkout pair names (the Claude adapter §5): this run's own, unless it is
+ *  a retained daemon runtime copy, which a later install may remove; then the installed program
+ *  the copy was made from. Null when the copy names no installed program. */
+export function stablePairRunner(home: string | undefined): { command: string; entry: string } | null {
+  const runner = selfRunner();
+  if (!namesRuntimeCopy(runner.entry)) return runner;
+  const installed = home === undefined ? null : readInstalledProgram(home);
+  return installed === null ? null : { command: runner.command, entry: installed.entry };
+}
 
 /** Shared, read-only preflight for launch and setup. Admission and placement belong to callers. */
 export function planChannelPair(input: ChannelPairScope, privateFolder = true): ChannelPairPlan {
@@ -228,7 +265,11 @@ export function planChannelPair(input: ChannelPairScope, privateFolder = true): 
   if (Object.hasOwn(servers, CHANNEL_SERVER) && !ownedEntry(servers[CHANNEL_SERVER], owner, input.seat, input.session)) {
     throw new ConfigRefusal('the channel server name is already owned by another configuration');
   }
-  const runner = selfRunner();
+  // A checkout pair outlives this run: it names the stable installed entry, never a retained
+  // runtime copy (the Claude adapter §5). A lobby pair is written by each launch, as before.
+  const stable = privateFolder ? selfRunner() : stablePairRunner(input.home);
+  if (stable === null) throw new ConfigRefusal("this run's own CLI is a retained runtime copy and no installed program is recorded; run team mcp setup from the installed team");
+  const runner = stable;
   // A pair in a checkout folder (a project root or a worktree) outlives the launch that wrote
   // it, so it names no epoch: a pinned epoch there goes stale at the next relaunch and the
   // server it names refuses. The server binds the seat's current claim at its own start, and a

@@ -1,4 +1,5 @@
 import { currentClaimIn, sealRecoveredRead } from '../mcp/inbox.ts';
+import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
 import { realHost as realAckHost, runAck } from './ack.ts';
 import { runDrops } from './drops.ts';
 import { messageFile } from './messages.ts';
@@ -1894,7 +1895,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // The one socket redelivery a stored signed record gets: the channel's redelivery in the
         // held-drop retry, and the unread pass's slow event ladder for a Claude seat. A seat whose
         // launch the socket gate refuses falls through to whatever the caller walks next.
-        const socketRedeliver = (dropDir: string, drop: PendingDrop) => {
+        const socketRedeliver = async (dropDir: string, drop: PendingDrop) => {
+          // The Claude adapter §1: an E7b-active root takes no socket redelivery, read at each one.
+          if (socketSuppressed(root, sources.home ?? realHost.home)) return { ok: false as const, reason: SOCKET_OFF_ON_ACTIVE };
           const seat = team.seats.find((one) => one.name === drop.to);
           return redeliverChannelOnSocket({
             host: { ...realHost, home: sources.home ?? realHost.home, now: sources.now },

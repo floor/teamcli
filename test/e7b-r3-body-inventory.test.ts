@@ -134,4 +134,15 @@ describe('revision 3: the body-write inventory', () => {
       expect(code(byPath.get(path) as string)).toMatch(/takeCopyNumber\(|wrapCopy\(/);
     }
   });
+
+  test('the Claude adapter offer token is minted, kept and read only inside the comms boundary', () => {
+    // Minted by the channel server alone, for the push it writes.
+    expect(sitesOf('newOfferToken')).toEqual({ 'src/mcp/serve.ts': 1 });
+    // The history entries that hold it are read by the offer module alone: no reader, pointer,
+    // hook or status line opens them.
+    expect(Object.keys(sitesOf('offeredCopies')).sort()).toEqual(['src/comms/offer.ts']);
+    // The token-ack log is read only through the offer module.
+    const logReaders = files.filter((file) => file.path !== 'src/comms/offer.ts' && code(file.text).includes('OFFER_ACKS'));
+    expect(logReaders.map((file) => file.path)).toEqual([]);
+  });
 });

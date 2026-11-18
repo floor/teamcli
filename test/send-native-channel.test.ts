@@ -16,13 +16,16 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readHistory } from '../src/send/history.ts';
 import { readTriggerLine } from '../src/send/native.ts';
-import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, stampedPayload, writeReceipt, writeRecord, type RecordPayload } from '../src/send/record.ts';
+import { takeCopyNumber } from '../src/queue/handover.ts';
 import {
   PENDING_NATIVE_CONFIRM_WINDOW_MS,
   PENDING_NATIVE_TTL_MS,
   pendingDir,
   pendingPath,
   sweepPendingNative,
+  writePending,
+  type PendingNative,
 } from '../src/send/pending.ts';
 import { updateState } from '../src/state.ts';
 import { expirePendingNative } from '../src/watch/native.ts';
@@ -1584,8 +1587,22 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
 describe('revision 3: a stamped native handoff completed after a rollback', () => {
   const daemonActor = { kind: 'daemon' as const, name: 'daemon', pid: 1, build: 'b', level: 3 };
   async function handedThenRolledBack(made: World, host: Fake): Promise<void> {
+    void host;
     expect(activate(made.root, { home: made.home, build: 'b', actors: () => [daemonActor] }).kind).toBe('activated');
-    expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+    // The Claude adapter: this build makes no native handoff to a Claude receiver on an active
+    // root (its walk is the channel or the drop, then the pointer). A stamped handoff an earlier
+    // build left is planted as that build wrote it: the stamped record, its copy number, and the
+    // stamped pending handoff.
+    const body = `from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator [${NONCE}]\n\nhello`;
+    const payload: RecordPayload = { kind: 'message', id: ID, to: 'lead', to_id: null, root: made.root, session: 'acme', at: NOW.toISOString(), body, from: 'helper', from_id: null, rule: "a seat to its own team's orchestrator", thread: ID };
+    const signed = signRecord(stampedPayload(payload, made.home), made.home);
+    expect(writeRecord(dropDir(made.dir, 'lead'), signed).ok).toBe(true);
+    takeCopyNumber(seatMailDirs(made.root, 'acme', 'lead').stamped, ID, 'native');
+    expect(writePending('acme', made.root, made.home, {
+      v: 1, id: ID, nonce: NONCE, ts: NOW.toISOString(), from: 'helper', from_id: null, to: 'lead', to_id: null, team: teamIdOf(made.root), session: 'acme',
+      cli: 'claude-code', pane: 'pane-lead-1', address: `uds:${join(made.sockets, '222.sock')}`, rule: "a seat to its own team's orchestrator", project: 'acme', root: made.root,
+      thread: ID, fallback: ['drop'], body,
+    } as PendingNative, true).ok).toBe(true);
     expect(existsSync(join(nativePendingDir(made.root), `${ID}.json`))).toBe(true);
     expect(deactivate(made.root, made.home).kind).toBe('dark');
     // A fresh process: no stamp remembered, and the canonical stamped record out of reach.

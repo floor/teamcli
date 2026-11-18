@@ -14,6 +14,7 @@
 // client invocation with no delivery callback (the tests that exercise the record alone) writes
 // the drop and stops.
 
+import { withSignedIdentity } from '../comms/identity.ts';
 import { appendDeliverySync } from '../queue/append.ts';
 import { queueLog } from '../queue/log.ts';
 import { randomUUID } from 'node:crypto';
@@ -137,7 +138,7 @@ export function writeClientDrop(input: {
 }): { ok: true; path: string; id: string; recipientId: string; record: RecordPayload } | { ok: false; why: string } {
   const id = input.id ?? randomUUID();
   // E7b: the delivery era is decided once, here; this exact payload is signed and carried.
-  const payload: RecordPayload = stampedPayload({
+  const payload: RecordPayload = withSignedIdentity(stampedPayload({
     kind: 'message',
     id,
     to: input.target.recipientSeat,
@@ -151,7 +152,7 @@ export function writeClientDrop(input: {
     rule: input.rule ?? CLIENT_RULE,
     thread: id,
     from_client: { client_id: input.grant.clientId, grant_id: input.grant.grantId },
-  }, input.home);
+  }, input.home), input.home);
   let signed;
   try {
     signed = signRecord(payload, input.home);

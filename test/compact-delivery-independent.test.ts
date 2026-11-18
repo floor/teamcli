@@ -147,30 +147,33 @@ describe('the compact frame is the first content line and the show footer', () =
     );
   });
 
+const SCOUT_VIEW = {
+    seatById: (id: string) => id === 'agt_5c0a75c0a75c' ? { seat: 'scout', teamId: 'team_harbor', teamName: 'harbor', signedNickname: null, nickname: null, persona: null, model: 'Claude Opus 5.5', display: null } : null,
+    otherSeats: () => [],
+  };
   test('only the first non-empty line survives, and the full rendering is unchanged without the mark', () => {
     const compact = senderMod.attributedBody(
       `from Scout — admitted by: ${TO_ORCH}\n\n\n\nAlpha headline\nBeta detail`,
       'scout',
-      { rule: TO_ORCH, cli: 'claude-code', compact: true, seat: 'scout', team: 'harbor', at: NOW },
+      { rule: TO_ORCH, compact: true, fromId: 'agt_5c0a75c0a75c', view: SCOUT_VIEW, at: NOW },
     );
-    expect(compact).toBe('scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline');
+    expect(compact).toBe('scout · scout@harbor · Claude Opus 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline');
 
     const full = senderMod.attributedBody(
       `from Scout — admitted by: ${TO_ORCH}\n\nAlpha headline\nBeta detail`,
       'scout',
-      { rule: TO_ORCH, cli: 'claude-code', seat: 'scout', team: 'harbor', at: NOW },
+      { rule: TO_ORCH, fromId: 'agt_5c0a75c0a75c', view: SCOUT_VIEW, at: NOW },
     );
-    expect(full).toBe('scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline\nBeta detail');
+    expect(full).toBe('scout · scout@harbor · Claude Opus 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline\nBeta detail');
 
     const headerless = senderMod.attributedBody('No header line one\nline two', 'scout', {
       rule: TO_ORCH,
-      cli: 'claude-code',
       compact: true,
-      seat: 'scout',
-      team: 'harbor',
+      fromId: 'agt_5c0a75c0a75c',
+      view: SCOUT_VIEW,
       at: NOW,
     });
-    expect(headerless).toBe('scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nNo header line one');
+    expect(headerless).toBe('scout · scout@harbor · Claude Opus 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nNo header line one');
     expect(firstContentLineOf(senderMod)('\n\n\n')).toBe('');
   });
 });
@@ -365,7 +368,7 @@ describe('team show reads the whole record for its addressee', () => {
     // The first show writes the receipt and prints the whole body even though the captain's seat
     // is marked compact_delivery: show reads the signed record, never the socket frame.
     const expected =
-      'Scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nHarbor line one\nHarbor line two\nHarbor line three\n\n↩ team reply d1f0a7c2 "…" · team ack d1f0a7c2';
+      'Scout · scout@harbor · Claude Sonnet 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nHarbor line one\nHarbor line two\nHarbor line three\n\n↩ team reply d1f0a7c2 "…" · team ack d1f0a7c2';
     const jsonIo = captainIo(at);
     expect(await runShow([id, '--json'], jsonIo, { home: at.home, now: () => NOW })).toBe(0);
     const doc = JSON.parse(jsonIo.out) as Record<string, unknown>;
@@ -445,7 +448,7 @@ describe('team show reads the whole record for its addressee', () => {
     const io = captainIo(at);
     expect(await runShow(['019a0000'], io, { home: at.home, now: () => NOW })).toBe(0);
     expect(io.out).toBe(
-      'Grok Bot · 2026-11-05 18:00Z · admitted: owner relay\n\nClient line one\nClient line two\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
+      'Grok Bot · client:grok-bot (grant grant-01) · 2026-11-05 18:00Z · admitted: owner relay\n\nClient line one\nClient line two\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
     );
     expect(existsSync(join(at.dropDir, `${id}.read.json`))).toBe(true);
   });
@@ -484,7 +487,7 @@ describe('team show refuses what is not this caller\'s record', () => {
     const whole = captainIo(at);
     expect(await runShow([id1], whole, { home: at.home, now: () => NOW })).toBe(0);
     expect(whole.out).toBe(
-      'Scout · scout@harbor · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha line\nmore\n\n↩ team reply d1f0a7c2-1 "…" · team ack d1f0a7c2-1\n',
+      'Scout · scout@harbor · Claude Sonnet 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha line\nmore\n\n↩ team reply d1f0a7c2-1 "…" · team ack d1f0a7c2-1\n',
     );
 
     // A record waiting in another seat's folder is refused without naming its text, and no read

@@ -120,6 +120,11 @@ export type RecordPayload = {
    *  a writer-side read. Absent: the legacy contract. A build that predates the field refuses the
    *  record as unsupported, so no older carrier ever presents a stamped body. */
   lvl?: 3;
+  /** The sender's identity as signed at send time (the Claude adapter §4.2): its name, address
+   *  and model, each one line. Only a stamped record carries it — stamped records live in the
+   *  `send-stamped` tree, which no build before the stamp lists — so a rollback build never meets
+   *  it. A record without it is named from its verified `from` and `from_id`. */
+  from_identity?: { name: string; address?: string; model?: string };
 };
 
 export type SignedRecord = {
@@ -218,6 +223,13 @@ export function ackedFile(dropDir: string, id: string): string {
   return join(folderOfDrop(dropDir, id), `${id}.ack.json`);
 }
 
+/** The clearance note beside a stamped record whose copy receipt already stood (the Claude adapter
+ *  §3): the lead's or the owner's clearance, kept with its actor, while the ack note keeps the
+ *  `ack` word every level-3 reader settles by. A `.json` sidecar: no listing reads it as mail. */
+export function clearedFile(dropDir: string, id: string): string {
+  return join(folderOfDrop(dropDir, id), `${id}.cleared.json`);
+}
+
 /** The `read_by` words that confirm: the recipient's own ack, its channel ack tool, a reply (the
  *  reply op and answered-by-send), and a lead's clearance. */
 export function isConfirmedReadBy(readBy: string | undefined): boolean {
@@ -254,7 +266,42 @@ export function stampedSettled(dropDir: string, id: string, context: StatusConte
   if (read !== null && (word === 'ack' || word === 'channel' || word === 'reply')) return true;
   if (read !== null && isLeadAckReadBy(word) && leadAckReceiptAt(dropDir, id, context, key) !== null) return true;
   const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
-  return note !== null && note.payload.read_by === 'ack';
+  if (note === null) return false;
+  if (note.payload.read_by === 'ack') return true;
+  return clearedBy(note.payload.read_by, context) !== null;
+}
+
+/** The clearing actor a lead-ack word names, when its authority holds for this context: the owner,
+ *  or the lead the caller bound. Null otherwise. */
+function clearedBy(readBy: string | undefined, context: StatusContext): string | null {
+  const by = leadAckActorOf(readBy);
+  if (by === null) return null;
+  return by === 'owner' || (context.lead !== undefined && by === context.lead) ? by : null;
+}
+
+/**
+ * How a stamped record was settled, for the sender's report (the Claude adapter §3): `answered`
+ * (a reply), `acked` (the recipient's ack, by `team ack` or the channel's ack tool), or `cleared`
+ * by the owner or the lead the context binds. Null while it is not settled. The same rule as
+ * `stampedSettled`, read for what it says.
+ */
+export function stampedSettlement(dropDir: string, id: string, context: StatusContext, key: KeyObject): { kind: 'answered' } | { kind: 'acked' } | { kind: 'cleared'; by: string } | null {
+  if (receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key)) return { kind: 'answered' };
+  const read = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
+  const word = read?.payload.read_by;
+  if (read !== null && word === 'reply') return { kind: 'answered' };
+  if (read !== null && (word === 'ack' || word === 'channel')) return { kind: 'acked' };
+  if (read !== null && isLeadAckReadBy(word)) {
+    const cleared = leadAckReceiptAt(dropDir, id, context, key);
+    if (cleared !== null) return { kind: 'cleared', by: cleared.by };
+  }
+  const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
+  if (note === null) return null;
+  const cleared = leadAckReceiptAt(dropDir, id, context, key);
+  if (cleared !== null) return { kind: 'cleared', by: cleared.by };
+  if (note.payload.read_by === 'ack') return { kind: 'acked' };
+  const by = clearedBy(note.payload.read_by, context);
+  return by === null ? null : { kind: 'cleared', by };
 }
 
 const copyCache = new Map<string, { stamp: string; copy: boolean }>();
@@ -369,7 +416,7 @@ export type Sealed = { payload: RawPayload; signature: string };
 const RECORD_FIELDS: readonly string[] = [
   'kind', 'id', 'to', 'to_id', 'root', 'session', 'at', 'body', 'from', 'from_id', 'rule',
   'thread', 'subject', 'message_kind', 'work', 'in_reply_to', 'brief_sha256', 'incarnation',
-  'from_client', 'to_client', 'lvl',
+  'from_client', 'to_client', 'lvl', 'from_identity',
 ];
 
 /** The signed fields this version reads on a receipt. The last is the writer's signed
@@ -576,6 +623,13 @@ export function projectRecord(value: unknown): RecordProjection | null {
     if (payload.from !== `client:${fromClient.client_id}` || payload.from_id !== null) return null;
     payload.from_client = fromClient;
   }
+  if (value.from_identity !== undefined) {
+    // Signed only into a stamped record: an unstamped record carrying it is not one this writes.
+    if (payload.lvl !== DELIVERY_LEVEL) return null;
+    const identity = identityMapOf(value.from_identity);
+    if (identity === null) return null;
+    payload.from_identity = identity;
+  }
   if (value.to_client !== undefined) {
     const toClient = clientMapOf(value.to_client);
     if (toClient === null) return null;
@@ -589,6 +643,23 @@ export function projectRecord(value: unknown): RecordProjection | null {
 /** The payload a message record carries, or null when the value is not one this version writes. */
 export function recordPayloadOf(value: unknown): RecordPayload | null {
   return projectRecord(value)?.payload ?? null;
+}
+
+/** The `from_identity` map a stamped record carries: a non-empty one-line `name`, and optional
+ *  one-line `address` and `model`, each at most 64 characters; null for any other shape. */
+function identityMapOf(value: unknown): { name: string; address?: string; model?: string } | null {
+  if (!isRecordValue(value)) return null;
+  if (Object.keys(value).some((key) => key !== 'name' && key !== 'address' && key !== 'model')) return null;
+  const field = (text: unknown): boolean => typeof text === 'string' && text !== '' && Array.from(text).length <= 64
+    && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029·]/.test(text);
+  if (!field(value.name)) return null;
+  if (value.address !== undefined && !field(value.address)) return null;
+  if (value.model !== undefined && !field(value.model)) return null;
+  return {
+    name: value.name as string,
+    ...(value.address === undefined ? {} : { address: value.address as string }),
+    ...(value.model === undefined ? {} : { model: value.model as string }),
+  };
 }
 
 /** The `{client_id, grant_id}` map a client record carries, or null when it is not exactly one. */
@@ -1514,12 +1585,23 @@ export function leadAckReceiptAt(
   context: StatusContext,
   key: KeyObject,
 ): { by: string; at: string; payload: ReceiptPayload } | null {
-  const verified = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
-  if (verified === null) return null;
-  const by = leadAckActorOf(verified.payload.read_by);
-  if (by === null) return null;
-  if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) return null;
-  return { by, at: verified.payload.at, payload: verified.payload };
+  // The one clearance lookup, in both places a clearance is kept: the read receipt itself, and
+  // the clearance note written when a copy's receipt already held the read name.
+  for (const path of [receiptFile(dropDir, id, 'read'), clearedFile(dropDir, id)]) {
+    const verified = readVerifiedReceipt(path, id, 'read', context, key);
+    if (verified === null) continue;
+    // The clearance note counts only beside the committed ack note it was written with: the same
+    // time, and the `ack` word. A note alone is an intent that never committed.
+    if (path !== receiptFile(dropDir, id, 'read')) {
+      const ack = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
+      if (ack === null || ack.payload.read_by !== 'ack' || ack.payload.at !== verified.payload.at) continue;
+    }
+    const by = leadAckActorOf(verified.payload.read_by);
+    if (by === null) continue;
+    if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) continue;
+    return { by, at: verified.payload.at, payload: verified.payload };
+  }
+  return null;
 }
 
 /**

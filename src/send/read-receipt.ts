@@ -13,7 +13,7 @@ import { queuePlaceOf } from '../queue/append.ts';
 import { type KeyObject } from 'node:crypto';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
-import { ackedFile, COPY_READ_BY, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
+import { ackedFile, clearedFile, COPY_READ_BY, isLeadAckReadBy, leadAckActorOf, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
 import { clearUnread } from './unread-hint.ts';
 
 /** The message whose read is being recorded: its folder, its id, the seat it was addressed to,
@@ -84,7 +84,30 @@ function publish(input: RecordReadInput): RecordReadOutcome {
     if (standing !== null && !confirming) return { kind: 'published' };
     if (standing !== null) {
       const acked = ackedFile(dropDir, id);
-      const receipt: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at, read_by: 'ack' };
+      // A lead's or the owner's clearance (the Claude adapter §3): its authority is checked first.
+      // Its intent, the clearance note with the actor, is written and made durable before the ack
+      // note every level-3 reader settles by (`ack`), and the ack takes the intent's own time, so
+      // a reader never sees the ack without the actor, and accepts the note only beside that exact
+      // ack (`leadAckReceiptAt`). A retry finds the intent and finishes the same pair; an ack name
+      // another act already holds (the recipient's own ack) is never claimed for the clearer.
+      const clearing = isLeadAckReadBy(readBy) ? leadAckActorOf(readBy) : null;
+      if (clearing !== null && clearing !== 'owner' && clearing !== lead) return { kind: 'held', status: 'read', entry: 'file' };
+      let ackAt = at;
+      if (clearing !== null) {
+        const cleared = clearedFile(dropDir, id);
+        const intent: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at, read_by: readBy as string };
+        const wrote = publishReadReceipt(cleared, `${JSON.stringify(signReceiptPayload(intent, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
+        if (wrote === 'failed') return { kind: 'unwritten', reason: 'write' };
+        if (wrote === 'exists') {
+          // An earlier clearance of this message began here: finish that pair, at its time.
+          const standingIntent = readVerifiedReceipt(cleared, id, 'read', context, key);
+          if (standingIntent === null || !isLeadAckReadBy(standingIntent.payload.read_by)) return { kind: 'held', status: 'read', entry: 'file' };
+          ackAt = standingIntent.payload.at;
+        } else if (!flushReceipt(cleared, dropDir)) {
+          return { kind: 'unwritten', reason: 'durable' };
+        }
+      }
+      const receipt: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at: ackAt, read_by: 'ack' };
       const made = publishReadReceipt(acked, `${JSON.stringify(signReceiptPayload(receipt, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
       if (made === 'failed') return { kind: 'unwritten', reason: 'write' };
       if (made === 'exists') return stampedSettled(dropDir, id, context, key) ? { kind: 'served' } : { kind: 'held', status: 'read', entry: 'file' };

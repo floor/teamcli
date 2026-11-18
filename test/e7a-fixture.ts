@@ -11,8 +11,21 @@ const REPO = join(import.meta.dir, '..');
 /** The level-2 build: E7a, the reader switch, installed before E7b. */
 export const LEVEL2_COMMIT = 'd8cd0ae3d';
 
+/** The installed level-3 build before the Claude adapter (E7b with the re-send scheduler). */
+export const INSTALLED_LEVEL3_COMMIT = '682867020';
+
 /** The E7a source tree as a fixture, or null when the history is not at hand. */
 export function level2Tree(): string | null {
+  return treeAt(LEVEL2_COMMIT);
+}
+
+/** The installed level-3 source tree (682867020) as a fixture, or null without the history. */
+export function installedLevel3Tree(): string | null {
+  return treeAt(INSTALLED_LEVEL3_COMMIT);
+}
+
+function treeAt(commit: string): string | null {
+  const LEVEL2_COMMIT = commit;
   try {
     execFileSync('git', ['-C', REPO, 'cat-file', '-e', `${LEVEL2_COMMIT}^{commit}`], { stdio: 'ignore' });
   } catch {

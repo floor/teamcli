@@ -34,6 +34,7 @@
 // (`landsWhereRead`), and a write that cannot be confirmed says where it wrote and that the
 // reader was not confirmed. The reply rules themselves — who may answer, the thread, and the
 // read an answer marks — are decided before the walk and are untouched by it.
+import { withSignedIdentity } from '../comms/identity.ts';
 import { appendDeliverySync } from '../queue/append.ts';
 import { queueLog } from '../queue/log.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
@@ -90,7 +91,7 @@ import { messageKeyOf, messageKeyState } from '../store/keys.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { noteUnread } from '../send/unread-hint.ts';
 import { recordDir } from './messages.ts';
-import { reportedConversationProblem, admissionOf, labelNameOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
+import { reportedConversationProblem, admissionOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
 import { seatDropDir, seatListingDirs, sessionMailDir } from '../queue/mail-tree.ts';
 import { liveRecordPath } from '../send/drop-folder.ts';
 
@@ -1067,7 +1068,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   });
   const body = `${senderHeader(admission.sender, admission.rule, naming)}\n${text}`;
   // E7b: the delivery era is decided once, here; this exact payload is signed and carried.
-  const payload: RecordPayload = stampedPayload({
+  const payload: RecordPayload = withSignedIdentity(stampedPayload({
     kind: 'message',
     id: replyId,
     to: targetSeat,
@@ -1081,7 +1082,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     rule: admission.rule,
     thread,
     in_reply_to: answered.id,
-  }, host.home);
+  }, host.home), host.home);
 
   let landed = false;
   // A held seat is a queue, not a refusal, exactly as a send's own drop and typed legs say it:
@@ -1180,7 +1181,6 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
         sender: {
           teamId: fileTeamId,
           project: team.project,
-          label: placed.kind === 'seat' ? labelNameOf(team, placed.name) : null,
         },
         address: targetAgentReach?.address ?? null,
         who,

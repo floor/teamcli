@@ -1,4 +1,5 @@
 import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
 import { recordStampAt } from './record.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
@@ -47,7 +48,7 @@ import { tokenUnavailable } from '../quota/token-fallback.ts';
 import { quotaOutDetail, quotaOutOf } from './quota-out.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
-import { attributedBody } from './sender-claim.ts';
+import { attributedBody, renderedIdentity } from './sender-claim.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from './frame.ts';
 import { releaseWake, reserveWake, wakePath } from './wake-marker.ts';
@@ -156,9 +157,6 @@ export type DaemonSendRequest = {
   from_id?: string | null;
   /** The sender's one-line subject (`--subject`): a display field, never the summary. */
   subject?: string;
-  /** The `message-display` header's sender name, as the caller resolved it (the seat's nickname,
-   *  or its seat name). Absent, the daemon reads the team file's nickname, then the seat name. */
-  name?: string;
   /** The verified admission rule. The daemon does not read one out of the body. */
   rule?: string;
   /** The receiving team's `message-display` template as the caller read it; absent, the daemon
@@ -1219,7 +1217,7 @@ async function nativeHoldOf(
  *  receiving chain's; the caller's sender name, or the team file's nickname, or the seat name.
  *  The summary is the body's first content line, and the id never enters it. */
 function displayOf(
-  request: Pick<DaemonSendRequest, 'from' | 'name' | 'template' | 'subject'>,
+  request: Pick<DaemonSendRequest, 'from' | 'from_id' | 'template' | 'subject'>,
   team: TeamFile,
   root: string,
   host: DaemonHost,
@@ -1228,11 +1226,12 @@ function displayOf(
   const template = request.template
     ?? messageDisplayInForce({ home: host.home, root, team, now: host.now() });
   const declared = team.seats.find((seat) => seat.name === request.from);
-  // The caller's own name when it read one, else the name the seat goes by — its written label's
-  // persona when the nickname field could hold it, else the record's nickname
-  // (src/file/sections/seats.ts:seatNicknames) — the same answer the launch and the message
-  // header read.
-  const name = request.name ?? (declared === undefined ? null : seatNickname(team.seats, declared)) ?? request.from;
+  // The sender's one identity name, read by its registry id (src/comms/identity.ts); with no id,
+  // the name the seat this daemon's own team declares goes by, else the seat name. No caller
+  // hands a name in.
+  const name = request.from_id !== undefined && request.from_id !== null
+    ? renderedIdentity(request.from, { fromId: request.from_id, home: host.home }).name
+    : (declared === undefined ? null : seatNickname(team.seats, declared)) ?? request.from;
   const header = renderMessageDisplay(template, {
     name,
     seat: request.from,
@@ -1320,8 +1319,7 @@ async function executeQueuedSend(
     }
     // The socket frame opens with the compact sender header, then the signed record's body; a
     // person-pane seat gets neither a reply line nor a read hint.
-    const display = displayOf(request, team, root, host, body);
-    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, display.name, configured.human === true, request.rule ?? '');
+    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, request.from_id ?? null, configured.human === true, request.rule ?? '');
   }
 
   const found = await findSeatAgent(host, team.session, seatName);
@@ -1777,8 +1775,9 @@ async function executeSocketSend(
   alive: (pid: number) => boolean,
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: Pick<HistoryEntry, 'spec' | 'resolved' | 'from_team'>,
-  /** The sender's display name for the compact header; empty uses the record's own claim. */
-  senderName = '',
+  /** The sender's registry id, when the request carries one: the header names the sender from
+   *  it (src/comms/identity.ts), never from a name the caller hands in. */
+  fromId: string | null = null,
   /** True for a person-pane seat: no reply line and no read hint. */
   personPane = false,
   /** The verified admission rule, when the caller has one. Empty leaves the header without a rule. */
@@ -1802,6 +1801,18 @@ async function executeSocketSend(
     seat: seatName,
     ...(receiver?.launch !== undefined ? { launch: receiver.launch } : {}),
   });
+  // The Claude adapter §1: a waited send on an E7b-active root rides no socket; a stamped send
+  // waits on its settlement in the caller instead (it never dials the daemon).
+  if (socketSuppressed(root, host.home)) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: the socket is ${SOCKET_OFF_ON_ACTIVE}; nothing was sent`,
+    };
+  }
   if (!SOCKET_SEND || !socketEligible(receiver?.inbound, inbound)) {
     const why = SOCKET_SEND ? socketSkipReason(receiver?.inbound, inbound) : 'this build does not carry it';
     return {
@@ -1839,7 +1850,7 @@ async function executeSocketSend(
   let content = attributedBody(body, from, {
     home: host.home,
     root,
-    displayName: senderName === '' ? null : senderName === 'owner' ? 'the owner' : senderName,
+    fromId,
     ...(rule === '' ? {} : { rule }),
     at: host.now(),
     compact: false,
@@ -1970,6 +1981,11 @@ async function executeSocketSend(
     }
     const listener = opened.listener;
     try {
+      // The Claude adapter §1, at the dial itself: the floor may have been activated while this
+      // send waited for the seat lock or set up its reply listener.
+      if (socketSuppressed(root, host.home)) {
+        return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'refused', detail: `${seatName}: the socket is ${SOCKET_OFF_ON_ACTIVE}; nothing was sent` };
+      }
       const taken = await host.deliver(socketPath, frame);
       if (!taken.ok) {
         appendHistory(team.project, root, host.home, {

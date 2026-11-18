@@ -778,7 +778,7 @@ test('probe 5: webhook is posted at most once when reply webhook walks race on t
     payload: storedReply.record.payload,
     naming: defaultNaming(),
     file: loaded.team,
-    sender: { teamId: teamIdOf(made.root), project: 'acme', label: null },
+    sender: { teamId: teamIdOf(made.root), project: 'acme' },
     address: null,
     who: 'owner',
   });
@@ -807,7 +807,7 @@ test('probe 5: webhook is posted at most once when reply webhook walks race on t
     payload: storedReply.record.payload,
     naming: defaultNaming(),
     file: loaded.team,
-    sender: { teamId: teamIdOf(made.root), project: 'acme', label: null },
+    sender: { teamId: teamIdOf(made.root), project: 'acme' },
     address: null,
     who: 'owner',
   });
