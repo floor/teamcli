@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { readTeams, teamIdOf } from '../registry/teams.ts';
+import { personaCollision, registryIdentityView, type PersonaCollision } from '../comms/identity.ts';
 import { spawnProcessToolSync } from '../process-tools-adapter.ts';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
@@ -621,6 +623,36 @@ function identityFindings(team: TeamFile, dir: string, session: string, sources?
   return findings;
 }
 
+// A seat whose own written label persona is a name another seat carries — its nickname or its
+// persona, in any registered team: the sender line never prints it (src/comms/identity.ts), and
+// the seat reads as its seat name until the label or the other seat changes. One note per seat.
+function personaFindings(team: TeamFile, root: string, home: string): Finding[] {
+  const findings: Finding[] = [];
+  let roster: ReadonlyArray<{ agent: string; seat: string }> = [];
+  try {
+    roster = readTeams(home)[teamIdOf(root)]?.roster ?? [];
+  } catch {
+    return findings;
+  }
+  const view = registryIdentityView(home);
+  for (const seat of team.seats) {
+    const line = roster.find((entry) => entry.seat === seat.name);
+    if (line === undefined) continue;
+    let collision: PersonaCollision | null = null;
+    try {
+      collision = personaCollision(view, line.agent);
+    } catch {
+      collision = null;
+    }
+    if (collision === null) continue;
+    findings.push({
+      level: 'note',
+      text: plainLine(`${seat.name}: label persona "${collision.persona}" is another seat's name; messages name it as ${seat.name}`),
+    });
+  }
+  return findings;
+}
+
 // A seat recorded as running whose launch line does not carry the one feature set its profile
 // pins: the launch that wrote the record predates the pin, or the file names its own feature
 // words. Every seat of such a CLI joins one background server, and a front end whose settings
@@ -799,6 +831,7 @@ export function doctorFindings(
   findings.push(...swapFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
   findings.push(...featureFindings(team, dir, session));
+  findings.push(...personaFindings(team, root, sources.home));
 
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, root, session, running, sources.now(), sources, health));
   findings.push(...trustFindings(team, root, dir, session, sources));

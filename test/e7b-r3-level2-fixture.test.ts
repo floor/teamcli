@@ -18,6 +18,7 @@ import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { recordChannelAbort } from '../src/mcp/channel.ts';
 import { markPending } from '../src/send/pending.ts';
 import { seatMailDirs } from '../src/queue/mail-tree.ts';
+import { withSignedIdentity } from '../src/comms/identity.ts';
 
 const SESSION = 'acme';
 const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
@@ -130,5 +131,32 @@ describe.skipIf(e7a === null)('revision 3: level-2 (E7a) code over a root with a
     expect(folder.folderOfDrop(at.legacy, ID)).toBe(at.legacy);
     const record = await import(`${e7a}/send/record.ts`);
     expect(existsSync(record.recordFile(at.legacy, ID))).toBe(false);
+  });
+});
+
+describe.skipIf(e7a === null)('the Claude adapter (F18): an E7a reader never meets from_identity', () => {
+  test('an identity-signed stamped record sits in the stamped tree, which E7a never lists or reads', async () => {
+    const at = place();
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+    const payload = withSignedIdentity(stampedPayload(payloadOf(at, ID), at.home), at.home);
+    expect(payload.from_identity).toBeDefined();
+    expect(writeRecord(at.legacy, signRecord(payload, at.home)).ok).toBe(true);
+    expect(existsSync(join(at.stamped, ID))).toBe(true);
+    expect(readdirSync(at.legacy).filter((name) => name.startsWith(ID))).toEqual([]);
+    const inbox = await import(`${e7a}/mcp/inbox.ts`);
+    expect(inbox.listUnread(at.legacy, context(at), at.home, undefined, undefined, { legacy: 'include' })).toEqual([]);
+    expect(inbox.readMessage(target(at), ID, at.home).ok).toBe(false);
+    const drops = await import(`${e7a}/commands/drops.ts`);
+    expect(drops.listDrops(at.legacy).rows).toEqual([]);
+  });
+
+  test('an unstamped record (a dark root) carries no from_identity, and E7a reads it as before', async () => {
+    const at = place();
+    const payload = withSignedIdentity(stampedPayload(payloadOf(at, ID), at.home), at.home);
+    expect(payload.lvl).toBeUndefined();
+    expect('from_identity' in payload).toBe(false);
+    expect(writeRecord(at.legacy, signRecord(payload, at.home)).ok).toBe(true);
+    const inbox = await import(`${e7a}/mcp/inbox.ts`);
+    expect(inbox.listUnread(at.legacy, context(at), at.home).map((message: { id: string }) => message.id)).toEqual([ID]);
   });
 });

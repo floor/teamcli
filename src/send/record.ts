@@ -120,6 +120,11 @@ export type RecordPayload = {
    *  a writer-side read. Absent: the legacy contract. A build that predates the field refuses the
    *  record as unsupported, so no older carrier ever presents a stamped body. */
   lvl?: 3;
+  /** The sender's identity as signed at send time (the Claude adapter §4.2): its name, address
+   *  and model, each one line. Only a stamped record carries it — stamped records live in the
+   *  `send-stamped` tree, which no build before the stamp lists — so a rollback build never meets
+   *  it. A record without it is named from its verified `from` and `from_id`. */
+  from_identity?: { name: string; address?: string; model?: string };
 };
 
 export type SignedRecord = {
@@ -369,7 +374,7 @@ export type Sealed = { payload: RawPayload; signature: string };
 const RECORD_FIELDS: readonly string[] = [
   'kind', 'id', 'to', 'to_id', 'root', 'session', 'at', 'body', 'from', 'from_id', 'rule',
   'thread', 'subject', 'message_kind', 'work', 'in_reply_to', 'brief_sha256', 'incarnation',
-  'from_client', 'to_client', 'lvl',
+  'from_client', 'to_client', 'lvl', 'from_identity',
 ];
 
 /** The signed fields this version reads on a receipt. The last is the writer's signed
@@ -576,6 +581,13 @@ export function projectRecord(value: unknown): RecordProjection | null {
     if (payload.from !== `client:${fromClient.client_id}` || payload.from_id !== null) return null;
     payload.from_client = fromClient;
   }
+  if (value.from_identity !== undefined) {
+    // Signed only into a stamped record: an unstamped record carrying it is not one this writes.
+    if (payload.lvl !== DELIVERY_LEVEL) return null;
+    const identity = identityMapOf(value.from_identity);
+    if (identity === null) return null;
+    payload.from_identity = identity;
+  }
   if (value.to_client !== undefined) {
     const toClient = clientMapOf(value.to_client);
     if (toClient === null) return null;
@@ -589,6 +601,23 @@ export function projectRecord(value: unknown): RecordProjection | null {
 /** The payload a message record carries, or null when the value is not one this version writes. */
 export function recordPayloadOf(value: unknown): RecordPayload | null {
   return projectRecord(value)?.payload ?? null;
+}
+
+/** The `from_identity` map a stamped record carries: a non-empty one-line `name`, and optional
+ *  one-line `address` and `model`, each at most 64 characters; null for any other shape. */
+function identityMapOf(value: unknown): { name: string; address?: string; model?: string } | null {
+  if (!isRecordValue(value)) return null;
+  if (Object.keys(value).some((key) => key !== 'name' && key !== 'address' && key !== 'model')) return null;
+  const field = (text: unknown): boolean => typeof text === 'string' && text !== '' && Array.from(text).length <= 64
+    && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029·]/.test(text);
+  if (!field(value.name)) return null;
+  if (value.address !== undefined && !field(value.address)) return null;
+  if (value.model !== undefined && !field(value.model)) return null;
+  return {
+    name: value.name as string,
+    ...(value.address === undefined ? {} : { address: value.address as string }),
+    ...(value.model === undefined ? {} : { model: value.model as string }),
+  };
 }
 
 /** The `{client_id, grant_id}` map a client record carries, or null when it is not exactly one. */

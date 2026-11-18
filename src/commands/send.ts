@@ -1,4 +1,5 @@
 import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { withSignedIdentity } from '../comms/identity.ts';
 import { TYPED_REQUESTED } from '../queue/resend.ts';
 import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
@@ -23,14 +24,13 @@ import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { nudgeBusNoWait } from '../bus/server.ts';
 import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
-import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, readAncestors, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
 import { placedCallerTeam } from '../registry/binding.ts';
 import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { NOT_A_REPO } from '../file/load.ts';
-import { labelPersona } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, beginHerdrSnapshot, endHerdrSnapshot, evictHerdrAgentList, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
@@ -84,7 +84,7 @@ import { deliveryChainOf, deliveryInboxLed, DeliveryChainUnreadable, type Delive
 import { messagingStoreChainOf, StoreChainUnreadable } from '../send/store.ts';
 import { cascadeOrder, cascadeWalk, legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { webhookRefusal } from '../send/webhook.ts';
-import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
+import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import {
   deliverCodexNativeRoute,
   deliverHeadlessResumeRoute,
@@ -2114,7 +2114,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // carried by every leg and retried. A send that keeps no record (`messaging.store: none`) has no
   // stored copy to retry or acknowledge, so it stays on legacy delivery (unstamped).
   const unstamped = recordOf(msgId, to, body, from, admission, host.modelDriftNotice?.at ?? host.now().toISOString(), subject === '' ? undefined : subject);
-  const record = store === 'none' ? unstamped : stampedPayload(unstamped, host.home);
+  const record = store === 'none' ? unstamped : withSignedIdentity(stampedPayload(unstamped, host.home), host.home);
   const callerRoot = { root, session: team.session };
   if (dry) {
     // A dry run reports the same ordered legs a real send would, but it can only say whether each
@@ -2854,22 +2854,15 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
         break;
       }
-      // The accepted frame opens with the sender's identity line alone. `#682` pinned that shape:
-      // no summary, no rule. The message-display line is the typed wake's, where the seat reads
-      // it in its own composer; an agent handling a socket frame has the whole signed record.
-      const identityHeader = frameIdentityHeader(
-        record,
-        naming,
-        fileTeamId,
-        team.project,
-        caller.kind === 'seat' ? labelNameOf(team, caller.name) : null,
-      );
+      // The accepted frame opens with the sender's identity line, read from the record alone
+      // (src/comms/identity.ts). The message-display line is the typed wake's, where the seat
+      // reads it in its own composer; an agent handling a socket frame has the whole signed record.
       const socketStore = store === 'parallel'
         ? { mode: 'parallel' as const, settle: settleStaged }
         : store === 'none'
           ? { mode: 'none' as const }
           : { mode: 'first' as const, staged: stagedRecordOf() };
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, identityHeader, human, true, socketStore);
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, human, true, socketStore);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -3318,7 +3311,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     const dialled = !isStampedPayload(record) && existsSync(daemonSock)
       && (handoff || (!to.cross && compose === null && typedWake === null && !wait));
     if (dialled) await ensureEpisode();
-    const daemonRequest = { v: 1 as const, op: 'send' as const, id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) };
+    const daemonRequest = { v: 1 as const, op: 'send' as const, id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) };
     let viaDaemon = dialled ? await requestDaemon(daemonSock, daemonRequest) : null;
     // A typed handoff the endpoint dropped without answering (the daemon restarts an endpoint
     // that missed its probes, and a restart closes the connection) is asked again once the
@@ -5738,10 +5731,6 @@ export async function walkBriefDelivery(input: {
   return { via: null, walked: true, exit: 1, failures };
 }
 
-/** The sender display name for a client send's socket frame: the person's client, named as the
- *  person (`Client Grok Bot (owner relay):`). */
-const CLIENT_FRAME_HEADER = CLIENT_SLICE_DISPLAY_NAME;
-
 /**
  * The client send's own walk, after the grant wrote its drop: the same signed record, carried
  * through the receiving seat's resolved delivery order by the walk a reply makes
@@ -5829,10 +5818,9 @@ async function deliverClientRecord(
     payload: record,
     naming,
     file: team,
-    sender: { teamId: target.teamId, project, label: null },
+    sender: { teamId: target.teamId, project },
     address: agentRecord?.reach.address ?? null,
     who: from,
-    identityHeader: CLIENT_FRAME_HEADER,
     // The grant's bound recipient: the socket is dialed only while the registry still records
     // that agent running on this seat, CLI, session and team, as a seat send's dial requires.
     recipient: { agentId: target.recipientId, teamId: target.teamId },
@@ -5957,17 +5945,14 @@ export async function walkReplyDelivery(input: {
   naming: SenderNaming;
   /** The receiving team file when the caller already read it; null reads it here. */
   file: TeamFile | null;
-  /** The replying side's own identity: the team it stands in, its project, and the label its
-   *  file writes on it (a seat's; null for the owner). */
-  sender: { teamId: string; project: string; label: string | null };
+  /** The replying side's own team and project. Its name on every leg is the record's own
+   *  identity (src/comms/identity.ts). */
+  sender: { teamId: string; project: string };
   /** The receiving seat's registry address, when the caller resolved one: the socket's first
    *  candidate. */
   address: string | null;
   /** The caller's log tag, as every leg logs it. */
   who: string;
-  /** The socket frame's identity line, when the carrier names its sender itself: a client send
-   *  names the person's client. Absent, the line is the sending seat's, read from `naming`. */
-  identityHeader?: string;
   /** The receiving seat's registry id and the team key its record is filed under, when the caller
    *  resolved them from a signed binding: the socket leg then makes the same record check a
    *  send's own walk makes before it dials (running, same CLI, team, session and seat). */
@@ -6240,11 +6225,9 @@ export async function walkReplyDelivery(input: {
         continue;
       }
       await ensureStaged();
-      const identityHeader = input.identityHeader
-        ?? frameIdentityHeader(input.payload, input.naming, input.sender.teamId, input.sender.project, input.sender.label);
       const attempt = await deliverSocketFrame(
         input.dir, input.who, from, aim, input.payload, failures, input.host, report, startedAt,
-        false, inbound, identityHeader, false, false, { mode: 'first', staged: stagedRecordOf() },
+        false, inbound, false, false, { mode: 'first', staged: stagedRecordOf() },
       );
       if (attempt.kind === 'delivered') {
         return ended({ via: 'socket', walked: true, unconfirmed: false, summary: `${seatName}: delivered (socket)` });
@@ -6651,43 +6634,6 @@ type SocketAttempt =
 const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending session's own SendMessage";
 
 /**
- * The human name a seat's written label carries: the text before its middle dot, trimmed. A label
- * the file writes reads `<name> · <role>` — the workspace title `up` gives it — and its first half
- * is the name people call the seat by. A written label with no middle dot is the name whole. A
- * seat with no written label has no such name: the stored label is its model and version, and its
- * workspace title its seat name and role, so the seat name stands in its place. Display only.
- */
-export function labelNameOf(team: TeamFile, seat: string): string | null {
-  const found = team.seats.find((one) => one.name === seat);
-  return found === undefined ? null : labelPersona(found);
-}
-
-/**
- * The sender's display name for an accepted socket frame: the nickname the registry (or the
- * seat's own setting) holds, the name its written label carries before the middle dot, then the
- * seat name. Display only: the signed record below it is the message, and the record's body keeps
- * its own `from … — admitted by: …` line. A registry that cannot answer reads as no nickname, so
- * a frame always names its sender.
- */
-function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, senderTeam: string, _teamName: string, labelName: string | null): string {
-  let name = '';
-  try {
-    name = senderNickname(
-      // This is a frame header for the sender's own team. Omitting the id keeps senderNickname's
-      // team lookup pinned here even if a stale or foreign roster also repeats that id.
-      { seat: record.from, team: senderTeam },
-      naming,
-    ) ?? '';
-  } catch {
-    // A registry that cannot answer is no nickname.
-  }
-  // A nickname wins; then the name the seat's written label carries; then the seat name, so the
-  // line always names its sender.
-  if (name === '') name = labelName ?? '';
-  return name === '' ? record.from : name;
-}
-
-/**
  * The default path's first leg: one frame on the target's cross-session socket, nothing typed.
  * The address is resolved first — the registry's recorded one while it is still live, else the pane's
  * own processes — and a write the socket takes is the send: this channel has no
@@ -6717,8 +6663,6 @@ async function deliverSocketFrame(
   startedAt: number,
   wait = false,
   inbound: InboundDeclaration = { policy: null, declaredAt: null, source: null },
-  /** The display line the frame opens with; empty, the body alone. */
-  header = '',
   /** True for a person-pane seat: no reader line, a person answers in its client. */
   personPane = false,
   /** False for a caller that writes the walk's one history line itself (the reply's own
@@ -6757,12 +6701,10 @@ async function deliverSocketFrame(
     : compact
       ? compactReaderLine(msgId, existingIds)
       : readerLine(msgId, existingIds);
-  const normalizedDisplay = header === '' ? null : header === 'owner' ? 'the owner' : header;
   let content = attributedBody(body, from, {
     record: payload,
     home: host.home,
     root: to.root,
-    displayName: normalizedDisplay,
     rule: payload.rule,
     compact: false,
   });
@@ -7029,7 +6971,6 @@ export async function redeliverChannelOnSocket(input: {
     ? teamIdOf(root)
     : getAgent(host.home, payload.from_id)?.reach.team ?? teamIdOf(root);
   const report: Report = { json: false, seat, sent: payload.id, project, session, from_team: fromTeam };
-  const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: input.team });
   const to: Aim = {
     seat,
     agentId: payload.to_id,
@@ -7054,7 +6995,6 @@ export async function redeliverChannelOnSocket(input: {
     host.now().getTime(),
     false,
     inbound,
-    frameIdentityHeader(payload, naming, fromTeam, input.team.project, labelNameOf(input.team, seat)),
     false,
   );
   if (attempt.kind === 'delivered') return { ok: true };
@@ -7105,8 +7045,6 @@ export async function resendStampedRecord(input: {
   const boundTeam = payload.from_id === null ? null : getAgent(host.home, payload.from_id)?.reach.team ?? null;
   const fromTeam = boundTeam ?? teamIdOf(root);
   const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: team });
-  const senderLabel = boundTeam === teamIdOf(root) && team.seats.some((one) => one.name === payload.from) ? labelNameOf(team, payload.from) : null;
-  const identityHeader = boundTeam === null ? payload.from : frameIdentityHeader(payload, naming, boundTeam, team.project, senderLabel);
   const walk = await walkReplyDelivery({
     io: quiet,
     host,
@@ -7119,10 +7057,9 @@ export async function resendStampedRecord(input: {
     payload,
     naming,
     file: team,
-    sender: { teamId: fromTeam, project: team.project, label: senderLabel },
+    sender: { teamId: fromTeam, project: team.project },
     address: null,
     who: 'watch',
-    identityHeader,
     resend: true,
     typedRequest: input.typedRequest ?? (() => false),
     ...(input.startAfter === undefined ? {} : { startAfter: input.startAfter }),

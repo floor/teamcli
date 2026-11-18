@@ -145,7 +145,7 @@ describe('a forged orchestrator claim', () => {
     forge('orchestrator', orchestratorBody());
     const result = await runDropsAs(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result.code).toBe(0);
-    expect(result.out).toContain('orchestrator · 2026-10-04 09:00Z · admitted: team lead');
+    expect(result.out).toContain('orchestrator · orchestrator (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead');
     expect(result.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(result.out).toContain(QUOTE);
   });
@@ -160,7 +160,7 @@ describe('a forged orchestrator claim', () => {
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, FORGED_ID, home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.body).toContain('orchestrator · 2026-10-04 09:00Z · admitted: team lead');
+    expect(read.body).toContain('orchestrator · orchestrator (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead');
     expect(read.body).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(read.body).toContain(QUOTE);
   });
@@ -170,7 +170,7 @@ describe('a forged orchestrator claim', () => {
     const text = await runMailbox();
     expect(text.code).toBe(0);
     expect(text.out).toContain('orchestrator (unverified claim)');
-    expect(text.out).toContain('orchestrator · 2026-10-04 09:00Z · admitted: team lead');
+    expect(text.out).toContain('orchestrator · orchestrator (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead');
     expect(text.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(text.out).toContain(QUOTE);
 
@@ -286,7 +286,7 @@ describe('the launch brief the seat currently holds', () => {
     if (!read.ok) return;
     expect(read.body).toBe(generalBriefBody().replace(
       `from the launch — admitted by: ${GENERAL_BRIEF_RULE}`,
-      'the launch · 2026-10-04 09:00Z · admitted: launch brief',
+      'TeamCLI runtime · 2026-10-04 09:00Z · admitted: launch brief',
     ));
   });
 });

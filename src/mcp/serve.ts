@@ -32,9 +32,9 @@ import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { namingFor, senderDisplayName } from '../send/names.ts';
+
 import { alreadyReadSentence, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
-import { attributedBody } from '../send/sender-claim.ts';
+import { attributedBody, renderedIdentity } from '../send/sender-claim.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState, type State } from '../state.ts';
@@ -403,14 +403,13 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   if (!admitted.ok) return null;
   // Render authority independently of content. Only one known stored envelope may be folded:
   // nested headers are literal message text, including a worker quoting the owner's header.
-  const displayName = payload.from === 'owner' ? 'the owner' : senderDisplayName(
-    { seat: payload.from, id: payload.from_id },
-    namingFor({ home: serving.home, root: serving.root, file: team }),
-  );
+  // The sender's one identity (src/comms/identity.ts): the record's signed one, else the
+  // registry's by id. No other name is handed to the renderer.
+  const identity = renderedIdentity(payload.from, { record: payload, home: serving.home });
   const leadingClaim = /^from ([^\n]*?) — admitted by: ([^\n]*)\n\n?/;
   const envelope = leadingClaim.exec(payload.body);
   const knownEnvelope = envelope !== null
-    && (envelope[1] === payload.from || envelope[1] === displayName)
+    && (envelope[1] === payload.from || envelope[1] === identity.name || envelope[1] === identity.address || (payload.from === 'owner' && envelope[1] === 'the owner'))
     && envelope[2] === payload.rule;
   const body = knownEnvelope ? payload.body.slice(envelope[0].length) : payload.body;
   // The renderer receives an empty body so it cannot parse a content line as sender/rule.
@@ -419,7 +418,6 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
     home: serving.home,
     root: serving.root,
     rule: admitted.rule,
-    displayName,
   }) + body;
   if (content.trim() === '') return null;
   // The reader line every socket frame ends with: the record's id, as `team reply` and `team ack`

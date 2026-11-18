@@ -501,7 +501,7 @@ describe('team drops in a folder that is not a git repository', () => {
     plainRoot();
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the root', { at: '2026-10-04T09:00:00.000Z' });
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(result).toEqual({ code: 0, out: `lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\nhello from the root\n\n${readerLine(D_RECORD)}\n`, err: '' });
+    expect(result).toEqual({ code: 0, out: `lead · lead (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead\n\nhello from the root\n\n${readerLine(D_RECORD)}\n`, err: '' });
     const at = receiptPath(dropDir, D_RECORD);
     const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
     const key = messageKeyState(home);
@@ -527,7 +527,7 @@ describe('team drops --read', () => {
   test('the launch read serves the seat its launch names and receipts each record after the body', async () => {
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello', { at: '2026-10-04T09:00:00.000Z' });
     const first = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(first).toEqual({ code: 0, out: `lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\nhello\n\n${readerLine(D_RECORD)}\n`, err: '' });
+    expect(first).toEqual({ code: 0, out: `lead · lead (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead\n\nhello\n\n${readerLine(D_RECORD)}\n`, err: '' });
     expectReceipt(D_RECORD);
     // The receipt is what says it was handed over: the next turn names that read and serves no body.
     const second = await run(['--read', '--seat', 'lead', '--session', 'acme']);
@@ -656,7 +656,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead']);
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe(`lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\na signed body\n\n${readerLine(D_RECORD_READ)}\n`);
+    expect(result.out).toBe(`lead · lead (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead\n\na signed body\n\n${readerLine(D_RECORD_READ)}\n`);
     expect(result.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
     expect(result.out).not.toContain('an old raw drop');
     expect(result.err).not.toContain('an old raw drop');
@@ -731,7 +731,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result).toEqual({
       code: 0,
-      out: "runtime · 2026-10-21 07:02Z · admitted: the team's unread-message report\n\nwriter-01: a message from architect is queued, not woken - unread for 4 min\n",
+      out: "TeamCLI runtime · 2026-10-21 07:02Z · admitted: the team's unread-message report\n\nwriter-01: a message from architect is queued, not woken - unread for 4 min\n",
       err: '',
     });
     // Its receipt is the signed read receipt every record gets, at the name its id derives.
@@ -810,7 +810,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead']);
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe(`lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\na signed body\n\n${readerLine(D_RECORD_READ)}\n`);
+    expect(result.out).toBe(`lead · lead (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead\n\na signed body\n\n${readerLine(D_RECORD_READ)}\n`);
     expect(result.err).toBe('');
     // The record that verified is receipted; the one that did not never is.
     expectReceipt(D_RECORD_READ);
@@ -895,7 +895,7 @@ describe('team drops --read caller placement', () => {
     placeLead(LEAD_PANE);
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the launch', { at: '2026-10-04T09:00:00.000Z' });
     const result = await runPlaced(READ, hookSources());
-    expect(result).toEqual({ code: 0, out: `lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\nhello from the launch\n\n${readerLine(D_RECORD)}\n`, err: '' });
+    expect(result).toEqual({ code: 0, out: `lead · lead (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead\n\nhello from the launch\n\n${readerLine(D_RECORD)}\n`, err: '' });
     expectReceipt(D_RECORD);
   });
 
@@ -938,7 +938,7 @@ describe('team drops --read caller placement', () => {
     plantRecord(home, root, 'acme', 'worker', D_RECORD, 'mail for the worker', { at: '2026-10-04T09:00:00.000Z' });
     const workerDir = join(root, '.agents', 'send-drops', 'acme', 'worker');
     const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], { kind: 'owner' });
-    expect(result).toEqual({ code: 0, out: `lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\nmail for the worker\n\n${readerLine(D_RECORD)}\n`, err: '' });
+    expect(result).toEqual({ code: 0, out: `lead · lead (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead\n\nmail for the worker\n\n${readerLine(D_RECORD)}\n`, err: '' });
     // A peek serves the body only: the record still waits for its seat, and no receipt stands.
     expect(existsSync(receiptPath(workerDir, D_RECORD))).toBe(false);
     expect(listUnread(workerDir, { to: 'worker', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD]);
@@ -952,7 +952,7 @@ describe('team drops --read caller placement', () => {
     placeLead(LEAD_PANE);
     const workerDir = join(root, '.agents', 'send-drops', 'acme', 'worker');
     const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', LEAD_PANE));
-    expect(result).toEqual({ code: 0, out: `lead · lead@acme · 2026-10-04 09:00Z · admitted: team lead\n\nother mail for the worker\n\n${readerLine(D_RECORD_READ)}\n`, err: '' });
+    expect(result).toEqual({ code: 0, out: `lead · lead (team unknown) · model unknown · 2026-10-04 09:00Z · admitted: team lead\n\nother mail for the worker\n\n${readerLine(D_RECORD_READ)}\n`, err: '' });
     expect(existsSync(receiptPath(workerDir, D_RECORD_READ))).toBe(false);
     expect(listUnread(workerDir, { to: 'worker', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD_READ]);
     expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toContain(`peek [lead] worker: ${D_RECORD_READ}`);

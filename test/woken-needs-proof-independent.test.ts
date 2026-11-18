@@ -363,7 +363,7 @@ describe('woken-needs-proof independent scenes', () => {
       file: null,
       address: null,
       who: 'lead',
-      sender: { teamId: 'team_acme', project: 'acme', label: 'lead' },
+      sender: { teamId: 'team_acme', project: 'acme' },
       naming: defaultNaming('team_acme'),
       payload: replyPayload,
     });

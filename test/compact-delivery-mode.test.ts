@@ -273,7 +273,7 @@ describe('3. team show <id> full-body inspection, read receipt, re-show, and mai
     const firstIo = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
     expect(await runShow(['47c25f34'], firstIo, { home: f.home, now: () => NOW })).toBe(0);
     expect(firstIo.out).toBe(
-      'Argon · builder-gemini@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nHeadline line 1\nBody line 2\nBody line 3\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34\n',
+      'Argon · builder-gemini@acme · Gemini 4 Argon 1 · 2026-11-05 15:00Z · admitted: to orchestrator\n\nHeadline line 1\nBody line 2\nBody line 3\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34\n',
     );
     expect(existsSync(join(f.dropDir, `${id}.read.json`))).toBe(true);
 
@@ -298,7 +298,7 @@ describe('3. team show <id> full-body inspection, read receipt, re-show, and mai
     expect(parsedJson.seat).toBe('orchestrator');
     expect(parsedJson.written).toBe(false);
     expect(parsedJson.content).toBe(
-      'Argon · builder-gemini@acme · 2026-11-05 15:00Z · admitted: to orchestrator\n\nHeadline line 1\nBody line 2\nBody line 3\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34',
+      'Argon · builder-gemini@acme · Gemini 4 Argon 1 · 2026-11-05 15:00Z · admitted: to orchestrator\n\nHeadline line 1\nBody line 2\nBody line 3\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34',
     );
 
     // 3. Even after `team reply` writes `<id>.replied.json`, `team show` still displays the message
@@ -384,7 +384,7 @@ describe('3. team show <id> full-body inspection, read receipt, re-show, and mai
     const io = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
     expect(await runShow(['019a0000'], io, { home: f.home, now: () => NOW })).toBe(0);
     expect(io.out).toBe(
-      'Grok Bot · 2026-11-05 15:00Z · admitted: owner relay\n\nClient ping line 1.\nClient ping line 2.\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
+      'Grok Bot · client:grok-bot (grant grant-01) · 2026-11-05 15:00Z · admitted: owner relay\n\nClient ping line 1.\nClient ping line 2.\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
     );
     expect(existsSync(join(f.dropDir, `${clientId}.read.json`))).toBe(true);
   });

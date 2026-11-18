@@ -215,7 +215,7 @@ test('a seat with no nickname opens the frame with its written label name, and w
   // The roster holds no nickname, so the written label's name before the middle dot stands.
   expect(await runSend(['lead', 'from the label'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('Seat Eight · labelled@acme · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Seat Eight · labelled@acme · Test 1 · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 
   // A written label with nothing before the middle dot falls through to the seat name.
   const blank = registerSeat(made, 'blank', 'fixture-pane-c');
@@ -230,7 +230,7 @@ test('a seat with no nickname opens the frame with its written label name, and w
   const fromBlank = testIo(made.root, { kind: 'seat', name: 'blank', pane: 'fixture-pane-c', session: 'acme' });
   expect(await runSend(['lead', 'from the blank'], fromBlank, again)).toBe(0);
   expect(again.frames).toHaveLength(1);
-  expect(frameContent(again.frames[0] as string).startsWith('blank · blank@acme · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
+  expect(frameContent(again.frames[0] as string).startsWith('blank · blank@acme · Test 1 · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 });
 
 test('a seat sender opens the frame with its nickname, and with its seat name when the roster holds none', async () => {
@@ -250,7 +250,7 @@ test('a seat sender opens the frame with its nickname, and with its seat name wh
 
   expect(await runSend(['lead', 'from bea'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('Bea · helper@acme · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Bea · helper@acme · Test 1 · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 
   // The roster without a nickname for the seat: the same line falls back to the seat name.
   const native = registerSeat(made, 'native', 'fixture-pane-c');
@@ -265,5 +265,5 @@ test('a seat sender opens the frame with its nickname, and with its seat name wh
   const fromNative = testIo(made.root, { kind: 'seat', name: 'native', pane: 'fixture-pane-c', session: 'acme' });
   expect(await runSend(['lead', 'from native'], fromNative, again)).toBe(0);
   expect(again.frames).toHaveLength(1);
-  expect(frameContent(again.frames[0] as string).startsWith('native · native@acme · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
+  expect(frameContent(again.frames[0] as string).startsWith('native · native@acme · Test 1 · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 });
