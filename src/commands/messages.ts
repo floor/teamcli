@@ -77,6 +77,7 @@ import {
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { noteUnread } from '../send/unread-hint.ts';
 import { attributedBody, attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
+import { seatDropDir, seatMailParts, sessionMailDir, type MailTree } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team messages [--json]
 Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]
@@ -145,7 +146,7 @@ export function receiptFile(root: string, seat: string, id: string): string {
 
 /** The folder a session's records live in: `<root>/.agents/send-drops/<session>/<seat>`. */
 export function recordDir(root: string, session: string, seat: string): string {
-  return join(root, '.agents', 'send-drops', session, seat);
+  return seatDropDir(root, session, seat);
 }
 
 /** One candidate file: a signed record in the transport tree, or a legacy message file. */
@@ -156,6 +157,8 @@ type Candidate = {
   path: string;
   /** The session directory the record was found under (records only). */
   session?: string;
+  /** The mail tree the record was found in (records only; src/queue/mail-tree.ts). */
+  tree?: MailTree;
 };
 
 export type Unacked = { id: string; to: string; at: string };
@@ -265,18 +268,21 @@ const WORK_PREFIX = 'work-';
  *  report marker, a receipt publisher's `.new` temp, a work nudge — is not a candidate. The names
  *  alone are returned here; whether a regular file at one is JSON is read by each caller. */
 function recordNames(root: string, session: string): Candidate[] {
-  const dir = join(root, '.agents', 'send-drops', session);
-  if (!isDir(dir)) return [];
   const out: Candidate[] = [];
-  for (const seat of readdirSync(dir).sort(compareSeatNames)) {
-    if (!NAME.test(seat)) continue;
-    const seatDir = join(dir, seat);
-    if (!isDir(seatDir)) continue;
-    for (const name of readdirSync(seatDir).sort()) {
-      if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith(WORK_PREFIX)) continue;
-      const path = join(seatDir, name);
-      if (!isFile(path)) continue;
-      out.push({ store: 'record', seat, id: name, path, session });
+  // E7b revision 3: both trees (src/queue/mail-tree.ts), legacy first.
+  for (const tree of ['legacy', 'stamped'] as const) {
+    const dir = sessionMailDir(root, session, tree);
+    if (!isDir(dir)) continue;
+    for (const seat of readdirSync(dir).sort(compareSeatNames)) {
+      if (!NAME.test(seat)) continue;
+      const seatDir = join(dir, seat);
+      if (!isDir(seatDir)) continue;
+      for (const name of readdirSync(seatDir).sort()) {
+        if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith(WORK_PREFIX)) continue;
+        const path = join(seatDir, name);
+        if (!isFile(path)) continue;
+        out.push({ store: 'record', seat, id: name, path, session, ...(tree === 'stamped' ? { tree } : {}) });
+      }
     }
   }
   return out;
@@ -730,7 +736,7 @@ type MailboxRow = {
 /** The record's path as the caller reads it in the refusal's repair. */
 function mailboxPath(candidate: Candidate): string {
   if (candidate.store === 'record') {
-    return `.agents/send-drops/${candidate.session ?? ''}/${candidate.seat}/${candidate.id}`;
+    return [...seatMailParts(candidate.session ?? '', candidate.seat, candidate.tree), candidate.id].join('/');
   }
   return `.agents/messages/${candidate.seat}/${candidate.id}.json`;
 }
@@ -824,7 +830,7 @@ function repairOf(candidate: Candidate, problem: Problem, payload: MessagePayloa
   const path = mailboxPath(candidate);
   const moveTarget = (seat: string, id: string): string =>
     candidate.store === 'record'
-      ? `.agents/send-drops/${candidate.session ?? ''}/${seat}/${id}`
+      ? [...seatMailParts(candidate.session ?? '', seat, candidate.tree), id].join('/')
       : `.agents/messages/${seat}/${id}.json`;
   switch (problem.kind) {
     case 'id':

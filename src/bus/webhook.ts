@@ -44,6 +44,7 @@ import { WEBHOOK_SENDER_DEADLINE_MAX_MS } from '../settings/webhook-sender.ts';
 import { webhookSenderDeadlineMs } from '../settings/webhook-sender-policy.ts';
 import type { SignedEventRecord } from './log.ts';
 import { hostedCommit } from '../host/request-scope.ts';
+import { seatMailDirIn, type MailTree } from '../queue/mail-tree.ts';
 
 /** How hard one record is tried when the request could not be sent at all: three attempts in
  *  total, five seconds each, then one and four seconds between them — about twenty seconds. A
@@ -161,11 +162,20 @@ function ownDropPath(
   if (!segmentOk(session) || !segmentOk(to)) {
     return { ok: false, reason: 'the arrival cannot name a drop folder' };
   }
-  const dir = join(root, '.agents', 'send-drops', session, to);
+  // E7b revision 3: a stamped record sits in the seat's stamped folder (src/queue/mail-tree.ts),
+  // held to the same checks; the legacy folder's answer stands when neither holds it.
+  const legacy = ownDropPathIn(root, session, to, id, 'legacy');
+  if (legacy.ok) return legacy;
+  const stamped = ownDropPathIn(root, session, to, id, 'stamped');
+  return stamped.ok ? stamped : legacy;
+}
+
+function ownDropPathIn(root: string, session: string, to: string, id: string, tree: MailTree): { ok: true; path: string } | { ok: false; reason: string } {
+  const dir = seatMailDirIn(join(root, '.agents'), session, to, tree);
   let expected: string;
   let realDir: string;
   try {
-    expected = join(realpathSync(root), '.agents', 'send-drops', session, to);
+    expected = seatMailDirIn(join(realpathSync(root), '.agents'), session, to, tree);
     realDir = realpathSync(dir);
   } catch {
     return { ok: false, reason: `the message record ${id} is not in the seat's drop folder` };
@@ -196,12 +206,21 @@ const CLAIM_SUFFIX = '.posting';
 /** The seat's own drop folder for this record, resolved through real paths: a linked folder that
  *  leads outside the project proves nothing and is never posted into or marked. Null when the
  *  folder cannot be proven — no root, an unsafe segment, a missing or linked folder. */
-function dropDirAt(root: string | undefined, session: string, to: string): string | null {
+function dropDirAt(root: string | undefined, session: string, to: string, id?: string): string | null {
   if (root === undefined) return null;
   if (!segmentOk(session) || !segmentOk(to)) return null;
+  // E7b revision 3: the marks sit beside the record, in the folder of its own tree.
+  if (id !== undefined) {
+    const stamped = dropDirIn(root, session, to, 'stamped');
+    if (stamped !== null && existsSync(join(stamped, id))) return stamped;
+  }
+  return dropDirIn(root, session, to, 'legacy');
+}
+
+function dropDirIn(root: string, session: string, to: string, tree: MailTree): string | null {
   try {
     const realRoot = realpathSync(root);
-    const expected = join(realRoot, '.agents', 'send-drops', session, to);
+    const expected = seatMailDirIn(join(realRoot, '.agents'), session, to, tree);
     const realDir = realpathSync(expected);
     return realDir === expected ? realDir : null;
   } catch {
@@ -214,7 +233,7 @@ function dropDirAt(root: string | undefined, session: string, to: string): strin
  *  nothing, and an unproved mark is never an excuse to skip the delivery. */
 function postedMarkAt(root: string | undefined, session: string, to: string, id: string): boolean {
   if (!DROP_NAME.test(id)) return false;
-  const dir = dropDirAt(root, session, to);
+  const dir = dropDirAt(root, session, to, id);
   if (dir === null) return false;
   let held;
   try {
@@ -628,7 +647,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
   // that left it also freed the claim's name.
   const claimId = payload.record_id;
   const claimDir = to !== undefined && payload.kind === 'message.arrived' && DROP_NAME.test(claimId)
-    ? dropDirAt(input.root, payload.session, to)
+    ? dropDirAt(input.root, payload.session, to, claimId)
     : null;
   if (claimDir !== null && to !== undefined) {
     if (holdClaim(claimDir, claimId, policy.claimStaleMs, input.report, input.seat) !== 'held') {

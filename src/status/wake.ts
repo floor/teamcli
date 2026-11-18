@@ -13,6 +13,7 @@
 import { join } from 'node:path';
 import { seatDeliveryClass, wakeableWhileIdle, type DeliveryClass, type SeatDeliveryInput } from '../launch/delivery-class.ts';
 import { inboxLive, listUnread } from '../mcp/inbox.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 /** What one row says about reaching its seat while it is idle. */
 export type SeatWake = {
@@ -134,7 +135,7 @@ export type SeatWakeReading = {
 
 export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
   const delivery = seatDeliveryClass(input);
-  const dropDir = join(input.dir, 'send-drops', input.session, input.seat);
+  const dropDir = seatMailDirIn(input.dir, input.session, input.seat);
   const listener = inboxLive(dropDir, input.root, input.session, input.seat).live;
   let oldest: number | null = null;
   let unreadCount: number | null = null;

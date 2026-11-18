@@ -16,6 +16,7 @@ import { dropMessage } from './native.ts';
 import { readRecord, sameFolder, signRecord, verifyRecord, type RecordPayload } from './record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { ensureFoldersBelow } from './history.ts';
+import { seatDropDir, seatMailDirIn } from '../queue/mail-tree.ts';
 
 /** The principal a runtime notice is signed as. Drop readers print it. Channel admission does not. */
 export const RUNTIME_FROM = 'runtime';
@@ -38,8 +39,8 @@ export function writeRuntimeNotice(input: {
       body: input.body, from: RUNTIME_FROM, from_id: null, rule: RUNTIME_RULE, thread: input.id,
       ...(input.inReplyTo === undefined ? {} : { in_reply_to: input.inReplyTo }),
     };
-    const leadDir = join(input.root, '.agents', 'send-drops', input.session, input.lead);
-    const problem = ensureFoldersBelow(payload.root, [join('.agents', 'send-drops', input.session, input.lead)]);
+    const leadDir = seatDropDir(input.root, input.session, input.lead);
+    const problem = ensureFoldersBelow(payload.root, [seatMailDirIn('.agents', input.session, input.lead)]);
     if (problem !== null) return { ok: false, reason: problem };
     const existing = readRecord(join(leadDir, input.id), input.id);
     if (!existing.ok) return existing;

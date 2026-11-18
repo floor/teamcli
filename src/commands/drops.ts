@@ -66,8 +66,9 @@ import {
 import { listArchivedUnread, runInboxRetention, seatDropFolders } from '../send/inbox-retention.ts';
 import { legacySeatFolders, listLegacyArchivedUnread } from '../send/legacy-inbox-retention.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, settledReadOf, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, recordStampAt, settledReadOf, signedRecordOf, type RecordPayload, type StatusContext, verifyRecord } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { LEGACY_TREE, seatMailDirIn, seatMailParts, stampedListing } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
        team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
@@ -240,14 +241,28 @@ export function dropFolderReadable(dir: string, session: string, seat: string): 
   const ours = (held: { uid: number }): boolean => process.getuid === undefined || held.uid === process.getuid();
   const agents = heldAt(dir);
   if (agents.kind !== 'folder' || !ours(agents)) return false;
-  let at = dir;
-  for (const part of ['send-drops', session, seat]) {
-    at = join(at, part);
-    const held = heldAt(at);
-    if (held.kind === 'missing') return true;
-    if (held.kind !== 'folder' || !ours(held)) return false;
+  // E7b revision 3: both of the seat's folders (src/queue/mail-tree.ts) are held to the same rule.
+  for (const tree of ['legacy', 'stamped'] as const) {
+    let at = dir;
+    for (const part of seatMailParts(session, seat, tree).slice(1)) {
+      at = join(at, part);
+      const held = heldAt(at);
+      if (held.kind === 'missing') break;
+      if (held.kind !== 'folder' || !ours(held)) return false;
+    }
   }
   return true;
+}
+
+/** The messages an older requester's relayed read may carry: those whose record is not stamped
+ *  (an unreadable record counts as stamped, so it is left out too). */
+export function withoutStamped<T extends { id: string }>(dropDir: string, messages: readonly T[]): T[] {
+  return messages.filter((message) => recordStampAt(dropDir, message.id) === false);
+}
+
+/** The one line an older requester's relayed read gets in place of stamped mail. */
+export function stampedLeftOut(count: number): string {
+  return `${String(count)} stamped message${count === 1 ? '' : 's'}: run the installed team drops`;
 }
 
 export const drops: Command = (argv, io) => runDrops(argv, io, realSources);
@@ -338,86 +353,92 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'ok', rows: [] };
     return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
   }
-  const nameSet = new Set(names);
   const rows: DropRow[] = [];
   // The claim this listing serves under. Without a context there is none, and every drop is
   // listed — the same "nothing can be proven" rule the receipt read follows above.
   const claim = context === undefined ? null : currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
   const keyPrint = key === undefined ? 'none' : keyPrintForCache(key);
-  for (const name of names) {
-    if (name.includes('.')) continue;
-    if (superseded.has(name)) continue;
-    const path = join(dropDir, name);
-    let stat;
-    try {
-      stat = lstatSync(path);
-    } catch {
-      continue;
-    }
-    if (!stat.isFile()) continue;
-    // A verified read receipt means the drop was handed over: it is read, and this reading is
-    // done with it. The receipt is the signed `<id>.read.json` the inbox and `team messages` write;
-    // a file there that the message key did not sign proves nothing and leaves the drop waiting.
-    // At the current claim's id the receipt must bind that claim too: a read of an earlier
-    // delivery does not count for this one.
-    const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
-    const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
-    if (key !== undefined && context !== undefined && hasReceiptFile && isReadOrCleared(dropDir, name, context, key, binding)) continue;
-    const stamp = fileStatStamp(path);
-    let from: string | null = null;
-    let fromId: string | null = null;
-    let senderAttribution: SenderAttribution = 'none';
-    let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
-    const cached = stamp !== null && keyPrint !== '' ? dropInspectCache.get(path) : undefined;
-    if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint) {
-      from = cached.from;
-      fromId = cached.fromId;
-      launch = cached.launch;
-      senderAttribution = key !== undefined && cached.payload !== null
-        ? attributeSenderClaim(cached.payload, { briefClaim: claim })
-        : 'none';
-    } else {
+  // E7b revision 3: the seat's stamped folder is read with it (src/queue/mail-tree.ts).
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return { kind: 'unreadable', reason: 'the seat\'s stamped folder cannot be listed' };
+  const seatFolders = [{ folder: dropDir, names: names }, ...(stamped === null ? [] : [stamped])];
+  for (const { folder: dropDir, names: names } of seatFolders) {
+    const nameSet = new Set(names);
+    for (const name of names) {
+      if (name.includes('.')) continue;
+      if (superseded.has(name)) continue;
+      const path = join(dropDir, name);
+      let stat;
       try {
-        const text = readFileSync(path, 'utf8');
-        const record = signedRecordOf(parsedJson(text));
-        let verifiedPayload: RecordPayload | null = null;
-        if (record !== null) {
-          // The record names its sender in the payload. The key that verified it is the message
-          // key; when the folder is read with no key at all, the payload is still what is shown —
-          // a record that fails the key it was checked with leaves the sender unknown.
-          if (key === undefined || verifyRecord(record, key)) {
-            verifiedPayload = record.payload;
-            from = record.payload.from;
-            fromId = record.payload.from_id;
-            // Only a record this key verified can be attributed, and only the seat's current
-            // general seat brief rests on more than the shared key. A read with no key can show
-            // the payload but cannot attribute it.
-            senderAttribution = key === undefined
-              ? 'none'
-              : attributeSenderClaim(record.payload, { briefClaim: claim });
-            if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
-              launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
-            }
-          }
-        } else {
-          from = senderOf(text.split('\n', 1)[0] ?? '');
-        }
-        if (stamp !== null && keyPrint !== '') {
-          if (dropInspectCache.size >= DROP_INSPECT_CACHE_LIMIT) dropInspectCache.clear();
-          dropInspectCache.set(path, { stamp, keyPrint, from, fromId, launch, payload: verifiedPayload });
-        }
+        stat = lstatSync(path);
       } catch {
-        // The file is still a drop; its sender is unknown.
+        continue;
       }
+      if (!stat.isFile()) continue;
+      // A verified read receipt means the drop was handed over: it is read, and this reading is
+      // done with it. The receipt is the signed `<id>.read.json` the inbox and `team messages` write;
+      // a file there that the message key did not sign proves nothing and leaves the drop waiting.
+      // At the current claim's id the receipt must bind that claim too: a read of an earlier
+      // delivery does not count for this one.
+      const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
+      const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
+      if (key !== undefined && context !== undefined && hasReceiptFile && isReadOrCleared(dropDir, name, context, key, binding)) continue;
+      const stamp = fileStatStamp(path);
+      let from: string | null = null;
+      let fromId: string | null = null;
+      let senderAttribution: SenderAttribution = 'none';
+      let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
+      const cached = stamp !== null && keyPrint !== '' ? dropInspectCache.get(path) : undefined;
+      if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint) {
+        from = cached.from;
+        fromId = cached.fromId;
+        launch = cached.launch;
+        senderAttribution = key !== undefined && cached.payload !== null
+          ? attributeSenderClaim(cached.payload, { briefClaim: claim })
+          : 'none';
+      } else {
+        try {
+          const text = readFileSync(path, 'utf8');
+          const record = signedRecordOf(parsedJson(text));
+          let verifiedPayload: RecordPayload | null = null;
+          if (record !== null) {
+            // The record names its sender in the payload. The key that verified it is the message
+            // key; when the folder is read with no key at all, the payload is still what is shown —
+            // a record that fails the key it was checked with leaves the sender unknown.
+            if (key === undefined || verifyRecord(record, key)) {
+              verifiedPayload = record.payload;
+              from = record.payload.from;
+              fromId = record.payload.from_id;
+              // Only a record this key verified can be attributed, and only the seat's current
+              // general seat brief rests on more than the shared key. A read with no key can show
+              // the payload but cannot attribute it.
+              senderAttribution = key === undefined
+                ? 'none'
+                : attributeSenderClaim(record.payload, { briefClaim: claim });
+              if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
+                launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+              }
+            }
+          } else {
+            from = senderOf(text.split('\n', 1)[0] ?? '');
+          }
+          if (stamp !== null && keyPrint !== '') {
+            if (dropInspectCache.size >= DROP_INSPECT_CACHE_LIMIT) dropInspectCache.clear();
+            dropInspectCache.set(path, { stamp, keyPrint, from, fromId, launch, payload: verifiedPayload });
+          }
+        } catch {
+          // The file is still a drop; its sender is unknown.
+        }
+      }
+      // A launch record the current claim does not name cannot be served: it is an earlier
+      // delivery, or an old build's record carrying none of the fields a claim binds.
+      if (key !== undefined && context !== undefined && launch !== null
+        && (claim === null || launch.sha256 !== claim.sha256 || launch.incarnation !== claim.incarnation)) {
+        continue;
+      }
+      rows.push({ id: name, from, from_id: fromId, sender_attribution: senderAttribution, received: stat.mtime.toISOString(), path });
     }
-    // A launch record the current claim does not name cannot be served: it is an earlier
-    // delivery, or an old build's record carrying none of the fields a claim binds.
-    if (key !== undefined && context !== undefined && launch !== null
-      && (claim === null || launch.sha256 !== claim.sha256 || launch.incarnation !== claim.incarnation)) {
-      continue;
-    }
-    rows.push({ id: name, from, from_id: fromId, sender_attribution: senderAttribution, received: stat.mtime.toISOString(), path });
   }
   return {
     kind: 'ok',
@@ -485,11 +506,17 @@ function settledFacts(dropDir: string, context: StatusContext, home: string): { 
     return [];
   }
   const facts: { id: string; at: string; readBy: string | undefined }[] = [];
-  for (const name of names) {
-    if (name.includes('.') || !recordNameOk(name)) continue;
-    const settled = settledReadOf(dropDir, name, context, key.key);
-    if (settled === null) continue;
-    facts.push({ id: name, at: settled.at, readBy: settled.readBy });
+  // E7b revision 3: the seat's stamped folder is read with it (src/queue/mail-tree.ts).
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return [];
+  const seatFolders = [{ folder: dropDir, names: names }, ...(stamped === null ? [] : [stamped])];
+  for (const { folder: dropDir, names: names } of seatFolders) {
+    for (const name of names) {
+      if (name.includes('.') || !recordNameOk(name)) continue;
+      const settled = settledReadOf(dropDir, name, context, key.key);
+      if (settled === null) continue;
+      facts.push({ id: name, at: settled.at, readBy: settled.readBy });
+    }
   }
   return facts.sort((a, b) => (Date.parse(b.at) - Date.parse(a.at)) || a.id.localeCompare(b.id));
 }
@@ -610,12 +637,12 @@ function listUnreadArchive(io: Io, json: boolean, root: string, session: string,
     // exit: drops.archive.unread-refused
     return 1;
   }
-  const rows: Array<{ store: 'send-drops' | 'messages'; session: string; seat: string; month: string; id: string; path: string }> = [];
+  const rows: Array<{ store: typeof LEGACY_TREE | 'messages'; session: string; seat: string; month: string; id: string; path: string }> = [];
   for (const folder of seatDropFolders(root)) {
     if (own !== null && folder.seat !== own) continue;
     if (wanted !== undefined && folder.seat !== wanted) continue;
     for (const item of listArchivedUnread(folder.dropDir)) {
-      rows.push({ store: 'send-drops', session: folder.session, seat: folder.seat, month: item.month, id: item.id, path: item.path });
+      rows.push({ store: LEGACY_TREE, session: folder.session, seat: folder.seat, month: item.month, id: item.id, path: item.path });
     }
   }
   // The older `.agents/messages/<seat>` store: its archive holds only this session's records.
@@ -750,7 +777,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     if (!dropFolderReadable(dir, readSession, seatName)) {
       return refuse(io, json, 'the drop folder is not a real folder: a link or a file stands in its path');
     }
-    const dropDir = join(dir, 'send-drops', readSession, seatName);
+    const dropDir = seatMailDirIn(dir, readSession, seatName);
     const context: StatusContext = { to: seatName, root: loaded.root, session: readSession, lead: loaded.team.orchestrator };
     // The launch's own brief is served under the claim the seat's state holds now. A reader the
     // launch started under an epoch serves only a brief delivered under that same runtime; a
@@ -765,6 +792,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
     const asked = args.values.id;
     if (asked !== undefined) {
+      // E7b revision 3 (carrier 4): an older requester's relayed read never carries a stamped body.
+      if (io.legacyRelay === true && recordStampAt(dropDir, asked) !== false) {
+        io.stdout(`${stampedLeftOut(1)}\n`);
+        return readOk();
+      }
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const key = messageKeyState(sources.home);
       const settled = key.kind === 'key' ? settledReadOf(dropDir, asked, context, key.key) : null;
@@ -811,7 +843,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const settled = settledFacts(dropDir, context, sources.home);
     // Only a name the inbox lists is served. A file whose name is not a message id stays on the
     // folder listing and is not handed over here.
-    const waiting = listUnread(dropDir, context, sources.home, undefined, undefined, { legacy: 'include' });
+    const listed = listUnread(dropDir, context, sources.home, undefined, undefined, { legacy: 'include' });
+    // E7b revision 3 (carrier 4): an older requester's relayed read leaves stamped mail out and
+    // says, in one line with no body, how many it left.
+    const waiting = io.legacyRelay === true ? withoutStamped(dropDir, listed) : listed;
+    if (waiting.length < listed.length) io.stdout(`${stampedLeftOut(listed.length - waiting.length)}\n`);
     const bodies: string[] = [];
     const seals: Array<() => boolean> = [];
     // Each deferred read holds the id's exclusive claim until its seal, or until this run gives up.
@@ -955,7 +991,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     return refuse(io, json, `only a seat of this team reads its own drops; this call is ${describeCaller(shown)}`);
   }
   const seat = named.name;
-  const dropDir = join(dir, 'send-drops', session, seat);
+  const dropDir = seatMailDirIn(dir, session, seat);
   const keyState = messageKeyState(sources.home);
   const key = keyState.kind === 'key' ? keyState.key : undefined;
   const context: StatusContext = { to: seat, root: loaded.root, session, lead: loaded.team.orchestrator };

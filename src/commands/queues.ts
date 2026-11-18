@@ -11,6 +11,7 @@ import { activate, deactivate, floorState, seatDropFoldersStrict } from '../queu
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { readerSwitch, seatQueueCheck, setReaderSwitch, type SeatBinding } from '../queue/reader.ts';
 import { buildIdentity } from '../version.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team queues status
        team queues activate
@@ -45,7 +46,7 @@ export function unreadOf(root: string, home: string, lead: string | undefined, d
   const parts = dropDir.split('/');
   const seat = parts[parts.length - 1];
   const session = parts[parts.length - 2];
-  if (!seat || !session || join(root, '.agents', 'send-drops', session, seat) !== dropDir) return null;
+  if (!seat || !session || seatDropDir(root, session, seat) !== dropDir) return null;
   let listedOk = false;
   const ids = listUnread(dropDir, { to: seat, root, session, ...(lead === undefined ? {} : { lead }) }, home, undefined, () => { listedOk = true; }, observe ? { queue: 'skip' } : {}).map(message => message.id);
   if (!listedOk) return null;

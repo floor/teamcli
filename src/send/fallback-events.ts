@@ -91,6 +91,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { appendStoreLine, ensureFoldersBelow, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
 import { dropMessage } from './native.ts';
 import { readSealedRecord, recordAuthOfSealed, recordFile, sameFolder } from './record.ts';
+import { mailTreeOf } from '../queue/mail-tree.ts';
 
 /** The receiver as TeamCLI verified it: the registry team and seat, the seat's registry id when
  *  one exists, the session the seat stands in, and the checkout the record is written under. */
@@ -849,7 +850,7 @@ export function* drainDeferredNotesSteps(
 function* notesUnderSteps(root: string, limit = Number.POSITIVE_INFINITY): Generator<void, { path: string; text: string | null }[]> {
   const found: { path: string; text: string | null }[] = [];
   if (limit <= 0) return found;
-  const base = join(root, '.agents', 'send-drops');
+  const base = mailTreeOf(root);
   for (const session of yield* folderNamesSteps(base)) {
     const sessionDir = join(base, session);
     for (const seat of yield* folderNamesSteps(sessionDir)) {
@@ -1911,7 +1912,7 @@ function* markersUnderSteps(
   root: string,
 ): Generator<void, ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[]> {
   const found: ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] = [];
-  const base = join(root, '.agents', 'send-drops');
+  const base = mailTreeOf(root);
   const seen = new Set<string>();
   let markerCount = 0;
   for (const session of yield* folderNamesSteps(base)) {

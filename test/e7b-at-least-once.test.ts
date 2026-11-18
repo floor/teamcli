@@ -454,7 +454,9 @@ describe('code round 3 fixes', () => {
     const at = place();
     activateRoot(at);
     expect(writeRecord(at.dropDir, signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home)).ok).toBe(true);
-    expect(existsSync(join(at.dropDir, EXPOSURES, M1))).toBe(true);
+    // Revision 3: the record and its era folder sit in the seat's stamped tree.
+    expect(existsSync(join(at.dropDir.replace('/send-drops/', '/send-stamped/'), EXPOSURES, M1))).toBe(true);
+    expect(existsSync(join(at.dropDir, M1))).toBe(false);
     expect(copyHistory(at.dropDir, M1)).toMatchObject({ copies: 0 });
     await plainRead(at, M1);
     expect(listUnread(at.dropDir, context(at), at.home).map((m) => m.id)).toEqual([M1]);
@@ -462,7 +464,7 @@ describe('code round 3 fixes', () => {
 });
 
 
-describe('the actor proof counts long-lived readers and carriers only (coordinator decision)', () => {
+describe('revision 3: activation needs only the daemon at the floor', () => {
   const launched = (at: At, seat: string) => writeFileSync(join(at.root, '.agents', 'team.state.json'), JSON.stringify({
     format: 1, sessions: { [SESSION]: { seats: { [seat]: { stage: 'ready', launched: { shell: process.pid, cli: [process.pid] } } } } },
   }));
@@ -471,85 +473,36 @@ describe('the actor proof counts long-lived readers and carriers only (coordinat
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat, session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), level: 3, ...fields })}\n`);
   };
-  const actorsOf = async (at: At) => {
-    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
-    return (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
-  };
-
   const scanActivate = async (at: At) => {
     const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
-    const scanned = liveFloorActors(at.root, at.home) ?? [];
-    return { scanned: scanned.filter((a) => a.kind !== 'daemon'), outcome: activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...scanned.filter((a) => a.kind !== 'daemon')] }).kind };
+    const scanned = (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
+    return { scanned, outcome: activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...scanned] }).kind };
   };
 
-  test('a live seat with no marker whose launch signed level 3 and names its live CLI is not an actor: activation allowed', async () => {
-    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
-    const { processStartOf } = await import('../src/watch/pane.ts');
+  test('a live seat with no inbox marker (a launch from any build) is no actor: activation allowed', async () => {
     const at = place();
     launched(at, 'builder');
-    expect(launchPending(at.root, at.home, SESSION, 'builder', process.pid)).toBe(true);
-    expect(launchProven(at.root, at.home, SESSION, 'builder', process.pid, processStartOf(process.pid) as number)).toBe(true);
     const run = await scanActivate(at);
     expect(run.scanned).toEqual([]);
     expect(run.outcome).toBe('activated');
   });
 
-  test('a pre-install launch (no launch-level record) with no marker is unknown: activation refused', async () => {
-    const at = place();
-    launched(at, 'builder');
-    const run = await scanActivate(at);
-    expect(run.scanned).toMatchObject([{ kind: 'other', level: null }]);
-    expect(run.outcome).toBe('refused');
+  test('a live level-2 inbox server, a stale marker and a marker bound elsewhere are no actors: they cannot see the stamped tree', async () => {
+    for (const fields of [{ level: 2 }, { pid: 999_999_99 }, { root: '/elsewhere' }]) {
+      const at = place();
+      launched(at, 'lead');
+      marker(at, 'lead', fields);
+      const run = await scanActivate(at);
+      expect(run.scanned).toEqual([]);
+      expect(run.outcome).toBe('activated');
+    }
   });
 
-  test('a launch record still pending, or naming another process, is unknown: activation refused', async () => {
-    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
+  test('the daemon below the floor, or no live daemon, refuses activation', () => {
     const at = place();
-    launched(at, 'builder');
-    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
-    expect((await scanActivate(at)).outcome).toBe('refused');
-    // Proven, but for a process whose start instant is not the live one (a reused pid, an older relaunch).
-    launchProven(at.root, at.home, SESSION, 'builder', process.pid, 1);
-    expect((await scanActivate(at)).outcome).toBe('refused');
-  });
-
-  test('on an active root, the same scan rolls back when a launch record names another process', async () => {
-    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
-    const { processStartOf } = await import('../src/watch/pane.ts');
-    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
-    const at = place();
-    launched(at, 'builder');
-    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
-    launchProven(at.root, at.home, SESSION, 'builder', process.pid, processStartOf(process.pid) as number);
-    expect((await scanActivate(at)).outcome).toBe('activated');
-    launchProven(at.root, at.home, SESSION, 'builder', process.pid, 1);
-    const actors = (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
-    expect(checkActors(at.root, at.home, [daemon, ...actors]).kind).toBe('dark');
-  });
-
-  test('a marker standing while its process is gone and the seat\'s CLI is live is unknown: activation refused', async () => {
-    const at = place();
-    launched(at, 'lead');
-    marker(at, 'lead', { pid: 999_999_99 });
-    const actors = await actorsOf(at);
-    expect(actors).toMatchObject([{ kind: 'other', level: null }]);
-    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
-  });
-
-  test('a marker bound elsewhere is unknown: activation refused', async () => {
-    const at = place();
-    launched(at, 'lead');
-    marker(at, 'lead', { root: '/elsewhere' });
-    const actors = await actorsOf(at);
-    expect(actors[0]?.name).toContain('marker bound elsewhere');
-    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
-  });
-
-  test('a live inbox server at level 3 is an actor at level 3', async () => {
-    const at = place();
-    launched(at, 'lead');
-    marker(at, 'lead', {});
-    expect(await actorsOf(at)).toMatchObject([{ kind: 'inbox-server', level: 3 }]);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [{ ...daemon, level: 2 }] }).kind).toBe('refused');
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [] }).kind).toBe('refused');
+    expect(floorState(at.root, at.home).kind).toBe('dark');
   });
 });
 
@@ -566,7 +519,9 @@ describe('round 5 and 6 fixes', () => {
     activateRoot(at);
     const staged = await stageSendRecord(at.dropDir, stampedPayload(payloadOf(at, M1), at.home), at.home, () => new Date(), 'acme');
     expect(staged.ok).toBe(true);
-    expect(existsSync(join(at.dropDir, EXPOSURES, M1))).toBe(true);
+    // Revision 3: the record and its era folder sit in the seat's stamped tree.
+    expect(existsSync(join(at.dropDir.replace('/send-drops/', '/send-stamped/'), EXPOSURES, M1))).toBe(true);
+    expect(existsSync(join(at.dropDir, M1))).toBe(false);
     await plain(at, M1);
     expect(listUnread(at.dropDir, context(at), at.home).map((m) => m.id)).toEqual([M1]);
   });
@@ -636,45 +591,6 @@ describe('round 8 fixes', () => {
     return (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
   };
 
-  test('a live, correctly signed earlier process does not vouch for a different current CLI', async () => {
-    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
-    const { processStartOf } = await import('../src/watch/pane.ts');
-    const at = place();
-    // The signed record names the parent process (alive, right start time); the seat now runs this one.
-    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
-    launchProven(at.root, at.home, SESSION, 'builder', process.ppid, processStartOf(process.ppid) as number);
-    launchedState(at, 'builder', [process.pid]);
-    const actors = await scan(at);
-    expect(actors).toMatchObject([{ kind: 'other', level: null }]);
-    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
-  });
-
-  test('activation between L1 and L2, before any CLI is recorded, is refused', async () => {
-    const { launchPending } = await import('../src/queue/launch-level.ts');
-    const at = place();
-    launchedState(at, 'builder', null);
-    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
-    const actors = await scan(at);
-    expect(actors[0]?.name).toContain('managed launch in flight');
-    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
-  });
-
-  test('a malformed (null) launch record on an active root rolls the floor back to dark on disk', async () => {
-    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
-    const { processStartOf } = await import('../src/watch/pane.ts');
-    const { queuesFolder } = await import('../src/queue/floor.ts');
-    const at = place();
-    launchedState(at, 'builder', [process.pid]);
-    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
-    launchProven(at.root, at.home, SESSION, 'builder', process.pid, processStartOf(process.pid) as number);
-    expect(await scan(at)).toEqual([]);
-    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
-    writeFileSync(join(queuesFolder(at.root), 'launches', `${SESSION}.builder.json`), 'null\n');
-    const actors = await scan(at);
-    expect(checkActors(at.root, at.home, [daemon, ...actors]).kind).toBe('dark');
-    expect(floorState(at.root, at.home).kind).toBe('dark');
-  });
-
   test('the notice must be durable before the source moves; a failed fsync holds it, a later pass moves it', async () => {
     const { noticeBeforeMove } = await import('../src/daemon/chores/inbox-archive.ts');
     const { acquireLockAt } = await import('../src/launch/seat-lock.ts');
@@ -695,4 +611,75 @@ describe('round 8 fixes', () => {
     }
     expect(existsSync(join(bossDir, undeliveredNoticeId(M1)))).toBe(true);
   });
+});
+
+describe('round 9 fixes', () => {
+  const scan = async (at: At) => {
+    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
+    return (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
+  };
+  const refusedWith = async (at: At) => {
+    const actors = await scan(at);
+    return { actors, outcome: activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind };
+  };
+
+  const noticeSetup = async () => {
+    const { noticeBeforeMove } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeBeforeMove>[0]['team'];
+    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', team, key: key(at), at: new Date().toISOString(), item: { id: M1, undelivered: { from: 'worker', from_id: null } } };
+    const bossDir = join(at.root, '.agents', 'send-drops', SESSION, 'boss');
+    const wrong = signRecord({ kind: 'message', id: undeliveredNoticeId(M1), to: 'boss', to_id: null, root: at.root, session: SESSION, at: new Date().toISOString(), body: `mentions ${M1}`, from: 'runtime', from_id: null, rule: "the team's unread-message report", thread: undeliveredNoticeId(M1) }, at.home);
+    return { noticeBeforeMove, at, input, bossDir, wrongText: `${JSON.stringify(wrong, null, 2)}\n` };
+  };
+
+  test('a replacement between verification and open is caught: the descriptor read is what is verified', async () => {
+    const { noticeBeforeMove, input, bossDir, wrongText } = await noticeSetup();
+    const swap = () => { writeFileSync(join(bossDir, `${undeliveredNoticeId(M1)}.swap`), wrongText); renameSync(join(bossDir, `${undeliveredNoticeId(M1)}.swap`), join(bossDir, undeliveredNoticeId(M1))); };
+    expect(noticeBeforeMove({ ...input, hooks: { beforeOpen: swap } })).toBe(false);
+  });
+
+  test('a different file at the name after the flush is caught (identity check)', async () => {
+    const { noticeBeforeMove, input, bossDir, wrongText } = await noticeSetup();
+    const swap = () => { writeFileSync(join(bossDir, `${undeliveredNoticeId(M1)}.swap`), wrongText); renameSync(join(bossDir, `${undeliveredNoticeId(M1)}.swap`), join(bossDir, undeliveredNoticeId(M1))); };
+    expect(noticeBeforeMove({ ...input, hooks: { afterFlush: swap } })).toBe(false);
+  });
+
+  test('a fresh notice under a held notice queue lock (taken before the first call) is written, verified and made durable', async () => {
+    const { noticeBeforeMove, input, bossDir } = await noticeSetup();
+    const { acquireLockAt } = await import('../src/launch/seat-lock.ts');
+    const { queueBaseOf } = await import('../src/queue/append.ts');
+    mkdirSync(bossDir, { recursive: true });
+    const base = queueBaseOf(bossDir);
+    if (base !== null) mkdirSync(base, { recursive: true });
+    const lock = base === null ? null : acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    expect(lock !== null && 'release' in lock).toBe(true);
+    try {
+      expect(noticeBeforeMove(input)).toBe(true);
+    } finally {
+      if (lock !== null && 'release' in lock) lock.release();
+    }
+  }, 30_000);
+});
+
+describe('round 10 fixes', () => {
+  const scan = async (at: At) => {
+    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
+    return (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
+  };
+  const state = (at: At, session: string, seat: string, cli: number[]) => writeFileSync(join(at.root, '.agents', 'team.state.json'), JSON.stringify({
+    format: 1, sessions: { [session]: { seats: { [seat]: { stage: 'ready', launched: { shell: process.pid, cli } } } } },
+  }));
+
+  test('an in-place overwrite of the notice after the flush (same inode) holds the move', async () => {
+    const { noticeBeforeMove } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeBeforeMove>[0]['team'];
+    const notice = join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M1));
+    const overwrite = () => writeFileSync(notice, '{"truncated":true}\n');
+    expect(noticeBeforeMove({ home: at.home, root: at.root, session: SESSION, seat: 'lead', team, key: key(at), at: new Date().toISOString(), item: { id: M1, undelivered: { from: 'worker', from_id: null } }, hooks: { afterFlush: overwrite } })).toBe(false);
+  });
+
 });

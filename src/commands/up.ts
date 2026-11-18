@@ -149,6 +149,7 @@ import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { callerPaneIdentity, isCallerPane } from '../launch/caller-pane.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
 
 // What `up` reads from outside the file, so tests can stand in for it.
 export type UpSources = {
@@ -781,7 +782,7 @@ async function channelRestoreQuiet(
   seat: string,
   sources: { sleep?: (ms: number) => Promise<void> },
 ): Promise<boolean> {
-  const drop = join(root, '.agents', 'send-drops', session, seat);
+  const drop = seatDropDir(root, session, seat);
   let waited = 0;
   for (;;) {
     if (inboxLive(drop, root, session, seat).live) return false;
@@ -4755,7 +4756,6 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       // team's, and does not block the seat that now stands there (`seatOfFile`).
       ...(launch.codexThreadWait === undefined ? {} : {
         codexThreadFree: codexThreadFreeFor({ home: sources.home, dir, wait: launch.codexThreadWait }),
-        launchLevelAt: { root, home: sources.home },
       }),
       seatStates: () => {
         const seats = readState(dir).sessions[session]?.seats ?? null;

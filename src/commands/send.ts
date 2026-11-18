@@ -121,6 +121,8 @@ import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 import { modelDiffers, positiveModelObservation, signedSeatModel, signedSeatModelObservation, type SeatModelObservation } from '../status/statusline.ts';
 import { clearPreflightReports, reportHeldSend } from '../send/held-reports.ts';
+import { NO_STAMPED_FOLDER, identityDirOf, mailTreeIn, recordFolderFor, seatMailDirIn, sessionMailDir } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -1201,7 +1203,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // client to load the channel, the listener marker says the server declared it, and a seat
   // with either word missing walks its order exactly as a send without the channel would. A
   // declared order is walked as written, and the channel is never a declared word.
-  const dropDir = join(input.dir, 'send-drops', input.session, input.seat);
+  const dropDir = seatMailDirIn(input.dir, input.session, input.seat);
   // The listener is probed whenever the seat's launch enables the channel, even for a declared
   // order the channel is never a word of: a serving channel this build cannot vouch for pushes
   // whatever the sender's walk chooses, so the sender leaves its held marker before a wake of its
@@ -2236,7 +2238,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
           // Only a post-admission ending may inspect its own notice copy. Admission refusals
           // never reach this read, and there is no fallback writer or transport here.
           if (!recorded && ['send.held', 'send.not-delivered', 'send.not-submitted', 'send.unreachable'].includes(result.error?.id ?? '')) {
-            const copy = readRecord(join(to.dir, 'send-drops', to.session, lead, notice.id), notice.id);
+            const copy = readRecord(liveRecordPath(seatMailDirIn(to.dir, to.session, lead), notice.id), notice.id);
             const key = messageKeyState(host.home);
             if (key.kind === 'key' && copy.ok && copy.record !== null && verifyRecord(copy.record, key.key)) {
               const payload = copy.record.payload;
@@ -3306,7 +3308,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     // that answers `direct: true` (it runs no wake child, and staged and typed nothing): the walk
     // below is then this process's, exactly once.
     const handoff = !to.cross && compose === null && typedWake !== null && !wait && trigger !== null;
-    const dialled = existsSync(daemonSock)
+    // E7b revision 3 (carrier 2): a stamped record's body is never handed to the daemon. Its
+    // record is already staged in the stamped tree, and this process (the installed build, level 3)
+    // walks its legs itself, so no request carrying the body can reach an older daemon.
+    const dialled = !isStampedPayload(record) && existsSync(daemonSock)
       && (handoff || (!to.cross && compose === null && typedWake === null && !wait));
     if (dialled) await ensureEpisode();
     const daemonRequest = { v: 1 as const, op: 'send' as const, id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) };
@@ -3938,6 +3943,9 @@ export async function stageSendRecord(
     }
   }
   const record = recordTextOf(signed);
+  // E7b revision 3: the record's era names its container (src/queue/mail-tree.ts): a stamped record
+  // is staged only into the seat's stamped folder, never where an older reader lists mail.
+  const recordDir = recordFolderFor(dropDir, isStampedPayload(signed.payload));
   hostedCommit('relay stage');
   // The receiver's queue (rfc-event-comms §1, E4, shadow): the staging is the record write the
   // append wraps, unchanged; the queue's own outcome never changes this send's.
@@ -3947,10 +3955,11 @@ export async function stageSendRecord(
       // E7b: a stamped record's era evidence (its delivery-history folder) stands, durably, before
       // the record is published, on the queued path and the queue-skip fallback alike (this is the
       // one writer both run), so no receipt can ever stand on it without the strict rule.
-      if (isStampedPayload(signed.payload) && !ensureFolder(join(dropDir, EXPOSURES, payload.id))) {
+      if (recordDir === null) return { ok: false, value: { outcome: 'refused' as const, reason: NO_STAMPED_FOLDER } };
+      if (isStampedPayload(signed.payload) && !ensureFolder(join(recordDir, EXPOSURES, payload.id))) {
         return { ok: false, value: { outcome: 'refused' as const, reason: 'the delivery history folder could not be made durable' } };
       }
-      const result = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
+      const result = await relayStage({ dir: recordDir, name: payload.id }, { id: payload.id, record }, { now });
       return { ok: result.outcome !== 'refused', value: result };
     },
     { home, log: queueLog(dropDir, now) },
@@ -3981,8 +3990,9 @@ export async function stageSendRecord(
   // The recipient's unread index names this record as its sender's newest. It is a hint the
   // receiver's sweep verifies against the record itself, never a second source of truth, and a
   // hint that cannot be written never changes what this send did.
-  noteUnread(dropDir, payload.from, payload.id, payload.at);
-  return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record, signed };
+  // The hint is the seat's own (body-free: an id and a time): it stays in the identity folder.
+  noteUnread(identityDirOf(dropDir), payload.from, payload.id, payload.at);
+  return { ok: true, path: staged.receipt.copy ?? join(recordDir ?? dropDir, payload.id), record, signed };
 }
 
 /** Stages a record the asking principal already signed, through the same durable copy the
@@ -4138,7 +4148,8 @@ async function handOff(
   if (!signed.ok) {
     return { kind: 'refused', why: `the record could not be written (${signed.reason}); nothing was sent` };
   }
-  const written = writePending(storeProject, storeRoot, host.home, pending);
+  // E7b revision 3 (carrier 1): a stamped send's handoff waits only under the stamped tree.
+  const written = writePending(storeProject, storeRoot, host.home, pending, isStampedPayload(payload));
   if (!written.ok) {
     return { kind: 'refused', why: `the native handoff could not be written down (${written.reason}); nothing was sent` };
   }
@@ -4453,6 +4464,7 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
     ? { spec: record.spec, resolved: record.resolved }
     : {};
   const written = appendHistory(record.project, record.root, host.home, {
+    ...(taken.stamped ? { stamped: true as const } : {}),
     ts: host.now().toISOString(),
     from: record.from,
     to: record.to,
@@ -4718,8 +4730,9 @@ function findThreadReply(
   const keyState = messageKeyState(home);
   if (keyState.kind !== 'key') return null;
   const hits: { at: number; id: string; body: string }[] = [];
-  for (const { root, session } of roots) {
-    const sessionDir = join(root, '.agents', 'send-drops', session);
+  // E7b revision 3: both trees of each session (src/queue/mail-tree.ts).
+  for (const { root, session, tree } of roots.flatMap((place) => (['legacy', 'stamped'] as const).map((tree) => ({ ...place, tree })))) {
+    const sessionDir = sessionMailDir(root, session, tree);
     let seats: string[];
     try {
       seats = readdirSync(sessionDir).sort();
@@ -5592,7 +5605,7 @@ export async function walkBriefDelivery(input: {
   }
   const from = input.payload.from;
   const startedAt = input.host.now().getTime();
-  const dropDir = join(input.dir, 'send-drops', input.session, seatName);
+  const dropDir = seatMailDirIn(input.dir, input.session, seatName);
   const read = resolveSeatOverrides({ home: input.host.home, root: input.root, seat: seatName });
   if (!read.ok) {
     return {
@@ -5956,7 +5969,7 @@ export async function walkReplyDelivery(input: {
   const from = input.payload.from;
   const msgId = input.payload.id;
   const startedAt = input.host.now().getTime();
-  const dropDir = join(input.dir, 'send-drops', input.session, seatName);
+  const dropDir = seatMailDirIn(input.dir, input.session, seatName);
   const quiet: Io = {
     ...input.io,
     stdout: () => { /* the reply prints its own one line */ },
@@ -6441,7 +6454,7 @@ function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: 
 export function sealDropTree(dir: string, session: string, seat: string): void {
   // Creates the drop folders and narrows their modes: an effect.
   hostedCommit('drop tree');
-  const root = join(dir, 'send-drops');
+  const root = mailTreeIn(dir);
   const sessionDir = join(root, session);
   const leaf = join(sessionDir, seat);
   mkdirSync(leaf, { recursive: true });
@@ -6697,7 +6710,7 @@ async function deliverSocketFrame(
   // and both write its own signed read receipt (ADR D3). It addresses the record, never the
   // sender, so an owner-origin frame needs no reply target and no sending team. A person-pane
   // seat has no reader line at all: a person answers in their own client.
-  const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
+  const dropDir = seatMailDirIn(to.dir, to.session, to.seat);
   const existingIds = existingRecordIdsIn(dropDir);
   const compact = declaredCompactDeliveryAt(to, host.home);
   const reply = personPane
@@ -6779,7 +6792,10 @@ async function deliverSocketFrame(
   // signed record in its folder, which is the copy `team messages` and the watch read. Under
   // `parallel` the walk's own write is already running beside this dial, and under `none` there
   // is no copy at all: the frame carries the signed bytes instead.
-  const copy = { dir: join(to.dir, 'send-drops', to.session, to.seat), name: msgId };
+  // E7b revision 3: the durable copy sits in the folder of the record's own era.
+  const copyDir = recordFolderFor(seatMailDirIn(to.dir, to.session, to.seat), isStampedPayload(payload));
+  if (copyDir === null) return { kind: 'fallback', reason: NO_STAMPED_FOLDER };
+  const copy = { dir: copyDir, name: msgId };
   let recordText: string;
   if (carried !== null) {
     recordText = carried;

@@ -131,6 +131,10 @@ import {
   type StatusWaitSeat,
   type StatusClimb,
 } from '../watch/status-events.ts';
+import { mailTreeIn, seatMailDirIn } from '../queue/mail-tree.ts';
+import { floorState } from '../queue/floor.ts';
+import { isRecordSidecarName, recordNameOk } from '../send/record.ts';
+import { DROP_MONTH_ARCHIVE } from '../send/drop-folder.ts';
 
 export {
   classifyPromptKind,
@@ -2152,14 +2156,14 @@ function writeWorkDrop(
 ): { trigger: string } | { error: string } {
   // A work nudge is not a message: its name says so, and the receive side reads only records.
   const id = `work-${randomUUID()}`;
-  const dropDir = join(dir, 'send-drops', session, seat);
+  const dropDir = seatMailDirIn(dir, session, seat);
   // Checked before the write, as `team send` does: a path that will not fit is not written.
   if (triggerLine(join(dropDir, id)) === null) {
     return { error: `${seat}: the trigger would exceed the limit; nothing was sent` };
   }
   let path: string;
   try {
-    const root = join(dir, 'send-drops');
+    const root = mailTreeIn(dir);
     const sessionDir = join(root, session);
     mkdirSync(dropDir, { recursive: true });
     chmodSync(root, 0o700);
@@ -2899,7 +2903,7 @@ const relayRunning = new Set<string>();
 /** How often a hosted watch runs its seats' outbox requests, whatever its pass pace. */
 const RELAY_EVERY_MS = 3_000;
 
-async function relayConfinedOutboxes(
+export async function relayConfinedOutboxes(
   dir: string,
   root: string,
   home: string,
@@ -2918,11 +2922,11 @@ async function relayConfinedOutboxes(
     // A cut-off relayed read's saved bodies are the seat's: their receipts are sealed as the seat's
     // own reads, through the one receipt act every reader uses.
     seal: (seat, ids, owner) => {
-      const target = { dropDir: join(dir, 'send-drops', session, seat), root, seat, session, ...(team.orchestrator === undefined ? {} : { lead: team.orchestrator }) };
+      const target = { dropDir: seatMailDirIn(dir, session, seat), root, seat, session, ...(team.orchestrator === undefined ? {} : { lead: team.orchestrator }) };
       const brief = { claim: () => currentClaimIn(root, session, seat) };
       return ids.every((id) => sealRecoveredRead(target, id, home, brief, owner));
     },
-    run: async (command, argv, cwd, caller, persist, owner) => {
+    run: async (command, argv, cwd, caller, persist, owner, protocol) => {
       let out = '';
       let err = '';
       let handed: readonly string[] = [];
@@ -2939,7 +2943,17 @@ async function relayConfinedOutboxes(
         stderrIsTTY: false,
         caller,
         handoverOwner: owner,
+        ...(protocol === 1 ? { legacyRelay: true as const } : {}),
       };
+      // E7b revision 3 (carrier 4): an older requester (outbox protocol 1) never settles mail on a
+      // root that is not proven dark: every ack and reply it relays is refused, whatever it names,
+      // with the one pointer to the installed command. A proven-dark root serves it as before.
+      // It is refused too whenever the seat's stamped folder holds any live record or cannot be read,
+      // whatever the floor: after a rollback to dark, stamped mail stays stamped until it settles.
+      if (protocol === 1 && (command === 'ack' || command === 'reply')
+        && (floorState(root, home).kind !== 'dark' || stampedFolderHolds(seatMailDirIn(dir, session, caller.name, 'stamped')))) {
+        return { code: 1, out: '', err: `team ${command}: ${protocol1Refusal(command)}\n` };
+      }
       let code: number;
       try {
         code = command === 'send'
@@ -2956,6 +2970,23 @@ async function relayConfinedOutboxes(
       return { code, out, err };
     },
   });
+}
+
+/** Whether a seat's stamped folder holds a live record, or stands and cannot be read (fail
+ *  closed). No folder holds none. Names are only listed, never resolved. */
+export function stampedFolderHolds(folder: string): boolean {
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+  return names.some((name) => !name.startsWith('.') && recordNameOk(name) && !isRecordSidecarName(name) && name !== DROP_MONTH_ARCHIVE);
+}
+
+/** The one line an older requester's relayed ack or reply gets on a root not proven dark. */
+export function protocol1Refusal(command: 'ack' | 'reply'): string {
+  return `run the installed team ${command}: an older team ${command} is not relayed while this team's messages are stamped; nothing was written`;
 }
 
 /** Where a taken climb waits until it is sent or left in the runtime mailbox: one file per climb,

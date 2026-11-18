@@ -97,6 +97,8 @@ import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { readState } from '../state.ts';
 import { readScreen } from './screen.ts';
+import { seatDropDir, seatMailDirIn } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 /** The marker beside a message whose one wake line was typed (`src/send/wake-marker.ts` holds
  *  the reservations and the record; this module keeps the name its callers import). */
@@ -531,7 +533,7 @@ async function wakeByWebhook(
 ): Promise<WebhookWake> {
   const home = scene.home;
   if (home === undefined) return { outcome: 'next' };
-  const looked = readRecord(join(dropDir, message.id), message.id);
+  const looked = readRecord(liveRecordPath(dropDir, message.id), message.id);
   if (!looked.ok || looked.record === null) return { outcome: 'next' };
   if (!reserve(wakePath(dropDir, message.id), { id: message.id, at, state: 'reserved', evidence: 'webhook' })) {
     return { outcome: 'settled' };
@@ -820,7 +822,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // from the wake before it. Other holds (a person wait, a gone or untrusted projection) keep
       // the legacy clock. Nothing else happens for a held seat: no wake, no reservation, no key.
       if (isLeadSeat(scene, seat.name) && scene.nativeWorking?.has(seat.name) === true) {
-        rearmLeadEpisodes(join(scene.dir, 'send-drops', scene.session, seat.name), scene.now.getTime());
+        rearmLeadEpisodes(seatMailDirIn(scene.dir, scene.session, seat.name), scene.now.getTime());
       }
       continue;
     }
@@ -828,7 +830,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // The seat's own retry, read from its profile and its file word. Off keeps today's
     // drop-file typed leg, whose writer refuses in every real binding.
     const retry = watchRetryOf(seat);
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
     const unread = mail.unread(seat.name);
     // The folder as it is now, not only as the scan saw it. A message that landed after the
@@ -1082,7 +1084,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           ? null
           : await deliverLeadTypedWake(leadWakeHost(scene, pane), pane, leadLine, seat.cli, {
               now: () => scene.now.getTime(),
-              dropPath: join(dropDir, message.id),
+              dropPath: liveRecordPath(dropDir, message.id),
               seatDir: join(scene.dir, 'seats', seat.name),
               log: (kept) => logLine(join(scene.root, '.agents'), 'watch', seat.name, kept, scene.now),
               ...(leadHandle === null ? {} : { beforeFirstKey: leadHandle.emit }),
@@ -1237,7 +1239,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       }
       const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
         submitHeld: true,
-        dropPath: join(dropDir, message.id),
+        dropPath: liveRecordPath(dropDir, message.id),
         receipt,
       });
       // `held` left the box as it was, and `not-submitted` left the trigger in it for the next
@@ -1392,7 +1394,7 @@ function writeLeadBlockedDrop(
   text: string,
   at: string,
 ): { ok: true; path: string; id: string; existing?: true } | { ok: false; error: string } {
-  const dropDir = join(target.root, '.agents', 'send-drops', target.session, target.to);
+  const dropDir = seatDropDir(target.root, target.session, target.to);
   const path = join(dropDir, id);
   if (existsSync(path)) return { ok: true, path, id, existing: true };
   let record: ReturnType<typeof signRecord>;
@@ -1540,7 +1542,7 @@ function reportBlockedScreenToLead(
     const noticeId = cover?.notice ?? activeReportId ?? blockedDropId(scene.session, seat.name, kind, ids);
     const lines = reserved.map((one) => {
       const minutes = Math.max(1, Math.round(one.age / 60_000));
-      const where = `the drop is at ${join(dropDir, one.message.id)}`;
+      const where = `the drop is at ${liveRecordPath(dropDir, one.message.id)}`;
       return `${seat.name}: blocked by a dialog (${kind}) — a message from ${one.payload.from} is delivered-but-blocked after ${String(minutes)} min (id ${one.message.id}); no wake line was typed; ${where}`;
     });
     const header = unreadListing.length === 1
@@ -1775,7 +1777,7 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
     // the report exists to speak for. The lead's own unread mail is the wake, and a receipt
     // that never arrives climbs to the parent orchestrator.
     if (seat.human === true || seat.stopped === true || seat.name === leadName) continue;
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     const unread = mail.unread(seat.name);
     if (unread.length === 0) {
       closeStuckEpisode(mail, dropDir);
@@ -1849,7 +1851,7 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
     const count = unread.length;
     const minutes = Math.max(1, Math.round(oldestAge / 60_000));
     const waits = `${String(count)} message${count === 1 ? '' : 's'} wait, oldest ${String(minutes)} min`;
-    const where = `the drop is at ${join(dropDir, oldest.id)}`;
+    const where = `the drop is at ${liveRecordPath(dropDir, oldest.id)}`;
     // This report types nothing, but a wake the send or a retry already delivered is named: a
     // notice saying only "no wake line was typed" read as "the seat was never woken" when the
     // send's own typed wake had landed minutes before (2026-11-17, an agy seat whose turn ran
@@ -1901,7 +1903,7 @@ function writeLeadReportDrop(
   text: string,
   at: string,
 ): { ok: true; path: string; id: string; existing?: true } | { ok: false; error: string } {
-  const dropDir = join(target.root, '.agents', 'send-drops', target.session, target.to);
+  const dropDir = seatDropDir(target.root, target.session, target.to);
   const id = reportDropId(messageIds);
   const path = join(dropDir, id);
   if (existsSync(path)) return { ok: true, path, id, existing: true };
@@ -2115,7 +2117,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
     // A person writes no receipt; a drop to a human seat is read by the person, not by a watcher.
     // The retry pass's own give-up already names a drop no watcher read.
     if (seat.human === true) continue;
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
     // The seat's class is read only for a seat something waits at, as the wake pass reads it.
     const unread = mail.unread(seat.name);
@@ -2170,7 +2172,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
           : woke.evidence === 'webhook'
             ? `its webhook adapter took the wake at ${woke.at}`
             : `its wake line was sent at ${woke.at}`;
-      const where = `the drop is at ${join(dropDir, message.id)}`;
+      const where = `the drop is at ${liveRecordPath(dropDir, message.id)}`;
       // The record's state word matches the send-side one written when a walk stored a message
       // without waking the seat: `queued, not woken`. A sender reading either line finds the
       // same words, and the wake words behind them say what this daemon's re-wake did.

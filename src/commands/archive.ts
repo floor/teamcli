@@ -27,6 +27,7 @@ import { storePath, storesFolder } from '../store/store.ts';
 import { version } from '../version.ts';
 import { realSources, runDown, type DownSources } from './down.ts';
 import { raiseSecurityRefusal } from './reply.ts';
+import { LEGACY_TREE } from '../queue/mail-tree.ts';
 
 export const archive: Command = (argv, io) => runArchive(argv, io, realSources);
 export default archive;
@@ -62,7 +63,7 @@ export type ArchiveManifest = {
   drops: { files: number; seats: Record<string, number> } | null;
 };
 
-const DROPS = 'send-drops';
+const DROPS = LEGACY_TREE;
 /** How deep a copied tree may go: `drops/<session>/<seat>/<id>` is three. */
 const TREE_DEPTH = 4;
 

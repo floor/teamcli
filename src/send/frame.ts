@@ -15,6 +15,7 @@
 import { readdirSync } from 'node:fs';
 import { isRecordSidecarName, recordNameOk } from './record.ts';
 import { attributedBody } from './sender-claim.ts';
+import { seatListingDirs } from '../queue/mail-tree.ts';
 
 export const MIN_ID_PREFIX_LEN = 8;
 
@@ -42,16 +43,21 @@ export function shortIdPrefix(id: string, existingIds: Iterable<string> = []): s
  * folder does not exist yet.
  */
 export function existingRecordIdsIn(dropDir: string): string[] {
-  try {
-    return readdirSync(dropDir).filter(
-      (name) =>
-        recordNameOk(name) &&
-        !isRecordSidecarName(name) &&
-        !name.startsWith('work-'),
-    );
-  } catch {
-    return [];
+  // E7b revision 3: a seat's records are those of both its folders (src/queue/mail-tree.ts).
+  const ids: string[] = [];
+  for (const folder of seatListingDirs(dropDir)) {
+    try {
+      ids.push(...readdirSync(folder).filter(
+        (name) =>
+          recordNameOk(name) &&
+          !isRecordSidecarName(name) &&
+          !name.startsWith('work-'),
+      ));
+    } catch {
+      // A folder that does not exist yet holds none.
+    }
   }
+  return ids;
 }
 
 /**

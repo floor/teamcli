@@ -11,6 +11,7 @@ import { fullReaderLine, takesReaderLine } from './frame.ts';
 import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { profileFor } from '../profiles/index.ts';
 import { verifiedRecordAt, type RecordPayload } from './record.ts';
+import { liveRecordPath } from './drop-folder.ts';
 
 export const RUNTIME_WAKE_MAX = 64 * 1024;
 export const TYPED_WAKE_MAX = 200;
@@ -50,7 +51,7 @@ export function recordDeliveredBody(input: {
   try {
     const key = messageKeyState(input.home);
     if (key.kind !== 'key') return false;
-    const payload = verifiedRecordAt(join(input.dropDir, input.id), input.id, key.key);
+    const payload = verifiedRecordAt(liveRecordPath(input.dropDir, input.id), input.id, key.key);
     if (payload === null || payload.to !== input.seat || payload.session !== input.session) return false;
     // The wake must be this record's own body, in either shape a wake carries it.
     // A stamped record is never settled by its carrier: only its recipient acknowledges it (E7b).

@@ -24,6 +24,10 @@ import {
   type HistoryEntry,
 } from '../send/history.ts';
 import { storePath, storesFolder } from '../store/store.ts';
+import { createHash } from 'node:crypto';
+import { seatDropDir, sessionMailRoots } from '../queue/mail-tree.ts';
+import { readRecord, recordFile, verifyRecord } from '../send/record.ts';
+import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]
 
@@ -515,6 +519,9 @@ function collectEntries(
       ? readAllHistories(sources.home)
       : readHistory(project, root, sources.home);
   if (!read.ok) return read;
+  // E7b revision 3: a line written on a root not proven dark carries no body; the feed reads it
+  // back from the verified stamped record the line names, when its digest matches.
+  if (root !== null) for (const entry of read.entries) if (entry.stamped === true && entry.body === '') entry.body = stampedBodyOf(root, sources.home, entry) ?? '';
 
   const briefDirs: string[] = [];
   if (root !== null) briefDirs.push(join(root, 'briefs'));
@@ -734,6 +741,29 @@ function kindOf(entry: HistoryEntry): string {
     .filter((part): part is string => part !== null)
     .join(' ');
   return meta === '' ? entry.outcome : `${entry.outcome} (${meta})`;
+}
+
+/** The body of the record a body-free history line names: looked up by its seat and id in each
+ *  session's two trees, verified with the home's key, and returned only when its sha256 is the
+ *  line's own. Null when none is found or it does not match. */
+function stampedBodyOf(root: string, home: string, entry: HistoryEntry): string | null {
+  const key = messageKeyState(home);
+  if (key.kind !== 'key' || entry.body_sha256 === undefined || !/^[0-9a-f-]{8,64}$/.test(entry.id)) return null;
+  const sessions = new Set<string>();
+  for (const tree of sessionMailRoots(root)) {
+    try {
+      for (const name of readdirSync(tree)) if (!name.startsWith('.')) sessions.add(name);
+    } catch {
+      // A tree that cannot be listed names no session.
+    }
+  }
+  for (const session of sessions) {
+    const looked = readRecord(recordFile(seatDropDir(root, session, entry.to), entry.id), entry.id);
+    if (!looked.ok || looked.record === null || !verifyRecord(looked.record, key.key)) continue;
+    const body = looked.record.payload.body;
+    if (createHash('sha256').update(body, 'utf8').digest('hex') === entry.body_sha256) return body;
+  }
+  return null;
 }
 
 function eventJson(entry: HistoryEntry): Record<string, unknown> {

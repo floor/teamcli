@@ -74,6 +74,7 @@ import {
 } from './log.ts';
 import { eventLogSettingsFor } from './log-settings.ts';
 import { isOwnerDigestRecord } from './owner.ts';
+import { sessionMailDir } from '../queue/mail-tree.ts';
 
 export type ReconcileOptions = {
   project: string;
@@ -817,111 +818,134 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   const keyState = messageKeyState(home);
 
   // 1. Scan `.agents/send-drops/<session>/<seat>` for drop files, `.pending` markers, and receipts.
-  const sessionDropsDir = join(root, '.agents', 'send-drops', session);
-  const dropSeatNames = yield* listDirSteps(state, sessionDropsDir, visited);
-  if (dropSeatNames !== null) {
-    const seats = [...dropSeatNames].sort(compareSeatNames);
-    for (const seat of seats) {
-      if (!RECORD_NAME.test(seat)) continue;
-      const seatDir = join(sessionDropsDir, seat);
-      if (!isRealDir(seatDir)) continue;
-      // A linked folder above the seat's — the session's, its parent — could lead into another
-      // checkout, and no record it holds is this checkout's to raise. Nothing in it is read.
-      if (!dropFolderIsReal(root, session, seat)) {
-        refuseRecord(options, state, `folder\0${seatDir}`, `${seat} (drop folder)`, "the folder is not this checkout's");
-        continue;
-      }
-      visited.add(seatDir);
-
-      const files = (yield* listDirSteps(state, seatDir, visited)) ?? [];
-
-      const sendersById = new Map<string, string>();
-      const previousSenders = state.senders.get(seatDir);
-
-      let skippedDrops = 0;
-      // This seat's queue generation, read once per pass when a record asks for it.
-      let queueGeneration: string | null | undefined;
-      for (const file of files) {
-        if (file.startsWith('.') || isSideFile(file)) {
-          skippedDrops += 1;
-          if (skippedDrops % RECONCILE_SCAN_CHUNK === 0) yield;
+  // E7b revision 3: both trees (src/queue/mail-tree.ts), legacy first; each is held to its own
+  // folder-chain checks.
+  for (const tree of ['legacy', 'stamped'] as const) {
+    const sessionDropsDir = sessionMailDir(root, session, tree);
+    const dropSeatNames = yield* listDirSteps(state, sessionDropsDir, visited);
+    if (dropSeatNames !== null) {
+      const seats = [...dropSeatNames].sort(compareSeatNames);
+      for (const seat of seats) {
+        if (!RECORD_NAME.test(seat)) continue;
+        const seatDir = join(sessionDropsDir, seat);
+        if (!isRealDir(seatDir)) continue;
+        // A linked folder above the seat's — the session's, its parent — could lead into another
+        // checkout, and no record it holds is this checkout's to raise. Nothing in it is read.
+        if (!dropFolderIsReal(root, session, seat, tree)) {
+          refuseRecord(options, state, `folder\0${seatDir}`, `${seat} (drop folder)`, "the folder is not this checkout's");
           continue;
         }
-        const fullPath = join(seatDir, file);
-        const id = file.endsWith('.json') ? file.slice(0, -'.json'.length) : file;
-        if (!RECORD_NAME.test(id)) {
-          skippedDrops += 1;
-          if (skippedDrops % RECONCILE_SCAN_CHUNK === 0) yield;
-          continue;
-        }
-        const stamp = fileStampOnly(fullPath);
-        if (stamp === null) {
-          // A linked leaf is not a record: its bytes could be anywhere, and the pass never
-          // follows a link. It is named once; nothing is read.
-          if (isLinkAt(fullPath)) {
-            refuseRecord(options, state, `link\0${fullPath}`, `${seat}/${id}`, 'the record is a symbolic link');
+        visited.add(seatDir);
+
+        const files = (yield* listDirSteps(state, seatDir, visited)) ?? [];
+
+        const sendersById = new Map<string, string>();
+        const previousSenders = state.senders.get(seatDir);
+
+        let skippedDrops = 0;
+        // This seat's queue generation, read once per pass when a record asks for it.
+        let queueGeneration: string | null | undefined;
+        for (const file of files) {
+          if (file.startsWith('.') || isSideFile(file)) {
+            skippedDrops += 1;
+            if (skippedDrops % RECONCILE_SCAN_CHUNK === 0) yield;
+            continue;
           }
-        } else if (keyState.kind === 'key') {
-          // The record is read through the same verified read the bus's nudge uses: its
-          // signature covers the fields the arrival carries, and it must be addressed to this
-          // seat, session and checkout. Without the key nothing signed can verify, and the
-          // record is left for a pass that has one.
-          let entry = cachedEntry(state, seatDir, file, stamp);
-          if (entry === null || entry.kind !== 'drop') {
-            const checked = checkedDropRelative(root, session, seat, file, { session, seat, record_id: id }, scope, keyState.key);
-            stats.filesRead += 1;
-            if (checked.ok) {
-              entry = { kind: 'drop', verified: true, event: checked.event };
-            } else {
-              entry = { kind: 'drop', verified: false };
-              if (!checked.missing) {
-                refuseRecord(options, state, `record\0${fullPath}`, `${seat}/${id}`, checked.reason);
-              }
+          const fullPath = join(seatDir, file);
+          const id = file.endsWith('.json') ? file.slice(0, -'.json'.length) : file;
+          if (!RECORD_NAME.test(id)) {
+            skippedDrops += 1;
+            if (skippedDrops % RECONCILE_SCAN_CHUNK === 0) yield;
+            continue;
+          }
+          const stamp = fileStampOnly(fullPath);
+          if (stamp === null) {
+            // A linked leaf is not a record: its bytes could be anywhere, and the pass never
+            // follows a link. It is named once; nothing is read.
+            if (isLinkAt(fullPath)) {
+              refuseRecord(options, state, `link\0${fullPath}`, `${seat}/${id}`, 'the record is a symbolic link');
             }
-            storeEntry(state, seatDir, file, stamp, entry);
-          } else {
-            stats.filesReused += 1;
-            // Still here, still refused: the path stays in the cache and is not said again.
-            if (!entry.verified) state.refusedNow.add(`record\0${fullPath}`);
-          }
-          if (entry.kind === 'drop' && entry.verified) {
-            if (entry.event.from !== undefined) sendersById.set(id, entry.event.from);
-            raise(entry.event);
-            // The queue's orphan source (rfc-event-comms §1, E4): a verified record with no
-            // committed entry is appended at the next seq, flagged recovered. The answer comes
-            // from the queue under its lock, never from a hint, and is kept bound to the
-            // generation that gave it: a replaced generation asks again. The lock is never
-            // waited for here (the pass is sliced); a held queue is asked on a later pass.
-            if (options.queueOrphans !== false) {
-              if (queueGeneration === undefined) queueGeneration = currentGenerationName(seatDir);
-              if (entry.queued === undefined || entry.queued !== queueGeneration) {
-                const queued = appendRecovered(seatDir, { root, session, seat }, id, { home, log: queueLog(seatDir), lockWaitMs: 0 });
-                if (queued.kind === 'committed' || queued.kind === 'existing') {
-                  entry.queued = queued.generation;
-                  queueGeneration = queued.generation;
+          } else if (keyState.kind === 'key') {
+            // The record is read through the same verified read the bus's nudge uses: its
+            // signature covers the fields the arrival carries, and it must be addressed to this
+            // seat, session and checkout. Without the key nothing signed can verify, and the
+            // record is left for a pass that has one.
+            let entry = cachedEntry(state, seatDir, file, stamp);
+            if (entry === null || entry.kind !== 'drop') {
+              const checked = checkedDropRelative(root, session, seat, file, { session, seat, record_id: id }, scope, keyState.key, tree);
+              stats.filesRead += 1;
+              if (checked.ok) {
+                entry = { kind: 'drop', verified: true, event: checked.event };
+              } else {
+                entry = { kind: 'drop', verified: false };
+                if (!checked.missing) {
+                  refuseRecord(options, state, `record\0${fullPath}`, `${seat}/${id}`, checked.reason);
+                }
+              }
+              storeEntry(state, seatDir, file, stamp, entry);
+            } else {
+              stats.filesReused += 1;
+              // Still here, still refused: the path stays in the cache and is not said again.
+              if (!entry.verified) state.refusedNow.add(`record\0${fullPath}`);
+            }
+            if (entry.kind === 'drop' && entry.verified) {
+              if (entry.event.from !== undefined) sendersById.set(id, entry.event.from);
+              raise(entry.event);
+              // The queue's orphan source (rfc-event-comms §1, E4): a verified record with no
+              // committed entry is appended at the next seq, flagged recovered. The answer comes
+              // from the queue under its lock, never from a hint, and is kept bound to the
+              // generation that gave it: a replaced generation asks again. The lock is never
+              // waited for here (the pass is sliced); a held queue is asked on a later pass.
+              if (options.queueOrphans !== false) {
+                if (queueGeneration === undefined) queueGeneration = currentGenerationName(seatDir);
+                if (entry.queued === undefined || entry.queued !== queueGeneration) {
+                  const queued = appendRecovered(seatDir, { root, session, seat }, id, { home, log: queueLog(seatDir), lockWaitMs: 0 });
+                  if (queued.kind === 'committed' || queued.kind === 'existing') {
+                    entry.queued = queued.generation;
+                    queueGeneration = queued.generation;
+                  }
                 }
               }
             }
           }
+          yield;
         }
-        yield;
-      }
 
-      // Check `.pending` held drops in the seat's drop folder. The marker is a convenience and
-      // never the message: the arrival it asks for names a record, and is raised only once that
-      // record is on disk and verifies. A marker whose record is gone, or refused, raises
-      // nothing — a held event included, since its sender would come from the same marker.
-      const pendingDrops = yield* readPendingCachedSteps(state, seatDir, files);
-      for (const pending of pendingDrops) {
-        let arrival: EventAppendInput | null = null;
-        let refusal: string | null = null;
-        if (RECORD_NAME.test(pending.id) && keyState.kind === 'key') {
-          for (const name of [pending.id, `${pending.id}.json`]) {
-            const fullPath = join(seatDir, name);
-            const stamp = fileStampOnly(fullPath);
-            if (stamp === null) {
-              if (isLinkAt(fullPath)) {
-                // No stamp to reuse. The reader's own sentence is the marker's reason.
+        // Check `.pending` held drops in the seat's drop folder. The marker is a convenience and
+        // never the message: the arrival it asks for names a record, and is raised only once that
+        // record is on disk and verifies. A marker whose record is gone, or refused, raises
+        // nothing — a held event included, since its sender would come from the same marker.
+        const pendingDrops = yield* readPendingCachedSteps(state, seatDir, files);
+        for (const pending of pendingDrops) {
+          let arrival: EventAppendInput | null = null;
+          let refusal: string | null = null;
+          if (RECORD_NAME.test(pending.id) && keyState.kind === 'key') {
+            for (const name of [pending.id, `${pending.id}.json`]) {
+              const fullPath = join(seatDir, name);
+              const stamp = fileStampOnly(fullPath);
+              if (stamp === null) {
+                if (isLinkAt(fullPath)) {
+                  // No stamp to reuse. The reader's own sentence is the marker's reason.
+                  const checked = checkedDropRelative(
+                    root,
+                    session,
+                    seat,
+                    name,
+                    { session, seat, record_id: pending.id },
+                    scope,
+                    keyState.key,
+                    tree,
+                  );
+                  if (checked.ok) arrival = checked.event;
+                  else if (!checked.missing) refusal = checked.reason;
+                  break;
+                }
+                continue;
+              }
+              // The drop scan cached this record under its stamp. An unchanged marker reuses that
+              // entry instead of verifying the file again.
+              let entry = cachedEntry(state, seatDir, name, stamp);
+              if (entry === null || entry.kind !== 'drop') {
                 const checked = checkedDropRelative(
                   root,
                   session,
@@ -930,158 +954,141 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
                   { session, seat, record_id: pending.id },
                   scope,
                   keyState.key,
+                  tree,
                 );
-                if (checked.ok) arrival = checked.event;
-                else if (!checked.missing) refusal = checked.reason;
+                stats.verifies += 1;
+                if (checked.ok) {
+                  entry = { kind: 'drop', verified: true, event: checked.event };
+                } else {
+                  entry = { kind: 'drop', verified: false };
+                  if (!checked.missing) refusal = checked.reason;
+                }
+                storeEntry(state, seatDir, name, stamp, entry);
+              } else {
+                stats.verifiesReused += 1;
+              }
+              if (entry.kind === 'drop' && entry.verified) {
+                arrival = entry.event;
                 break;
               }
+              if (refusal !== null) break;
+            }
+          }
+          if (arrival !== null) {
+            if (arrival.from !== undefined) sendersById.set(pending.id, arrival.from);
+            raise(arrival);
+            if (pending.leg !== 'mcp-inbox') {
+              const heldAgeMs = nowMs - Date.parse(pending.ts);
+              if (!Number.isFinite(heldAgeMs) || heldAgeMs >= heldThresholdMs) {
+                raise({
+                  ts: pending.ts,
+                  kind: 'message.held',
+                  session,
+                  record_id: `${pending.id}:held`,
+                  ...(arrival.from !== undefined ? { from: arrival.from } : {}),
+                  to: arrival.to,
+                });
+              }
+            }
+          } else if (refusal !== null) {
+            refuseRecord(options, state, `pending\0${join(seatDir, pending.id)}`, `${seat}/${pending.id}`, refusal);
+          }
+          yield;
+        }
+
+        // Check signed receipts (`.delivered.json`, `.read.json`, `.replied.json`) beside drops. A
+        // receipt's stat stamp is enough to raise it; only a new or touched file is stamped again.
+        // The sender comes from this listing, from the map the preceding pass left, or — after any
+        // number of quiet passes, or a restart — from the arrival event the log still holds for
+        // that record.
+        const receiptKey = keyState.kind === 'key' ? keyState.key : null;
+        let skippedReceipts = 0;
+        for (const file of files) {
+          if (file.startsWith('.')) {
+            skippedReceipts += 1;
+            if (skippedReceipts % RECONCILE_SCAN_CHUNK === 0) yield;
+            continue;
+          }
+          const receipt = receiptOf(file);
+          if (receipt === null || !RECORD_NAME.test(receipt.id)) {
+            skippedReceipts += 1;
+            if (skippedReceipts % RECONCILE_SCAN_CHUNK === 0) yield;
+            continue;
+          }
+          const fullPath = join(seatDir, file);
+          const stamp = fileStampOnly(fullPath);
+          if (stamp === null) {
+            yield;
+            continue;
+          }
+          let entry = cachedEntry(state, seatDir, file, stamp);
+          if (entry === null || entry.kind !== 'receipt') {
+            // Every receipt is a signed envelope in this build, and a name alone proves nothing. A
+            // pass that cannot read the message key cannot check one: that is unchecked, not
+            // unverified, so the file is left for a pass that holds the key — the drop scan beside
+            // it leaves an unverifiable record the same way, storing nothing.
+            if (receiptKey === null) {
+              yield;
               continue;
             }
-            // The drop scan cached this record under its stamp. An unchanged marker reuses that
-            // entry instead of verifying the file again.
-            let entry = cachedEntry(state, seatDir, name, stamp);
-            if (entry === null || entry.kind !== 'drop') {
-              const checked = checkedDropRelative(
-                root,
-                session,
-                seat,
-                name,
-                { session, seat, record_id: pending.id },
-                scope,
-                keyState.key,
-              );
-              stats.verifies += 1;
-              if (checked.ok) {
-                entry = { kind: 'drop', verified: true, event: checked.event };
-              } else {
-                entry = { kind: 'drop', verified: false };
-                if (!checked.missing) refusal = checked.reason;
-              }
-              storeEntry(state, seatDir, name, stamp, entry);
-            } else {
-              stats.verifiesReused += 1;
+            const fresh = fileStampOf(fullPath);
+            if (fresh === null) {
+              yield;
+              continue;
             }
-            if (entry.kind === 'drop' && entry.verified) {
-              arrival = entry.event;
-              break;
-            }
-            if (refusal !== null) break;
+            // Verify the receipt exactly as the settle side does before it reads a status: a file
+            // this checkout's key never signed — unsigned, tampered, another message's, seat's,
+            // session's or checkout's — is no delivery, no read and no reply, so it raises no step
+            // and no clearance. The same check reads `read_by` back for a lead-ack receipt.
+            const signed = readVerifiedReceipt(fullPath, receipt.id, receipt.receipt, { to: seat, root, session }, receiptKey);
+            const clearedBy = signed === null || receipt.receipt !== 'read' ? null : leadAckActorOf(signed.payload.read_by);
+            entry = {
+              kind: 'receipt',
+              receipt: receipt.receipt,
+              id: receipt.id,
+              at: fresh.mtimeIso,
+              ...(signed === null ? { unverified: true as const } : {}),
+              ...(clearedBy === null ? {} : { clearedBy }),
+            };
+            storeEntry(state, seatDir, file, fresh.stamp, entry);
+          } else {
+            stats.filesReused += 1;
           }
-        }
-        if (arrival !== null) {
-          if (arrival.from !== undefined) sendersById.set(pending.id, arrival.from);
-          raise(arrival);
-          if (pending.leg !== 'mcp-inbox') {
-            const heldAgeMs = nowMs - Date.parse(pending.ts);
-            if (!Number.isFinite(heldAgeMs) || heldAgeMs >= heldThresholdMs) {
-              raise({
-                ts: pending.ts,
-                kind: 'message.held',
-                session,
-                record_id: `${pending.id}:held`,
-                ...(arrival.from !== undefined ? { from: arrival.from } : {}),
-                to: arrival.to,
-              });
-            }
-          }
-        } else if (refusal !== null) {
-          refuseRecord(options, state, `pending\0${join(seatDir, pending.id)}`, `${seat}/${pending.id}`, refusal);
-        }
-        yield;
-      }
-
-      // Check signed receipts (`.delivered.json`, `.read.json`, `.replied.json`) beside drops. A
-      // receipt's stat stamp is enough to raise it; only a new or touched file is stamped again.
-      // The sender comes from this listing, from the map the preceding pass left, or — after any
-      // number of quiet passes, or a restart — from the arrival event the log still holds for
-      // that record.
-      const receiptKey = keyState.kind === 'key' ? keyState.key : null;
-      let skippedReceipts = 0;
-      for (const file of files) {
-        if (file.startsWith('.')) {
-          skippedReceipts += 1;
-          if (skippedReceipts % RECONCILE_SCAN_CHUNK === 0) yield;
-          continue;
-        }
-        const receipt = receiptOf(file);
-        if (receipt === null || !RECORD_NAME.test(receipt.id)) {
-          skippedReceipts += 1;
-          if (skippedReceipts % RECONCILE_SCAN_CHUNK === 0) yield;
-          continue;
-        }
-        const fullPath = join(seatDir, file);
-        const stamp = fileStampOnly(fullPath);
-        if (stamp === null) {
-          yield;
-          continue;
-        }
-        let entry = cachedEntry(state, seatDir, file, stamp);
-        if (entry === null || entry.kind !== 'receipt') {
-          // Every receipt is a signed envelope in this build, and a name alone proves nothing. A
-          // pass that cannot read the message key cannot check one: that is unchecked, not
-          // unverified, so the file is left for a pass that holds the key — the drop scan beside
-          // it leaves an unverifiable record the same way, storing nothing.
-          if (receiptKey === null) {
+          // An unverified receipt raises nothing: neither the read, delivery or reply its name
+          // claims nor any clearance its unsigned bytes name, so a planted file can never look like
+          // an answer on the bus.
+          if (entry.unverified === true) {
             yield;
             continue;
           }
-          const fresh = fileStampOf(fullPath);
-          if (fresh === null) {
+          // A lead-ack receipt settles only when it names the owner or this team's lead. The
+          // receipt is signed with the shared message key every seat holds, so its `read_by` name
+          // is the only actor proof there is; a name the team does not admit raises no step at
+          // all, so a forged clearance can never leave a `message.read` a seat did not earn.
+          if (entry.clearedBy !== undefined && entry.clearedBy !== 'owner' && entry.clearedBy !== leadForClearance()) {
             yield;
             continue;
           }
-          // Verify the receipt exactly as the settle side does before it reads a status: a file
-          // this checkout's key never signed — unsigned, tampered, another message's, seat's,
-          // session's or checkout's — is no delivery, no read and no reply, so it raises no step
-          // and no clearance. The same check reads `read_by` back for a lead-ack receipt.
-          const signed = readVerifiedReceipt(fullPath, receipt.id, receipt.receipt, { to: seat, root, session }, receiptKey);
-          const clearedBy = signed === null || receipt.receipt !== 'read' ? null : leadAckActorOf(signed.payload.read_by);
-          entry = {
-            kind: 'receipt',
-            receipt: receipt.receipt,
-            id: receipt.id,
-            at: fresh.mtimeIso,
-            ...(signed === null ? { unverified: true as const } : {}),
-            ...(clearedBy === null ? {} : { clearedBy }),
-          };
-          storeEntry(state, seatDir, file, fresh.stamp, entry);
-        } else {
-          stats.filesReused += 1;
-        }
-        // An unverified receipt raises nothing: neither the read, delivery or reply its name
-        // claims nor any clearance its unsigned bytes name, so a planted file can never look like
-        // an answer on the bus.
-        if (entry.unverified === true) {
+          const from = sendersById.get(entry.id) ?? previousSenders?.get(entry.id) ?? arrivedFrom.get(`${seat}\0${entry.id}`);
+          raise({
+            ts: entry.at,
+            kind: entry.receipt === 'delivered' ? 'message.delivered' : entry.receipt === 'read' ? 'message.read' : 'message.replied',
+            session,
+            record_id: `${entry.id}:${entry.receipt}`,
+            to: seat,
+            ...(from !== undefined ? { from } : {}),
+            // A lead's clearance is the message.read step with what it actually was written into
+            // it: the trace and the feed read the outcome, never a `delivered (read)` the seat
+            // never earned.
+            ...(entry.clearedBy === undefined
+              ? {}
+              : { outcome: `cleared by ${entry.clearedBy}`, reason: `cleared by ${entry.clearedBy}` }),
+          });
           yield;
-          continue;
         }
-        // A lead-ack receipt settles only when it names the owner or this team's lead. The
-        // receipt is signed with the shared message key every seat holds, so its `read_by` name
-        // is the only actor proof there is; a name the team does not admit raises no step at
-        // all, so a forged clearance can never leave a `message.read` a seat did not earn.
-        if (entry.clearedBy !== undefined && entry.clearedBy !== 'owner' && entry.clearedBy !== leadForClearance()) {
-          yield;
-          continue;
-        }
-        const from = sendersById.get(entry.id) ?? previousSenders?.get(entry.id) ?? arrivedFrom.get(`${seat}\0${entry.id}`);
-        raise({
-          ts: entry.at,
-          kind: entry.receipt === 'delivered' ? 'message.delivered' : entry.receipt === 'read' ? 'message.read' : 'message.replied',
-          session,
-          record_id: `${entry.id}:${entry.receipt}`,
-          to: seat,
-          ...(from !== undefined ? { from } : {}),
-          // A lead's clearance is the message.read step with what it actually was written into
-          // it: the trace and the feed read the outcome, never a `delivered (read)` the seat
-          // never earned.
-          ...(entry.clearedBy === undefined
-            ? {}
-            : { outcome: `cleared by ${entry.clearedBy}`, reason: `cleared by ${entry.clearedBy}` }),
-        });
-        yield;
-      }
 
-      state.senders.set(seatDir, sendersById);
+        state.senders.set(seatDir, sendersById);
+      }
     }
   }
 
@@ -1284,7 +1291,10 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       } else if (!dropFolderIsReal(root, session, entry.to)) {
         refusal = 'the history line names no drop folder of this checkout';
       } else {
-        for (const name of [entry.id, `${entry.id}.json`]) {
+        // E7b revision 3: the record is looked for in the stamped tree too (src/queue/mail-tree.ts),
+        // only when that folder passes the same folder-chain check.
+        const trees = dropFolderIsReal(root, session, entry.to, 'stamped') ? ['legacy', 'stamped'] as const : ['legacy'] as const;
+        for (const [tree, name] of trees.flatMap((one) => [entry.id, `${entry.id}.json`].map((name) => [one, name] as const))) {
           const checked = checkedDropRelative(
             root,
             session,
@@ -1293,6 +1303,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             { session, seat: entry.to, record_id: entry.id },
             scope,
             keyState.key,
+            tree,
           );
           if (checked.ok) {
             arrival = checked.event;

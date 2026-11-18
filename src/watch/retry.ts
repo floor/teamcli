@@ -62,6 +62,8 @@ import type { Live } from '../status/compare.ts';
 import type { MailPass } from './mail-pass.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readScreen } from './screen.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 /** What a retry reads and types through: the watch's own sources, narrowed to the pane calls. */
 export type RetrySources = {
@@ -219,8 +221,8 @@ function failedNotes(drop: PendingDrop): { failed?: string[] } {
  *  from the disk, so an age-out does not name a file that was moved away. */
 function giveUp(scene: RetryScene, dropDir: string, drop: PendingDrop, why: string, dropGone = false): void {
   clearPending(dropDir, drop.id);
-  const gone = dropGone || !existsSync(join(dropDir, drop.id));
-  const tail = gone ? 'send it again' : `the record is at ${join(dropDir, drop.id)}; send it again`;
+  const gone = dropGone || !existsSync(liveRecordPath(dropDir, drop.id));
+  const tail = gone ? 'send it again' : `the record is at ${liveRecordPath(dropDir, drop.id)}; send it again`;
   scene.say(`${drop.to}: ${heldWords(drop)} was not delivered (${why}); ${tail}`, true);
 }
 
@@ -229,8 +231,8 @@ function giveUp(scene: RetryScene, dropDir: string, drop: PendingDrop, why: stri
  *  the message still waits. A drop whose file is gone is named for the folder, not a file. */
 function giveUpUnread(scene: RetryScene, dropDir: string, drop: PendingDrop, why: string): void {
   clearPending(dropDir, drop.id);
-  const where = existsSync(join(dropDir, drop.id))
-    ? `the drop file is at ${join(dropDir, drop.id)}`
+  const where = existsSync(liveRecordPath(dropDir, drop.id))
+    ? `the drop file is at ${liveRecordPath(dropDir, drop.id)}`
     : `its drop file is gone from ${dropDir}`;
   scene.say(`${drop.to}: a dropped send from ${drop.from} was not read (${why}); ${where}`, true);
 }
@@ -340,7 +342,7 @@ function holdChannelPush(scene: RetryScene, dropDir: string, drop: PendingDrop):
 async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
   // The marker is only a convenience; the drop file is the message. A record left behind a drop
   // that was moved or removed has nothing to tell the seat, so it is given up on, not typed.
-  if (!existsSync(join(dropDir, drop.id))) {
+  if (!existsSync(liveRecordPath(dropDir, drop.id))) {
     giveUp(scene, dropDir, drop, `its drop file is gone from ${dropDir}`, true);
     return;
   }
@@ -434,7 +436,7 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
     const began = Date.now();
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
       submitHeld: true,
-      dropPath: join(dropDir, drop.id),
+      dropPath: liveRecordPath(dropDir, drop.id),
       receipt,
     });
     noteWake(scene, drop, {
@@ -616,7 +618,7 @@ export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
   // snapshot from before this promotion.
   const read = new Set<string>();
   for (const seat of scene.team.seats) {
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     for (const drop of readPending(dropDir)) {
       // A marker with no leg is a typed retry's own record; a receipt on the drop is another
       // send's proof and never this one's.
@@ -678,7 +680,7 @@ export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
  *  a loop. */
 function queuedTriggerLine(scene: RetryScene, seat: Seat, dropDir: string, drop: PendingDrop): string | null {
   const home = scene.home;
-  if (home === undefined || !existsSync(join(dropDir, drop.id))) return null;
+  if (home === undefined || !existsSync(liveRecordPath(dropDir, drop.id))) return null;
   const payload = verifiedPayloadOf(dropDir, drop.id, home);
   if (payload === null) return null;
   const sender = wakeTrigger(payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
@@ -712,7 +714,7 @@ async function reofferQueuedDrop(
   const wake = scene.sources.typedWake;
   if (wake === undefined || !queuedWakeOn(seat)) return;
   const drop = queued[0];
-  if (drop === undefined || !existsSync(join(dropDir, drop.id))) return;
+  if (drop === undefined || !existsSync(liveRecordPath(dropDir, drop.id))) return;
   if (drop.tries >= PENDING_MAX_TRIES) {
     giveUpUnread(scene, dropDir, drop, `the seat did not read it in ${String(PENDING_MAX_TRIES)} offers`);
     return;
@@ -735,7 +737,7 @@ async function reofferQueuedDrop(
  */
 export async function retryHeldDrops(scene: RetryScene): Promise<void> {
   for (const seat of scene.team.seats) {
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     const drops = readPending(dropDir);
     if (drops.length === 0) continue;
     // A launch-brief sidecar whose delivery the seat's claim has moved past is retired here:

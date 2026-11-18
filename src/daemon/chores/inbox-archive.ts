@@ -24,11 +24,11 @@ import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
 import { teamIdOf } from '../../registry/teams.ts';
 import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
 import { archiveSeatInbox, listArchivedUnread, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
-import { isStampedPayload, readRecord, recordFile, sameFolder, stampedSettled, verifyRecord, type RecordPayload } from '../../send/record.ts';
+import { isStampedPayload, readRecord, recordAuthOf, recordFile, sameFolder, stampedSettled, verifyRecord, type RecordPayload } from '../../send/record.ts';
 import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE } from '../../send/drop-folder.ts';
 import { createExclusive, fsyncFolder, removeDurable } from '../../queue/durable.ts';
 import { messageKeyOf, signDomain, verifyDomain, type Json } from '../../store/keys.ts';
-import { closeSync, constants, fsyncSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readdirSync, readFileSync, readSync } from 'node:fs';
 import { openSync } from '../../host/guarded-fs.ts';
 import type { KeyObject } from 'node:crypto';
 import { archiveLegacySeat, legacySeatFolders } from '../../send/legacy-inbox-retention.ts';
@@ -36,6 +36,8 @@ import { heldAt } from '../../held.ts';
 import type { StatusContext } from '../../send/record.ts';
 import { readParsed, writeAtomic } from '../../state.ts';
 import { messageKeyState } from '../../store/keys.ts';
+import { mailTreeOf, seatDropDir, sessionMailDir, type MailTree } from '../../queue/mail-tree.ts';
+import { seatFolderOf } from '../../send/drop-folder.ts';
 
 /** The local hours the run may start or go on in: from 03:00 up to 06:00, machine time. */
 export const INBOX_ARCHIVE_WINDOW = { fromHour: 3, toHour: 6 } as const;
@@ -104,14 +106,14 @@ export function inWindow(now: Date): boolean {
 }
 
 function runPath(root: string): string {
-  return join(root, '.agents', 'send-drops', INBOX_ARCHIVE_RUN_FILE);
+  return sessionMailDir(root, INBOX_ARCHIVE_RUN_FILE);
 }
 
 /** Whether `.agents` and `send-drops` are plain folders and the run file, when there, a plain
  *  file: the run file is read and written only then, never through a link. */
 function runPlaceOk(root: string): boolean {
   if (heldAt(join(root, '.agents')).kind !== 'folder') return false;
-  if (heldAt(join(root, '.agents', 'send-drops')).kind !== 'folder') return false;
+  if (heldAt(mailTreeOf(root)).kind !== 'folder') return false;
   const held = heldAt(runPath(root)).kind;
   return held === 'file' || held === 'missing';
 }
@@ -202,6 +204,8 @@ export function noticeBeforeMove(input: {
   agents?: readonly Agent[]; teamId?: string;
   /** Test seam: the fsync of a file or folder (throws on failure). */
   fsync?: (path: string, folder: boolean) => void;
+  /** Test seams at the proof's boundaries: before the name is opened, after the folder flush. */
+  hooks?: { beforeOpen?: () => void; afterFlush?: () => void };
 }): boolean {
   const from = input.item.undelivered?.from ?? 'unknown';
   const fromId = input.item.undelivered?.from_id ?? null;
@@ -218,35 +222,70 @@ export function noticeBeforeMove(input: {
     at: input.at,
   });
   if (!notice.ok) return false;
-  const found = notice.payload;
-  if (!(found.id === noticeId && found.to === to && found.session === session && sameFolder(found.root, input.root)
-    && found.from === RUNTIME_FROM && found.in_reply_to === input.item.id)) return false;
-  // The notice must be durable before the source may move (written now or reused): the notice file
-  // and its folder chain (seat, session, send-drops) are fsynced, and any failure holds the move.
-  const seatDir = join(input.root, '.agents', 'send-drops', session, to);
+  // The notice must be this obligation's own and durable before the source may move, proved on one
+  // handle: the name is opened once (no link followed, a regular file), the record is read and
+  // verified from that descriptor, the same descriptor is fsynced, then the folder chain (seat,
+  // session, send-drops) is fsynced, and the name must still hold that same file. Any failure, or a
+  // different file at the name, holds the move (the next pass tries again).
+  // E7b revision 3: the chain fsynced is the one of the tree that holds the notice.
+  const seatDir = seatFolderOf(seatDropDir(input.root, session, to), noticeId);
   const path = recordFile(seatDir, noticeId);
-  const sync = input.fsync ?? ((target: string, folder: boolean) => {
-    if (folder) {
-      fsyncFolder(target);
-      return;
-    }
-    const fd = openSync(target, constants.O_RDONLY);
-    try {
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-  });
+  const syncFolder = input.fsync === undefined ? fsyncFolder : (folder: string) => input.fsync?.(folder, true);
+  let fd: number | null = null;
   try {
-    sync(path, false);
-    sync(dirname(path), true);
-    if (dirname(path) !== seatDir) sync(seatDir, true);
-    sync(dirname(seatDir), true);
-    sync(dirname(dirname(seatDir)), true);
+    input.hooks?.beforeOpen?.();
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fstatSync(fd, { bigint: true });
+    if (!opened.isFile()) return false;
+    const bytes = readAt(fd);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const read = recordAuthOf(JSON.parse(bytes.toString('utf8')) as unknown, input.key);
+    if (read.kind !== 'ok' || !noticeIsObligation(read.value.payload, { archived: input.item.id, notice: noticeId, to, session, root: input.root })) return false;
+    if (input.fsync === undefined) fsyncSync(fd);
+    else input.fsync(path, false);
+    syncFolder(dirname(path));
+    if (dirname(path) !== seatDir) syncFolder(seatDir);
+    syncFolder(dirname(seatDir));
+    syncFolder(dirname(dirname(seatDir)));
+    input.hooks?.afterFlush?.();
+    // The name still holds the same file, and the file still holds exactly the verified bytes: an
+    // in-place rewrite or truncate after the verification (same inode) holds the move too.
+    const standing = lstatSync(path, { bigint: true });
+    if (!standing.isFile() || standing.dev !== opened.dev || standing.ino !== opened.ino) return false;
+    const after = fstatSync(fd, { bigint: true });
+    if (after.size !== opened.size || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs) return false;
+    return createHash('sha256').update(readAt(fd)).digest('hex') === digest;
   } catch {
     return false;
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* closed */ }
+    }
   }
-  return true;
+}
+
+/** The whole file behind `fd`, read from its start (never from the descriptor's position). */
+function readAt(fd: number): Buffer {
+  const chunks: Buffer[] = [];
+  let position = 0;
+  for (;;) {
+    const chunk = Buffer.alloc(65536);
+    const got = readSync(fd, chunk, 0, chunk.length, position);
+    if (got <= 0) break;
+    chunks.push(chunk.subarray(0, got));
+    position += got;
+  }
+  return Buffer.concat(chunks);
+}
+
+/** One not-delivered notice obligation: the archived message, its notice id, and the route. */
+type Obligation = { archived: string; notice: string; to: string; session: string; root: string };
+
+/** Whether a verified runtime record is exactly this obligation's notice: its id, recipient,
+ *  session and checkout (the signed root, resolved), the runtime sender, and `in_reply_to`. */
+function noticeIsObligation(notice: RecordPayload, obligation: Obligation): boolean {
+  return notice.id === obligation.notice && notice.to === obligation.to && notice.session === obligation.session
+    && sameFolder(notice.root, obligation.root) && notice.from === RUNTIME_FROM && notice.in_reply_to === obligation.archived;
 }
 
 /** A stable, UUID-shaped id for one message's not-delivered notice. */
@@ -257,8 +296,8 @@ export function undeliveredNoticeId(id: string): string {
 
 /** Whether send-drops, the session folder and the seat folder are each a plain folder, not a
  *  link: checked before the folder is used and again after every turn the loop gave away. */
-function folderChainOk(root: string, session: string, seat: string): boolean {
-  const base = join(root, '.agents', 'send-drops');
+function folderChainOk(root: string, session: string, seat: string, tree: MailTree = 'legacy'): boolean {
+  const base = mailTreeOf(root, tree);
   for (const path of [join(root, '.agents'), base, join(base, session), join(base, session, seat)]) {
     if (heldAt(path).kind !== 'folder') return false;
   }
@@ -331,10 +370,11 @@ export async function inboxArchivePass(input: {
   seats: for (const folder of seatDropFolders(root)) {
     // The lead binds a clearance's authority (E7b: the stamped planner rule asks it).
     const context: StatusContext = { to: folder.seat, root, session: folder.session, ...(team.orchestrator ? { lead: team.orchestrator } : {}) };
-    const key2 = `${folder.session}/${folder.seat}`;
+    // E7b revision 3: a seat's stamped folder is its own unit of the run (src/queue/mail-tree.ts).
+    const key2 = folder.tree === 'stamped' ? `${folder.session}/${folder.seat} (stamped)` : `${folder.session}/${folder.seat}`;
     // A folder fully looked at today is not looked at again until tomorrow.
     if (run.completed.includes(key2)) continue;
-    const chainOk = (): boolean => folderChainOk(root, folder.session, folder.seat);
+    const chainOk = (): boolean => folderChainOk(root, folder.session, folder.seat, folder.tree);
     // 1. What an earlier move left part way: listed once a pass, worked through from a cursor
     //    that moves past every unit looked at, whatever it found, so nothing starves the rest.
     if (!run.recovered.includes(key2)) {

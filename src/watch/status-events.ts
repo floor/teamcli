@@ -48,6 +48,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { minutes } from './check.ts';
 import { notify as defaultNotify } from './notify.ts';
 import { questionText, readScreen, screenWord, type Screen, type ScreenOptions } from './screen.ts';
+import { seatListingDirs, seatMailDirIn } from '../queue/mail-tree.ts';
 
 export {
   HERDR_AGENT_STATUSES,
@@ -570,57 +571,59 @@ export function seatHasAssignedWorkOnDisk(
   const keyState = messageKeyState(options?.home);
   const key = keyState.kind === 'key' ? keyState.key : undefined;
   const context: StatusContext = { to: seatName, root, session, ...(options?.lead === undefined ? {} : { lead: options.lead }) };
-  const dropDir = join(agentsDir, 'send-drops', session, seatName);
-  if (existsSync(dropDir)) {
-    try {
-      for (const name of readdirSync(dropDir)) {
-        if (
-          name.startsWith('.')
-          || name.startsWith('work-')
-          || name.endsWith('.pending')
-          || name.endsWith('.delivered')
-          || name.endsWith('.closed.json')
-          // The mark a send leaves beside a record it posted to the seat's webhook adapter: the
-          // wake already happened, and the name is no unacked message. Its claim, while the post
-          // is in flight, is the same kind of note.
-          || name.endsWith('.posted')
-          || name.endsWith('.posting')
-          || RECEIPT_STATUSES.some((status) => name.endsWith(`.${status}.json`))
-          || (briefId !== undefined && name === briefId)
-          || supersededBriefs.has(name)
-        ) {
-          continue;
-        }
-        if (key !== undefined) {
-          // The seat took this message: a signed read or reply receipt verifies for its id, this
-          // seat, this checkout and this session — or a lead's clearance settles it for a seat
-          // that is not coming back. A tampered, foreign-key or other-session receipt is not a
-          // read, and the name stays work.
-          if (isReadOrCleared(dropDir, name, context, key)) continue;
-          // Every delivery of this build's brief is the launch's, not assigned work: the current
-          // id is skipped above from the claim, and a superseded id the state no longer lists is
-          // recognized from the record itself — same key, same sender, same checkout, same
-          // delivered body. The key is the home's, shared by every checkout it serves, so the
-          // record's root must name this checkout too; another checkout's brief is not work this
-          // seat has taken.
-          const held = readRecord(join(dropDir, name), name);
+  // E7b revision 3: the seat's stamped folder holds work too (src/queue/mail-tree.ts).
+  for (const dropDir of seatListingDirs(seatMailDirIn(agentsDir, session, seatName))) {
+    if (existsSync(dropDir)) {
+      try {
+        for (const name of readdirSync(dropDir)) {
           if (
-            held.ok
-            && held.record !== null
-            && held.record.payload.to === seatName
-            && held.record.payload.session === session
-            && sameFolder(held.record.payload.root, root)
-            && held.record.payload.from === GENERAL_BRIEF_FROM
-            && held.record.payload.brief_sha256 === GENERAL_BRIEF_SHA256
-            && verifyRecord(held.record, key)
+            name.startsWith('.')
+            || name.startsWith('work-')
+            || name.endsWith('.pending')
+            || name.endsWith('.delivered')
+            || name.endsWith('.closed.json')
+            // The mark a send leaves beside a record it posted to the seat's webhook adapter: the
+            // wake already happened, and the name is no unacked message. Its claim, while the post
+            // is in flight, is the same kind of note.
+            || name.endsWith('.posted')
+            || name.endsWith('.posting')
+            || RECEIPT_STATUSES.some((status) => name.endsWith(`.${status}.json`))
+            || (briefId !== undefined && name === briefId)
+            || supersededBriefs.has(name)
           ) {
             continue;
           }
+          if (key !== undefined) {
+            // The seat took this message: a signed read or reply receipt verifies for its id, this
+            // seat, this checkout and this session — or a lead's clearance settles it for a seat
+            // that is not coming back. A tampered, foreign-key or other-session receipt is not a
+            // read, and the name stays work.
+            if (isReadOrCleared(dropDir, name, context, key)) continue;
+            // Every delivery of this build's brief is the launch's, not assigned work: the current
+            // id is skipped above from the claim, and a superseded id the state no longer lists is
+            // recognized from the record itself — same key, same sender, same checkout, same
+            // delivered body. The key is the home's, shared by every checkout it serves, so the
+            // record's root must name this checkout too; another checkout's brief is not work this
+            // seat has taken.
+            const held = readRecord(join(dropDir, name), name);
+            if (
+              held.ok
+              && held.record !== null
+              && held.record.payload.to === seatName
+              && held.record.payload.session === session
+              && sameFolder(held.record.payload.root, root)
+              && held.record.payload.from === GENERAL_BRIEF_FROM
+              && held.record.payload.brief_sha256 === GENERAL_BRIEF_SHA256
+              && verifyRecord(held.record, key)
+            ) {
+              continue;
+            }
+          }
+          return true;
         }
-        return true;
+      } catch {
+        // Ignore unreadable directory.
       }
-    } catch {
-      // Ignore unreadable directory.
     }
   }
 

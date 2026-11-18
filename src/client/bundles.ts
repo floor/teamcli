@@ -18,6 +18,7 @@ import { verifyClientUp } from './up-grant.ts';
 import { CLIENT_REQUEST_ID_PATTERN } from './verify.ts';
 import { writeClientDrop, type ResolvedClientTarget } from './send.ts';
 import type { RecordPayload } from '../send/record.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
 
 /** The bundles in force for an entity (and, when the team sits in one, its project): the release
  *  defaults with the `client-bundles` policy laid over them. A policy chain that cannot be read or
@@ -196,7 +197,7 @@ export function resolveBundleSendTarget(home: string, grant: ClientUpGrantRecord
       teamId: grant.up.teamId,
       teamRoot: grant.up.root,
       session: team.session,
-      dropDir: join(grant.up.root, '.agents', 'send-drops', team.session, seat),
+      dropDir: seatDropDir(grant.up.root, team.session, seat),
     },
   };
 }

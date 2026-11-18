@@ -13,6 +13,8 @@ import { join } from 'node:path';
 import { linkSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { acquireLockAt } from '../launch/seat-lock.ts';
 import { readOwn } from '../queue/append.ts';
+import { seatFolderOf } from './drop-folder.ts';
+import { seatListingDirs } from '../queue/mail-tree.ts';
 
 /** The folder of exclusive read claims inside a seat's drop folder: a dot name, never a message. */
 export const READ_CLAIMS = '.read-claims';
@@ -58,7 +60,7 @@ function ownerOf(dropDir: string, id: string): string | null | 'unknown' {
 
 /** The owner a standing claim names: null when none stands, 'unknown' when it cannot be read. */
 export function ownerOfClaim(dropDir: string, id: string): string | null | 'unknown' {
-  return ownerOf(dropDir, id);
+  return ownerOf(seatFolderOf(dropDir, id), id);
 }
 
 function fsyncPath(path: string, flags: number): void {
@@ -114,7 +116,9 @@ function settle(dropDir: string, id: string, owner: string | undefined): void {
  * body over (a relayed read), and is made durable before this returns. A reader with no owner holds
  * the claim only while it lives.
  */
-export function claimRead(dropDir: string, id: string, owner?: string, adopt = false): ReadClaim {
+export function claimRead(seatDir: string, id: string, owner?: string, adopt = false): ReadClaim {
+  // E7b revision 3: the claim sits in the seat folder of the record's own tree.
+  const dropDir = seatFolderOf(seatDir, id);
   const folder = join(dropDir, READ_CLAIMS);
   const standing = ownerOf(dropDir, id);
   if (standing === 'unknown') return { ok: false, why: 'unknown' };
@@ -164,20 +168,24 @@ export function claimRead(dropDir: string, id: string, owner?: string, adopt = f
 /** The ids whose standing claim names `owner`: a cut-off relayed read's, found by its recovery.
  *  [] only when the claim folder is proven absent; null when it, or any owner file in it, cannot
  *  be read now, since an unread owner file may be this request's. Unknown is never read as none. */
-export function claimsOwnedBy(dropDir: string, owner: string, list: (folder: string) => string[] = readdirSync): string[] | null {
-  let names: string[];
-  try {
-    names = list(join(dropDir, READ_CLAIMS));
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
-  }
+export function claimsOwnedBy(seatDir: string, owner: string, list: (folder: string) => string[] = readdirSync): string[] | null {
   const ids: string[] = [];
-  for (const name of names) {
-    if (!name.endsWith(OWNER_SUFFIX)) continue;
-    const id = name.slice(0, -OWNER_SUFFIX.length);
-    const standing = ownerOf(dropDir, id);
-    if (standing === 'unknown') return null;
-    if (standing === owner) ids.push(id);
+  // E7b revision 3: both of the seat's folders hold claims (each record's in its own tree).
+  for (const dropDir of seatListingDirs(seatDir)) {
+    let names: string[];
+    try {
+      names = list(join(dropDir, READ_CLAIMS));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      return null;
+    }
+    for (const name of names) {
+      if (!name.endsWith(OWNER_SUFFIX)) continue;
+      const id = name.slice(0, -OWNER_SUFFIX.length);
+      const standing = ownerOf(dropDir, id);
+      if (standing === 'unknown') return null;
+      if (standing === owner) ids.push(id);
+    }
   }
   return ids.sort();
 }
@@ -193,7 +201,8 @@ const realClaimFs: ClaimFs = {
  *  durably. The dead holder's lock file goes first while the owner file still turns readers away,
  *  then the owner file, then the folder is fsynced. True once neither stands (already removed
  *  counts); false on any fault, leaving what remains for the next pass. Idempotent. */
-export function removeOwnedClaim(dropDir: string, id: string, owner: string, fs: Partial<ClaimFs> = {}): boolean {
+export function removeOwnedClaim(seatDir: string, id: string, owner: string, fs: Partial<ClaimFs> = {}): boolean {
+  const dropDir = seatFolderOf(seatDir, id);
   const io = { ...realClaimFs, ...fs };
   const standing = ownerOf(dropDir, id);
   if (standing === 'unknown') return false;

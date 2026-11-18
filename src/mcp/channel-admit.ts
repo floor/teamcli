@@ -21,6 +21,8 @@ import { readSendGrantReads } from '../send/grants.ts';
 import { closeFile, readClose, readSealedRecord, recordAuthOfSealed, recordNameOk, sameFolder, verifyClose, type RecordPayload } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { parseYaml, toValue } from '../yaml.ts';
+import { seatDropDir, sessionMailDir } from '../queue/mail-tree.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
 
 export type ChannelAdmission = { ok: true; rule: string } | { ok: false; why: string };
 
@@ -248,7 +250,7 @@ function replyContext(input: {
   if (!loaded.ok || loaded.team.session !== session) return undefined;
   const senderSeat = loaded.team.seats.find((seat) => seat.name === payload.from);
   if (senderSeat === undefined) return undefined;
-  const looked = readSealedRecord(join(root, '.agents', 'send-drops', session, payload.from, payload.in_reply_to));
+  const looked = readSealedRecord(join(seatFolderOf(seatDropDir(root, session, payload.from), payload.in_reply_to), payload.in_reply_to));
   if (!looked.ok || looked.sealed === null) return undefined;
   const auth = recordAuthOfSealed(looked.sealed, key.key);
   if (auth.kind !== 'ok') return undefined;
@@ -280,7 +282,7 @@ function replyContext(input: {
     && input.team.project === entity && input.team.orchestrator === input.seat) {
     let opening = answered;
     if (answered.id !== answered.thread) {
-      const looked = readSealedRecord(join(root, '.agents', 'send-drops', session, payload.from, answered.thread));
+      const looked = readSealedRecord(join(seatFolderOf(seatDropDir(root, session, payload.from), answered.thread), answered.thread));
       if (!looked.ok || looked.sealed === null) return undefined;
       const auth = recordAuthOfSealed(looked.sealed, key.key);
       if (auth.kind !== 'ok') return undefined;
@@ -296,40 +298,44 @@ function replyContext(input: {
 }
 
 function threadStillOpen(root: string, session: string, thread: string, key: KeyObject, now: Date, ttlSeconds: number, cap: number, incomingId?: string): boolean {
-  const dir = join(root, '.agents', 'send-drops', session);
-  let seats: string[];
-  try {
-    seats = readdirSync(dir);
-  } catch {
-    return false;
-  }
   let count = 0;
   let latest = 0;
   let closed = false;
-  for (const seat of seats) {
-    if (seat.startsWith('.') || seat.includes('.')) continue;
-    let names: string[];
+  // E7b revision 3: a thread's records are those of both trees (src/queue/mail-tree.ts).
+  for (const tree of ['legacy', 'stamped'] as const) {
+    const dir = sessionMailDir(root, session, tree);
+    let seats: string[];
     try {
-      names = readdirSync(join(dir, seat));
-    } catch {
-      continue;
+      seats = readdirSync(dir);
+    } catch (error) {
+      if (tree === 'stamped' && (error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      return false;
     }
-    for (const name of names) {
-      if (!recordNameOk(name) || name === incomingId) continue;
-      const looked = readSealedRecord(join(dir, seat, name));
-      if (!looked.ok || looked.sealed === null) continue;
-      const auth = recordAuthOfSealed(looked.sealed, key);
-      if (auth.kind !== 'ok') continue;
-      const payload = auth.value.payload;
-      if (payload.id !== name) continue;
-      if (payload.thread !== thread || payload.session !== session || !sameFolder(payload.root, root)) continue;
-      count += 1;
-      const at = Date.parse(payload.at);
-      if (Number.isFinite(at) && at > latest) latest = at;
-      const close = readClose(closeFile(join(dir, seat), payload.id), payload.id);
-      if (!close.ok || close.close === null) continue;
-      if (close.close.payload.thread !== thread || close.close.payload.session !== session || !sameFolder(close.close.payload.root, root)) continue;
-      if (verifyClose(close.close, key)) closed = true;
+    for (const seat of seats) {
+      if (seat.startsWith('.') || seat.includes('.')) continue;
+      let names: string[];
+      try {
+        names = readdirSync(join(dir, seat));
+      } catch {
+        continue;
+      }
+      for (const name of names) {
+        if (!recordNameOk(name) || name === incomingId) continue;
+        const looked = readSealedRecord(join(dir, seat, name));
+        if (!looked.ok || looked.sealed === null) continue;
+        const auth = recordAuthOfSealed(looked.sealed, key);
+        if (auth.kind !== 'ok') continue;
+        const payload = auth.value.payload;
+        if (payload.id !== name) continue;
+        if (payload.thread !== thread || payload.session !== session || !sameFolder(payload.root, root)) continue;
+        count += 1;
+        const at = Date.parse(payload.at);
+        if (Number.isFinite(at) && at > latest) latest = at;
+        const close = readClose(closeFile(join(dir, seat), payload.id), payload.id);
+        if (!close.ok || close.close === null) continue;
+        if (close.close.payload.thread !== thread || close.close.payload.session !== session || !sameFolder(close.close.payload.root, root)) continue;
+        if (verifyClose(close.close, key)) closed = true;
+      }
     }
   }
   if (closed || count === 0) return false;

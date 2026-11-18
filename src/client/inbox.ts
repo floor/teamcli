@@ -70,6 +70,7 @@ import {
 } from './records.ts';
 import { CLIENT_REPLY_ID_PATTERN, verifyClientRead, type ClientReadRequest } from './verify.ts';
 import { recordDir } from '../commands/messages.ts';
+import { seatDropDir, seatMailParts } from '../queue/mail-tree.ts';
 
 /** The default page bound, and the largest page a read admits. */
 export const CLIENT_READ_DEFAULT_LIMIT = 20;
@@ -85,7 +86,7 @@ function inboxNameOk(name: string): boolean {
 
 /** The inbox folder: `<root>/.agents/send-drops/<session>/.clients/<clientId>`. */
 export function clientInboxFolder(root: string, session: string, clientId: string): string {
-  return join(root, '.agents', 'send-drops', session, '.clients', clientId);
+  return join(seatDropDir(root, session, '.clients'), clientId);
 }
 
 /** The read receipt beside one reply: `<id>.read.json`. */
@@ -149,7 +150,7 @@ function checkInboxFolder(folder: string): FolderCheck {
  */
 export function ensureClientInbox(root: string, session: string, clientId: string): { ok: true; dir: string } | { ok: false; why: string } {
   if (!CLIENT_WORD_PATTERN.test(clientId)) return { ok: false, why: `"${clientId}" is not a client id` };
-  const clients = join(root, '.agents', 'send-drops', session, '.clients');
+  const clients = seatDropDir(root, session, '.clients');
   const dir = join(clients, clientId);
   for (const folder of [clients, dir]) {
     try {
@@ -503,7 +504,7 @@ export function clientSentStatuses(
     .sort((left, right) => (left[1].at < right[1].at ? -1 : left[1].at > right[1].at ? 1 : 0))
     .slice(-input.limit);
   return rows.map(([id, sent]) => {
-    const dropDir = join(sent.team.root, '.agents', 'send-drops', sent.team.session, sent.to);
+    const dropDir = seatDropDir(sent.team.root, sent.team.session, sent.to);
     const signed = statusOf(dropDir, id, { to: sent.to, root: sent.team.root, session: sent.team.session }, input.key);
     const status: SentStatus = answered.has(id) || signed === 'replied'
       ? 'replied'
@@ -808,7 +809,7 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
 
   const differences: OutputDifference[] = outcome.scan.refused.map((row) => ({
     what: row.why,
-    repair: `the owner checks the record in ${join('.agents', 'send-drops', outcome.coordinator.session, '.clients', outcome.grant.clientId, row.id)} and removes it, or has the sending seat re-send it`,
+    repair: `the owner checks the record in ${join(...seatMailParts(outcome.coordinator.session, '.clients'), outcome.grant.clientId, row.id)} and removes it, or has the sending seat re-send it`,
     who: 'the owner',
   }));
   const reading: ClientReading = {

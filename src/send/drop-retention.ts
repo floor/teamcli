@@ -56,6 +56,7 @@ import {
   type ReceiptStatus,
   type RecordPayload,
 } from './record.ts';
+import { LEGACY_TREE, mailTreeIn } from '../queue/mail-tree.ts';
 
 export const DROP_ARCHIVE_DOMAIN = 'teamcli-drop-archive-v1\0';
 export const DROP_ARCHIVE_DIR = '.archive';
@@ -1419,7 +1420,7 @@ export function* dropRetirementSteps(
     const agentsProblem = folderProblemAt(agentsDir);
     if (agentsProblem !== null) return fail(`${agentsDir}: ${agentsProblem}`);
 
-    const sendDropsDir = join(agentsDir, 'send-drops');
+    const sendDropsDir = mailTreeIn(agentsDir);
     if (heldAt(sendDropsDir).kind === 'missing') return snapshot();
     const sendDropsProblem = folderProblemAt(sendDropsDir);
     if (sendDropsProblem !== null) return fail(`${sendDropsDir}: ${sendDropsProblem}`);
@@ -1433,7 +1434,7 @@ export function* dropRetirementSteps(
     const agentsStep = openRootDirNoFollow(agentsDir);
     if (!agentsStep.ok) return fail(agentsStep.reason);
     openedFds.push(agentsStep.fd);
-    const sendDropsStep = openChildDirNoFollow(atFfi, agentsStep.fd, sendDropsDir, 'send-drops');
+    const sendDropsStep = openChildDirNoFollow(atFfi, agentsStep.fd, sendDropsDir, LEGACY_TREE);
     if (!sendDropsStep.ok) return fail(sendDropsStep.reason);
     openedFds.push(sendDropsStep.fd);
     sendDropsHeld = {

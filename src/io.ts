@@ -30,6 +30,9 @@ export type Io = {
    *  under it makes its claim durable and names this owner, so a cut-off run's messages belong to
    *  its recovery alone. Never set from the environment or a command line. */
   handoverOwner?: string;
+  /** E7b revision 3 (carrier 4): a relayed run for an older requester (outbox protocol 1): stamped
+   *  mail is left out of what it prints, and one line says how many were left out. */
+  legacyRelay?: true;
   /** Set with `handoverOwner`: a read run under it names, just before each stdout write, the ids
    *  of the messages whose bodies that write holds whole, so the relay saves them with it. */
   handedIds?: (ids: readonly string[]) => void;

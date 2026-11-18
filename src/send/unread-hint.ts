@@ -18,6 +18,7 @@
 import { readStateFile, writeStateFile } from '../file-write.ts';
 import { basename, dirname, join } from 'node:path';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
+import { mailDirOf } from '../queue/mail-tree.ts';
 
 export type UnreadHintOutcome =
   | { ok: true; kind: 'written' | 'unchanged' | 'skipped' }
@@ -59,12 +60,11 @@ export function unreadHintPath(dropDir: string): string {
  *  a seat lock lives in. Anything else — a client inbox, a folder a test made by hand — names
  *  null and takes no hint: only a seat's own drop folder is read by a seat's send. */
 function dropFolder(dropDir: string): { dir: string; session: string; seat: string } | null {
-  const seat = basename(dropDir);
-  const session = basename(dirname(dropDir));
-  const sendDrops = dirname(dirname(dropDir));
-  if (basename(sendDrops) !== 'send-drops') return null;
-  if (!NAME.test(seat) || !NAME.test(session)) return null;
-  return { dir: dirname(sendDrops), session, seat };
+  // The hint is the seat's own: it lives in the seat's identity (legacy) folder only.
+  const at = mailDirOf(dropDir);
+  if (at === null || at.tree !== 'legacy') return null;
+  if (!NAME.test(at.seat) || !NAME.test(at.session)) return null;
+  return { dir: at.agents, session: at.session, seat: at.seat };
 }
 
 /** The map as it is on disk, or an empty one when there is no readable map. A file that is not

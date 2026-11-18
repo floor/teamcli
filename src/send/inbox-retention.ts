@@ -41,6 +41,7 @@ import {
 } from './record.ts';
 import { clearUnread } from './unread-hint.ts';
 import { archiveLegacySeat, daemonServesRoot, legacySeatFolders } from './legacy-inbox-retention.ts';
+import { identityDirOf, mailTreeOf, type MailTree } from '../queue/mail-tree.ts';
 
 /** `read_by` on the note `team ack` writes. A plain read receipt does not carry it. */
 export const EXPLICIT_ACK_READ_BY = 'ack';
@@ -310,7 +311,8 @@ export function planSeatArchive(
 }
 
 function channelStartMs(dropDir: string, context: StatusContext): number | null {
-  const listener = readListener(dropDir);
+  // The listener marker is the seat's own: it lives in the seat's identity (legacy) folder.
+  const listener = readListener(identityDirOf(dropDir));
   if (listener === null || listener.channel !== true) return null;
   if (listener.seat !== context.to || listener.session !== context.session) return null;
   if (!sameFolder(listener.root, context.root)) return null;
@@ -763,13 +765,19 @@ export function listArchivedUnread(dropDir: string): ArchivedUnread[] {
   return out;
 }
 
-/** One seat drop folder under a root: its session, its seat and its path. */
-export type SeatDropFolder = { session: string; seat: string; dropDir: string };
+/** One seat drop folder under a root: its session, its seat, its path and its tree. */
+export type SeatDropFolder = { session: string; seat: string; dropDir: string; tree: MailTree };
 
-/** Every seat drop folder under `root`, in session then seat order as the folder lists them. A
- *  folder that is not a plain folder, or whose name is not an id, is not listed. */
+/** Every seat drop folder under `root`, in session then seat order as the folder lists them, the
+ *  legacy tree first and then the stamped one (E7b revision 3, src/queue/mail-tree.ts): each folder
+ *  is archived within its own tree. A folder that is not a plain folder, or whose name is not an
+ *  id, is not listed. */
 export function seatDropFolders(root: string): SeatDropFolder[] {
-  const base = join(root, '.agents', 'send-drops');
+  return [...seatDropFoldersIn(root, 'legacy'), ...seatDropFoldersIn(root, 'stamped')];
+}
+
+function seatDropFoldersIn(root: string, tree: MailTree): SeatDropFolder[] {
+  const base = mailTreeOf(root, tree);
   if (heldAt(base).kind !== 'folder') return [];
   let sessions: string[];
   try {
@@ -792,7 +800,7 @@ export function seatDropFolders(root: string): SeatDropFolder[] {
       if (seat.startsWith('.') || seat === DROP_MONTH_ARCHIVE || !ID_NAME.test(seat)) continue;
       const dropDir = join(sessionDir, seat);
       if (heldAt(dropDir).kind !== 'folder') continue;
-      out.push({ session, seat, dropDir });
+      out.push({ session, seat, dropDir, tree });
     }
   }
   return out;
@@ -818,14 +826,17 @@ export function runInboxRetention(
 } {
   const key = messageKeyState(options.home);
   if (key.kind !== 'key') return { move: [], markRead: [], partial: [], refused: null };
-  const base = join(root, '.agents', 'send-drops');
   // No drop tree, or one that cannot be read: no drop moves, the older store is still looked at.
-  let sessions: string[] = [];
-  if (heldAt(base).kind === 'folder') {
+  // E7b revision 3: both trees (src/queue/mail-tree.ts), legacy first; each seat folder is archived
+  // within its own tree.
+  const sessions: { base: string; session: string }[] = [];
+  for (const tree of ['legacy', 'stamped'] as const) {
+    const treeBase = mailTreeOf(root, tree);
+    if (heldAt(treeBase).kind !== 'folder') continue;
     try {
-      sessions = readdirSync(base);
+      for (const session of readdirSync(treeBase)) sessions.push({ base: treeBase, session });
     } catch {
-      sessions = [];
+      // A tree that cannot be read moves nothing.
     }
   }
   const move: string[] = [];
@@ -833,7 +844,7 @@ export function runInboxRetention(
   const partial: string[] = [];
   const refusals: string[] = [];
   const dryRun = options.dryRun === true;
-  for (const session of sessions) {
+  for (const { base, session } of sessions) {
     if (session.startsWith('.') || !ID_NAME.test(session)) continue;
     const sessionDir = join(base, session);
     if (heldAt(sessionDir).kind !== 'folder') continue;

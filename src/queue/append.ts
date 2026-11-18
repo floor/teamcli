@@ -34,6 +34,7 @@ import { readNoFollow } from '../send/history.ts';
 import { createExclusive, removeDurable } from './durable.ts';
 import { drainPendingReceipts } from './receipt-store.ts';
 import { recordFile, sameFolder, signedRecordOf, verifyRecord, type SignedRecord } from '../send/record.ts';
+import { mailDirOf, seatDropDir } from './mail-tree.ts';
 
 /** The domain a queue entry is signed over. */
 export const QUEUE_DOMAIN = 'team-queue-v1\n';
@@ -102,12 +103,10 @@ const GENERATION = /^g[0-9a-f]{16}$/;
 /** The receiver's queue folder for a seat's drop folder `<root>/.agents/send-drops/<session>/<seat>`,
  *  or null when the folder is not one (a client inbox, a mailbox, a test's own folder). */
 export function queueBaseOf(dropDir: string): string | null {
-  const seat = basename(dropDir);
-  const sessionDir = dirname(dropDir);
-  const session = basename(sessionDir);
-  const drops = dirname(sessionDir);
-  if (basename(drops) !== 'send-drops' || !NAME.test(seat) || !NAME.test(session)) return null;
-  return join(dirname(drops), 'queues', session, seat);
+  // Either of the seat's two folders (src/queue/mail-tree.ts) names the seat's one queue.
+  const at = mailDirOf(dropDir);
+  if (at === null || !NAME.test(at.seat) || !NAME.test(at.session)) return null;
+  return join(at.agents, 'queues', at.session, at.seat);
 }
 
 function seqName(seq: number): string {
@@ -786,7 +785,7 @@ export function recoverSessionQueues(root: string, session: string, options: Que
   }
   const failed: { seat: string; reason: string }[] = [];
   for (const seat of seats) {
-    const dropDir = join(root, '.agents', 'send-drops', session, seat);
+    const dropDir = seatDropDir(root, session, seat);
     try {
       const opened = open(dropDir, { root, session, seat }, options);
       if ('skipped' in opened) failed.push({ seat, reason: opened.skipped });

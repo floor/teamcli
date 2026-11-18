@@ -1,4 +1,8 @@
 import { hostedCommit } from '../host/request-scope.ts';
+import { createHash } from 'node:crypto';
+import { floorState } from '../queue/floor.ts';
+import { mailTreeOf, nativePendingDir, seatMailDirs, stampedHereId } from '../queue/mail-tree.ts';
+import { folderOfDrop } from './drop-folder.ts';
 import { closeSync, constants, existsSync, fstatSync, readdirSync, readSync, statSync } from 'node:fs';
 import { chmodSync, fchmodSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join, sep } from 'node:path';
@@ -70,6 +74,10 @@ export type HistoryEntry = {
   body: string;
   id: string;
   outcome: string;
+  /** E7b revision 3 (carrier 3): on a root not proven dark, the line carries no body (`body` is
+   *  empty) but its sha256, and says so here. The body lives only in the stamped record. */
+  stamped?: true;
+  body_sha256?: string;
   /** The team the sender sits in, by team id, written by the send that made the line. The feed
    *  needs it to read a sender from another team by its address: without it a seat name shared
    *  with a local seat would read as the local nickname. A line written before this field (or by
@@ -272,6 +280,29 @@ function rotateHistory(path: string): string | null {
  * Appends one JSONL record `{ts, from, to, body, id, outcome}` to `<storeDir>/messages.jsonl`
  * at mode 0600 without following symbolic links. Rotates at 1 MB keeping 3 files at mode 0600.
  */
+/** Whether a stamped record of `id` for seat `to`, or a stamped native handoff of `id`, stands
+ *  under `root` (any session; the live folder or its month archive). */
+function stampedOnDisk(root: string, to: string, id: string): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(to)) return false;
+  if (heldAt(join(nativePendingDir(root), `${id}.json`)).kind !== 'missing') return true;
+  let sessions: string[];
+  try {
+    sessions = readdirSync(mailTreeOf(root, 'stamped'));
+  } catch (error) {
+    // No stamped tree: nothing stamped stands. A tree that stands but cannot be read is treated
+    // as holding the message (fail closed: the line goes body-free).
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+  for (const session of sessions) {
+    if (session.startsWith('.')) continue;
+    const seatDir = seatMailDirs(root, session, to).stamped;
+    if (heldAt(join(seatDir, id)).kind !== 'missing') return true;
+    // An archived stamped record: its month folder sits inside the stamped seat folder.
+    if (folderOfDrop(seatDir, id).startsWith(`${seatDir}/`)) return true;
+  }
+  return false;
+}
+
 export function appendHistory(project: string, root: string, home: string, entry: HistoryEntry): HistoryWrite {
   hostedCommit('appendHistory');
   const record: HistoryEntry = {
@@ -282,6 +313,17 @@ export function appendHistory(project: string, root: string, home: string, entry
     id: entry.id,
     outcome: entry.outcome,
   };
+  // E7b revision 3 (carrier 3): history is read by older watches, so a line never carries the body
+  // of a stamped message: the id and a digest only. The era rides with the message, not the
+  // floor at write time: the line is body-free when it says it is stamped, when this process
+  // stamped that id, when a stamped record or stamped native handoff of that id stands under the
+  // root, or when the root is not proven dark (an unreadable floor counts as not dark). A dark
+  // root's line for an unstamped message keeps its exact older shape.
+  if (entry.body !== '' && (entry.stamped === true || stampedHereId(entry.id) || stampedOnDisk(root, entry.to, entry.id) || floorState(root, home).kind !== 'dark')) {
+    record.body = '';
+    record.stamped = true;
+    record.body_sha256 = createHash('sha256').update(entry.body, 'utf8').digest('hex');
+  }
   // Written only when the run recorded them, so a plain line keeps its exact older shape.
   if (entry.from_team !== undefined) record.from_team = entry.from_team;
   if (entry.spec !== undefined) record.spec = entry.spec;
@@ -414,6 +456,8 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     outcome: obj.outcome,
   };
   // `from_team`, `spec`, `resolved`, `ms`, `via`, `session`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
+  if (obj.stamped === true) entry.stamped = true;
+  if (typeof obj.body_sha256 === 'string' && /^[0-9a-f]{64}$/.test(obj.body_sha256)) entry.body_sha256 = obj.body_sha256;
   if (typeof obj.from_team === 'string' && obj.from_team !== '') {
     entry.from_team = obj.from_team;
   }

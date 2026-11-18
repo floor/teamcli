@@ -32,6 +32,7 @@ import { receiptFile } from '../send/record.ts';
 import { ensureFolder } from './durable.ts';
 import { mayCreateFence } from './floor.ts';
 import { recordStampAt } from '../send/record.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
 
 export type BodyLeg = 'channel' | 'typed' | 'native' | 'socket';
 
@@ -73,7 +74,7 @@ export function exposeBody(target: ExposureTarget, leg: BodyLeg, home: string): 
   if (!mayCreateFence(target.root, home, 'exposure')) return { kind: 'legacy' };
   const owner = `${EXPOSE_PREFIX}${leg}:${target.msgId}:${randomBytes(6).toString('hex')}`;
   // The claim folder chain is made durable before the owner file can be (§3 first write).
-  if (!ensureFolder(join(target.dropDir, READ_CLAIMS))) return { kind: 'pointer', why: 'the read claim folder could not be made durable' };
+  if (!ensureFolder(join(seatFolderOf(target.dropDir, target.msgId), READ_CLAIMS))) return { kind: 'pointer', why: 'the read claim folder could not be made durable' };
   const claim = claimRead(target.dropDir, target.msgId, owner);
   if (!claim.ok) return { kind: 'pointer', why: claim.why === 'recovering' ? 'already shown by another hand-over' : `the read claim was not taken (${claim.why})` };
   // Under the claim, a body is granted only on positive proof of no earlier exposure: both receipt

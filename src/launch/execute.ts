@@ -46,7 +46,6 @@ import { featureDialog, featureDialogClose } from './reboot.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { processStartOf } from '../watch/pane.ts';
-import { launchPending, launchProven } from '../queue/launch-level.ts';
 import { classifyComposer, readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import { codexThreadLockedScreen } from './codex-thread-release.ts';
 
@@ -250,9 +249,6 @@ export type Host = {
    * told from the same shell. Absent: the run reads the process table itself.
    */
   processStartOf?(pid: number): number | null;
-  /** E7b: where a managed launch signs its build level (`src/queue/launch-level.ts`). Absent: no
-   *  record is written, and a seat without an inbox marker stays unknown to the actor proof. */
-  launchLevelAt?: { root: string; home: string };
   sleep(ms: number): Promise<void>;
   now(): number;
   /** Null when this seat may launch. A string is the reason it may not. */
@@ -1843,12 +1839,6 @@ export async function executePlan(
         let channelCurrent = true;
         try { if (channel?.ok) channel.lease.check(); } catch { channelCurrent = false; }
         if (!guardRestore(op.seat)) break;
-        // E7b (L1): under the seat lock, before the CLI starts, the seat's earlier launch-level
-        // record goes and a pending one (proving nothing) stands. A record that cannot be written
-        // leaves the seat unknown to the actor proof (fail closed); the launch itself goes on.
-        if (here && host.launchLevelAt !== undefined) {
-          launchPending(host.launchLevelAt.root, host.launchLevelAt.home, session, op.seat, host.processInfo?.(session, here.pane)?.shell ?? null);
-        }
         // Each way the line can fail to run is named: one sentence for three causes hid which
         // one a stale pane hit (the Kimi and DeepSeek testers, 2026-11-12).
         const notRun = !here
@@ -1954,12 +1944,6 @@ export async function executePlan(
           const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
           if (identity) {
             identities.set(op.seat, identity);
-            // E7b (L2): the launch-level record now names the CLI's own process and its start.
-            const cli = identity.cli[0];
-            const cliStart = cli === undefined ? null : (host.processStartOf ?? processStartOf)(cli);
-            if (host.launchLevelAt !== undefined && cli !== undefined && cliStart !== null) {
-              launchProven(host.launchLevelAt.root, host.launchLevelAt.home, session, op.seat, cli, cliStart);
-            }
             const sessionId = liveSession(op.seat, here.pane, op.cli) ?? launchSessions.get(op.seat);
             recordSeat(op.seat, {
               stage: 'launched',

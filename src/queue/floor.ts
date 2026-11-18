@@ -37,6 +37,7 @@ import { join } from 'node:path';
 import { acquireLockAt } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { createExclusive, ensureFolder, fsyncFolder, readFence, removeDurable, type DurableFaults } from './durable.ts';
+import { mailTreeOf } from './mail-tree.ts';
 
 /** The capability level this build reports: exposure claims, wake-attempt states, and (E7b) the
  *  at-least-once hand-over of stamped records with numbered copies. */
@@ -367,7 +368,7 @@ export function deactivate(root: string, home: string, options: { after?: (step:
 
 /** Lists the folders a root's live actors leave markers in: one per seat drop folder. */
 export function seatDropFolders(root: string): string[] {
-  const base = join(root, '.agents', 'send-drops');
+  const base = mailTreeOf(root);
   const out: string[] = [];
   let sessions: string[];
   try {
@@ -422,7 +423,7 @@ function readFolder(folder: string): string[] | null {
 /** Every seat drop folder of the root, or null when any level cannot be listed (an unreadable
  *  session or seat folder is never an empty one). */
 export function seatDropFoldersStrict(root: string): string[] | null {
-  const base = join(root, '.agents', 'send-drops');
+  const base = mailTreeOf(root);
   const sessions = readFolder(base);
   if (sessions === null) return null;
   const out: string[] = [];
