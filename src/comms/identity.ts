@@ -9,7 +9,7 @@
 //
 // A stamped record carries the identity signed at send time (`from_identity`); every other record
 // is named here from its verified `from` and `from_id`, by registry id only. An id the registry
-// does not hold is no answer: the signed spelling stands, with the team and model unknown.
+// does not hold is no answer: the signed spelling stands alone, with no team and no model.
 
 import { readTeamConfig } from '../file/team-config.ts';
 import { labelPersona } from '../file/sections/seats.ts';
@@ -153,7 +153,7 @@ export function personaCollision(view: IdentityView, agentId: string): PersonaCo
 /**
  * The one sender identity. A seat: signed nickname, roster nickname, its own label persona (not
  * another seat's name anywhere), seat name; its model from the agent record, else the display.
- * A seat id the registry does not hold reads as its signed spelling, team and model unknown. A
+ * A seat id the registry does not hold reads as its signed spelling alone, with no team and no model. A
  * client: its display name and grant binding, never a seat label. The owner and the runtime have
  * fixed names.
  */
@@ -178,7 +178,8 @@ export function senderIdentity(view: IdentityView, principal: Principal): FromId
         }
       }
       if (seat === null || principal.id === null) {
-        return encodeIdentity({ name: principal.seat, address: `${principal.seat} (team unknown)`, model: 'model unknown' });
+        // An id the registry cannot resolve shows its signed spelling only: no team, no model.
+        return encodeIdentity({ name: principal.seat });
       }
       // The persona is read (and guarded against every other seat) only when no nickname names it.
       let persona: string | null = null;
@@ -190,10 +191,12 @@ export function senderIdentity(view: IdentityView, principal: Principal): FromId
         }
       }
       const name = seat.signedNickname ?? seat.nickname ?? persona ?? seat.seat;
+      // The model only when it is known.
+      const model = seat.model ?? seat.display;
       return encodeIdentity({
         name,
         address: `${seat.seat}@${seat.teamName}`,
-        model: seat.model ?? seat.display ?? 'model unknown',
+        ...(model === null ? {} : { model }),
       });
     }
   }
@@ -319,7 +322,7 @@ export function signedIdentityOf(
  * The payload with its sender identity signed in, when it is stamped: `team send`, `team reply`
  * and client ingress all call this after the era is decided (`stampedPayload`). An unstamped
  * payload is returned unchanged, so a record an older build may read carries no new field. A
- * registry that cannot answer still yields an identity (the signed spelling, team unknown).
+ * registry that cannot answer still yields an identity (the signed spelling alone).
  */
 export function withSignedIdentity<T extends { lvl?: 3; from: string; from_id: string | null; from_client?: { client_id: string; grant_id: string }; from_identity?: FromIdentity }>(
   payload: T,

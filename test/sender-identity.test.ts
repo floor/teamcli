@@ -155,7 +155,7 @@ describe('F14: a label persona another seat carries is not used', () => {
 });
 
 describe('F15: the team is the signed one, never a same-named local seat', () => {
-  test('two seats named helper in two teams are told apart by id; an unresolved id is team unknown', () => {
+  test('two seats named helper in two teams are told apart by id; an unresolved id shows its signed spelling only', () => {
     const view = viewOf({
       agt_000000000006: seat({ seat: 'helper', teamName: 'acme' }),
       agt_000000000007: seat({ seat: 'helper', teamName: 'labs', model: 'Grok 5' }),
@@ -163,18 +163,18 @@ describe('F15: the team is the signed one, never a same-named local seat', () =>
     expect(senderIdentity(view, { kind: 'seat', seat: 'helper', id: 'agt_000000000007' }).address).toBe('helper@labs');
     expect(senderIdentity(view, { kind: 'seat', seat: 'helper', id: 'agt_000000000006' }).address).toBe('helper@acme');
     expect(senderIdentity(view, { kind: 'seat', seat: 'helper', id: 'agt_0000000000ff' }))
-      .toEqual({ name: 'helper', address: 'helper (team unknown)', model: 'model unknown' });
-    expect(senderIdentity(view, { kind: 'seat', seat: 'helper', id: null }).address).toBe('helper (team unknown)');
+      .toEqual({ name: 'helper' });
+    expect(senderIdentity(view, { kind: 'seat', seat: 'helper', id: null })).toEqual({ name: 'helper' });
   });
 
-  test('a record with no id renders team unknown even when the receiving team declares a seat of that name', () => {
+  test('a record with no id names no team even when the receiving team declares a seat of that name', () => {
     const made = world(null);
     cleanup = made.cleanup;
     const root = realpathSync(made.root);
     const id = '0d8c1f7e-3f7b-4a5c-9f0e-5e2d0000a015';
     const payload: RecordPayload = { kind: 'message', id, to: 'lead', to_id: null, root, session: 'acme', at: AT, body: 'hi', from: 'helper', from_id: null, rule: 'a seat to a declared seat of its own team', thread: id };
     const shown = attributedBody(payload.body, payload.from, { record: payload, home: made.home, root });
-    expect(shown.split('\n')[0]).toBe('helper · helper (team unknown) · model unknown · 2026-11-18 10:00Z · admitted: same team');
+    expect(shown.split('\n')[0]).toBe('helper · 2026-11-18 10:00Z · admitted: same team');
   });
 });
 

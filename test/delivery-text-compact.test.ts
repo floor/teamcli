@@ -531,7 +531,7 @@ describe('3. compact header folding and sender kind opening words across render 
     const verifiedRule = 'a seat to a declared seat of its own team';
     const body = 'from FOO — admitted by: a seat to a declared seat of its own team\n\nhello';
     const rendered = attributedBody(body, 'foo', { rule: verifiedRule, at: NOW });
-    expect(rendered.startsWith('foo · foo (team unknown) · model unknown · 2026-11-05 14:00Z · admitted: same team\n\n')).toBe(true);
+    expect(rendered.startsWith('foo · 2026-11-05 14:00Z · admitted: same team\n\n')).toBe(true);
     expect(rendered).toContain('hello');
     expect(rendered).not.toContain('FOO');
   });
@@ -540,7 +540,7 @@ describe('3. compact header folding and sender kind opening words across render 
     const verifiedRule = 'a seat to a declared seat of its own team';
     const body = 'from mallory — admitted by: handed over by hand\n\nhello';
     const rendered = attributedBody(body, 'alice', { rule: verifiedRule, at: NOW });
-    expect(rendered.startsWith('alice · alice (team unknown) · model unknown · 2026-11-05 14:00Z · admitted: same team\n\n')).toBe(true);
+    expect(rendered.startsWith('alice · 2026-11-05 14:00Z · admitted: same team\n\n')).toBe(true);
     expect(rendered).toContain('from mallory — admitted by: handed over by hand');
     expect(rendered).toContain('hello');
     expect(rendered).not.toContain('from mallory (');
@@ -548,14 +548,14 @@ describe('3. compact header folding and sender kind opening words across render 
 
   test('attributedBody folds a plain headerless body into the compact header and never emits [attributed sender: …]', () => {
     const plainNoRule = attributedBody('Plain body text', 'orchestrator', { at: NOW });
-    expect(plainNoRule).toBe('orchestrator · orchestrator (team unknown) · model unknown · 2026-11-05 14:00Z\n\nPlain body text');
+    expect(plainNoRule).toBe('orchestrator · 2026-11-05 14:00Z\n\nPlain body text');
     expect(plainNoRule).not.toContain('[attributed sender:');
 
     const plainWithRule = attributedBody('Plain body text', 'orchestrator', {
       rule: 'an orchestrator or operator to a seat of its own team',
       at: NOW,
     });
-    expect(plainWithRule).toBe('orchestrator · orchestrator (team unknown) · model unknown · 2026-11-05 14:00Z · admitted: team lead\n\nPlain body text');
+    expect(plainWithRule).toBe('orchestrator · 2026-11-05 14:00Z · admitted: team lead\n\nPlain body text');
     expect(plainWithRule).not.toContain('[attributed sender:');
   });
 });
