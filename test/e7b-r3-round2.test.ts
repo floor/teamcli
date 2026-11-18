@@ -226,7 +226,7 @@ describe('finding 2: the era rides with the message into history, not the floor 
 // not proven dark, with no id resolution; on a proven-dark root protocol 1 works as before.
 // Driven through the watch's real relay run (relayConfinedOutboxes, the real handlers behind it).
 describe('round 3: protocol-1 ack and reply through the real relay run', () => {
-  async function relayed(active: boolean, command: 'ack' | 'reply' = 'ack'): Promise<{ result: { code: number; err: string }; dirs: { legacy: string; stamped: string }; id: string; cleanup: () => void }> {
+  async function relayed(active: boolean, command: 'ack' | 'reply' = 'ack', rollback = false): Promise<{ result: { code: number; err: string }; dirs: { legacy: string; stamped: string }; id: string; cleanup: () => void }> {
     const made = nativeFixtureWorld(['typed']);
     updateState(made.dir, (state) => {
       state.sessions.acme = { seats: { helper: { stage: 'ready', pane: 'w1:p1' } }, worktrees: {} };
@@ -239,6 +239,7 @@ describe('round 3: protocol-1 ack and reply through the real relay run', () => {
     const id = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e91';
     const payload: RecordPayload = { kind: 'message', id, to: 'helper', to_id: null, root: made.root, session: 'acme', at: new Date().toISOString(), body: SECRET, from: 'lead', from_id: null, rule: 'the owner', thread: id };
     expect(writeRecord(dirs.legacy, signRecord(active ? stampedPayload(payload, made.home) : payload, made.home)).ok).toBe(true);
+    if (rollback) expect(deactivate(made.root, made.home).kind).toBe('dark');
     const folder = outboxFolder(made.dir, 'acme', 'helper', 1)!;
     mkdirSync(folder, { recursive: true, mode: 0o700 });
     const request = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e92';
@@ -255,6 +256,17 @@ describe('round 3: protocol-1 ack and reply through the real relay run', () => {
       expect(run.result.err).toContain(protocol1Refusal('ack'));
       expect(readdirSync(run.dirs.stamped).filter((name) => name.startsWith(`${run.id}.`))).toEqual([]);
       expect(existsSync(run.dirs.legacy) ? readdirSync(run.dirs.legacy).filter((name) => name.startsWith(run.id)) : []).toEqual([]);
+    } finally {
+      run.cleanup();
+    }
+  });
+
+  test('round 4: activate, stamp, roll back to dark: a protocol-1 ack is still refused while the seat\'s stamped folder holds mail', async () => {
+    const run = await relayed(true, 'ack', true);
+    try {
+      expect(run.result.code).not.toBe(0);
+      expect(run.result.err).toContain(protocol1Refusal('ack'));
+      expect(readdirSync(run.dirs.stamped).filter((name) => name.startsWith(`${run.id}.`))).toEqual([]);
     } finally {
       run.cleanup();
     }
