@@ -28,7 +28,8 @@ import { isStampedPayload, readRecord, recordFile, sameFolder, stampedSettled, v
 import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE } from '../../send/drop-folder.ts';
 import { createExclusive, fsyncFolder, removeDurable } from '../../queue/durable.ts';
 import { messageKeyOf, signDomain, verifyDomain, type Json } from '../../store/keys.ts';
-import { closeSync, constants, fsyncSync, openSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fsyncSync, readdirSync, readFileSync } from 'node:fs';
+import { openSync } from '../../host/guarded-fs.ts';
 import type { KeyObject } from 'node:crypto';
 import { archiveLegacySeat, legacySeatFolders } from '../../send/legacy-inbox-retention.ts';
 import { heldAt } from '../../held.ts';
