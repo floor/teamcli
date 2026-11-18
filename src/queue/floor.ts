@@ -36,6 +36,7 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { acquireLockAt } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
+import { randomBytes } from 'node:crypto';
 import { createExclusive, ensureFolder, fsyncFolder, readFence, removeDurable, type DurableFaults } from './durable.ts';
 
 /** The capability level this build enforces: exposure claims and wake-attempt states. */
@@ -206,12 +207,18 @@ function recoverUnderLock(root: string, home: string, faults?: DurableFaults): {
       ? { kind: 'ok' }
       : { kind: 'failed', why: 'a cut-off floor marker could not be removed' };
   }
-  if (record.kind !== 'ok') return { kind: 'ok' };
-  const published = readJson(join(queuesFolder(root), PUBLISHED));
-  if (published.kind !== 'absent') return { kind: 'ok' };
-  // The activation was decided and its record verifies: make the record durable (folder fsync)
-  // before PUBLISHED can stand, then publish. No reader acted on `active` before this point.
-  return publishUnderLock(root, faults);
+  // A verifying record whose publication was cut off is NOT published here: publication is A4 of a
+  // run whose A1 proof holds today (an actor that appeared since the cut must still refuse it).
+  void faults;
+  return { kind: 'ok' };
+}
+
+/** Whether a verifying activation record stands without its publication (a cut after A3). */
+function unpublishedRecord(root: string, home: string): boolean {
+  const marker = readJson(join(queuesFolder(root), PROTOCOL));
+  if (marker.kind !== 'ok') return false;
+  if (readActivation(root, home).kind !== 'ok') return false;
+  return readJson(join(queuesFolder(root), PUBLISHED)).kind === 'absent';
 }
 
 function publishUnderLock(root: string, faults?: DurableFaults): { kind: 'ok' } | { kind: 'failed'; why: string } {
@@ -236,16 +243,29 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
     if (recovered.kind === 'failed') return recovered;
     options.after?.('recover');
     const state = floorState(root, options.home);
-    if (state.kind === 'unknown') return { kind: 'failed', why: state.why };
-    // A1: the proof, fresh, immediately before the first write.
-    const actors = options.actors();
-    if (actors === null) return { kind: 'refused', why: 'the live actors cannot be read', below: [] };
+    const resume = state.kind === 'unknown' && unpublishedRecord(root, options.home);
+    if (state.kind === 'unknown' && !resume) return { kind: 'failed', why: state.why };
+    // Stale launch reservations (their launcher is gone) are cleared before the proof reads them.
+    clearStaleLaunches(root);
+    // A1: the proof, fresh, immediately before the first write. Live launch reservations are
+    // actors too (a managed launch admitted and not yet visible as its own actor).
+    const live = options.actors();
+    const reserved = launchReservations(root);
+    if (live === null || reserved === null) return { kind: 'refused', why: 'the live actors cannot be read', below: [] };
+    const actors = [...live, ...reserved];
     // The daemon runs the check and hosts the workers: without a live daemon at the floor there is
     // nobody to enforce the fences, so the root stays dark.
     if (!actors.some(actor => actor.kind === 'daemon')) return { kind: 'refused', why: 'no live daemon reports a level', below: [] };
     const below = belowFloor(actors, FLOOR_LEVEL);
     if (below.length > 0) return { kind: 'refused', why: 'an actor below the floor is live', below };
     options.after?.('prove');
+    if (resume) {
+      // A4 for a record cut off before its publication, now that today's proof holds.
+      const published = publishUnderLock(root, options.faults);
+      if (published.kind === 'failed') return published;
+      options.after?.('publish');
+      return { kind: 'already', level: FLOOR_LEVEL };
+    }
     if (state.kind === 'active') return { kind: 'already', level: state.level };
     if (state.kind === 'fenced') {
       return removeDurable(join(queuesFolder(root), FENCED)) === 'removed'
@@ -368,9 +388,96 @@ export function floorPass(root: string, home: string, nowMs: number, actors: () 
  * lock, so a launch and an activation never interleave. Null admits; a string is the refusal.
  * A lock that cannot be taken refuses (fail closed): the next run asks again.
  */
-export function admitManagedLaunch(root: string, home: string, level: number = ACTOR_LEVEL): string | null {
-  const result = withActivationLock(root, () => ({ answer: launchAdmission(root, home, level) }));
+export function admitManagedLaunch(root: string, home: string, level: number = ACTOR_LEVEL, launcherPid: number = process.pid, label = 'launch'): string | null {
+  const result = withActivationLock(root, () => {
+    const answer = launchAdmission(root, home, level);
+    if (answer !== null) return { answer };
+    // The admitted launch is represented BEFORE the lock is let go: a durable reservation, bound to
+    // the launcher's live pid and the level of the code it starts, that activation's actor proof
+    // counts until the launcher is gone. So an activation can never prove an inventory that misses
+    // an admitted start (E7 gate 3), whatever the launch awaits between admission and its own
+    // listener, and an answer reused before an in-place exit is still represented.
+    const reservation = reserveLaunch(root, launcherPid, level, label);
+    return { answer: reservation ? null : 'the launch could not be reserved durably' };
+  });
   if ('answer' in result) return result.answer;
   if (result.kind === 'busy') return 'the activation lock is held; the launch is asked again on the next run';
   return `the launch admission cannot be checked (${result.why})`;
+}
+
+const LAUNCHING = 'launching';
+const LAUNCH_NAME = /^(\d{1,10})\.[0-9a-f]{12}\.json$/;
+
+function reserveLaunch(root: string, pid: number, level: number, label: string): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  const folder = join(queuesFolder(root), LAUNCHING);
+  // One reservation per launcher process is enough: it stands until that process is gone.
+  const standing = readFolder(folder);
+  if (standing === null) return false;
+  if (standing.some(name => name.startsWith(`${String(pid)}.`))) return true;
+  const name = `${String(pid)}.${randomBytes(6).toString('hex')}.json`;
+  return createExclusive(join(folder, name), `${JSON.stringify({ v: 1, pid, level, label, at: new Date().toISOString() })}\n`) === 'created';
+}
+
+function readFolder(folder: string): string[] | null {
+  try {
+    return readdirSync(folder);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
+  }
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** The live launch reservations as actors; null when any cannot be read (fail closed). */
+export function launchReservations(root: string): FloorActor[] | null {
+  const folder = join(queuesFolder(root), LAUNCHING);
+  const names = readFolder(folder);
+  if (names === null) return null;
+  const actors: FloorActor[] = [];
+  for (const name of names) {
+    const match = LAUNCH_NAME.exec(name);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    if (!alive(pid)) continue;
+    const read = readJson(join(folder, name));
+    if (read.kind !== 'ok') return null;
+    const value = read.value as { pid?: unknown; level?: unknown; label?: unknown };
+    if (value.pid !== pid) return null;
+    const level = typeof value.level === 'number' && Number.isInteger(value.level) ? value.level : null;
+    actors.push({ kind: 'other', name: `launch reserved by pid ${String(pid)} (${typeof value.label === 'string' ? value.label : 'launch'})`, pid, build: null, level });
+  }
+  return actors;
+}
+
+/** Removes reservations whose launcher is gone. Under the activation lock; best effort. */
+function clearStaleLaunches(root: string): void {
+  const folder = join(queuesFolder(root), LAUNCHING);
+  for (const name of readFolder(folder) ?? []) {
+    const match = LAUNCH_NAME.exec(name);
+    if (match && !alive(Number(match[1]))) removeDurable(join(folder, name));
+  }
+}
+
+/** Every seat drop folder of the root, or null when any level cannot be listed (an unreadable
+ *  session or seat folder is never an empty one). */
+export function seatDropFoldersStrict(root: string): string[] | null {
+  const base = join(root, '.agents', 'send-drops');
+  const sessions = readFolder(base);
+  if (sessions === null) return null;
+  const out: string[] = [];
+  for (const session of sessions) {
+    if (session.startsWith('.')) continue;
+    const seats = readFolder(join(base, session));
+    if (seats === null) return null;
+    for (const seat of seats) if (!seat.startsWith('.')) out.push(join(base, session, seat));
+  }
+  return out;
 }

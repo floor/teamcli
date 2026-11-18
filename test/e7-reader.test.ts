@@ -6,11 +6,15 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listUnread } from '../src/mcp/inbox.ts';
+import { inQueueOrder, listUnread } from '../src/mcp/inbox.ts';
+import { unreadOf } from '../src/commands/queues.ts';
+import { LEAD_ACK_PREFIX } from '../src/send/record.ts';
+import { publishRecordRead } from '../src/send/read-receipt.ts';
+import { spawnSync } from 'node:child_process';
 import { signRecord } from '../src/send/record.ts';
-import { appendDeliverySync, queueBaseOf } from '../src/queue/append.ts';
-import { activate, admitManagedLaunch, fencesEnforced, floorState, mayCreateFence, queuesFolder, type FloorActor } from '../src/queue/floor.ts';
-import { drainPendingReceipts, shadowQueueReceipt } from '../src/queue/receipt-store.ts';
+import { appendDeliverySync, lockedQueueOrder, queueBaseOf } from '../src/queue/append.ts';
+import { activate, admitManagedLaunch, fencesEnforced, floorState, launchReservations, mayCreateFence, queuesFolder, seatDropFoldersStrict, type FloorActor } from '../src/queue/floor.ts';
+import { drainPendingReceipts, pendingMarkers, shadowQueueReceipt } from '../src/queue/receipt-store.ts';
 import { readerOrder, readerSwitch, seatQueueCheck, setReaderSwitch } from '../src/queue/reader.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
@@ -57,7 +61,8 @@ function orphan(at: At, id: string, when: string): void {
 
 const context = (at: At) => ({ to: 'lead', root: at.root, session: SESSION });
 const binding = (at: At) => ({ root: at.root, session: SESSION, seat: 'lead' });
-const listed = (at: At) => listUnread(at.dropDir, context(at), at.home).map(m => [m.id, m.seq ?? null]);
+const listed = (at: At) => inQueueOrder(listUnread(at.dropDir, context(at), at.home)).map(m => [m.id, m.seq ?? null]);
+const raw = (at: At) => listUnread(at.dropDir, context(at), at.home).map(m => [m.id, m.seq ?? null]);
 const on = (at: At, actors: FloorActor[] = [daemon]) => setReaderSwitch(at.root, true, {
   home: at.home, actors: () => actors,
   unreadOf: (dropDir) => ({ binding: binding(at), ids: listUnread(dropDir, context(at), at.home).map(m => m.id) }),
@@ -232,5 +237,119 @@ describe('E7 reader switch', () => {
       expect(on(at).kind).toBe('on');
       expect(listed(at)).toEqual([[M1, 1], [M2, 2]]);
     }
+  });
+});
+
+describe('E7 round 2', () => {
+  test('P1 recovery: a record cut off before publication is never published without today\'s proof', () => {
+    for (const actors of [[daemon, e6Server], [] as FloorActor[]]) {
+      const at = place();
+      expect(() => activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon], after: (step) => { if (step === 'record') throw new Error('crash'); } })).toThrow('crash');
+      // A level-2 actor appeared, or the daemon is gone: the recovery run refuses and publishes nothing.
+      expect(activateRoot(at, actors).kind).toBe('refused');
+      expect(existsSync(join(queuesFolder(at.root), 'PUBLISHED'))).toBe(false);
+      expect(floorState(at.root, at.home).kind).toBe('unknown');
+      expect(mayCreateFence(at.root, at.home, 'exposure')).toBe(false);
+      // Today's proof holds: A4 publishes the cut-off record.
+      expect(activateRoot(at).kind).toBe('already');
+      expect(floorState(at.root, at.home).kind).toBe('active');
+    }
+  });
+
+  test('P1 admission: an admitted launch is represented before the lock is let go; a lower-level launch in flight refuses activation', () => {
+    const at = place();
+    // Dark root: a level-2 launch is admitted and reserved under the lock (the launcher is this
+    // live test process); its own actor record does not exist yet.
+    expect(admitManagedLaunch(at.root, at.home, 2, process.pid, 'restart worker')).toBeNull();
+    expect(launchReservations(at.root)).toMatchObject([{ level: 2, pid: process.pid }]);
+    // Activation running while that launch is in flight counts it, and refuses.
+    expect(activateRoot(at).kind).toBe('refused');
+    expect(floorState(at.root, at.home).kind).toBe('dark');
+  });
+
+  test('P1 admission: a reservation whose launcher is gone is cleared, and a same-level one is counted at its level', () => {
+    const at = place();
+    const gone = spawnSync('true').pid as number;
+    expect(admitManagedLaunch(at.root, at.home, 2, gone, 'old')).toBeNull();
+    expect(launchReservations(at.root)).toEqual([]); // a dead launcher is not an actor
+    expect(admitManagedLaunch(at.root, at.home, 3, process.pid, 'mcp serve')).toBeNull();
+    expect(activateRoot(at).kind).toBe('activated');
+    expect(readdirSync(join(queuesFolder(at.root), 'launching')).some(name => name.startsWith(`${String(gone)}.`))).toBe(false);
+  });
+
+  test('P2 completeness: an unlistable session or inbox is never certified; the bound view honours a lead clearance', () => {
+    const at = place();
+    message(at, M1, LATER);
+    message(at, M2, EARLIER);
+    expect(activateRoot(at).kind).toBe('activated');
+    // A lead's valid clearance settles M2 in the bound view the inbox uses.
+    expect(publishRecordRead({ dropDir: at.dropDir, id: M2, to: 'lead', root: at.root, session: SESSION, home: at.home, key: messageKeyOf(at.home), at: '2026-11-18T00:01:00.000Z', readBy: `${LEAD_ACK_PREFIX}owner`, lead: 'lead' })).toBeTruthy();
+    expect(unreadOf(at.root, at.home, 'lead', at.dropDir)?.ids).toEqual([M1]);
+    // An inbox that cannot be listed is null, never an empty set.
+    const blind = join(at.root, '.agents', 'send-drops', SESSION, 'ghost');
+    writeFileSync(blind, 'not a folder');
+    expect(unreadOf(at.root, at.home, 'lead', blind)).toBeNull();
+    const refused = setReaderSwitch(at.root, true, { home: at.home, actors: () => [daemon], unreadOf: (dropDir) => unreadOf(at.root, at.home, 'lead', dropDir) });
+    expect(refused.kind).toBe('refused');
+    // A session folder that cannot be listed makes the whole inventory unknown.
+    writeFileSync(join(at.root, '.agents', 'send-drops', 'broken'), 'x');
+    expect(seatDropFoldersStrict(at.root)).toBeNull();
+  });
+
+  test('P2 consumers: every consumer keeps signed-time order; only the model-facing listing is offered by seq', () => {
+    const at = place();
+    message(at, M1, LATER);
+    message(at, M2, EARLIER);
+    expect(activateRoot(at).kind).toBe('activated');
+    expect(on(at).kind).toBe('on');
+    expect(raw(at)).toEqual([[M2, 2], [M1, 1]]); // time order kept, seq attached (drops batch, wake ages, wake picker)
+    expect(listed(at)).toEqual([[M1, 1], [M2, 2]]); // inbox_check order
+  });
+
+  test('P2 generation: the order is proved on the generation current under the lock; a rotation leaves the listing legacy', () => {
+    const at = place();
+    message(at, M1, LATER);
+    message(at, M2, EARLIER);
+    expect(activateRoot(at).kind).toBe('activated');
+    expect(on(at).kind).toBe('on');
+    const base = queueBaseOf(at.dropDir) as string;
+    // Rotate: a new empty generation becomes current (as a replacement does).
+    mkdirSync(join(base, 'g00000000000000ff', 'entries'), { recursive: true });
+    writeFileSync(join(base, 'current'), 'g00000000000000ff\n');
+    expect(listed(at)).toEqual([[M2, null], [M1, null]]);
+  });
+
+  test('P2 generation: a rotation after the lock is taken is the generation proved (the pointer is read under the lock)', () => {
+    const at = place();
+    message(at, M1, LATER);
+    message(at, M2, EARLIER);
+    const base = queueBaseOf(at.dropDir) as string;
+    const out = lockedQueueOrder(at.dropDir, binding(at), [M1, M2], at.home, { afterLock: () => {
+      mkdirSync(join(base, 'g00000000000000fe', 'entries'), { recursive: true });
+      writeFileSync(join(base, 'current'), 'g00000000000000fe\n');
+    } });
+    expect(out).toMatchObject({ why: expect.stringContaining('no committed queue entry') });
+  });
+
+  test('P2 status is read-only: pending, quarantine and receipts are left exactly as they were', () => {
+    const at = place();
+    message(at, M1, EARLIER);
+    const base = queueBaseOf(at.dropDir) as string;
+    // A read decided while another holder has the queue lock: a pending marker a drain could settle.
+    const held = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    expect('release' in held).toBe(true);
+    try {
+      expect(shadowQueueReceipt({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: M1, kind: 'read', actor: { kind: 'recipient', name: 'lead' }, home: at.home })).toBe('pending');
+    } finally {
+      if ('release' in held) held.release();
+    }
+    const snapshot = () => JSON.stringify([readdirSync(join(base, 'pending-receipts')).sort(), existsSync(join(at.root, '.agents', 'receipts')) ? readdirSync(join(at.root, '.agents', 'receipts'), { recursive: true }).sort() : []]);
+    const before = snapshot();
+    expect(seatQueueCheck(at.dropDir, binding(at), [M1], at.home)).toMatchObject({ kind: 'incomplete' });
+    expect(pendingMarkers(at.dropDir)).toBe(1);
+    expect(snapshot()).toBe(before);
+    // The authorized path drains it: the receipt is written and the marker goes.
+    expect(seatQueueCheck(at.dropDir, binding(at), [M1], at.home, { drain: true }).kind).toBe('complete');
+    expect(snapshot()).not.toBe(before);
   });
 });

@@ -7,7 +7,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
 import { listUnread } from '../mcp/inbox.ts';
-import { activate, floorState, seatDropFolders } from '../queue/floor.ts';
+import { activate, floorState, seatDropFoldersStrict } from '../queue/floor.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { readerSwitch, seatQueueCheck, setReaderSwitch, type SeatBinding } from '../queue/reader.ts';
 import { buildIdentity } from '../version.ts';
@@ -30,14 +30,18 @@ export type QueuesSources = { home: string; now?: () => Date };
 export const queues: Command = (argv, io) => runQueues(argv, io, { home: homedir() });
 export default queues;
 
-/** One seat folder's binding and unread ids, or null when it cannot be read. */
-function unreadOf(root: string, home: string, dropDir: string): { binding: SeatBinding; ids: string[] } | null {
+/** One seat folder's binding and unread ids, read exactly as the seat's own inbox reads them (the
+ *  lead binding included, so a lead's clearance settles a message here too). Null when the folder
+ *  cannot be listed: an unreadable inbox is never certified as an empty one. */
+export function unreadOf(root: string, home: string, lead: string | undefined, dropDir: string): { binding: SeatBinding; ids: string[] } | null {
   const parts = dropDir.split('/');
   const seat = parts[parts.length - 1];
   const session = parts[parts.length - 2];
   if (!seat || !session || join(root, '.agents', 'send-drops', session, seat) !== dropDir) return null;
-  const binding = { root, session, seat };
-  return { binding, ids: listUnread(dropDir, { to: seat, root, session }, home).map(message => message.id) };
+  let listedOk = false;
+  const ids = listUnread(dropDir, { to: seat, root, session, ...(lead === undefined ? {} : { lead }) }, home, undefined, () => { listedOk = true; }).map(message => message.id);
+  if (!listedOk) return null;
+  return { binding: { root, session, seat }, ids };
 }
 
 export async function runQueues(argv: string[], io: Io, sources: QueuesSources): Promise<number> {
@@ -57,15 +61,22 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
   }
   const root = loaded.root;
   const home = sources.home;
+  const lead = loaded.team.orchestrator ?? undefined;
   if (verb === 'status') {
     const floor = floorState(root, home);
     const flag = readerSwitch(root, home);
     out.stdout(`floor: ${floor.kind}${'level' in floor ? ` (level ${String(floor.level)})` : ''}${'why' in floor ? ` — ${floor.why}` : ''}\n`);
     out.stdout(`reader switch: ${flag.kind}${flag.kind === 'unknown' ? ` — ${flag.why}` : ''}\n`);
-    for (const dropDir of seatDropFolders(root)) {
-      const unread = unreadOf(root, home, dropDir);
-      if (unread === null) continue;
-      const check = seatQueueCheck(dropDir, unread.binding, unread.ids, home);
+    const folders = seatDropFoldersStrict(root);
+    if (folders === null) out.stdout('seats: the seat folders cannot all be listed\n');
+    for (const dropDir of folders ?? []) {
+      const unread = unreadOf(root, home, lead, dropDir);
+      if (unread === null) {
+        out.stdout(`${dropDir}: the inbox cannot be listed\n`);
+        continue;
+      }
+      // Read-only: status drains nothing, signs nothing and moves nothing.
+      const check = seatQueueCheck(dropDir, unread.binding, unread.ids, home, { drain: false });
       out.stdout(`${unread.binding.session}/${unread.binding.seat}: ${check.kind === 'complete' ? `complete (${String(check.committed)} unread placed)` : `incomplete — ${check.why}`}\n`);
     }
     // exit: queues.status
@@ -95,7 +106,7 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
   const outcome = setReaderSwitch(root, value === 'on', {
     home,
     actors: () => liveFloorActors(root, home),
-    unreadOf: (dropDir) => unreadOf(root, home, dropDir),
+    unreadOf: (dropDir) => unreadOf(root, home, lead, dropDir),
     ...(sources.now ? { now: sources.now } : {}),
   });
   if (outcome.kind === 'on' || outcome.kind === 'off') {

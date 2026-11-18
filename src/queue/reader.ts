@@ -17,19 +17,26 @@
 //   off         READER removed durably. Rollback mid-traffic: the next listing is legacy, and no
 //               message moves or disappears, because the set never depended on the switch.
 //
-// A listing in queue order needs, at read time, every one of: READER verifies, the floor is ACTIVE
-// at >= READER_LEVEL, a snapshot of the seat's journal taken under its queue lock is durable and
-// whole, no reserved hole at or below the highest listed seq, and every listed message holds a
-// committed entry that verifies for this root, session, seat and generation. Anything unknown,
-// missing or contradictory answers `legacy` with the reason: the legacy listing is the full set,
-// so falling back can delay order, never hide a message (fail closed toward visibility).
+// A listing carries each message's seq only when, at read time: READER verifies, the floor is
+// ACTIVE at >= READER_LEVEL, and ONE proof taken under the seat's queue lock (the current
+// generation pointer read under that lock, the journal durable and whole, every listed message's
+// committed entry verified for this root, session, seat and generation, no reserved hole at or
+// below the highest listed seq) holds. Anything unknown, missing, held or contradictory answers
+// `legacy` with the reason. The listing's set and order are the legacy ones for every consumer
+// (the drops batch, wake ages, the wake picker keep their own time criteria); only the
+// model-facing inbox listing is offered in seq order (`inQueueOrder`). So a fallback can delay
+// order, never hide a message (fail closed toward visibility).
+//
+// `seatQueueCheck` is read-only by default (`team queues status`); only the authorized switch
+// path drains pending dual writes. Admitted managed launches are reservations the actor proof
+// counts (floor.ts), so the switch's proof sees a launch that is not yet its own actor.
 
 import { join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { committedSnapshot, readEntry, queueBaseOf } from './append.ts';
+import { lockedQueueOrder, queueBaseOf } from './append.ts';
 import { createExclusive, readFence, removeDurable, type DurableFaults } from './durable.ts';
-import { floorState, queuesFolder, seatDropFolders, withActivationLock, type FloorActor } from './floor.ts';
-import { drainPendingReceipts, quarantinedPending } from './receipt-store.ts';
+import { floorState, launchReservations, queuesFolder, seatDropFoldersStrict, withActivationLock, type FloorActor } from './floor.ts';
+import { drainPendingReceipts, pendingMarkers, quarantinedPending } from './receipt-store.ts';
 
 /** The level a root must be active at before the switch may be on. */
 export const READER_LEVEL = 3;
@@ -71,45 +78,32 @@ export type SeatCheck =
 
 /**
  * Whether a seat's queue can be trusted for its order. `unread` are the ids waiting in the seat's
- * folder (the legacy listing's set). Drains the seat's pending dual writes first.
+ * folder (the bound legacy listing's set). `drain`: the authorized switch path drains the seat's
+ * pending dual writes first; the read-only check (`team queues status`) only counts them and
+ * writes nothing at all.
  */
-export function seatQueueCheck(dropDir: string, binding: SeatBinding, unread: readonly string[], home: string): SeatCheck {
+export function seatQueueCheck(dropDir: string, binding: SeatBinding, unread: readonly string[], home: string, mode: { drain: boolean } = { drain: false }): SeatCheck {
   if (queueBaseOf(dropDir) === null) return { kind: 'incomplete', why: 'the folder has no queue' };
-  const drained = drainPendingReceipts(dropDir, home);
-  if (drained.unknown) return { kind: 'incomplete', why: 'the pending receipts cannot be listed' };
-  if (drained.left > 0) return { kind: 'incomplete', why: `${String(drained.left)} pending receipt(s) are not drained` };
+  let pending: number | null;
+  if (mode.drain) {
+    const drained = drainPendingReceipts(dropDir, home);
+    pending = drained.unknown ? null : drained.left;
+  } else {
+    pending = pendingMarkers(dropDir);
+  }
+  if (pending === null) return { kind: 'incomplete', why: 'the pending receipts cannot be listed' };
+  if (pending > 0) return { kind: 'incomplete', why: `${String(pending)} pending receipt(s) are not drained` };
   const quarantined = quarantinedPending(dropDir);
   if (quarantined === null) return { kind: 'incomplete', why: 'the receipt quarantine cannot be listed' };
   if (quarantined.length > 0) return { kind: 'incomplete', why: `${String(quarantined.length)} quarantined receipt marker(s) are not accounted for` };
-  const order = orderOf(dropDir, binding, unread, home);
-  if (order.kind === 'legacy') return { kind: 'incomplete', why: order.why };
+  const order = lockedQueueOrder(dropDir, binding, unread, home);
+  if ('why' in order) return { kind: 'incomplete', why: order.why };
   return { kind: 'complete', generation: order.generation, committed: order.seq.size, pending: 0, quarantined: 0 };
 }
 
 export type ReaderOrder =
   | { kind: 'queue'; generation: string; seq: Map<string, number> }
   | { kind: 'legacy'; why: string };
-
-/** The queue order for `ids` (a listing's set), or the reason the listing stays legacy. */
-function orderOf(dropDir: string, binding: SeatBinding, ids: readonly string[], home: string): ReaderOrder {
-  const snapshot = committedSnapshot(dropDir);
-  if (snapshot === null) return { kind: 'legacy', why: 'the queue journal is not readable now' };
-  const base = queueBaseOf(dropDir);
-  if (base === null) return { kind: 'legacy', why: 'the folder has no queue' };
-  const seq = new Map<string, number>();
-  let highest = 0;
-  for (const id of ids) {
-    const at = snapshot.committed.get(id);
-    if (at === undefined) return { kind: 'legacy', why: `message ${id} has no committed queue entry` };
-    const entry = readEntry(join(base, snapshot.generation), at, { root: binding.root, session: binding.session, seat: binding.seat, generation: snapshot.generation }, home);
-    if (entry === null || entry.payload.msg_id !== id) return { kind: 'legacy', why: `message ${id}'s queue entry does not verify` };
-    seq.set(id, at);
-    if (at > highest) highest = at;
-  }
-  const hole = snapshot.holes.find(at => at <= highest);
-  if (hole !== undefined) return { kind: 'legacy', why: `seq ${String(hole)} is still reserved` };
-  return { kind: 'queue', generation: snapshot.generation, seq };
-}
 
 /**
  * The order a listing of `ids` is offered in. `queue` only when the switch is on, the root is
@@ -124,7 +118,8 @@ export function readerOrder(dropDir: string, binding: SeatBinding, ids: readonly
     const floor = floorState(binding.root, home);
     if (floor.kind !== 'active') return { kind: 'legacy', why: `the root is ${floor.kind}` };
     if (floor.level < READER_LEVEL) return { kind: 'legacy', why: `the root is active at level ${String(floor.level)}, below the reader level ${String(READER_LEVEL)}` };
-    return orderOf(dropDir, binding, ids, home);
+    const order = lockedQueueOrder(dropDir, binding, ids, home);
+    return 'why' in order ? { kind: 'legacy', why: order.why } : { kind: 'queue', generation: order.generation, seq: order.seq };
   } catch (error) {
     return { kind: 'legacy', why: `the queue order cannot be read (${(error as Error).message})` };
   }
@@ -141,8 +136,11 @@ export type SwitchOptions = {
   home: string;
   /** The live actors, read fresh right before the record (R0). */
   actors: () => FloorActor[] | null;
-  /** The unread ids of one seat folder (the legacy listing's set). */
+  /** The unread ids of one seat folder (the bound legacy listing's set); null when the folder
+   *  cannot be listed (never read as empty). */
   unreadOf: (dropDir: string) => { binding: SeatBinding; ids: string[] } | null;
+  /** The root's seat folders; null when any level cannot be listed. Defaults to the strict scan. */
+  seatFolders?: () => string[] | null;
   now?: () => Date;
   faults?: DurableFaults;
 };
@@ -157,19 +155,23 @@ export function setReaderSwitch(root: string, on: boolean, options: SwitchOption
     if (floor.kind !== 'active') return { kind: 'refused', why: `the root is ${floor.kind}, not active` };
     if (floor.level < READER_LEVEL) return { kind: 'refused', why: `the root is active at level ${String(floor.level)}, below the reader level ${String(READER_LEVEL)}` };
     const blocked: { dropDir: string; why: string }[] = [];
-    for (const dropDir of seatDropFolders(root)) {
+    const folders = (options.seatFolders ?? (() => seatDropFoldersStrict(root)))();
+    if (folders === null) return { kind: 'refused', why: 'the seat folders cannot all be listed' };
+    for (const dropDir of folders) {
       const unread = options.unreadOf(dropDir);
       if (unread === null) {
         blocked.push({ dropDir, why: 'the seat folder cannot be listed' });
         continue;
       }
-      const check = seatQueueCheck(dropDir, unread.binding, unread.ids, options.home);
+      const check = seatQueueCheck(dropDir, unread.binding, unread.ids, options.home, { drain: true });
       if (check.kind === 'incomplete') blocked.push({ dropDir, why: check.why });
     }
     if (blocked.length > 0) return { kind: 'refused', why: 'a seat queue is not complete', seats: blocked };
     // The actors are proved last, with nothing awaited before the record.
-    const actors = options.actors();
-    if (actors === null) return { kind: 'refused', why: 'the live actors cannot be read' };
+    const live = options.actors();
+    const reserved = launchReservations(root);
+    if (live === null || reserved === null) return { kind: 'refused', why: 'the live actors cannot be read' };
+    const actors = [...live, ...reserved];
     const below = actors.filter(actor => actor.level === null || actor.level < READER_LEVEL);
     if (below.length > 0) return { kind: 'refused', why: `an actor below the reader level is live (${below.map(actor => actor.name).join(', ')})` };
     const payload: ReaderPayload = { v: 1, kind: 'queue-reader', root, level: READER_LEVEL, at: (options.now?.() ?? new Date()).toISOString() };

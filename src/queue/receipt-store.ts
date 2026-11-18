@@ -308,6 +308,14 @@ function listPending(folder: string): string[] | null {
   }
 }
 
+/** How many pending markers stand, read-only; null when the folder cannot be listed. */
+export function pendingMarkers(dropDir: string): number | null {
+  const folder = pendingFolder(dropDir);
+  if (folder === null) return 0;
+  const names = listPending(folder);
+  return names === null ? null : names.length;
+}
+
 /** Every quarantined marker, or `null` when the quarantine cannot be listed. */
 export function quarantinedPending(dropDir: string): string[] | null {
   const folder = pendingFolder(dropDir);

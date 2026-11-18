@@ -919,32 +919,51 @@ export function entriesOf(dropDir: string): number[] {
 }
 
 /**
- * The current generation's committed placements and its open holes, read once under the writer's
- * queue lock (tried once, never waited for) from a durable journal. Null (unknown) when the lock is
- * held, the journal is not proven durable, or it is unreadable, torn or corrupt: a reader then keeps
- * the legacy order (E7). `holes` are seqs whose last line is still `reserved`.
+ * The queue order of `ids` (a listing's set), proved in ONE locked snapshot (E7): under the
+ * writer's queue lock (tried once, never waited for) the current generation pointer is read, the
+ * journal is proved durable and whole, and every id's committed placement and its signed entry are
+ * verified, all before the lock is let go. A generation rotated before the lock is therefore never
+ * read as current. Null with the reason when anything is unknown, missing or held.
  */
-export function committedSnapshot(dropDir: string): { generation: string; committed: Map<string, number>; holes: number[]; head: number } | null {
+export function lockedQueueOrder(
+  dropDir: string,
+  binding: { root: string; session: string; seat: string },
+  ids: readonly string[],
+  home: string,
+  faults: { afterLock?: () => void } = {},
+): { generation: string; seq: Map<string, number> } | { why: string } {
   const base = queueBaseOf(dropDir);
-  if (base === null) return null;
-  const named = currentGenerationName(dropDir);
-  if (named === null) return null;
-  const folder = join(base, named);
+  if (base === null) return { why: 'the folder has no queue' };
   let lock: ReturnType<typeof acquireLockAt>;
   try {
     lock = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
   } catch {
-    return null;
+    return { why: 'the queue lock cannot be taken' };
   }
-  if (!('release' in lock)) return null;
+  if (!('release' in lock)) return { why: 'the queue lock is held' };
   try {
-    if (!journalDurable(folder)) return null;
+    faults.afterLock?.();
+    const named = currentGenerationName(dropDir);
+    if (named === null) return { why: 'the queue has no current generation' };
+    const folder = join(base, named);
+    if (!journalDurable(folder)) return { why: 'the queue journal is not proved durable' };
     const journal = readJournal(join(folder, 'journal.jsonl'));
-    if (journal.unreadable === true || journal.corrupt || journal.tornAt !== null) return null;
+    if (journal.unreadable === true || journal.corrupt || journal.tornAt !== null) return { why: 'the queue journal is not whole' };
     const folded = fold(journal.lines);
-    const holes: number[] = [];
-    for (const [seq, last] of folded.last) if (last.state === 'reserved') holes.push(seq);
-    return { generation: named, committed: folded.committedIds, holes: holes.sort((a, b) => a - b), head: folded.head };
+    const seq = new Map<string, number>();
+    let highest = 0;
+    for (const id of ids) {
+      const at = folded.committedIds.get(id);
+      if (at === undefined) return { why: `message ${id} has no committed queue entry` };
+      const entry = readEntry(folder, at, { root: binding.root, session: binding.session, seat: binding.seat, generation: named }, home);
+      if (entry === null || entry.payload.msg_id !== id) return { why: `message ${id}'s queue entry does not verify` };
+      seq.set(id, at);
+      if (at > highest) highest = at;
+    }
+    for (const [at, last] of folded.last) {
+      if (last.state === 'reserved' && at <= highest) return { why: `seq ${String(at)} is still reserved` };
+    }
+    return { generation: named, seq };
   } finally {
     lock.release();
   }

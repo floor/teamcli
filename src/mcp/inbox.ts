@@ -562,19 +562,25 @@ export function listUnread(
       ...(legacy ? { legacy: true as const } : {}),
     });
   }
-  // E7: the same set, offered in queue order when the reader switch holds for this seat. The set
-  // never depends on the switch: a legacy listing is the full set, so a fallback delays order and
-  // hides nothing. Plain-text legacy drops have no queue entry and keep the legacy listing.
+  // E7: the same set and the same (signed-time) order for every consumer; each message carries its
+  // queue seq when the reader switch holds for this seat. Time-driven consumers (the drops batch,
+  // wake ages, the wake picker) keep their own criteria; only the model-facing inbox listing is
+  // offered in seq order (`inQueueOrder`). The set never depends on the switch.
+  messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
   if (messages.length > 0 && !messages.some(message => message.legacy === true)) {
     const order = readerOrder(dropDir, { root: context.root, session: context.session, seat: context.to }, messages.map(message => message.id), home);
-    if (order.kind === 'queue') {
-      return messages
-        .map(message => ({ ...message, seq: order.seq.get(message.id) as number }))
-        .sort((a, b) => a.seq - b.seq);
-    }
+    if (order.kind === 'queue') return messages.map(message => ({ ...message, seq: order.seq.get(message.id) as number }));
   }
-  return messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
+  return messages;
 }
+
+/** The listing offered to the model in queue order: by seq when every message carries one (the
+ *  reader switch held for the whole listing), otherwise unchanged (signed-time order). */
+export function inQueueOrder(messages: readonly InboxMessage[]): InboxMessage[] {
+  if (messages.length === 0 || messages.some(message => message.seq === undefined)) return [...messages];
+  return [...messages].sort((a, b) => (a.seq as number) - (b.seq as number));
+}
+
 
 /** The text as JSON, or undefined when it is not JSON at all. */
 function parsedJson(text: string): unknown {
