@@ -22,6 +22,7 @@ import { basename, join } from 'node:path';
 import { cliWordListOf, provenScriptWord, shellScriptWordOf } from '../launch/cli-scope.ts';
 import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { shellWords } from '../launch/shell-words.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
 
 /** The launch flag that loads a development channel, and the value that names this server. */
 export const CHANNEL_FLAG = '--dangerously-load-development-channels';
@@ -226,6 +227,7 @@ export function channelLaunchEnabled(launch: string | undefined | null, server: 
 
 /** The push marker's path: the record's own name, then the marker's suffix. */
 export function channelPushPath(dropDir: string, id: string): string {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   return join(dropDir, `${id}.${CHANNEL_PUSH_RECEIPT}.json`);
 }
 
@@ -233,6 +235,7 @@ export function channelPushPath(dropDir: string, id: string): string {
  *  server's push or the sender's held marker; both say this id is not to be pushed. A file that
  *  does not parse, or that names another id, is no marker. */
 export function channelPushHeld(dropDir: string, id: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   try {
     const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown };
     return parsed !== null && typeof parsed === 'object' && parsed.id === id;
@@ -245,6 +248,7 @@ export function channelPushHeld(dropDir: string, id: string): boolean {
  *  the same name but is not a push: the channel leg has not delivered anything when only that one
  *  is there, and its walk goes on. */
 export function channelPushed(dropDir: string, id: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   try {
     const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown; kind?: unknown };
     return parsed !== null && typeof parsed === 'object' && parsed.id === id && parsed.kind !== CHANNEL_HELD_RECEIPT;
@@ -257,6 +261,7 @@ export function channelPushed(dropDir: string, id: string): boolean {
 /** Whether the server recorded a completed notification write for this id. A reservation, a held
  *  marker, or a marker left behind when the seat lost liveness is not a delivery. */
 export function channelNotified(dropDir: string, id: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   try {
     const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown; kind?: unknown; notified?: unknown };
     return parsed !== null && typeof parsed === 'object' && parsed.id === id && parsed.kind !== CHANNEL_HELD_RECEIPT && parsed.notified === true;
@@ -268,6 +273,7 @@ export function channelNotified(dropDir: string, id: string): boolean {
 /** Records that the notification line was written. Never creates the marker and never turns a
  *  held marker into a delivery: only the server's own reservation can become a completed write. */
 export function markChannelNotified(dropDir: string, id: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   const path = channelPushPath(dropDir, id);
   const tmp = `${path}.${process.pid}.tmp`;
   try {
@@ -292,10 +298,12 @@ export function markChannelNotified(dropDir: string, id: string): boolean {
  *  leave or did leave, including when the completion flag could not be published. It is not
  *  itself a successful delivery, and it is not permission for another leg. */
 export function channelEmittedPath(dropDir: string, id: string): string {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   return join(dropDir, `${id}.channel-emitted`);
 }
 
 export function channelEmitted(dropDir: string, id: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   try {
     const parsed = JSON.parse(readFileSync(channelEmittedPath(dropDir, id), 'utf8')) as { id?: unknown };
     return parsed !== null && typeof parsed === 'object' && parsed.id === id;
@@ -305,6 +313,7 @@ export function channelEmitted(dropDir: string, id: string): boolean {
 }
 
 export function recordChannelEmitted(dropDir: string, id: string, at: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   hostedCommit('recordChannelEmitted');
   try {
     writeFileSync(channelEmittedPath(dropDir, id), `${JSON.stringify({ v: 1, id, at })}\n`, { flag: 'wx', mode: 0o600 });
@@ -317,10 +326,12 @@ export function recordChannelEmitted(dropDir: string, id: string, at: string): b
 /** The sender's abort beside a reservation: an in-flight server must not write the notification
  *  after the sender has taken another leg. It is not a push and not a delivery. */
 export function channelAbortPath(dropDir: string, id: string): string {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   return join(dropDir, `${id}.channel-abort`);
 }
 
 export function channelAborted(dropDir: string, id: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   try {
     const parsed = JSON.parse(readFileSync(channelAbortPath(dropDir, id), 'utf8')) as { id?: unknown };
     return parsed !== null && typeof parsed === 'object' && parsed.id === id;
@@ -330,6 +341,7 @@ export function channelAborted(dropDir: string, id: string): boolean {
 }
 
 export function recordChannelAbort(dropDir: string, id: string, at: string, reason: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   hostedCommit('recordChannelAbort');
   try {
     writeFileSync(channelAbortPath(dropDir, id), `${JSON.stringify({ v: 1, id, at, reason })}\n`, { flag: 'wx', mode: 0o600 });
@@ -356,6 +368,7 @@ export type ChannelHeldReceipt = {
  * on either way; the marker only ever prevents a later push.
  */
 export function recordChannelHeld(dropDir: string, receipt: ChannelHeldReceipt): boolean {
+  dropDir = seatFolderOf(dropDir, receipt.id); // E7b revision 3: the record's own tree.
   hostedCommit('recordChannelHeld');
   try {
     writeFileSync(channelPushPath(dropDir, receipt.id), `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
@@ -372,6 +385,7 @@ export function recordChannelHeld(dropDir: string, receipt: ChannelHeldReceipt):
  *  The lock name is published only after the owner record is durable. An empty or malformed
  *  name is not reclaimed: unknown ownership stays blocked. A time grace is not ownership. */
 export function channelCommitLockPath(dropDir: string, id: string): string {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   return join(dropDir, `${id}.channel-commit.lock`);
 }
 
@@ -923,6 +937,7 @@ function lockHolder(dropDir: string, id: string): number | null {
 /** True when the lock name exists and is not a dead positive pid. An empty or malformed record
  *  stays blocked. A missing name is not busy. */
 export function channelCommitActive(dropDir: string, id: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   try {
     const holder = Number(readFileSync(channelCommitLockPath(dropDir, id), 'utf8').trim());
     if (!Number.isInteger(holder) || holder <= 0) return true;
@@ -943,6 +958,7 @@ const heldCommits = new Set<string>();
  *  every return, including a throw from `work` or from the release hook. Nothing is spawned
  *  while the descriptor is held. */
 export function withChannelCommit<T>(dropDir: string, id: string, work: () => T, hooks?: ChannelCommitHooks): T | 'busy' {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   const path = channelCommitLockPath(dropDir, id);
   let fd: number | 'busy' = 'busy';
   for (let at = 0; at < 3; at += 1) {
@@ -977,6 +993,7 @@ export function withChannelCommit<T>(dropDir: string, id: string, work: () => T,
  * leg: reporting a hold that was not written would let both sides deliver.
  */
 export function reserveChannelFallback(dropDir: string, receipt: ChannelHeldReceipt): 'notified' | 'held' | 'unguarded' | 'uncertain' {
+  dropDir = seatFolderOf(dropDir, receipt.id); // E7b revision 3: the record's own tree.
   const claim = withChannelCommit(dropDir, receipt.id, () => {
     if (channelNotified(dropDir, receipt.id)) return 'notified' as const;
     if (channelEmitted(dropDir, receipt.id)) return 'uncertain' as const;
@@ -1016,6 +1033,7 @@ export type ChannelPushReceipt = {
  * must not write a notification without winning this reservation.
  */
 export function recordChannelPush(dropDir: string, receipt: ChannelPushReceipt): boolean {
+  dropDir = seatFolderOf(dropDir, receipt.id); // E7b revision 3: the record's own tree.
   hostedCommit('recordChannelPush');
   try {
     writeFileSync(channelPushPath(dropDir, receipt.id), `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
@@ -1033,6 +1051,7 @@ export function recordChannelPush(dropDir: string, receipt: ChannelPushReceipt):
  * True once none stands at its live name; false on any fault (the next pass tries again).
  */
 export function retireChannelAttempt(dropDir: string, id: string, nowMs: number = Date.now()): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   const done = withChannelCommit(dropDir, id, () => {
     const history = join(dropDir, '.exposures', id);
     try {

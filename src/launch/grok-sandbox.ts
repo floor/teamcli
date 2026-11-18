@@ -174,6 +174,8 @@ function agentGrants(root: string, session: string, seat: string): string[] {
   const grants: string[] = [];
   if (oneSegment(session) && oneSegment(seat)) {
     grants.push(realFolder(seatMailDirIn(agents, session, seat)));
+    // E7b revision 3: the seat's stamped folder, where its stamped mail and their receipts sit.
+    grants.push(realFolder(seatMailDirIn(agents, session, seat, 'stamped')));
     grants.push(realFolder(join(agents, 'messages', seat)));
   }
   const state = cliHookStatePath(agents, session, seat);

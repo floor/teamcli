@@ -23,7 +23,7 @@
 import { hostedCommit } from '../host/request-scope.ts';
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { messageKeyOf, messageKeyState, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -34,6 +34,7 @@ import { dropMessage } from './native.ts';
 import { floorState } from '../queue/floor.ts';
 import { EXPOSURES } from '../queue/handover.ts';
 import { ensureFolder } from '../queue/durable.ts';
+import { NO_STAMPED_FOLDER, recordFolderFor } from '../queue/mail-tree.ts';
 
 /** The `kind` a message record's payload carries. A receipt carries `receipt`, a thread's close
  *  `thread-close`. */
@@ -946,17 +947,22 @@ export function writeRecord(dropDir: string, record: SignedRecord): RecordWrite 
   if (!recordNameOk(id)) return { ok: false, reason: 'the record id cannot be a file name' };
   const path = recordFile(dropDir, id);
   if (heldAt(path).kind !== 'missing') return { ok: false, reason: 'a record already holds that id' };
+  // E7b revision 3: the record's era names its container; a stamped record is written only into
+  // the seat's stamped folder (src/queue/mail-tree.ts), which no older reader lists or opens.
+  const stamped = isStampedPayload(record.payload);
+  const folder = recordFolderFor(dropDir, stamped);
+  if (folder === null) return { ok: false, reason: NO_STAMPED_FOLDER };
   // E7b: a stamped record's era evidence (its delivery-history folder) stands, durably, before the
   // record can be seen, so no receipt can ever stand on it without the strict rule applying.
-  if (isStampedPayload(record.payload) && !ensureFolder(join(dropDir, EXPOSURES, id))) {
+  if (stamped && !ensureFolder(join(folder, EXPOSURES, id))) {
     return { ok: false, reason: 'the delivery history folder could not be made durable' };
   }
   try {
-    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+    dropMessage(folder, id, `${JSON.stringify(record, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the record could not be written' };
   }
-  return { ok: true, path };
+  return { ok: true, path: join(folder, id) };
 }
 
 /**
@@ -996,6 +1002,12 @@ export type SealedRead = { ok: true; sealed: Sealed | null } | { ok: false; reas
  * folder or a FIFO is refused and never replaced — writing there would either follow it or take a
  * name this key does not own.
  */
+/** The folder a record's sidecar is written into: beside a record in the stamped tree, so its
+ *  settlement sits in the same tree (E7b revision 3); otherwise the caller's folder, as before. */
+function besideRecord(dropDir: string, id: string, sidecarPath: string): string {
+  return seatFolderOf(dropDir, id) === dropDir ? dropDir : dirname(sidecarPath);
+}
+
 export function writeRecordOver(dropDir: string, record: SignedRecord): RecordWrite {
   hostedCommit('writeRecordOver');
   const id = record.payload.id;
@@ -1006,12 +1018,16 @@ export function writeRecordOver(dropDir: string, record: SignedRecord): RecordWr
   if (held.kind === 'fifo') return { ok: false, reason: 'a FIFO was found and not followed' };
   if (held.kind === 'folder') return { ok: false, reason: 'the record path is a folder' };
   if (held.kind === 'other') return { ok: false, reason: 'the record path is not a regular file' };
+  // E7b revision 3: an existing record is replaced where it stands; a new one goes to the folder
+  // of its own era (src/queue/mail-tree.ts).
+  const folder = held.kind === 'file' ? dirname(path) : recordFolderFor(dropDir, isStampedPayload(record.payload));
+  if (folder === null) return { ok: false, reason: NO_STAMPED_FOLDER };
   try {
-    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+    dropMessage(folder, id, `${JSON.stringify(record, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the record could not be written' };
   }
-  return { ok: true, path };
+  return { ok: true, path: join(folder, id) };
 }
 
 /**
@@ -1547,7 +1563,7 @@ export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: stri
     return { ok: false, reason: 'the read receipt name is held by a file that does not verify for this brief' };
   }
   try {
-    dropMessage(dropDir, `${id}.${status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+    dropMessage(besideRecord(dropDir, id, path), `${id}.${status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the receipt could not be written' };
   }
@@ -1578,7 +1594,7 @@ export function writeClose(dropDir: string, close: SignedClose): RecordWrite {
   const path = closeFile(dropDir, id);
   if (heldAt(path).kind !== 'missing') return { ok: true, path, existing: true };
   try {
-    dropMessage(dropDir, `${id}.closed.json`, `${JSON.stringify(close, null, 2)}\n`);
+    dropMessage(besideRecord(dropDir, id, path), `${id}.closed.json`, `${JSON.stringify(close, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the close could not be written' };
   }

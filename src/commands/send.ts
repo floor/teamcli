@@ -121,7 +121,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 import { modelDiffers, positiveModelObservation, signedSeatModel, signedSeatModelObservation, type SeatModelObservation } from '../status/statusline.ts';
 import { clearPreflightReports, reportHeldSend } from '../send/held-reports.ts';
-import { mailTreeIn, seatMailDirIn, sessionMailDir } from '../queue/mail-tree.ts';
+import { NO_STAMPED_FOLDER, identityDirOf, mailTreeIn, recordFolderFor, seatMailDirIn, sessionMailDir } from '../queue/mail-tree.ts';
 import { liveRecordPath } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -3940,6 +3940,9 @@ export async function stageSendRecord(
     }
   }
   const record = recordTextOf(signed);
+  // E7b revision 3: the record's era names its container (src/queue/mail-tree.ts): a stamped record
+  // is staged only into the seat's stamped folder, never where an older reader lists mail.
+  const recordDir = recordFolderFor(dropDir, isStampedPayload(signed.payload));
   hostedCommit('relay stage');
   // The receiver's queue (rfc-event-comms §1, E4, shadow): the staging is the record write the
   // append wraps, unchanged; the queue's own outcome never changes this send's.
@@ -3949,10 +3952,11 @@ export async function stageSendRecord(
       // E7b: a stamped record's era evidence (its delivery-history folder) stands, durably, before
       // the record is published, on the queued path and the queue-skip fallback alike (this is the
       // one writer both run), so no receipt can ever stand on it without the strict rule.
-      if (isStampedPayload(signed.payload) && !ensureFolder(join(dropDir, EXPOSURES, payload.id))) {
+      if (recordDir === null) return { ok: false, value: { outcome: 'refused' as const, reason: NO_STAMPED_FOLDER } };
+      if (isStampedPayload(signed.payload) && !ensureFolder(join(recordDir, EXPOSURES, payload.id))) {
         return { ok: false, value: { outcome: 'refused' as const, reason: 'the delivery history folder could not be made durable' } };
       }
-      const result = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
+      const result = await relayStage({ dir: recordDir, name: payload.id }, { id: payload.id, record }, { now });
       return { ok: result.outcome !== 'refused', value: result };
     },
     { home, log: queueLog(dropDir, now) },
@@ -3983,8 +3987,9 @@ export async function stageSendRecord(
   // The recipient's unread index names this record as its sender's newest. It is a hint the
   // receiver's sweep verifies against the record itself, never a second source of truth, and a
   // hint that cannot be written never changes what this send did.
-  noteUnread(dropDir, payload.from, payload.id, payload.at);
-  return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record, signed };
+  // The hint is the seat's own (body-free: an id and a time): it stays in the identity folder.
+  noteUnread(identityDirOf(dropDir), payload.from, payload.id, payload.at);
+  return { ok: true, path: staged.receipt.copy ?? join(recordDir ?? dropDir, payload.id), record, signed };
 }
 
 /** Stages a record the asking principal already signed, through the same durable copy the
@@ -6782,7 +6787,10 @@ async function deliverSocketFrame(
   // signed record in its folder, which is the copy `team messages` and the watch read. Under
   // `parallel` the walk's own write is already running beside this dial, and under `none` there
   // is no copy at all: the frame carries the signed bytes instead.
-  const copy = { dir: seatMailDirIn(to.dir, to.session, to.seat), name: msgId };
+  // E7b revision 3: the durable copy sits in the folder of the record's own era.
+  const copyDir = recordFolderFor(seatMailDirIn(to.dir, to.session, to.seat), isStampedPayload(payload));
+  if (copyDir === null) return { kind: 'fallback', reason: NO_STAMPED_FOLDER };
+  const copy = { dir: copyDir, name: msgId };
   let recordText: string;
   if (carried !== null) {
     recordText = carried;

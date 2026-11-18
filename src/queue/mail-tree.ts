@@ -112,3 +112,17 @@ export function stampedListing(dropDir: string): { folder: string; names: string
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : 'unreadable';
   }
 }
+
+/**
+ * The one era-aware container for a record write (E7b revision 3): a stamped record goes only into
+ * the seat's stamped folder, never the legacy one; an unstamped record into `dropDir` itself. Null
+ * for a stamped record whose `dropDir` is no seat folder: no container older code never reads
+ * stands for it, so it is not written (fail closed).
+ */
+export function recordFolderFor(dropDir: string, stamped: boolean): string | null {
+  if (!stamped) return dropDir;
+  return twinsOf(dropDir)?.stamped ?? null;
+}
+
+/** The refusal a writer gives when `recordFolderFor` names no folder. */
+export const NO_STAMPED_FOLDER = 'a stamped record has no stamped folder here, and it is never written where an older reader lists mail';

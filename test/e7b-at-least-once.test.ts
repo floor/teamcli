@@ -454,7 +454,9 @@ describe('code round 3 fixes', () => {
     const at = place();
     activateRoot(at);
     expect(writeRecord(at.dropDir, signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home)).ok).toBe(true);
-    expect(existsSync(join(at.dropDir, EXPOSURES, M1))).toBe(true);
+    // Revision 3: the record and its era folder sit in the seat's stamped tree.
+    expect(existsSync(join(at.dropDir.replace('/send-drops/', '/send-stamped/'), EXPOSURES, M1))).toBe(true);
+    expect(existsSync(join(at.dropDir, M1))).toBe(false);
     expect(copyHistory(at.dropDir, M1)).toMatchObject({ copies: 0 });
     await plainRead(at, M1);
     expect(listUnread(at.dropDir, context(at), at.home).map((m) => m.id)).toEqual([M1]);
@@ -517,7 +519,9 @@ describe('round 5 and 6 fixes', () => {
     activateRoot(at);
     const staged = await stageSendRecord(at.dropDir, stampedPayload(payloadOf(at, M1), at.home), at.home, () => new Date(), 'acme');
     expect(staged.ok).toBe(true);
-    expect(existsSync(join(at.dropDir, EXPOSURES, M1))).toBe(true);
+    // Revision 3: the record and its era folder sit in the seat's stamped tree.
+    expect(existsSync(join(at.dropDir.replace('/send-drops/', '/send-stamped/'), EXPOSURES, M1))).toBe(true);
+    expect(existsSync(join(at.dropDir, M1))).toBe(false);
     await plain(at, M1);
     expect(listUnread(at.dropDir, context(at), at.home).map((m) => m.id)).toEqual([M1]);
   });
