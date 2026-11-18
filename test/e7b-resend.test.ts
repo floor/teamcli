@@ -561,6 +561,9 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     // The CLI is gone and a new one (999) runs beside the surviving helper: refused.
     await pass([999, 223]);
     expect(lines).toEqual([]);
+    // The CLI is gone and only the recorded helper remains: a helper never counts on its own.
+    await pass([223]);
+    expect(lines).toEqual([]);
     // The recorded CLI and helper, both born when recorded: the wake goes out.
     await pass([222, 223]);
     expect(lines).toHaveLength(1);

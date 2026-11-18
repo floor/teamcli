@@ -861,7 +861,9 @@ function paneStillSeats(scene: RetryScene, seatName: string, pane: string): bool
       const at = recorded.indexOf(pid);
       if (at < 0 || owner.processStart(pid) !== starts[at]) return false;
     }
-    return true;
+    // The recorded CLI itself (the launch's first process beside the shell) must be in front:
+    // a recorded helper never counts on its own.
+    return processes.foreground.includes(recorded[0]!);
   } catch {
     return false;
   }
