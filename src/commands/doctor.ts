@@ -24,7 +24,7 @@ import { canonicalLanding, insideTrust, isLegacyTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { declaredModel } from '../file/model.ts';
 import type { BudgetAccount, Deprecation, Seat, TeamFile } from '../file/types.ts';
-import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent } from '../herdr.ts';
+import { HERDR_TESTED, herdrVersion, paneProcesses, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { verifyLobby } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
@@ -64,6 +64,8 @@ export type DoctorSources = {
   // The approval store's one read, overridable so a test can count it or swap the record
   // after the gate. Absent: the real read.
   standing?(root: string): Standing;
+  /** A pane's process identity (its shell and the pids in front). Absent: not read. */
+  paneProcesses?(session: string, pane: string): PaneProcesses | null;
   /** A pane's visible text. Absent in a test that does not read panes; the real command reads them. */
   paneText?(session: string, pane: string): string | undefined;
   /** Whether the watch's pid is alive. Absent: a fresh heartbeat is read as running, as before. */
@@ -141,6 +143,7 @@ export function checkLogin(profile: Profile, runner: CommandRunner = run): boole
 }
 
 export const realSources: DoctorSources = {
+  paneProcesses: (session, pane) => paneProcesses(pane, session),
   version(binary) {
     const result = run(binary, ['--version']);
     return result && result.status === 0 ? result.stdout.trim() : null;
@@ -574,7 +577,7 @@ export const relaunch = (team: Pick<TeamFile, 'orchestrator' | 'operator'>, name
 // lead's own seat draws neither note: it is the seat reading this line, and the register repair
 // is never shown to it. A seat the state doesn't record was not left running by this session,
 // and a stopped seat is never started by `up`: neither is told.
-function identityFindings(team: TeamFile, dir: string, session: string): Finding[] {
+function identityFindings(team: TeamFile, dir: string, session: string, sources?: Pick<DoctorSources, 'paneProcesses'>): Finding[] {
   const recorded = readState(dir).sessions[session]?.seats ?? {};
   const findings: Finding[] = [];
   for (const seat of team.seats) {
@@ -598,6 +601,13 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
         level: 'note',
         text: `${seat.name}: launched before team recorded its CLI's start time; typed wakes use the older pane proof until it is relaunched`,
       });
+    } else if (held.pane !== undefined) {
+      // The typed wake's full proof needs every recorded process in front; one that exited (a
+      // helper that ended normally) fails it closed, and no typed wake reaches the seat.
+      const live = sources?.paneProcesses?.(session, held.pane) ?? null;
+      if (live !== null && !held.launched.cli.every((pid) => live.foreground.includes(pid))) {
+        findings.push({ level: 'note', text: `${seat.name}: typed proof incomplete: relaunch` });
+      }
     }
     // The launch recorded the process and not the seat's id, so the registry row shows `-` where
     // the id goes. `team register` writes the id from the same reads, with nothing relaunched.
@@ -785,7 +795,7 @@ export function doctorFindings(
 
   findings.push(...launchLines);
 
-  findings.push(...identityFindings(team, dir, session));
+  findings.push(...identityFindings(team, dir, session, sources));
   findings.push(...swapFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
   findings.push(...featureFindings(team, dir, session));

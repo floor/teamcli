@@ -538,33 +538,38 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(lines[0]).toContain(`message ${ID} · delivery`);
   });
 
-  test('a recorded helper that survives a replaced CLI does not pass the proof', async () => {
+  /** A launch recorded in herdr's process-group order, helper first: [helper 223, CLI 222]. */
+  async function helperFirst(): Promise<{ pass: (foreground: number[]) => Promise<void>; lines: string[] }> {
     const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
     activateRoot(at);
-    // The launch recorded the CLI (222) and a helper beside it (223), with both start times.
     writeFileSync(join(at.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { agy: {
-      stage: 'ready', pane: 'pane-agy', agent_session: 'session-of-agy', launched: { shell: 111, cli: [222, 223], cli_start: [500, 600] }, pane_shell: 111, pane_shell_start: 1_700_000_000_000,
+      stage: 'ready', pane: 'pane-agy', agent_session: 'session-of-agy', launched: { shell: 111, cli: [223, 222], cli_start: [600, 500] }, pane_shell: 111, pane_shell_start: 1_700_000_000_000,
     } }, worktrees: {} } } })}\n`);
     const dropDir = stamped(at, 'agy', ID, 'short');
     takeCopyNumber(dropDir, ID, 'typed');
     const lines: string[] = [];
     const starts: Record<number, number> = { 111: 1_700_000_000_000, 222: 500, 223: 600, 999: 700 };
-    const keyOwner = (foreground: number[]): NonNullable<RetrySources['keyOwner']> => ({
-      agents: () => [{ name: 'agy', pane: 'pane-agy' }],
-      processes: () => ({ shell: 111, foreground }),
-      processStart: (pid) => starts[pid] ?? null,
-    });
     const pass = async (foreground: number[]): Promise<void> => {
       age(stampedFolder(at, 'agy'), ID, 31 * MIN);
-      await wakeUnreadDrops(passScene(at, new Date(), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE, keyOwner: keyOwner(foreground) }), { unreadAfter: 600 });
+      const keyOwner: NonNullable<RetrySources['keyOwner']> = {
+        agents: () => [{ name: 'agy', pane: 'pane-agy' }],
+        processes: () => ({ shell: 111, foreground }),
+        processStart: (pid) => starts[pid] ?? null,
+      };
+      await wakeUnreadDrops(passScene(at, new Date(), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE, keyOwner }), { unreadAfter: 600 });
     };
-    // The CLI is gone and a new one (999) runs beside the surviving helper: refused.
+    return { pass, lines };
+  }
+
+  test('a launch recorded helper first: the helper alone, or beside a replaced CLI, is refused', async () => {
+    const { pass, lines } = await helperFirst();
+    await pass([223]);
     await pass([999, 223]);
     expect(lines).toEqual([]);
-    // The CLI is gone and only the recorded helper remains: a helper never counts on its own.
-    await pass([223]);
-    expect(lines).toEqual([]);
-    // The recorded CLI and helper, both born when recorded: the wake goes out.
+  });
+
+  test('a launch recorded helper first: the whole recorded set in front, each born when recorded, is typed', async () => {
+    const { pass, lines } = await helperFirst();
     await pass([222, 223]);
     expect(lines).toHaveLength(1);
   });
