@@ -14,12 +14,14 @@
 // written is unknown, and no copy leaves (the record stays due; R2.2 X3 defer).
 //
 // Retry (R3.4): a stamped record that is not settled is due again once `backoff(n)` has passed
-// since its newest copy: 60 s, doubling, capped at 30 minutes, with no attempt limit. The legs'
-// own ladders (src/watch/unread.ts) and the channel server's redelivery pass ask `deliveryDue`.
+// since its newest attempt: 60 s, doubling, capped at 30 minutes, with no attempt limit and no
+// last day. An attempt is a numbered copy, or an offer the re-send scheduler made that carried
+// none (the seat's adapter took nothing this time); the offers are counted beside the history in
+// `.exposures/<id>/.offers`, never as a copy. One scheduler asks `resendDue` (src/queue/resend.ts).
 //
 // This module is inside the comms boundary: only the legs and the deliberate readers call it,
 // and no other module writes under `.exposures/` (test/handover-boundary.test.ts).
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createExclusive, ensureFolder } from './durable.ts';
 import { seatFolderOf } from '../send/drop-folder.ts';
@@ -96,13 +98,55 @@ export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs:
   return null;
 }
 
-/** Whether a stamped, unsettled record is due for another copy now. Unknown history is due (the
- *  caller's own take then refuses until the history reads again). */
-export function deliveryDue(dropDir: string, id: string, nowMs: number): boolean {
+/** The re-send scheduler's own offers of one message, beside its history (a dot name, so never
+ *  a copy): how many it made and the newest one's time. Absent or unreadable: none. */
+const OFFERS = '.offers';
+
+export type OfferLedger = { offers: number; lastMs: number | null };
+
+export function offerLedger(dropDir: string, id: string): OfferLedger {
+  try {
+    const parsed = JSON.parse(readFileSync(join(historyFolder(dropDir, id), OFFERS), 'utf8')) as { n?: unknown; at?: unknown };
+    const n = typeof parsed.n === 'number' && Number.isInteger(parsed.n) && parsed.n > 0 ? parsed.n : 0;
+    const at = typeof parsed.at === 'string' ? Date.parse(parsed.at) : Number.NaN;
+    return { offers: n, lastMs: n > 0 && Number.isFinite(at) ? at : null };
+  } catch {
+    return { offers: 0, lastMs: null };
+  }
+}
+
+/** Counts one offer the scheduler made, whatever it carried. Best effort: a ledger that cannot be
+ *  written only spaces the next offer by the history alone; it never stops one. */
+export function noteOffer(dropDir: string, id: string, nowMs: number): void {
+  const folder = historyFolder(dropDir, id);
+  if (!ensureFolder(join(seatFolderOf(dropDir, id), EXPOSURES)) || !ensureFolder(folder)) return;
+  const next = offerLedger(dropDir, id).offers + 1;
+  const path = join(folder, OFFERS);
+  const temp = `${path}.${String(process.pid)}.${String(nowMs)}.tmp`;
+  try {
+    writeFileSync(temp, `${JSON.stringify({ v: 1, n: next, at: new Date(nowMs).toISOString() })}\n`, { mode: 0o600 });
+    renameSync(temp, path);
+  } catch {
+    // The history still spaces the next offer.
+  }
+}
+
+/**
+ * Whether a stamped, unsettled record is due for another offer now (R3.4). The attempts so far are
+ * the more of its numbered copies and the scheduler's offers; the newest of either starts the
+ * wait, `backoffMs(attempts)`. A record with no attempt yet waits one first backoff from its
+ * arrival (`arrivedMs`), so the send's own delivery is not doubled. An unknown history counts no
+ * copy: the offers still space it, and the leg's own take refuses until the history reads again.
+ */
+export function resendDue(dropDir: string, id: string, nowMs: number, arrivedMs: number | null): boolean {
   const seen = copyHistory(dropDir, id);
-  if (seen === 'unknown') return true;
-  if (seen.copies === 0 || seen.lastMs === null) return true;
-  return nowMs - seen.lastMs >= backoffMs(seen.copies);
+  const copies = seen === 'unknown' ? 0 : seen.copies;
+  const lastCopy = seen === 'unknown' ? null : seen.lastMs;
+  const offered = offerLedger(dropDir, id);
+  const attempts = Math.max(copies, offered.offers);
+  const times = [lastCopy, offered.lastMs].filter((one): one is number => one !== null);
+  if (attempts === 0 || times.length === 0) return arrivedMs === null || nowMs - arrivedMs >= FIRST_BACKOFF_MS;
+  return nowMs - Math.max(...times) >= backoffMs(attempts);
 }
 
 /** The header line every copy of a stamped record carries (R4.1). */

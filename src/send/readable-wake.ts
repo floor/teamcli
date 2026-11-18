@@ -16,6 +16,9 @@ import { liveRecordPath } from './drop-folder.ts';
 export const RUNTIME_WAKE_MAX = 64 * 1024;
 export const TYPED_WAKE_MAX = 200;
 
+/** The widest delivery number a copy's header is measured with (the history's own bound). */
+const NUMBER_BOUND = 999_999_999;
+
 /** The longest typed wake for this CLI: its profile's measured `typed_wake_max`, or 200. */
 export function typedWakeMaxFor(cli: string | undefined): number {
   return (cli === undefined ? null : profileFor(cli)?.typedWakeMax ?? null) ?? TYPED_WAKE_MAX;
@@ -82,7 +85,10 @@ export function legBody(payload: RecordPayload, home: string, leg: BodyLeg, drop
   if (text === null) return { text: null, carriesBody: false, handle: null };
   if (isStampedPayload(payload)) {
     // E7b: a stamped record's copy is numbered, durably, immediately before it leaves. History
-    // that cannot be written sends no body now (the pointer); the record stays due.
+    // that cannot be written sends no body now (the pointer); the record stays due. A copy whose
+    // header and ack line would carry it past the leg's limit (a typed wake's few hundred bytes)
+    // is the pointer too, and takes no number: the seat's own read of it is the numbered copy.
+    if (Buffer.byteLength(wrapCopy(text, payload.id, NUMBER_BOUND), 'utf8') > limit) return { text: null, carriesBody: false, handle: null };
     const n = takeCopyNumber(dropDir, payload.id, leg);
     if (n === null) return { text: null, carriesBody: false, handle: null };
     return { text: wrapCopy(text, payload.id, n), carriesBody: true, handle: null };

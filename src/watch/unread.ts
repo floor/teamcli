@@ -49,7 +49,7 @@ import { recordStampAt } from '../send/record.ts';
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
 import { appendDeliverySync } from '../queue/append.ts';
 import { queueLog } from '../queue/log.ts';
-import { createHash } from 'node:crypto';
+import { createHash, type KeyObject } from 'node:crypto';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
 import { openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
@@ -93,6 +93,7 @@ import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus,
 import { climbUnreadLead } from './status-events.ts';
 import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutcome } from '../queue/wake-attempt.ts';
 import { floorPass } from '../queue/floor.ts';
+import { resendPass } from '../queue/resend.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { readState } from '../state.ts';
@@ -238,9 +239,11 @@ function recordWakeTry(dropDir: string, id: string, record: WakeTry): void {
   }
 }
 
-/** Whether a record is under the at-least-once contract (E7b); an unreadable stamp counts. */
+/** Whether a record is under the at-least-once contract (E7b). Such a record is never on this
+ *  file's ladders: the one re-send scheduler offers it (src/queue/resend.ts). An unreadable stamp
+ *  is not proven stamped and keeps the ladders it had. */
 function stampedRecord(dropDir: string, id: string): boolean {
-  return recordStampAt(dropDir, id) !== false;
+  return recordStampAt(dropDir, id) === true;
 }
 
 /** The most messages one pass re-offers to one seat on its event legs. */
@@ -250,8 +253,7 @@ const EVENT_REOFFER_PER_PASS = 5;
  *  ladder's last day, not held by the held-drop retry, and past the next attempt its ledger set. */
 function eventLadderDue(dropDir: string, message: { id: string; ts: string }, nowMs: number, unreadAfter: number, pendingOwned = true): boolean {
   const age = nowMs - Date.parse(message.ts);
-  // E7b: a stamped record is offered until its recipient acknowledges it, with no last day.
-  if (!(age >= unreadAfter * 1000) || !(age < WAKE_SLOW_MAX_AGE_MS || stampedRecord(dropDir, message.id))) return false;
+  if (!(age >= unreadAfter * 1000) || !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
   if (pendingOwned && existsSync(pendingDropPath(dropDir, message.id))) return false;
   const ledger = wakeTryOf(dropDir, message.id);
   if (ledger === null) return true;
@@ -294,7 +296,7 @@ async function reofferOnEventLegs(
   if (key.kind !== 'key') return false;
   const due = [...candidates]
     .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
-    .filter((one) => eventLadderDue(dropDir, one, nowMs, unreadAfter, pendingOwned))
+    .filter((one) => !stampedRecord(dropDir, one.id) && eventLadderDue(dropDir, one, nowMs, unreadAfter, pendingOwned))
     .slice(0, EVENT_REOFFER_PER_PASS);
   const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
   let offered = false;
@@ -434,7 +436,7 @@ function dueForWake(
   const ledger = wakeTryOf(dropDir, message.id);
   // Before any typed attempt, a report already written is the word that stands.
   if (ledger === null) return !reported;
-  if (ledger.tries >= retryTries && !(age < WAKE_SLOW_MAX_AGE_MS || stampedRecord(dropDir, message.id))) return false;
+  if (ledger.tries >= retryTries && !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
   const next = Date.parse(ledger.next_at);
   if (Number.isFinite(next) && nowMs < next) return false;
   return true;
@@ -769,6 +771,27 @@ export function noteLeadEpisode(
 }
 
 /**
+ * The watch's host for the one re-send scheduler (src/queue/resend.ts): every stamped record of
+ * the seat that is not settled and is due by its history is offered once more through the seat's
+ * current adapter (`scene.resendStamped`, the seat's resolved delivery walk). A seat whose live
+ * development channel leads its walk is left to its own channel server, which runs the same
+ * scheduler for it: only that process can write to the seat's session.
+ */
+async function resendStampedDrops(scene: RetryScene, seat: Seat, key: KeyObject, nowMs: number): Promise<void> {
+  const resend = scene.resendStamped;
+  if (resend === undefined) return;
+  if (scene.eventLegs?.(seat.name).channel === true) return;
+  const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
+  const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
+  const results = await resendPass({ dropDir, context, key }, nowMs, (id) => resend(seat, dropDir, id));
+  for (const one of results) {
+    const carried = one.copy === null ? 'no copy was carried' : `delivery ${String(one.copy)}`;
+    const leg = one.via === null ? '' : ` on the ${one.via}`;
+    scene.say(`${seat.name}: message ${one.id} is not acknowledged; offered again${leg} (${carried})`, false);
+  }
+}
+
+/**
  * Wakes each idle seat whose oldest due message is still unread, then types one line into the
  * panes that still owe one: the trigger is the seat's own drop read, which serves the whole
  * folder, so one line is the retry for all of them. The wake walks the cascade below the leg the
@@ -827,6 +850,9 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       continue;
     }
     if (options.rung?.has(seat.name) === true) continue;
+    // E7b (R3.4): the one re-send scheduler, for every stamped record of the seat that is not
+    // settled, through the seat's current adapter. The ladders below never see a stamped record.
+    if (scene.resendStamped !== undefined) await resendStampedDrops(scene, seat, key.key, nowMs);
     // The seat's own retry, read from its profile and its file word. Off keeps today's
     // drop-file typed leg, whose writer refuses in every real binding.
     const retry = watchRetryOf(seat);
@@ -859,11 +885,13 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const windowOf = (id: string): number => (id === readyBrief ? 0 : unreadAfter);
     const scanned = new Set(unread.map((one) => one.id));
     const due = unread
-      .filter((message) => dueForWake(dropDir, message, nowMs, windowOf(message.id), retry === null ? null : retry.tries, pendingOwned));
+      .filter((message) => !stampedRecord(dropDir, message.id)
+        && dueForWake(dropDir, message, nowMs, windowOf(message.id), retry === null ? null : retry.tries, pendingOwned));
     // A message the scan did not list is new here, and it is due now if its window has passed.
     // One the cascade would take by webhook waits for the pass that reaches the webhook first:
     // this pass types no line ahead of a leg it has not walked for the message.
     const arrived = fresh.filter((one) => !scanned.has(one.id)
+      && !stampedRecord(dropDir, one.id)
       && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
       && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
     if (leadSeat) {
@@ -942,6 +970,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       if (typedDue.length === 0) {
         const after = listUnread(dropDir, context, home, mail.recordAt);
         const late = after.filter((one) => !scanned.has(one.id)
+          && !stampedRecord(dropDir, one.id)
           && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
           && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
         if (late.length === 0) continue;
@@ -1008,6 +1037,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const freshNow = listUnread(dropDir, context, home, mail.recordAt);
       const unreadNow = new Set(freshNow.map((one) => one.id));
       const arrivedNow = freshNow.filter((one) => !scanned.has(one.id)
+        && !stampedRecord(dropDir, one.id)
         && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
         && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
       const wakeable = [

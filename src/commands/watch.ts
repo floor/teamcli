@@ -43,7 +43,7 @@ import { watchReadLimits, type ReadLimits } from '../watch/read-limits.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchRunning } from '../watch/pane.ts';
 import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand } from './up.ts';
-import { permittedEventLegs, realHost, redeliverChannelOnSocket, runSend } from './send.ts';
+import { permittedEventLegs, realHost, redeliverChannelOnSocket, resendStampedRecord, runSend, type SendHost } from './send.ts';
 import type { PendingDrop } from '../send/pending.ts';
 import { realHost as realReplyHost, runReply } from './reply.ts';
 import { relayOutboxes } from '../send/confined-outbox.ts';
@@ -1972,6 +1972,18 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, nativeWorking: new Set(workingSinceNow.keys()),
               ...(mail === undefined ? {} : { mail }),
               socketRedeliver,
+              // E7b (R3.4): the re-send scheduler's adapter, the seat's own resolved walk. A watch
+              // whose sources carry no typed wake binds none here either.
+              resendStamped: (seat: Seat, dropDir: string, id: string) => {
+                const { typedWake: _bound, ...rest } = realHost;
+                const host: SendHost = {
+                  ...rest,
+                  home: sources.home ?? realHost.home,
+                  now: sources.now,
+                  ...(sources.typedWake === undefined || realHost.typedWake === undefined ? {} : { typedWake: realHost.typedWake }),
+                };
+                return resendStampedRecord({ host, dir, root, project: team.project, session, seat: seat.name, cli: seat.cli, dropDir, id, team });
+              },
               eventLegs: (seat: string) => permittedEventLegs({ dir, root, home: sources.home ?? realHost.home, session, seat, team, now: sources.now }),
               // A hosted watch sends the unread-lead climb as the daemon's notice, like a prompt's.
               ...(hosted === undefined ? {} : {

@@ -117,6 +117,10 @@ export type RetryScene = {
   /** The channel's one redelivery over the socket: a push no receipt confirmed is written as a
    *  frame to the receiving session. Absent, the redelivery goes straight to the typed leg. */
   socketRedeliver?(dropDir: string, drop: PendingDrop): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** E7b (R3.4): the re-send scheduler's adapter. Offers one stamped, unsettled record of the seat
+   *  once more through the seat's current resolved delivery walk, whatever adapter it names, and
+   *  returns the leg that took it (null when none did). Absent, the unread pass re-sends nothing. */
+  resendStamped?(seat: Seat, dropDir: string, id: string): Promise<string | null>;
   /** The event legs the seat's own resolved order permits a re-offer on (`permittedEventLegs`):
    *  the send walk's own answer, exclusions included. Absent, the unread pass re-offers nothing. */
   eventLegs?(seat: string): { channel: boolean; socket: boolean; why?: string };

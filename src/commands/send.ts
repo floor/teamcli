@@ -518,6 +518,9 @@ export type SendHost = {
   daemon?: DaemonSendPrincipal;
   /** Optional process runner override for the `headless-resume` leg (`gemini` / `cursor-agent`). */
   headlessResumeSpawn?: HeadlessResumeSpawn;
+  /** The Codex native route a reply's (and a re-send's) walk takes. Absent (the real host), the
+   *  runtime's own route; a test hands in a queue that records what it was given. */
+  nativeRoute?: typeof deliverCodexNativeRoute;
   /** The two external private lists a public-only body is scanned against. Absent (the real
    *  host), the machine's default paths are read; a test hands in its own files, so no send
    *  touches the machine's lists. */
@@ -6298,7 +6301,7 @@ export async function walkReplyDelivery(input: {
             });
         // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
         const nativeBody = legBody(input.payload, input.host.home, 'native', dropDir);
-        const attempt = await deliverCodexNativeRoute(
+        const attempt = await (input.host.nativeRoute ?? deliverCodexNativeRoute)(
           {
             route: 'native',
             runtime: 'codex',
@@ -7020,6 +7023,74 @@ export async function redeliverChannelOnSocket(input: {
   );
   if (attempt.kind === 'delivered') return { ok: true };
   return { ok: false, reason: attempt.reason };
+}
+
+/**
+ * The re-send scheduler's adapter (rfc-event-comms E7b, R3.4; src/queue/resend.ts): one stamped,
+ * unsettled record offered once more through the receiving seat's current resolved delivery walk
+ * — the walk a reply and a client send take (`walkReplyDelivery`), with every leg's own rules: a
+ * Codex seat's native queue, the cross-session socket, the webhook, a profile's typed wake, a
+ * headless resume, and the bus inbox under them. Each leg that carries the body takes the next
+ * numbered copy itself (`legBody`, the socket frame); the drop leg carries nothing new, so a
+ * drop-only seat's next copy is its own next inbox read. The walk writes no second record (every
+ * leg finds the stored one at its id), waits for no receipt, and prints nothing; one history
+ * line names the leg that took the offer. Returns that leg, or null when none did.
+ */
+export async function resendStampedRecord(input: {
+  host: SendHost;
+  /** The receiving team's folder and root. */
+  dir: string;
+  root: string;
+  project: string;
+  session: string;
+  seat: string;
+  cli: string;
+  dropDir: string;
+  id: string;
+  /** The receiving team's file, for the walk's order and the display naming. */
+  team: TeamFile;
+}): Promise<string | null> {
+  const { dir, root, project, session, seat, cli, dropDir, id, team } = input;
+  const payload = verifiedPayloadOf(dropDir, id, input.host.home);
+  if (payload === null || !isStampedPayload(payload) || payload.to !== seat || payload.session !== session) return null;
+  // The offer waits for nothing: no receipt grace after a queue takes it, no channel push wait.
+  const host: SendHost = { ...input.host, inboxGraceMs: 0, channelGraceMs: 0 };
+  const quiet: Io = { stdout: () => {}, stderr: () => {}, cwd: root, env: {}, stdinIsTTY: false };
+  const fromTeam = payload.from_id === null
+    ? teamIdOf(root)
+    : getAgent(host.home, payload.from_id)?.reach.team ?? teamIdOf(root);
+  const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: team });
+  const walk = await walkReplyDelivery({
+    io: quiet,
+    host,
+    dir,
+    root,
+    project,
+    session,
+    seat,
+    cli,
+    payload,
+    naming,
+    file: team,
+    sender: { teamId: fromTeam, project: team.project, label: labelNameOf(team, seat) },
+    address: null,
+    who: 'watch',
+    identityHeader: frameIdentityHeader(payload, naming, fromTeam, team.project, labelNameOf(team, seat)),
+  });
+  const via = walk.walked && walk.via !== 'drop' && walk.endpointBlocked === undefined ? walk.via : null;
+  appendHistory(project, root, host.home, {
+    ts: host.now().toISOString(),
+    from: payload.from,
+    to: seat,
+    body: payload.body,
+    id: payload.id,
+    thread: payload.thread,
+    outcome: 'awaiting receipt',
+    note: via === null ? 'not acknowledged; re-send offered, no leg took it' : `not acknowledged; re-sent on the ${via}`,
+    ...(via === null ? {} : { via }),
+    ...(walk.failures.length > 0 ? { failed: [...walk.failures] } : {}),
+  });
+  return via;
 }
 
 /** The address this walk tries, read by the shared choice (`socketAddressOf`): the registry's
