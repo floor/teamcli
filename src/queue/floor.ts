@@ -9,6 +9,7 @@
 //   activation.lock  the root's activation lock (the seat lock's rule)
 //   PROTOCOL         the floor marker {v, level}; written first
 //   ACTIVATION       the signed activation record {root, level, build, actors, at}; written second
+//   PUBLISHED        written third, after the record's folder fsync; readers trust `active` only with it
 //   FENCED           written when an actor below the floor is seen after activation
 //
 // The activation transaction, under the activation lock (each step durable before the next):
@@ -20,8 +21,13 @@
 //                between them.
 //   A2 marker:   PROTOCOL created exclusively, durable (file and folder fsynced).
 //   A3 record:   ACTIVATION created exclusively, signed, durable.
-//   A4 active:   from here a fence writer may create fences; each one reads the record first.
+//   A4 publish:  PUBLISHED created exclusively, only after the record's folder fsync. Readers act
+//                on `active` only when PUBLISHED stands, so a visible PUBLISHED implies a durable
+//                record (E7 gate 2: no link-to-fsync publication window).
+//   A5 active:   from here a fence writer may create fences; each one reads the record first.
 // A crash after A2 and before A3 leaves the root dark, and A0 removes the marker on the next pass.
+// A crash after A3 and before A4 leaves the record unpublished: `unknown` (existing fences
+// honoured, none created) until A0 makes the record durable and publishes it.
 //
 // After activation an actor below the floor flips the root to FENCED: no new fence is created,
 // every existing fence stays honoured by every floor actor, and the state names the actor. A later
@@ -30,17 +36,20 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { acquireLockAt } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { createExclusive, ensureFolder, readFence, removeDurable, type DurableFaults } from './durable.ts';
+import { createExclusive, ensureFolder, fsyncFolder, readFence, removeDurable, type DurableFaults } from './durable.ts';
 
 /** The capability level this build enforces: exposure claims and wake-attempt states. */
-export const ACTOR_LEVEL = 2;
-/** The level a root is activated at by this build. A later fence family raises it (§3). */
-export const FLOOR_LEVEL = 2;
+export const ACTOR_LEVEL = 3;
+/** The level a root is activated at by this build. A later fence family raises it (§3). Level 3
+ *  (E7) adds the reader switch: a root activates at 3 only when every live actor reports 3, so an
+ *  E6 build (level 2) still running keeps the root dark and every reader on the legacy listing. */
+export const FLOOR_LEVEL = 3;
 
 export const ACTIVATION_DOMAIN = 'team-activation-v1\n';
 const PROTOCOL = 'PROTOCOL';
 const ACTIVATION = 'ACTIVATION';
 const FENCED = 'FENCED';
+const PUBLISHED = 'PUBLISHED';
 const LOCK = 'activation.lock';
 
 export function queuesFolder(root: string): string {
@@ -68,7 +77,7 @@ export type FloorState =
   | { kind: 'unknown'; why: string };
 
 /** The steps the fault grid crashes between. */
-export type ActivationStep = 'recover' | 'prove' | 'marker' | 'record';
+export type ActivationStep = 'recover' | 'prove' | 'marker' | 'record' | 'publish';
 
 export type ActivationOptions = {
   home: string;
@@ -136,6 +145,13 @@ export function floorState(root: string, home: string): FloorState {
   if (marker.kind === 'absent' && record.kind === 'absent') return { kind: 'dark' };
   if (marker.kind === 'absent') return { kind: 'unknown', why: 'an activation record stands without its floor marker' };
   if (record.kind === 'absent') return { kind: 'dark' }; // a cut-off activation: A0 removes the marker
+  // A4 publication. A reader acts on `active` only once PUBLISHED stands, and PUBLISHED is created
+  // only after the record's folder fsync: a visible PUBLISHED implies a durable record. A record
+  // without PUBLISHED (its publication was cut off) is `unknown` until recovery republishes it:
+  // existing fences are honoured, no new fence is created (E7 gate 2).
+  const published = readJson(join(queuesFolder(root), PUBLISHED));
+  if (published.kind === 'unknown') return { kind: 'unknown', why: 'the activation publication cannot be read' };
+  if (published.kind === 'absent') return { kind: 'unknown', why: 'the activation record is not published yet' };
   const fenced = readJson(join(queuesFolder(root), FENCED));
   if (fenced.kind === 'unknown') return { kind: 'unknown', why: 'the fenced marker cannot be read' };
   if (fenced.kind === 'ok') {
@@ -162,7 +178,7 @@ function belowFloor(actors: FloorActor[], level: number): FloorActor[] {
   return actors.filter(actor => actor.level === null || actor.level < level);
 }
 
-function withActivationLock<T>(root: string, run: () => T): T | { kind: 'busy' } | { kind: 'failed'; why: string } {
+export function withActivationLock<T>(root: string, run: () => T): T | { kind: 'busy' } | { kind: 'failed'; why: string } {
   const folder = queuesFolder(root);
   if (!ensureFolder(folder)) return { kind: 'failed', why: 'the queues folder cannot be made' };
   let lock;
@@ -179,15 +195,33 @@ function withActivationLock<T>(root: string, run: () => T): T | { kind: 'busy' }
   }
 }
 
-/** A0: removes a floor marker that no verifying activation record follows. Under the lock. */
-function recoverUnderLock(root: string, home: string): { kind: 'ok' } | { kind: 'failed'; why: string } {
+/** A0: removes a floor marker that no verifying activation record follows, and republishes a
+ *  verifying record whose publication was cut off. Under the lock. */
+function recoverUnderLock(root: string, home: string, faults?: DurableFaults): { kind: 'ok' } | { kind: 'failed'; why: string } {
   const marker = readJson(join(queuesFolder(root), PROTOCOL));
   if (marker.kind !== 'ok') return { kind: 'ok' };
   const record = readActivation(root, home);
-  if (record.kind !== 'absent') return { kind: 'ok' };
-  return removeDurable(join(queuesFolder(root), PROTOCOL)) === 'removed'
-    ? { kind: 'ok' }
-    : { kind: 'failed', why: 'a cut-off floor marker could not be removed' };
+  if (record.kind === 'absent') {
+    return removeDurable(join(queuesFolder(root), PROTOCOL)) === 'removed'
+      ? { kind: 'ok' }
+      : { kind: 'failed', why: 'a cut-off floor marker could not be removed' };
+  }
+  if (record.kind !== 'ok') return { kind: 'ok' };
+  const published = readJson(join(queuesFolder(root), PUBLISHED));
+  if (published.kind !== 'absent') return { kind: 'ok' };
+  // The activation was decided and its record verifies: make the record durable (folder fsync)
+  // before PUBLISHED can stand, then publish. No reader acted on `active` before this point.
+  return publishUnderLock(root, faults);
+}
+
+function publishUnderLock(root: string, faults?: DurableFaults): { kind: 'ok' } | { kind: 'failed'; why: string } {
+  try {
+    fsyncFolder(queuesFolder(root));
+  } catch {
+    return { kind: 'failed', why: 'the activation record could not be made durable' };
+  }
+  const made = createExclusive(join(queuesFolder(root), PUBLISHED), `${JSON.stringify({ v: 1 })}\n`, faults);
+  return made === 'failed' ? { kind: 'failed', why: 'the activation could not be published' } : { kind: 'ok' };
 }
 
 /**
@@ -198,7 +232,7 @@ function recoverUnderLock(root: string, home: string): { kind: 'ok' } | { kind: 
 export function activate(root: string, options: ActivationOptions): ActivationOutcome {
   if (options.launchBoundary !== true) return { kind: 'refused', why: 'the managed launch boundary is not wired yet; the root stays dark', below: [] };
   const result = withActivationLock(root, (): ActivationOutcome => {
-    const recovered = recoverUnderLock(root, options.home);
+    const recovered = recoverUnderLock(root, options.home, options.faults);
     if (recovered.kind === 'failed') return recovered;
     options.after?.('recover');
     const state = floorState(root, options.home);
@@ -250,6 +284,10 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
       return { kind: 'failed', why: 'the activation record could not be confirmed durable' };
     }
     options.after?.('record');
+    // A4: publication, after the record is durable. Only now may a reader act on `active`.
+    const published = publishUnderLock(root, options.faults);
+    if (published.kind === 'failed') return published;
+    options.after?.('publish');
     return { kind: 'activated', level: FLOOR_LEVEL };
   });
   return result;
@@ -315,10 +353,24 @@ export function floorPass(root: string, home: string, nowMs: number, actors: () 
     lastFloorPass.set(root, nowMs);
     const state = floorState(root, home);
     if (state.kind === 'active') return checkActors(root, home, actors());
-    // E6 never activates: activation waits for the managed launch boundary (see `launchBoundary`).
+    // The daemon never activates on its own: activation is the explicit `team queues activate`
+    // (E7), which runs the same transaction with the launch boundary wired (`admitManagedLaunch`).
     void build;
     return state;
   } catch {
     return { kind: 'unknown', why: 'the floor pass failed' };
   }
+}
+
+/**
+ * The managed launch boundary (E7 gate 3): `team up` (and boot restore, which runs it),
+ * `team restart` and `team add` ask this before a seat's CLI is launched, under the activation
+ * lock, so a launch and an activation never interleave. Null admits; a string is the refusal.
+ * A lock that cannot be taken refuses (fail closed): the next run asks again.
+ */
+export function admitManagedLaunch(root: string, home: string, level: number = ACTOR_LEVEL): string | null {
+  const result = withActivationLock(root, () => ({ answer: launchAdmission(root, home, level) }));
+  if ('answer' in result) return result.answer;
+  if (result.kind === 'busy') return 'the activation lock is held; the launch is asked again on the next run';
+  return `the launch admission cannot be checked (${result.why})`;
 }

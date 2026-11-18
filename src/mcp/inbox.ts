@@ -64,6 +64,7 @@ import { flushReceipt, publishReadReceipt } from './inbox-admission.ts';
 import { exposurePointer, isExposeOwner } from '../queue/exposure.ts';
 import { shadowQueueReceipt } from '../queue/receipt-store.ts';
 import { queuePlaceOf } from '../queue/append.ts';
+import { readerOrder } from '../queue/reader.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
@@ -155,6 +156,8 @@ export type InboxMessage = {
   sender_attribution: SenderAttribution;
   /** A plain-text drop an earlier build wrote: listed only when the caller asks for them. */
   legacy?: true;
+  /** The queue seq it is offered at, when the listing is in queue order (E7 reader switch). */
+  seq?: number;
 };
 
 export function listenerPath(dropDir: string): string {
@@ -558,6 +561,17 @@ export function listUnread(
       sender_attribution: senderAttribution,
       ...(legacy ? { legacy: true as const } : {}),
     });
+  }
+  // E7: the same set, offered in queue order when the reader switch holds for this seat. The set
+  // never depends on the switch: a legacy listing is the full set, so a fallback delays order and
+  // hides nothing. Plain-text legacy drops have no queue entry and keep the legacy listing.
+  if (messages.length > 0 && !messages.some(message => message.legacy === true)) {
+    const order = readerOrder(dropDir, { root: context.root, session: context.session, seat: context.to }, messages.map(message => message.id), home);
+    if (order.kind === 'queue') {
+      return messages
+        .map(message => ({ ...message, seq: order.seq.get(message.id) as number }))
+        .sort((a, b) => a.seq - b.seq);
+    }
   }
   return messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
 }

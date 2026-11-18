@@ -26,7 +26,7 @@
 // (`appendRecovered`), so the index converges without the writer.
 import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readdirSync, readSync, realpathSync } from 'node:fs';
-import { ftruncateSync, mkdirSync, openSync, renameSync, writeSync } from '../host/guarded-fs.ts';
+import { ftruncateSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join } from 'node:path';
 import { acquireLockAt, type LockSteps } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -240,7 +240,25 @@ function journalDurable(folder: string, sync: (fd: number) => void = fsyncSync):
   } finally {
     closeSync(fd);
   }
-  return removeDurable(marker) === 'removed';
+  return clearPoison(marker);
+}
+
+/** Removes the poisoned marker after a successful flush. The folder is fsynced only when a marker
+ *  was actually removed: an absent marker leaves nothing to make durable, and a removal that a
+ *  crash undoes only brings the marker back, which makes the next holder flush again (fail closed).
+ *  This keeps the steady-state open at one journal fsync (E7 gate 5). */
+function clearPoison(marker: string): boolean {
+  try {
+    unlinkSync(marker);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+  try {
+    fsyncFolder(dirname(marker));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function plainFolder(path: string): boolean {
@@ -897,5 +915,37 @@ export function entriesOf(dropDir: string): number[] {
     return readdirSync(join(base, named, 'entries')).filter((name) => /^\d{12}$/.test(name)).map(Number).sort((a, b) => a - b);
   } catch {
     return [];
+  }
+}
+
+/**
+ * The current generation's committed placements and its open holes, read once under the writer's
+ * queue lock (tried once, never waited for) from a durable journal. Null (unknown) when the lock is
+ * held, the journal is not proven durable, or it is unreadable, torn or corrupt: a reader then keeps
+ * the legacy order (E7). `holes` are seqs whose last line is still `reserved`.
+ */
+export function committedSnapshot(dropDir: string): { generation: string; committed: Map<string, number>; holes: number[]; head: number } | null {
+  const base = queueBaseOf(dropDir);
+  if (base === null) return null;
+  const named = currentGenerationName(dropDir);
+  if (named === null) return null;
+  const folder = join(base, named);
+  let lock: ReturnType<typeof acquireLockAt>;
+  try {
+    lock = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+  } catch {
+    return null;
+  }
+  if (!('release' in lock)) return null;
+  try {
+    if (!journalDurable(folder)) return null;
+    const journal = readJournal(join(folder, 'journal.jsonl'));
+    if (journal.unreadable === true || journal.corrupt || journal.tornAt !== null) return null;
+    const folded = fold(journal.lines);
+    const holes: number[] = [];
+    for (const [seq, last] of folded.last) if (last.state === 'reserved') holes.push(seq);
+    return { generation: named, committed: folded.committedIds, holes: holes.sort((a, b) => a - b), head: folded.head };
+  } finally {
+    lock.release();
   }
 }

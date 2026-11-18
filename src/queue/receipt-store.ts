@@ -187,6 +187,8 @@ export function shadowQueueReceipt(input: {
   kind: QueueReceiptKind;
   actor: { kind: ReceiptActorKind; name: string };
   home: string;
+  /** Fault seam: runs before the reuse path's folder flush (a throw is a failed flush). */
+  faults?: { reuseFlush?: () => void };
 }): WriteReceiptOutcome | 'unplaced' | 'pending' {
   try {
     const written = placeAndWrite(input);
@@ -259,13 +261,26 @@ function writePending(input: PendingInput): boolean {
   // each marker's verified signed content (record id, kind and actor, signed with this home's
   // key), never its file name, so an unverifiable file can never stand in for a real decision.
   const key = messageKeyState(input.home);
-  if (key.kind === 'key' && listPending(folder).some((name) => {
+  const standingNames = listPending(folder);
+  if (standingNames === null) return false;
+  if (key.kind === 'key' && standingNames.some((name) => {
     const text = readFence(join(folder, name));
     const standing = text === null ? null : verifiedPending(text, name, key.key);
     return standing !== null && standing.msg_id === input.msgId && standing.receipt === input.kind
       && standing.actor.kind === input.actor.kind && standing.actor.name === input.actor.name
       && standing.root === input.root && standing.session === input.session && standing.seat === input.seat;
-  })) return true;
+  })) {
+    // A matching marker proves the decision stands, not that it is durable: its creator may be
+    // between link and folder fsync, or its fsync may have failed. Re-flush the folder now; only a
+    // flush that succeeds lets this call report the decision as durably pending (E7 gate 1).
+    try {
+      input.faults?.reuseFlush?.();
+      fsyncFolder(folder);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   const payload: PendingPayload = {
     v: 1, kind: 'queue-pending', root: input.root, session: input.session, seat: input.seat,
     msg_id: input.msgId, receipt: input.kind, actor: input.actor,
@@ -282,11 +297,26 @@ function writePending(input: PendingInput): boolean {
   return createExclusive(join(folder, name), `${JSON.stringify({ payload, signature })}\n`) === 'created';
 }
 
-function listPending(folder: string): string[] {
+/** The pending markers, oldest first. `null` when the folder cannot be listed: an unreadable
+ *  folder is never read as an empty one (absent is the only empty). */
+function listPending(folder: string): string[] | null {
   try {
     return readdirSync(folder).filter(name => PENDING_NAME.test(name)).sort();
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    return null;
+  }
+}
+
+/** Every quarantined marker, or `null` when the quarantine cannot be listed. */
+export function quarantinedPending(dropDir: string): string[] | null {
+  const folder = pendingFolder(dropDir);
+  if (folder === null) return [];
+  try {
+    return readdirSync(join(folder, QUARANTINE)).sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    return null;
   }
 }
 
@@ -296,15 +326,18 @@ function listPending(folder: string): string[] {
  * answers `exists`), then the marker is removed durably. A marker whose placement still cannot be
  * proved, or whose write or removal fails, stays for the next pass. Called with no queue lock held.
  */
-export function drainPendingReceipts(dropDir: string, home: string, log?: (line: string) => void): { written: number; left: number; dropped: number } {
+export function drainPendingReceipts(dropDir: string, home: string, log?: (line: string) => void): { written: number; left: number; dropped: number; unknown: boolean } {
   const folder = pendingFolder(dropDir);
-  if (folder === null) return { written: 0, left: 0, dropped: 0 };
+  if (folder === null) return { written: 0, left: 0, dropped: 0, unknown: false };
+  const names = listPending(folder);
+  // A listing that failed is unknown, never zero: completeness cannot be claimed from it.
+  if (names === null) return { written: 0, left: 0, dropped: 0, unknown: true };
   const key = messageKeyState(home);
-  if (key.kind !== 'key') return { written: 0, left: listPending(folder).length, dropped: 0 };
+  if (key.kind !== 'key') return { written: 0, left: names.length, dropped: 0, unknown: false };
   let written = 0;
   let left = 0;
   let dropped = 0;
-  for (const name of listPending(folder)) {
+  for (const name of names) {
     try {
       const step = drainOne(folder, name, dropDir, home, key.key, log);
       if (step === 'written') written += 1;
@@ -316,7 +349,7 @@ export function drainPendingReceipts(dropDir: string, home: string, log?: (line:
       left += 1;
     }
   }
-  return { written, left, dropped };
+  return { written, left, dropped, unknown: false };
 }
 
 function drainOne(folder: string, name: string, dropDir: string, home: string, key: Parameters<typeof verifyDomain>[3], log?: (line: string) => void): 'written' | 'settled' | 'dropped' | 'left' {

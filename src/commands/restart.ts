@@ -2,6 +2,7 @@ import { evictHerdrAgentList, evictHerdrPaneProcessInfo } from '../herdr.ts';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
+import { admitManagedLaunch } from '../queue/floor.ts';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
@@ -2320,7 +2321,10 @@ function hostOf(input: {
     now: () => input.now().getTime(),
     allow(name) {
       if (name !== seat.name) return null;
-      return ceilingProblem(input.ceilings, running, seat);
+      const over = ceilingProblem(input.ceilings, running, seat);
+      if (over) return over;
+      // The managed launch boundary (E7): under the activation lock.
+      return admitManagedLaunch(input.root, input.home);
     },
     record(name, patch) {
       let replaced: string | undefined;

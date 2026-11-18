@@ -25,12 +25,12 @@ function scene(): { root: string; home: string } {
   return { root, home };
 }
 
-const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 2 };
+const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
 const server = (level: number | null): FloorActor => ({ kind: 'inbox-server', name: 's/seat', pid: 2, build: 'b', level });
 
 function active(): { root: string; home: string } {
   const s = scene();
-  expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(2)] }).kind).toBe('activated');
+  expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(3)] }).kind).toBe('activated');
   return s;
 }
 
@@ -49,13 +49,13 @@ describe('activation floor', () => {
 
   test('no live daemon means no activation', () => {
     const s = scene();
-    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [server(2)] }).kind).toBe('refused');
+    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [server(3)] }).kind).toBe('refused');
     expect(floorState(s.root, s.home).kind).toBe('dark');
   });
 
   test('every actor at the floor activates; marker then record', () => {
     const s = active();
-    expect(floorState(s.root, s.home)).toMatchObject({ kind: 'active', level: 2 });
+    expect(floorState(s.root, s.home)).toMatchObject({ kind: 'active', level: 3 });
     expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(true);
   });
 
@@ -70,7 +70,7 @@ describe('activation floor', () => {
   });
 
   test('fault grid: a fault at any durable step of the marker or the record never leaves the root active', () => {
-    for (const file of ['PROTOCOL', 'ACTIVATION']) {
+    for (const file of ['PROTOCOL', 'ACTIVATION', 'PUBLISHED']) {
       for (const step of STEPS) {
         const s = scene();
         const out = activate(s.root, {
@@ -79,10 +79,15 @@ describe('activation floor', () => {
         });
         expect(out.kind).toBe('failed');
         const after = floorState(s.root, s.home).kind;
-        // Before the record's link the root is dark; once the record is visible it is never taken
-        // back (a reader may have acted on it): it stays enforcing.
-        if (file === 'ACTIVATION' && (step === 'unlink-temp' || step === 'folder-fsync')) expect(after).toBe('active');
+        // Before the record's link the root is dark. A record that is visible but not published
+        // is `unknown` (E7 gate 2): existing fences are honoured, no reader acts on `active`.
+        // Only a visible PUBLISHED, created after the record's folder fsync, reads `active`.
+        const linked = step === 'unlink-temp' || step === 'folder-fsync';
+        if (file === 'PUBLISHED') expect(after).toBe(linked ? 'active' : 'unknown');
+        else if (file === 'ACTIVATION' && linked) expect(after).toBe('unknown');
         else expect(after).toBe('dark');
+        expect(fencesEnforced(s.root, s.home)).toBe(after !== 'dark');
+        if (after !== 'active') expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(false);
         // A clean pass afterwards reaches one consistent state: active.
         expect(['activated', 'already']).toContain(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon] }).kind);
         expect(floorState(s.root, s.home).kind).toBe('active');
@@ -95,7 +100,7 @@ describe('activation floor', () => {
     expect(checkActors(s.root, s.home, [daemon, server(null)]).kind).toBe('fenced');
     expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(false);
     expect(fencesEnforced(s.root, s.home)).toBe(true);
-    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(2)] }).kind).toBe('activated');
+    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(3)] }).kind).toBe('activated');
     expect(floorState(s.root, s.home).kind).toBe('active');
   });
 

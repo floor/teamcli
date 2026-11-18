@@ -25,7 +25,7 @@ import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
 
 const SESSION = 'acme';
-const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 2 };
+const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
 
 function place(): { root: string; home: string; dropDir: string } {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'e6-legacy-')));
@@ -240,11 +240,11 @@ describe('E6 body hand-over on the E5 read claim', () => {
     const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
     const binding = { root: at.root, session: SESSION, seat: 'lead', generation };
     // Still held: the drain proves nothing and keeps the marker.
-    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 1, dropped: 0 });
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 1, dropped: 0, unknown: false });
     if ('release' in holder) holder.release();
-    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 0 });
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 0, unknown: false });
     expect(readdirSync(pending).length).toBe(0);
-    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 0, dropped: 0 });
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 0, dropped: 0, unknown: false });
     const receipts = readQueueReceipts(binding, at.home, entryAt)!;
     expect(receipts.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
   });
@@ -280,7 +280,7 @@ describe('E6 body hand-over on the E5 read claim', () => {
     const payload = { v: 1, kind: 'queue-pending', root: at.root, session: SESSION, seat: 'lead', msg_id: M1, receipt: 'read', actor: { kind: 'recipient', name: 'lead' } };
     writeFileSync(join(folder, `0000000000001.aaaaaaaaaaaa.${M1}.read.json`), `${JSON.stringify({ payload, signature: 'AAAA' })}\n`);
     writeFileSync(join(folder, `0000000000002.bbbbbbbbbbbb.${M1}.read.json`), `${JSON.stringify({ payload })}\n`);
-    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 0, dropped: 2 });
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 0, dropped: 2, unknown: false });
     const generation = currentGenerationName(at.dropDir)!;
     const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
     const receipts = readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!;
@@ -298,7 +298,7 @@ describe('E6 body hand-over on the E5 read claim', () => {
     const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
     expect(readMessage(target(at), M1, at.home).ok).toBe(true);
     if ('release' in holder) holder.release();
-    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 1 });
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 1, unknown: false });
     const generation = currentGenerationName(at.dropDir)!;
     const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
     expect(readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
@@ -315,7 +315,7 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(readMessage(target(at), M1, at.home).ok).toBe(true);
     if ('release' in holder) holder.release();
     writeFileSync(join(folder, `0000000000000.dddddddddddd.${M1}.read.json`), 'null\n');
-    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 1 });
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 1, unknown: false });
   });
 
   test('the next holder of the queue lock drains the pending dual writes when it lets go', () => {
@@ -392,9 +392,13 @@ describe('E6 activation against a pre-E6 inbox server', () => {
     expect(floorState(at.root, at.home).kind).toBe('dark');
   });
 
-  test('the same marker at level 2 lets the root activate', () => {
+  test('E7 mixed versions: an E6 marker at level 2 refuses activation at the level-3 floor; level 3 activates', () => {
     const at = place();
     writeFileSync(join(at.dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), level: 2 })}\n`);
+    const old = liveFloorActors(at.root, at.home)!;
+    expect(activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon, ...old] }).kind).toBe('refused');
+    expect(floorState(at.root, at.home).kind).toBe('dark');
+    writeFileSync(join(at.dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), level: 3 })}\n`);
     const actors = liveFloorActors(at.root, at.home)!;
     expect(activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon, ...actors] }).kind).toBe('activated');
   });
