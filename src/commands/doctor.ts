@@ -1,4 +1,9 @@
 import { spawnSync } from 'node:child_process';
+import { channelUnproven } from '../queue/resend.ts';
+import { socketSuppressed } from '../queue/floor.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
+import { channelPairNamesRuntimeCopy, channelPairPinsEpoch, channelPairPresent, samePlace } from '../mcp/launch-config.ts';
+import { messageKeyState } from '../store/keys.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { personaCollision, registryIdentityView, type PersonaCollision } from '../comms/identity.ts';
 import { spawnProcessToolSync } from '../process-tools-adapter.ts';
@@ -623,6 +628,44 @@ function identityFindings(team: TeamFile, dir: string, session: string, sources?
   return findings;
 }
 
+// The Claude adapter §5: on an E7b-active root, each Claude seat whose channel is not proven,
+// with the reason, and each stale piece a relaunch would repair — a checkout pair that names a
+// retained daemon runtime copy or pins an `--epoch`, a lead with no pair in its folder, a launch
+// line that pins `--resume`. A lead or Atlas restarts the listed seats. A person's pane takes no
+// keys: it is named as waiting. A dark root has nothing here.
+function claudeChannelFindings(team: TeamFile, dir: string, root: string, session: string, home: string, now: Date): Finding[] {
+  const findings: Finding[] = [];
+  if (!socketSuppressed(root, home)) return findings;
+  const key = messageKeyState(home);
+  for (const seat of team.seats) {
+    if (seat.stopped || seat.cli !== 'claude-code' || seat.webhook !== undefined) continue;
+    const dropDir = seatMailDirIn(dir, session, seat.name);
+    const reasons: string[] = [];
+    const unproven = key.kind !== 'key'
+      ? 'no message key'
+      : channelUnproven({ dropDir, root, session, seat: seat.name, context: { to: seat.name, root, session, ...(team.orchestrator === '' ? {} : { lead: team.orchestrator }) }, key: key.key, nowMs: now.getTime() });
+    if (unproven !== null) reasons.push(unproven);
+    const folder = resolve(root, seat.cwd);
+    if (samePlace(folder, root)) {
+      if (!channelPairPresent(folder, seat.name)) {
+        if (isLeadSeat(team, seat.name)) reasons.push('no pair');
+      } else {
+        if (channelPairNamesRuntimeCopy(folder)) reasons.push('stale pair (a daemon-runtime/ server path)');
+        if (channelPairPinsEpoch(folder)) reasons.push('stale pair (a pinned --epoch)');
+      }
+    }
+    // The file's own launch line: a resume a restart adds to the running line is not a pin.
+    if (/(^|\s)--resume(\s|=|$)/.test(seat.launch)) reasons.push('a pinned --resume on the launch line');
+    if (reasons.length === 0) continue;
+    if (seat.human === true) {
+      if (unproven !== null) findings.push({ level: 'note', text: plainLine(`${seat.name}: waiting: protected pane, no proven channel`) });
+      continue;
+    }
+    findings.push({ level: 'warn', text: plainLine(`${seat.name}: no proven channel (${reasons.join('; ')}); messages reach it by typed pointer until a lead restarts it`) });
+  }
+  return findings;
+}
+
 // A seat whose own written label persona is a name another seat carries — its nickname or its
 // persona, in any registered team: the sender line never prints it (src/comms/identity.ts), and
 // the seat reads as its seat name until the label or the other seat changes. One note per seat.
@@ -832,6 +875,7 @@ export function doctorFindings(
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
   findings.push(...featureFindings(team, dir, session));
   findings.push(...personaFindings(team, root, sources.home));
+  findings.push(...claudeChannelFindings(team, dir, root, session, sources.home, sources.now()));
 
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, root, session, running, sources.now(), sources, health));
   findings.push(...trustFindings(team, root, dir, session, sources));

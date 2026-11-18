@@ -218,7 +218,7 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
     const stateDir = dirname(loaded.path);
     const claim = () => readState(stateDir).sessions[team.session]?.briefs?.[name];
     let claimBefore = JSON.stringify(claim() ?? null);
-    const plan = planChannelPair({ ...scope, epoch: currentBriefClaim(claim())?.epoch }, false);
+    const plan = planChannelPair({ ...scope, home, epoch: currentBriefClaim(claim())?.epoch }, false);
     // Validate restoration before any config or placement write, too.
     const restored = journal === null ? null : offDocuments(plan, journal);
     // The owner records the pane they stand in. With no pane of their own, the pane the seat's
@@ -286,7 +286,7 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
       }
       if (!record.unchanged() || plan.documents.some(({ doc }) => !doc.unchanged())) throw new Error('the setup project documents changed during registration');
       claimBefore = JSON.stringify(claim() ?? null);
-      const rebound = planChannelPair({ ...scope, epoch: currentBriefClaim(claim())?.epoch }, false);
+      const rebound = planChannelPair({ ...scope, home, epoch: currentBriefClaim(claim())?.epoch }, false);
       plan.documents = plan.documents.map(({ doc }, index) => ({ doc, text: rebound.documents[index]!.text }));
     }
     const saved: Journal = journal === null
