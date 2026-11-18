@@ -99,6 +99,7 @@ import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { readState } from '../state.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
+import { composeMessageLine } from '../settings/message-display.ts';
 import { readScreen } from './screen.ts';
 import { seatDropDir, seatMailDirIn } from '../queue/mail-tree.ts';
 import { liveRecordPath } from '../send/drop-folder.ts';
@@ -1153,7 +1154,11 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const wakeHint = pointer !== null
         ? pointer.hint
         : linesNow().get(audited.message.id)?.via === 'socket' ? socketWakeHint(audited.message.id) : undefined;
-      const line = readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
+      // A re-send's pointer never renders a wake template (no subject, no summary): only the
+      // sender as the registry names it, then the message, its delivery number and `team drops`.
+      const line = pointer !== null
+        ? composeMessageLine(`${sender.name ?? sender.seat} —`, pointer.hint)
+        : readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
       if (line === null) continue;
       // The typed retry submits a box that already holds exactly its line, and leaves every
       // other draft. A lead's draft is the exception the delivery below can keep: it copies

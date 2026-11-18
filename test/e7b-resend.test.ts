@@ -477,6 +477,21 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(shown.body).toContain('the secret body');
   });
 
+  test('the re-send pointer renders no wake template: the sender, then the message, its number and team drops, nothing of the body', async () => {
+    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    activateRoot(at);
+    recordPane(at, 'agy', 'pane-agy');
+    // A body short enough that the default template's {summary} would carry it whole.
+    const dropDir = stamped(at, 'agy', ID, 'tiny');
+    takeCopyNumber(dropDir, ID, 'typed');
+    const lines: string[] = [];
+    await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE }), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(new RegExp(`^\\S+ — message ${ID} · delivery 2: run team drops \\[w:[^\\]]+\\]$`));
+    expect(lines[0]).not.toContain('tiny');
+    expect(lines[0]).not.toContain('Message from');
+  });
+
   test('the shared typed path proves the pane\'s owner at its first key: any mismatch or unreadable reading types nothing', async () => {
     const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
     activateRoot(at);
