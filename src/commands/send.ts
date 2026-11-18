@@ -2103,7 +2103,11 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // send walks the same delivery order and then waits on the thread for the first verified reply
   // record within the timeout window.
   const msgId = host.sendId?.() ?? randomUUID();
-  const record = recordOf(msgId, to, body, from, admission, host.modelDriftNotice?.at ?? host.now().toISOString(), subject === '' ? undefined : subject);
+  // E7b: the delivery era is decided once, here, and this exact payload is what is signed, staged,
+  // carried by every leg and retried. A send that keeps no record (`messaging.store: none`) has no
+  // stored copy to retry or acknowledge, so it stays on legacy delivery (unstamped).
+  const unstamped = recordOf(msgId, to, body, from, admission, host.modelDriftNotice?.at ?? host.now().toISOString(), subject === '' ? undefined : subject);
+  const record = store === 'none' ? unstamped : stampedPayload(unstamped, host.home);
   const callerRoot = { root, session: team.session };
   if (dry) {
     // A dry run reports the same ordered legs a real send would, but it can only say whether each
@@ -2382,7 +2386,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     // steps still name the legs it took.
     if (store === 'none') {
       try {
-        const signed = signRecord(record, host.home);
+        const signed = signRecord(record, host.home, { stamp: false });
         stagedWalk = { ok: true, path: null, record: recordTextOf(signed), signed };
       } catch {
         stagedWalk = { ok: false, reason: 'the record could not be signed' };
@@ -5343,7 +5347,8 @@ async function deliverTypedWakeSeat(
     const typedBody: LegBody = carrying
       ? legBody(payload, host.home, 'typed', dropDir, typedWakeMaxFor(cli), 'typed')
       : { text: trigger, carriesBody: false, handle: null };
-    const line = typedBody.text ?? trigger;
+    // E7b: a body that could not be numbered never goes out raw: the leg carries the pointer.
+    const line = carrying ? legText(typedBody, payload) : trigger;
     const wake = await deliverTypedWake(wakeHost, pane, line, cli, {
       ...(host.wakeVerifyMs === undefined ? {} : { verifyMs: host.wakeVerifyMs, workingBoundMs: host.wakeVerifyMs }),
       ...(host.wakePollMs === undefined ? {} : { pollMs: host.wakePollMs }),
@@ -6711,7 +6716,7 @@ async function deliverSocketFrame(
   let carried: string | null = null;
   if (store !== undefined && (store.mode === 'parallel' || store.mode === 'none')) {
     try {
-      carried = recordTextOf(signRecord(payload, host.home));
+      carried = recordTextOf(signRecord(payload, host.home, store.mode === 'none' ? { stamp: false } : {}));
     } catch {
       return { kind: 'fallback', reason: 'the record could not be signed' };
     }
@@ -6728,7 +6733,7 @@ async function deliverSocketFrame(
     bodyIncluded = false;
   }
   // E7b: a stamped record's copy carries its delivery number, taken durably before the frame.
-  if (bodyIncluded && isStampedPayload(stampedPayload(payload, host.home))) {
+  if (bodyIncluded && isStampedPayload(payload)) {
     const n = takeCopyNumber(dropDir, msgId, 'socket');
     if (n === null) return { kind: 'fallback', reason: 'the delivery history could not be written' };
     content = wrapCopy(content, msgId, n);

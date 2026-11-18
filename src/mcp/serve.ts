@@ -82,7 +82,7 @@ import {
 import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
-import { deliveryDue, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { copyHistory, deliveryDue, FIRST_BACKOFF_MS, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 
@@ -422,6 +422,42 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
     content: takesReaderLine(payload, false) ? bodyWithReaderLine(content, id, existingRecordIdsIn(serving.dropDir)) : content,
     meta: { id, from: payload.from, seat: serving.seat, team: serving.project },
   };
+}
+
+/**
+ * rfc-event-comms E7b (R3.4): the records of one seat the channel offers again now. Every
+ * verified, unsettled stamped record is a candidate, whether or not a push marker stands (a first
+ * push that failed before its marker, an abort, a record primed by a restart). It is due when its
+ * history says so (60 s doubling to 30 minutes after its newest copy); a record with no copy yet
+ * waits one first backoff from its arrival, so the arrival's own push is not doubled.
+ */
+export function channelRedeliveryDue(serving: Pick<Serving, 'dropDir' | 'seat' | 'root' | 'session' | 'home'>, nowMs: number): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(serving.dropDir);
+  } catch {
+    return [];
+  }
+  const due: string[] = [];
+  for (const name of names.sort()) {
+    if (name.startsWith('.') || isRecordSidecarName(name) || !MESSAGE_ID.test(name)) continue;
+    if (recordStampAt(serving.dropDir, name) !== true) continue;
+    if (receiptHeld(serving.dropDir, name, { to: serving.seat, root: serving.root, session: serving.session }, serving.home,
+      claimBindingIn(serving.root, serving.session, serving.seat, name))) continue;
+    if (!deliveryDue(serving.dropDir, name, nowMs)) continue;
+    const history = copyHistory(serving.dropDir, name);
+    if (history !== 'unknown' && history.copies === 0) {
+      let arrived: number;
+      try {
+        arrived = lstatSync(join(serving.dropDir, name)).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (nowMs - arrived < FIRST_BACKOFF_MS) continue;
+    }
+    due.push(name);
+  }
+  return due;
 }
 
 /**
@@ -816,25 +852,16 @@ function watchChannel(
   // the inbox is read whole only on the slow safety pass, for a sender that could not reach the bus.
   namesEvery();
   every(options.fallbackMs ?? CHANNEL_IDLE_MS);
-  // rfc-event-comms E7b (R3.4): a stamped record this server, or an earlier one, already pushed
-  // stays due until its recipient acknowledges it. Each pass retires the due ones' channel
-  // attempt (the markers move into the record's history) and pushes the next numbered copy.
+  // rfc-event-comms E7b (R3.4): every verified, unsettled stamped record of this seat stays due
+  // until its recipient acknowledges it, whether or not a push marker stands (a first push that
+  // failed before its marker, an abort, a record primed by a restart are all due). Each pass
+  // retires a due record's channel attempt (any markers move into its history) and pushes the next
+  // numbered copy. A record with no copy yet waits one first backoff from its arrival, so the
+  // arrival's own push is not doubled.
   const redeliverPass = (): void => {
     if (halted()) return;
-    let names: string[];
-    try {
-      names = readdirSync(serving.dropDir);
-    } catch {
-      return;
-    }
     const nowMs = Date.now();
-    for (const name of names) {
-      if (name.startsWith('.') || isRecordSidecarName(name) || !MESSAGE_ID.test(name)) continue;
-      if (recordStampAt(serving.dropDir, name) !== true) continue;
-      if (!channelPushHeld(serving.dropDir, name)) continue;
-      if (receiptHeld(serving.dropDir, name, { to: serving.seat, root: serving.root, session: serving.session }, serving.home,
-        claimBindingIn(serving.root, serving.session, serving.seat, name))) continue;
-      if (!deliveryDue(serving.dropDir, name, nowMs)) continue;
+    for (const name of channelRedeliveryDue(serving, nowMs)) {
       if (!retireChannelAttempt(serving.dropDir, name, nowMs)) continue;
       seen.delete(name);
       pushOne(name);

@@ -41,4 +41,17 @@ describe('the comms boundary (E7b)', () => {
       && /lvl:\s*(3|DELIVERY_LEVEL)/.test(code(path)));
     expect(offenders).toEqual([]);
   });
+
+  test('every read receipt this build writes comes from a known writer (a stamped record\'s read is a copy or a confirmation)', () => {
+    // readMessage and publishRecordRead mark a stamped record's writer-side read `copy`; ack, the
+    // lead's clearance, reply and answered-by-send confirm; the retention pre-channel mark skips
+    // stamped records; the client inbox writes only for client records, which are never stamped.
+    const known = new Set([
+      join(SRC, 'mcp', 'inbox.ts'), join(SRC, 'send', 'read-receipt.ts'), join(SRC, 'commands', 'ack.ts'),
+      join(SRC, 'send', 'inbox-retention.ts'), join(SRC, 'client', 'inbox.ts'), join(SRC, 'commands', 'messages.ts'),
+      join(SRC, 'send', 'record.ts'),
+    ]);
+    const writers = sources(SRC).filter((path) => /kind: 'receipt',\s*status: 'read'/.test(code(path)));
+    expect(writers.filter((path) => !known.has(path))).toEqual([]);
+  });
 });

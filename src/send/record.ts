@@ -139,7 +139,9 @@ export const DELIVERY_LEVEL = 3 as const;
  * client settles through its own grant), and a payload that already carries the stamp keeps it.
  */
 export function stampedPayload(payload: RecordPayload, home: string): RecordPayload {
-  if (payload.lvl === DELIVERY_LEVEL || payload.to_client !== undefined) return payload;
+  // A general seat brief keeps its own epoch-bound lifecycle (served once per launch at the turn
+  // start, never acknowledged with `team ack`), so it is never stamped either.
+  if (payload.lvl === DELIVERY_LEVEL || payload.to_client !== undefined || payload.brief_sha256 !== undefined) return payload;
   let dark: boolean;
   try {
     dark = floorState(payload.root, home).kind === 'dark';
@@ -220,7 +222,10 @@ function copyReceipt(path: string, id: string, context: StatusContext, key: KeyO
   const cached = stamp === null ? undefined : copyCache.get(path);
   if (cached !== undefined && cached.stamp === stamp) return cached.copy;
   const receipt = readVerifiedReceipt(path, id, 'read', context, key, brief);
-  const copy = receipt !== null && receipt.payload.read_by === COPY_READ_BY;
+  // A receipt that verified a moment ago and cannot be classified now is treated as a copy: an
+  // unknown never settles a message (fail toward delivery), and it is not remembered.
+  if (receipt === null) return true;
+  const copy = receipt.payload.read_by === COPY_READ_BY;
   if (stamp !== null) {
     if (copyCache.size > 4096) copyCache.clear();
     copyCache.set(path, { stamp, copy });
@@ -731,9 +736,9 @@ export function closeFile(dropDir: string, id: string): string {
 }
 
 /** Signs a payload with the checkout's message key. The key is created on the first sign. */
-export function signRecord(payload: RecordPayload, home: string): SignedRecord {
+export function signRecord(payload: RecordPayload, home: string, options: { stamp?: false } = {}): SignedRecord {
   const key = messageKeyOf(home);
-  const stamped = stampedPayload(payload, home);
+  const stamped = options.stamp === false ? payload : stampedPayload(payload, home);
   const raw = stamped as unknown as RawPayload;
   return withRaw({ payload: stamped, signature: signDomain(MESSAGE_DOMAIN, raw as unknown as Json, key) }, raw, []);
 }

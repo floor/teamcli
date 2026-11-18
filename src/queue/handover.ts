@@ -7,9 +7,9 @@
 // re-send, so no copy is ever silent, whatever order the copies arrive in (R4.1).
 //
 // Delivery history, one folder per message, never rewritten:
-//   <dropDir>/.exposures/<id>/<n>.<leg>   created exclusively and durably (file and folder fsync)
-//                                         immediately before the copy numbered n leaves
-// The number is taken by the exclusive create itself: two copies racing for n both try `<n>.*`
+//   <dropDir>/.exposures/<id>/<n>   created exclusively and durably (file and folder fsync)
+//                                   immediately before the copy numbered n leaves; the leg is inside
+// The number is taken by the exclusive create itself: two copies racing for n, on any two legs, both try `<n>`
 // and the loser moves on to n+1, so a number is used once. A history that cannot be read or
 // written is unknown, and no copy leaves (the record stays due; R2.2 X3 defer).
 //
@@ -28,7 +28,9 @@ export const EXPOSURES = '.exposures';
 /** The legs and readers a copy can leave through, as history names them. */
 export type CopyLeg = 'channel' | 'typed' | 'native' | 'socket' | 'read' | 'pointer';
 
-const COPY_NAME = /^([1-9][0-9]{0,8})\.(channel|typed|native|socket|read|pointer)$/;
+/** One name per number, whatever the leg (the leg is in the file): two legs that read the same
+ *  history race for the same name, and exactly one of them wins it. */
+const COPY_NAME = /^([1-9][0-9]{0,8})$/;
 
 /** First retry after 60 s, doubling, never longer than 30 minutes; no attempt limit. */
 export const FIRST_BACKOFF_MS = 60_000;
@@ -84,7 +86,7 @@ export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs:
   const seen = copyHistory(dropDir, id);
   if (seen === 'unknown') return null;
   for (let n = seen.copies + 1; n <= seen.copies + 8; n++) {
-    const made = createExclusive(join(folder, `${String(n)}.${leg}`), `${JSON.stringify({ v: 1, n, leg, at: new Date(nowMs).toISOString() })}\n`);
+    const made = createExclusive(join(folder, String(n)), `${JSON.stringify({ v: 1, n, leg, at: new Date(nowMs).toISOString() })}\n`);
     if (made === 'created') return n;
     if (made === 'failed') return null;
     // `exists`: a rival took n; try the next number.

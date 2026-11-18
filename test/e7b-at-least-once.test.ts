@@ -181,14 +181,14 @@ describe('numbered copies (R4.1)', () => {
     expect(takeCopyNumber(at.dropDir, M1, 'channel')).toBe(1);
     expect(takeCopyNumber(at.dropDir, M1, 'socket')).toBe(2);
     expect(takeCopyNumber(at.dropDir, M1, 'read')).toBe(3);
-    expect(readdirSync(join(at.dropDir, EXPOSURES, M1)).filter(n => !n.startsWith('.')).sort()).toEqual(['1.channel', '2.socket', '3.read']);
+    expect(readdirSync(join(at.dropDir, EXPOSURES, M1)).filter(n => !n.startsWith('.')).sort()).toEqual(['1', '2', '3']);
     expect(copyHistory(at.dropDir, M1)).toMatchObject({ copies: 3 });
   });
 
   test('a rival that took the next number makes this copy take the one after', () => {
     const at = place();
     mkdirSync(join(at.dropDir, EXPOSURES, M1), { recursive: true });
-    writeFileSync(join(at.dropDir, EXPOSURES, M1, '1.typed'), '{}\n');
+    writeFileSync(join(at.dropDir, EXPOSURES, M1, '1'), '{"leg":"typed"}\n');
     expect(takeCopyNumber(at.dropDir, M1, 'channel')).toBe(2);
   });
 
@@ -325,5 +325,75 @@ describe('the channel: one attempt retired so the next numbered copy can be push
     expect(retireChannelAttempt(at.dropDir, M1, 2_000)).toBe(true);
     // The retired evidence does not count as a numbered copy.
     expect(copyHistory(at.dropDir, M1)).toMatchObject({ copies: 0 });
+  });
+});
+
+describe('code round 1 fixes', () => {
+  test('a leg numbers the exact payload it was handed, whatever the floor says later (no recomputation)', async () => {
+    const { legBody } = await import('../src/send/readable-wake.ts');
+    const at = place();
+    activateRoot(at);
+    write(at, M1);
+    const stamped = stampedPayload(payloadOf(at, M1), at.home);
+    deactivate(at.root, at.home);
+    const body = legBody(stamped, at.home, 'native', at.dropDir);
+    expect(body.carriesBody).toBe(true);
+    expect(body.text?.startsWith(`message ${M1} · delivery 1`)).toBe(true);
+  });
+
+  test('a leg whose history cannot be written carries no body (the pointer), never the raw body', async () => {
+    const { legBody, legText } = await import('../src/send/readable-wake.ts');
+    const at = place();
+    activateRoot(at);
+    write(at, M1);
+    mkdirSync(join(at.dropDir, EXPOSURES), { recursive: true });
+    writeFileSync(join(at.dropDir, EXPOSURES, M1), 'not a folder\n');
+    const stamped = stampedPayload(payloadOf(at, M1), at.home);
+    const body = legBody(stamped, at.home, 'typed', at.dropDir);
+    expect(body.carriesBody).toBe(false);
+    expect(legText(body, stamped)).not.toContain(`body of ${M1}`);
+  });
+
+  test('a general seat brief is never stamped (it keeps its own lifecycle)', () => {
+    const at = place();
+    activateRoot(at);
+    const brief = { ...payloadOf(at, M1), brief_sha256: 'a'.repeat(64), incarnation: 'i0000000000000001' };
+    expect(stampedPayload(brief, at.home).lvl).toBeUndefined();
+  });
+
+  test('the channel offers again every due unsettled stamped record, marker or not', async () => {
+    const { channelRedeliveryDue } = await import('../src/mcp/serve.ts');
+    const { channelAbortPath } = await import('../src/mcp/channel.ts');
+    const at = place();
+    activateRoot(at);
+    write(at, M1);
+    write(at, M2);
+    writeFileSync(channelAbortPath(at.dropDir, M2), `{"id":"${M2}"}\n`);
+    const serving = { dropDir: at.dropDir, seat: 'lead', root: at.root, session: SESSION, home: at.home };
+    // Just arrived, no copy yet: the arrival's own push is not doubled.
+    expect(channelRedeliveryDue(serving, Date.now())).toEqual([]);
+    // A minute on, both are due: M1 never pushed (its first history write failed, say), M2 aborted.
+    const later = Date.now() + 61_000;
+    expect(channelRedeliveryDue(serving, later).sort()).toEqual([M1, M2].sort());
+    // A copy just taken is not due until its backoff; an acknowledged record is never due.
+    takeCopyNumber(at.dropDir, M1, 'channel');
+    read(at, M2, 'ack');
+    expect(channelRedeliveryDue(serving, Date.now() + 1_000)).toEqual([]);
+    expect(channelRedeliveryDue(serving, Date.now() + 61_000)).toEqual([M1]);
+  });
+
+  test('a retired seat\'s not-delivered notices are reconciled from its archive, once each', async () => {
+    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
+    mkdirSync(archived, { recursive: true, mode: 0o700 });
+    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(payloadOf(at, M1), at.home), null, 2)}\n`, { mode: 0o600 });
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'worker' }, { name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
+    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString() };
+    expect(noticeUndelivered(input)).toBe(1);
+    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker', undeliveredNoticeId(M1)))).toBe(true);
+    // A second pass (after a crash, or a failed first write) finds the notice and writes no other.
+    expect(noticeUndelivered(input)).toBe(0);
   });
 });

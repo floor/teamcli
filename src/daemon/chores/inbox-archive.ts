@@ -23,7 +23,9 @@ import { logLine } from '../../log.ts';
 import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
 import { teamIdOf } from '../../registry/teams.ts';
 import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
-import { archiveSeatInbox, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
+import { archiveSeatInbox, listArchivedUnread, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
+import { isRead, isStampedPayload, readRecord, verifyRecord } from '../../send/record.ts';
+import type { KeyObject } from 'node:crypto';
 import { archiveLegacySeat, legacySeatFolders } from '../../send/legacy-inbox-retention.ts';
 import { heldAt } from '../../held.ts';
 import type { StatusContext } from '../../send/record.ts';
@@ -179,6 +181,35 @@ export function seatRetired(agents: readonly Agent[], teamId: string, team: Team
     && (agent.lifecycle === 'running' || agent.lifecycle === 'registered' || agent.lifecycle === 'stopped'));
 }
 
+/**
+ * The not-delivered notices of one retired seat, reconciled from its unread archive: for each
+ * archived record that is stamped, verifies, and was never acknowledged, one runtime notice with a
+ * stable id. The notice goes to the sender when the sender is a seat of this team, and to the
+ * team's lead otherwise (a sender from another team, the owner, a client), naming the sender.
+ */
+export function noticeUndelivered(input: {
+  home: string; root: string; session: string; seat: string; dropDir: string; team: TeamFile;
+  context: StatusContext; key: KeyObject; at: string;
+}): number {
+  let written = 0;
+  for (const archived of listArchivedUnread(input.dropDir)) {
+    const looked = readRecord(archived.path, archived.id);
+    if (!looked.ok || looked.record === null || !verifyRecord(looked.record, input.key)) continue;
+    const payload = looked.record.payload;
+    if (!isStampedPayload(payload) || isRead(input.dropDir, archived.id, input.context, input.key)) continue;
+    const local = payload.from_client === undefined && input.team.seats.some((entry) => entry.name === payload.from);
+    const to = local ? payload.from : input.team.orchestrator;
+    if (to === undefined || to === null || to === '') continue;
+    const notice = writeRuntimeNotice({
+      home: input.home, root: input.root, session: input.session, lead: to, id: undeliveredNoticeId(archived.id),
+      body: `not delivered: seat retired (${input.seat}). The message ${archived.id} from ${payload.from} was never acknowledged and is archived; list it with \`team drops archive --unread\`.`,
+      at: input.at,
+    });
+    if (notice.ok && !notice.existing) written += 1;
+  }
+  return written;
+}
+
 /** A stable, UUID-shaped id for one message's not-delivered notice. */
 export function undeliveredNoticeId(id: string): string {
   const hex = createHash('sha256').update(`not-delivered\n${id}`).digest('hex');
@@ -257,6 +288,7 @@ export async function inboxArchivePass(input: {
   const refused: string[] = [];
   let registrySaid = false;
   const stop = async (after: 'recovery' | 'chunk'): Promise<boolean> => deps.yieldTurn !== undefined && !(await deps.yieldTurn(after));
+  const noticed = new Set<string>();
   seats: for (const folder of seatDropFolders(root)) {
     const context: StatusContext = { to: folder.seat, root, session: folder.session };
     const key2 = `${folder.session}/${folder.seat}`;
@@ -361,15 +393,13 @@ export async function inboxArchivePass(input: {
         },
       });
       const unreadHere = report.move.filter((item) => item.unread === true).length;
-      // E7b (decision 4): each unacknowledged stamped record moved off a retired seat is answered
-      // to its sender once (a stable id per message, so a retry finds the first notice).
-      for (const item of report.move) {
-        if (item.undelivered === undefined || item.undelivered.from === 'owner' || item.undelivered.from.includes(':')) continue;
-        writeRuntimeNotice({
-          home, root, session: folder.session, lead: item.undelivered.from, id: undeliveredNoticeId(item.id),
-          body: `not delivered: seat retired (${folder.seat}). Your message ${item.id} was never acknowledged and is archived; list it with \`team drops archive --unread\`.`,
-          at: now.toISOString(),
-        });
+      // E7b (decision 4): every unacknowledged stamped record in a retired seat's unread archive is
+      // answered to its sender, reconciled from the archive itself on every pass (a stable id per
+      // message, so a notice already written is found and not repeated). A move whose notice was
+      // cut off, or failed, is therefore answered on the next pass.
+      if (retired && !noticed.has(folder.dropDir)) {
+        noticed.add(folder.dropDir);
+        noticeUndelivered({ home, root, session: folder.session, seat: folder.seat, dropDir: folder.dropDir, team, context, key: key.key, at: now.toISOString() });
       }
       moved += report.move.length - unreadHere;
       unread += unreadHere;
