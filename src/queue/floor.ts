@@ -39,11 +39,11 @@ import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } fr
 import { createExclusive, ensureFolder, fsyncFolder, readFence, removeDurable, type DurableFaults } from './durable.ts';
 
 /** The capability level this build enforces: exposure claims and wake-attempt states. */
-export const ACTOR_LEVEL = 3;
-/** The level a root is activated at by this build. A later fence family raises it (§3). Level 3
- *  (E7) adds the reader switch: a root activates at 3 only when every live actor reports 3, so an
- *  E6 build (level 2) still running keeps the root dark and every reader on the legacy listing. */
-export const FLOOR_LEVEL = 3;
+export const ACTOR_LEVEL = 2;
+/** The level a root is activated at by this build. A later fence family raises it (§3). E7a
+ *  keeps E6's level: it changes no live behaviour while the root is dark, and the reader switch
+ *  needs READER_LEVEL (3), which only the activation boundary (E7b) raises the floor to. */
+export const FLOOR_LEVEL = 2;
 
 export const ACTIVATION_DOMAIN = 'team-activation-v1\n';
 const PROTOCOL = 'PROTOCOL';
@@ -92,6 +92,9 @@ export type ActivationOptions = {
    *  a binary below the floor. E6 does not wire it yet, so no production caller passes this and the
    *  root stays dark: the fences are written in shadow and enforced by nobody. */
   launchBoundary?: true;
+  /** The floor this run activates at; FLOOR_LEVEL by default. The reader switch (E7a) is exercised
+   *  in tests at READER_LEVEL; production activation stays refused until E7b. */
+  level?: number;
 };
 
 export type ActivationOutcome =
@@ -250,7 +253,8 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
     // The daemon runs the check and hosts the workers: without a live daemon at the floor there is
     // nobody to enforce the fences, so the root stays dark.
     if (!actors.some(actor => actor.kind === 'daemon')) return { kind: 'refused', why: 'no live daemon reports a level', below: [] };
-    const below = belowFloor(actors, FLOOR_LEVEL);
+    const floorLevel = options.level ?? FLOOR_LEVEL;
+    const below = belowFloor(actors, floorLevel);
     if (below.length > 0) return { kind: 'refused', why: 'an actor below the floor is live', below };
     options.after?.('prove');
     if (resume) {
@@ -258,7 +262,7 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
       const published = publishUnderLock(root, options.faults);
       if (published.kind === 'failed') return published;
       options.after?.('publish');
-      return { kind: 'already', level: FLOOR_LEVEL };
+      return { kind: 'already', level: floorLevel };
     }
     if (state.kind === 'active') return { kind: 'already', level: state.level };
     if (state.kind === 'fenced') {
@@ -267,7 +271,7 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
         : { kind: 'failed', why: 'the fenced marker could not be removed' };
     }
     // A2: the marker.
-    const marker = createExclusive(join(queuesFolder(root), PROTOCOL), `${JSON.stringify({ v: 1, level: FLOOR_LEVEL })}\n`, options.faults);
+    const marker = createExclusive(join(queuesFolder(root), PROTOCOL), `${JSON.stringify({ v: 1, level: floorLevel })}\n`, options.faults);
     if (marker === 'failed') {
       // A marker that may stand without being durable is taken back now (A0 would on the next pass).
       removeDurable(join(queuesFolder(root), PROTOCOL));
@@ -279,7 +283,7 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
       v: 1,
       kind: 'activation',
       root,
-      level: FLOOR_LEVEL,
+      level: floorLevel,
       build: options.build,
       actors: actors.map(actor => ({ kind: actor.kind, name: actor.name, pid: actor.pid, level: actor.level as number })),
       at: (options.now?.() ?? new Date()).toISOString(),
@@ -302,7 +306,7 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
     const published = publishUnderLock(root, options.faults);
     if (published.kind === 'failed') return published;
     options.after?.('publish');
-    return { kind: 'activated', level: FLOOR_LEVEL };
+    return { kind: 'activated', level: floorLevel };
   });
   return result;
 }

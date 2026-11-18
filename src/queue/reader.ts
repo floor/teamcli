@@ -36,7 +36,7 @@ import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } fr
 import { lockedQueueOrder, observedQueueOrder, queueBaseOf } from './append.ts';
 import { createExclusive, readFence, removeDurable, type DurableFaults } from './durable.ts';
 import { floorState, queuesFolder, seatDropFoldersStrict, withActivationLock, type FloorActor } from './floor.ts';
-import { drainPendingReceipts, pendingMarkers, quarantinedPending } from './receipt-store.ts';
+import { drainPendingReceiptsChecked, pendingMarkers, quarantinedPending } from './receipt-store.ts';
 
 /** The level a root must be active at before the switch may be on. */
 export const READER_LEVEL = 3;
@@ -86,7 +86,7 @@ export function seatQueueCheck(dropDir: string, binding: SeatBinding, unread: re
   if (queueBaseOf(dropDir) === null) return { kind: 'incomplete', why: 'the folder has no queue' };
   let pending: number | null;
   if (mode.drain) {
-    const drained = drainPendingReceipts(dropDir, home);
+    const drained = drainPendingReceiptsChecked(dropDir, home);
     pending = drained.unknown ? null : drained.left;
   } else {
     pending = pendingMarkers(dropDir);

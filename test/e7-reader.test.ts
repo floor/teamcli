@@ -15,7 +15,7 @@ import { signRecord } from '../src/send/record.ts';
 import { appendDeliverySync, lockedQueueOrder, queueBaseOf } from '../src/queue/append.ts';
 import { activate, fencesEnforced, floorState, mayCreateFence, queuesFolder, seatDropFoldersStrict, type FloorActor } from '../src/queue/floor.ts';
 import { exposeBody } from '../src/queue/exposure.ts';
-import { drainPendingReceipts, pendingMarkers, shadowQueueReceipt } from '../src/queue/receipt-store.ts';
+import { drainPendingReceiptsChecked, pendingMarkers, shadowQueueReceipt } from '../src/queue/receipt-store.ts';
 import { readerOrder, readerSwitch, seatQueueCheck, setReaderSwitch } from '../src/queue/reader.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
 import { runQueues } from '../src/commands/queues.ts';
@@ -70,7 +70,7 @@ const on = (at: At, actors: FloorActor[] = [daemon]) => setReaderSwitch(at.root,
   unreadOf: (dropDir) => ({ binding: binding(at), ids: listUnread(dropDir, context(at), at.home).map(m => m.id) }),
 });
 const off = (at: At) => setReaderSwitch(at.root, false, { home: at.home, actors: () => [daemon], unreadOf: () => null });
-const activateRoot = (at: At, actors: FloorActor[] = [daemon]) => activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => actors });
+const activateRoot = (at: At, actors: FloorActor[] = [daemon]) => activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => actors, level: 3 });
 
 const M1 = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e01';
 const M2 = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e02';
@@ -98,7 +98,7 @@ describe('E7 entry gates', () => {
     message(at, M1, EARLIER);
     const base = queueBaseOf(at.dropDir) as string;
     writeFileSync(join(base, 'pending-receipts'), 'not a folder');
-    expect(drainPendingReceipts(at.dropDir, at.home)).toMatchObject({ unknown: true, left: 0 });
+    expect(drainPendingReceiptsChecked(at.dropDir, at.home)).toMatchObject({ unknown: true, left: 0 });
     expect(seatQueueCheck(at.dropDir, binding(at), [M1], at.home)).toMatchObject({ kind: 'incomplete' });
   });
 
@@ -340,47 +340,6 @@ describe('E7 round 3', () => {
   });
 });
 
-describe('E7a first-body admission', () => {
-  const carrier = (at: At) => ({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: M1 });
-
-  test('two automatic carriers, no prior receipt, publication lost (root unknown): one body, one pointer', () => {
-    const at = place();
-    message(at, M1, LATER);
-    expect(activateRoot(at).kind).toBe('activated');
-    unlinkSync(join(queuesFolder(at.root), 'PUBLISHED'));
-    expect(floorState(at.root, at.home).kind).toBe('unknown');
-    const first = exposeBody(carrier(at), 'channel', at.home);
-    const second = exposeBody(carrier(at), 'typed', at.home);
-    expect(first.kind).toBe('expose');
-    expect(second.kind).toBe('pointer');
-  });
-
-  test('across recovery: a carrier admitted while unknown still excludes a carrier after the root is active again', () => {
-    const at = place();
-    message(at, M1, LATER);
-    expect(() => activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon], after: (step) => { if (step === 'record') throw new Error('crash'); } })).toThrow('crash');
-    expect(floorState(at.root, at.home).kind).toBe('unknown');
-    const first = exposeBody(carrier(at), 'channel', at.home);
-    expect(first.kind).toBe('expose');
-    expect(activateRoot(at).kind).toBe('already');
-    expect(floorState(at.root, at.home).kind).toBe('active');
-    expect(exposeBody(carrier(at), 'native', at.home).kind).toBe('pointer');
-  });
-
-  test('a fenced root and a dark root admit a first body only through the claim', async () => {
-    for (const fence of [true, false]) {
-      const at = place();
-      message(at, M1, LATER);
-      if (fence) {
-        expect(activateRoot(at).kind).toBe('activated');
-        const { checkActors } = await import('../src/queue/floor.ts');
-        expect(checkActors(at.root, at.home, [daemon, e6Server]).kind).toBe('fenced');
-      }
-      expect(exposeBody(carrier(at), 'channel', at.home).kind).toBe('expose');
-      expect(exposeBody(carrier(at), 'socket', at.home).kind).toBe('pointer');
-    }
-  });
-});
 
 describe('E7a activation stays dark', () => {
   test('team queues activate refuses in this build and writes nothing', async () => {
@@ -411,44 +370,25 @@ seats:
   });
 });
 
-describe('E7a round 5', () => {
-  const carrier = (at: At) => ({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: M1 });
-  const listener = (at: At, seat: string, level: number | null) => {
-    const dir = join(at.root, '.agents', 'send-drops', SESSION, seat);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat, session: SESSION, root: at.root, cli: 'codex', pid: process.pid, ts: new Date().toISOString(), ...(level === null ? {} : { level }) })}\n`);
-  };
 
-  test('coexistence: a live older carrier (an E6 inbox server, level 2, or one with no level) means a pointer and no claim; claim-aware carriers only means a body', () => {
-    for (const level of [2, null]) {
-      const at = place();
-      message(at, M1, LATER);
-      listener(at, 'old-seat', level);
-      expect(exposeBody(carrier(at), 'channel', at.home)).toMatchObject({ kind: 'pointer', why: expect.stringContaining('older carrier') });
-      expect(existsSync(join(at.dropDir, '.read-claims'))).toBe(false);
-    }
+describe('E7a is strictly dark: a dark root behaves exactly as E6', () => {
+  test('dark root: the exposure decision is legacy, no claim folder, no seq, signed-time order, the body served, and no queue file beyond E6 shadow writes', () => {
     const at = place();
     message(at, M1, LATER);
-    listener(at, 'new-seat', 3);
-    expect(exposeBody(carrier(at), 'channel', at.home).kind).toBe('expose');
-  });
-
-  test('a native route that refuses before submitting says so (beforeHandover), so its claim is given back', async () => {
-    const at = place();
-    message(at, M1, LATER);
-    const { deliverCodexNativeRoute } = await import('../src/send/push-adapters/codex-relay.ts');
-    const refused = await deliverCodexNativeRoute(
-      { route: 'native', runtime: 'codex', copy: { dir: at.dropDir, name: M1 }, root: at.root, home: at.home, session: SESSION, seat: 'lead', sender: { seat: 'worker', team: 'fixture' } },
-      { id: M1, record: '{}' },
-      { now: () => new Date('2026-11-18T00:00:00.000Z'), routeStartedAt: new Date('2026-11-18T01:00:00.000Z'), deliveryTimeout: 5_000, liveProbe: false, skipStage: true } as never,
-    );
-    expect(refused.outcome).not.toBe('enqueue');
-    expect('beforeHandover' in refused && refused.beforeHandover).toBe(true);
-    // The leg's settle maps that proof to 'no': the claim goes and the first ordinary read gets the body.
-    const first = exposeBody(carrier(at), 'native', at.home);
-    expect(first.kind).toBe('expose');
-    if (first.kind === 'expose') first.settle('no', () => true);
-    const { readMessage } = await import('../src/mcp/inbox.ts');
-    expect(readMessage({ dropDir: at.dropDir, root: at.root, seat: 'lead', session: SESSION }, M1, at.home).ok).toBe(true);
+    message(at, M2, EARLIER);
+    expect(floorState(at.root, at.home).kind).toBe('dark');
+    expect(readerSwitch(at.root, at.home).kind).toBe('off');
+    // The live listing: E6's set and order, no seq, nothing written by reading it.
+    const tree = () => JSON.stringify(readdirSync(join(at.root, '.agents'), { recursive: true }).map(String).sort());
+    const before = tree();
+    expect(raw(at)).toEqual([[M2, null], [M1, null]]);
+    expect(listed(at)).toEqual([[M2, null], [M1, null]]);
+    expect(tree()).toBe(before);
+    // The first-body decision on a dark root is E6's: legacy, no claim.
+    expect(exposeBody({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: M1 }, 'channel', at.home).kind).toBe('legacy');
+    expect(existsSync(join(at.dropDir, '.read-claims'))).toBe(false);
+    // `team queues activate` is refused (tested below); the reader switch cannot go on while dark.
+    expect(on(at).kind).toBe('refused');
+    expect(existsSync(join(queuesFolder(at.root), 'READER'))).toBe(false);
   });
 });

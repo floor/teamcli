@@ -334,7 +334,17 @@ export function quarantinedPending(dropDir: string): string[] | null {
  * answers `exists`), then the marker is removed durably. A marker whose placement still cannot be
  * proved, or whose write or removal fails, stays for the next pass. Called with no queue lock held.
  */
-export function drainPendingReceipts(dropDir: string, home: string, log?: (line: string) => void): { written: number; left: number; dropped: number; unknown: boolean } {
+export function drainPendingReceipts(dropDir: string, home: string, log?: (line: string) => void): { written: number; left: number; dropped: number } {
+  const { unknown, ...counts } = drainPendingReceiptsChecked(dropDir, home, log);
+  // E6's shape and behaviour exactly (E7a changes nothing live); an unlistable folder reads as
+  // nothing drained here, and only the E7 completeness check asks for `unknown`.
+  void unknown;
+  return counts;
+}
+
+/** The drain, saying whether the pending folder could be listed at all (E7 completeness): a failed
+ *  listing is `unknown: true`, never zero. */
+export function drainPendingReceiptsChecked(dropDir: string, home: string, log?: (line: string) => void): { written: number; left: number; dropped: number; unknown: boolean } {
   const folder = pendingFolder(dropDir);
   if (folder === null) return { written: 0, left: 0, dropped: 0, unknown: false };
   const names = listPending(folder);

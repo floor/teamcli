@@ -25,12 +25,12 @@ function scene(): { root: string; home: string } {
   return { root, home };
 }
 
-const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
+const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 2 };
 const server = (level: number | null): FloorActor => ({ kind: 'inbox-server', name: 's/seat', pid: 2, build: 'b', level });
 
 function active(): { root: string; home: string } {
   const s = scene();
-  expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(3)] }).kind).toBe('activated');
+  expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(2)] }).kind).toBe('activated');
   return s;
 }
 
@@ -49,13 +49,13 @@ describe('activation floor', () => {
 
   test('no live daemon means no activation', () => {
     const s = scene();
-    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [server(3)] }).kind).toBe('refused');
+    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [server(2)] }).kind).toBe('refused');
     expect(floorState(s.root, s.home).kind).toBe('dark');
   });
 
   test('every actor at the floor activates; marker then record', () => {
     const s = active();
-    expect(floorState(s.root, s.home)).toMatchObject({ kind: 'active', level: 3 });
+    expect(floorState(s.root, s.home)).toMatchObject({ kind: 'active', level: 2 });
     expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(true);
   });
 
@@ -100,7 +100,7 @@ describe('activation floor', () => {
     expect(checkActors(s.root, s.home, [daemon, server(null)]).kind).toBe('fenced');
     expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(false);
     expect(fencesEnforced(s.root, s.home)).toBe(true);
-    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(3)] }).kind).toBe('activated');
+    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(2)] }).kind).toBe('activated');
     expect(floorState(s.root, s.home).kind).toBe('active');
   });
 
