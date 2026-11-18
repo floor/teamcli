@@ -53,7 +53,7 @@ the send-only vocabulary, and the read is refused with the owner's repair named.
 | `--since` | `<id>` | show only replies ordered after that reply; the id must be a verified reply in this inbox |
 | `--ack` | `<id>` | write the read receipt beside that reply; the id is validated on its own, whether or not the page shows it |
 | `--limit` | `<n>` | the page bound, from 1 to 100; without it, 20 |
-| `--request-id` | `<id>` | the signed request's own id; generated when absent, and claimed once per checkout |
+| `--request-id` | `<id>` | the signed request's own id; generated when absent, and claimed once per checkout by an `--ack` (a plain read writes nothing and claims nothing) |
 | `--json` | — | the same reading as one document, format 1, registered as `schema/messages.schema.json`: the context, the message rows, the notes, the differences with their repairs, and the counts; the client form is the `team.messages.client` v1 document in `schema/messages-client.schema.json` |
 
 ## Who may run it

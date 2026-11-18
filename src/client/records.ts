@@ -1444,8 +1444,9 @@ export function withClientGrantLock<T>(home: string, fn: () => T, waitMs: number
       fd = openSync(path, 'wx', 0o600);
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw new Error(`the client grant lock "${path}" cannot be taken`);
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST') {
+        throw new Error(`the client grant lock "${path}" cannot be taken (${code ?? 'unreadable'})`);
       }
       if (Date.now() >= deadline) {
         throw new Error(

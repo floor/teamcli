@@ -245,10 +245,19 @@ A read is a signed request, and the command verifies it before it scans anything
 4. the grant is checked active again, and the registry binding is resolved a second time: the
    coordinator's team, seat and agent id, the checkout and the session must still be the ones the
    grant signs;
-5. the request id is claimed under the grant lock before any row is scanned: a replay of an
-   already-claimed request is refused with nothing read and nothing written;
-6. the inbox folder is checked as above, and the message key is read;
-7. only then is the folder scanned.
+5. for an `--ack`, the whole admission runs under the grant lock and the request id is claimed
+   before any row is scanned: a replay of an already-claimed request is refused with nothing read
+   and nothing written. A plain read (`--since`, `--limit` and `--follow` included) writes
+   nothing: it takes no lock, claims no request id and creates no folder, because it has no
+   effect a replay could repeat. A held lock never delays it, and a caller whose sandbox refuses
+   writes to the grants folder and the team's `.agents` can still read its replies;
+6. the inbox folder is checked as above (an ack creates it; a plain read creates none, and an
+   absent one is an empty inbox), and the message key is read;
+7. only then is the folder scanned (a folder found absent in step 6 is read as empty and not
+   listed);
+8. before anything is printed, the presented grant is checked active again with a fresh clock and
+   the coordinator binding is resolved a third time: a revocation, expiry or rebinding that landed
+   while the page was gathered refuses the read with nothing shown.
 
 Every failure before step 7 leaves no row scanned and no receipt written.
 
@@ -272,7 +281,9 @@ verified reply in the inbox, so a reply outside `--since`/`--limit` can be ackno
 its body being printed. The acknowledgement is written as a signed `<id>.read.json` receipt at
 0600, once: a second acknowledgement prints `ack: <id> already acknowledged` and writes nothing.
 An existing receipt that does not verify is not replaced — the ack is refused, the run exits 1,
-and the reason names the file for the owner to remove. A reply whose body is outside the page is
+and the reason names the file for the owner to remove. An ack whose caller may not write the
+grants folder (a sandboxed seat) is refused before anything is read, with the lock's cause named
+and the pointer to a plain read with `--since <id>`, which needs no write. A reply whose body is outside the page is
 never printed.
 
 ### The client pane guard
@@ -303,7 +314,7 @@ Seatbelt confinement of `~/.config/team-client` for guarded seats belongs to the
 The key is still a file on disk: `key isolation: enforced against team panes (key file still readable by same-user processes)` is printed on
 stderr on every client invocation, usage refusals included, and carried in the JSON as
 `key_isolation`. The read protects the inbox from other principals by grant and signature, not the
-key from same-user processes. The request replay claim is per checkout and client; it does not
+key from same-user processes. The request replay claim, made by an ack only, is per checkout and client; it does not
 expire on its own. The page bound is 20 by default and 100 at most.
 
 ## Examples, moved here whole
