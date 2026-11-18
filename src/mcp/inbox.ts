@@ -61,6 +61,9 @@ import {
 import { messageKeyState } from '../store/keys.ts';
 import type { BuildIdentity } from '../version.ts';
 import { flushReceipt, publishReadReceipt } from './inbox-admission.ts';
+import { decideExposure, exposurePointer } from '../queue/exposure.ts';
+import { shadowQueueReceipt } from '../queue/receipt-store.ts';
+import { queuePlaceOf } from '../queue/append.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
@@ -132,6 +135,9 @@ export type InboxListener = {
    *  epoch when the launch line named none. Absent when the claim holds no launch epoch, or the
    *  server started before a claim existed. Never a replacement for the server's live guards. */
   epoch?: string;
+  /** The fence capability level this server enforces (rfc-event-comms §3): 2 from E6. A marker
+   *  without it is a build before E6, whose level is unknown, and blocks activation. */
+  level?: number;
 };
 
 /** One waiting message, as `inbox_check` names it. `from` is the sender the message's own signed
@@ -233,6 +239,7 @@ export function readListener(dropDir: string): InboxListener | null {
       ...(typeof parsed.head === 'string' ? { head: parsed.head } : {}),
       ...(parsed.channel === true ? { channel: true as const } : {}),
       ...(isBriefEpoch(parsed.epoch) ? { epoch: parsed.epoch } : {}),
+      ...(typeof parsed.level === 'number' && Number.isInteger(parsed.level) && parsed.level > 0 ? { level: parsed.level } : {}),
     };
   } catch {
     return null;
@@ -771,6 +778,9 @@ export function readMessage(
    *  operation's recovery taking back the claim it left (src/send/read-claim.ts), so a recovered
    *  read seals the same receipt, brief binding included, that the live read would have. */
   handover?: { receipt: 'after'; owner?: string; adopt?: boolean },
+  /** The exposure actor (rfc-event-comms §3) when this read records a body a leg already carried
+   *  (`recordDeliveredBody`): that leg's own claim then continues instead of yielding a pointer. */
+  exposureActor?: string,
 ): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = recordFile(target.dropDir, id);
@@ -891,6 +901,11 @@ export function readMessage(
     if (!flushReceipt(readName, target.dropDir)) {
       return { ok: false, reason: 'the receipt could not be made durable, so the message is not returned' };
     }
+    // rfc-event-comms §2 (E6): the per-seat receipt store, written in shadow once this is durable.
+    shadowQueueReceipt({
+      dropDir: target.dropDir, root: target.root, session: target.session, seat: target.seat, msgId: id,
+      kind: 'read', actor: { kind: handover?.owner === undefined ? 'recipient' : 'relay', name: handover?.owner ?? target.seat }, home, place: queuePlaceOf,
+    });
     return true;
   };
   // The exclusive read claim (rfc-event-comms E5, review round 3): one reader holds the id from
@@ -919,6 +934,19 @@ export function readMessage(
   if (receiptHeldNow()) {
     release();
     return alreadyServed();
+  }
+  // The exposure claim (rfc-event-comms §3, E6), taken under the read claim and immediately before
+  // the body can leave: on an active root only its creator exposes the body; every other reader
+  // gets a pointer, and no `read` receipt is written for a pointer. A dark root writes the claim in
+  // shadow and decides nothing.
+  const exposure = decideExposure(
+    { root: target.root, session: target.session, seat: target.seat, msg_id: id, ...(isGeneralBriefRecord(payload) && writerEpoch !== undefined ? { epoch: writerEpoch } : {}) },
+    exposureActor ?? handover?.owner ?? (handover?.receipt === 'after' ? 'relayed-read' : 'inbox-read'),
+    home,
+  );
+  if (exposure.kind === 'pointer') {
+    release();
+    return { ok: false, reason: `${exposurePointer(id, queuePlaceOf(target.dropDir, id)?.seq ?? null)} (${exposure.why})`, served: 'already-served' };
   }
   if (handover?.receipt === 'after') {
     // A named owner's claim is never removed by the reader: it stays the relayed read's through its

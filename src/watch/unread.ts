@@ -90,6 +90,11 @@ import { messageKeyState } from '../store/keys.ts';
 import { MailPass, STUCK_MARKER } from './mail-pass.ts';
 import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
 import { climbUnreadLead } from './status-events.ts';
+import { attemptGate, incarnationOf, prepareAttempt, tokenText } from '../queue/wake-attempt.ts';
+import { floorPass } from '../queue/floor.ts';
+import { liveFloorActors } from '../queue/floor-actors.ts';
+import { queuePlaceOf } from '../queue/append.ts';
+import { readState } from '../state.ts';
 import { readScreen } from './screen.ts';
 
 /** The marker beside a message whose one wake line was typed (`src/send/wake-marker.ts` holds
@@ -783,6 +788,9 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   let words: WakeWords | undefined;
   const wordsNow = (): WakeWords => (words ??= wakeWordsFor(home, { root: scene.root, session: scene.session, team: scene.team }, scene.now));
   catchUpBlockedSeatEvents(scene, home);
+  // The activation floor (rfc-event-comms §3, E6): the hosted watch runs the root's floor pass —
+  // activation once every live actor is at the floor, and the legacy-actor watch after it.
+  floorPass(scene.root, home, scene.now.getTime(), () => liveFloorActors(scene.root, home), null);
   // The receiving team's `message-display` template is the same for every seat this pass wakes.
   const nowMs = scene.now.getTime();
   // The first history line per message id names the leg that carried it. Read once per pass, on
@@ -1112,7 +1120,31 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           for (const id of reserved) release(wakePath(dropDir, id));
           continue;
         }
-        const typed = await scene.sources.typedWake?.(pane, line, seat.cli, scene.session);
+        // The wake-attempt fence (rfc-event-comms §5, E6): an attempt whose keys may have landed
+        // and that nothing confirmed is never retyped; it resolves only on a read, its token in
+        // the scrollback, or a new seat incarnation. Dark roots write the states in shadow only.
+        const attemptScope = { root: scene.root, session: scene.session, seat: seat.name, incarnation: seatIncarnation(scene.dir, scene.session, seat.name, pane) };
+        const attemptTarget = { msg_id: message.id, seq: queuePlaceOf(dropDir, message.id)?.seq ?? null };
+        const gate = scene.sources.typedWake === undefined
+          ? { kind: 'open' as const, enforced: false }
+          : attemptGate(attemptScope, attemptTarget, home, {
+              settled: (id) => id === message.id ? receipt() : false,
+              scrollback: () => passPaneScreen(scene, pane),
+            });
+        if (gate.kind === 'blocked') {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          scene.say(`${seat.name}: ${gate.why}; no wake line was typed`, false);
+          continue;
+        }
+        const handle = scene.sources.typedWake === undefined ? null : prepareAttempt(attemptScope, attemptTarget, home, gate.enforced);
+        if (handle === null && gate.enforced) {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          scene.say(`${seat.name}: the wake attempt could not be recorded; no wake line was typed`, false);
+          continue;
+        }
+        const typedLine = handle !== null && gate.enforced ? `${line} ${tokenText(handle.attempt.token)}` : line;
+        const typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, handle === null ? undefined : { beforeFirstKey: handle.emit });
+        if (typed !== undefined) handle?.settle(typed);
         if (typed?.typed === true) noteTypedLine(dropDir, nowMs);
         if (typed === undefined) {
           // No seam bound: nothing was attempted, so nothing is spent and no attempt is counted.
@@ -2222,5 +2254,17 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
         true,
       );
     }
+  }
+}
+
+/** The seat's incarnation for its wake attempts: the launch identity `team` recorded (or the agent
+ *  session herdr reported) and the pane. 'unknown' when neither is recorded. */
+function seatIncarnation(dir: string, session: string, seat: string, pane: string): string {
+  try {
+    const held = readState(dir).sessions[session]?.seats[seat];
+    const stamp = held?.launched !== undefined ? JSON.stringify(held.launched) : (held?.agent_session ?? null);
+    return incarnationOf(stamp, pane);
+  } catch {
+    return incarnationOf(null, null);
   }
 }

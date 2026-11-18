@@ -1,11 +1,12 @@
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
+import { bodyExposure } from '../queue/exposure.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
 import { appendDelivery } from '../queue/append.ts';
 import { queueLog } from '../queue/log.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
-import { inlineWake, oversizedWake, recordDeliveredBody, typedWakeMaxFor, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
+import { exposedInline, exposurePointer, inlineWake, oversizedWake, recordDeliveredBody, typedWakeMaxFor, wakeTextFor, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
 import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -2946,7 +2947,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
             seat: to.seat,
             sender: { seat: from, team: teamIdOf(root) },
           },
-          { id: msgId, record: staged.record, sentAt: record.at, pointer: inlineWake(record, host.home) ?? oversizedWake(record) },
+          { id: msgId, record: staged.record, sentAt: record.at, pointer: wakeTextFor(record, host.home, 'native') },
           {
             now: host.now,
             startedAt,
@@ -2962,7 +2963,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         note(attempt.walkAttempt);
         markLeg('native', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
         if (attempt.outcome === 'enqueue') {
-          const carriedBody = inlineWake(record, host.home);
+          const carriedBody = exposedInline(record, host.home, 'native');
           if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: carriedBody });
           clearEndpointBlocked(to.root, to.session, to.seat);
           report.sent = msgId;
@@ -3099,7 +3100,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
           sender: { seat: from, team: teamIdOf(root) },
           cwd: seatCwd,
         },
-        { id: msgId, record: staged.record, pointer: inlineWake(record, host.home) ?? oversizedWake(record) },
+        { id: msgId, record: staged.record, pointer: wakeTextFor(record, host.home, 'native') },
         {
           now: host.now,
           startedAt,
@@ -3113,7 +3114,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       markLeg('headless-resume', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
       note(attempt.walkAttempt);
       if (attempt.outcome === 'enqueue') {
-        const carriedBody = inlineWake(record, host.home);
+        const carriedBody = exposedInline(record, host.home, 'native');
         if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: carriedBody });
         report.sent = msgId;
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
@@ -3263,7 +3264,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     const compose = profileFor(to.cli)?.compose ?? null;
     // The receiving team's `message-display` policy decides the words the wake opens with; a team
     // file that did not read leaves the shipped template, never an unnamed wake.
-    const trigger = inlineWake(record, host.home, typedWakeMaxFor(to.cli), 'typed') ?? readTriggerLine(to.seat, to.session, {
+    const trigger = exposedInline(record, host.home, 'typed', typedWakeMaxFor(to.cli), 'typed') ?? readTriggerLine(to.seat, to.session, {
       seat: record.from,
       team: team.project,
       template: wakeTemplate,
@@ -6196,7 +6197,7 @@ export async function walkReplyDelivery(input: {
         { seat: from, ...(input.payload.from_id === null ? {} : { id: input.payload.from_id }) },
         { ...input.naming, mode: 'nickname' },
       );
-      const trigger = inlineWake(input.payload, input.host.home, typedWakeMaxFor(cli), 'typed') ?? readTriggerLine(seatName, input.session, {
+      const trigger = exposedInline(input.payload, input.host.home, 'typed', typedWakeMaxFor(cli), 'typed') ?? readTriggerLine(seatName, input.session, {
         seat: from,
         team: input.sender.project,
         template: wakeTemplate,
@@ -6264,7 +6265,7 @@ export async function walkReplyDelivery(input: {
             seat: seatName,
             sender: { seat: from, team: teamIdOf(input.root) },
           },
-          { id: msgId, record: staged.record, sentAt: input.payload.at, pointer: inlineWake(input.payload, input.host.home) ?? oversizedWake(input.payload) },
+          { id: msgId, record: staged.record, sentAt: input.payload.at, pointer: wakeTextFor(input.payload, input.host.home, 'native') },
           {
             now: input.host.now,
             startedAt,
@@ -6278,7 +6279,7 @@ export async function walkReplyDelivery(input: {
           },
         );
         if (attempt.outcome === 'enqueue') {
-          const carriedBody = inlineWake(input.payload, input.host.home);
+          const carriedBody = exposedInline(input.payload, input.host.home, 'native');
           if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: carriedBody });
           clearEndpointBlocked(input.root, input.session, seatName);
           const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
@@ -6345,7 +6346,7 @@ export async function walkReplyDelivery(input: {
           sender: { seat: from, team: teamIdOf(input.root) },
           cwd: seatCwd,
         },
-        { id: msgId, record: staged.record, pointer: inlineWake(input.payload, input.host.home) ?? oversizedWake(input.payload) },
+        { id: msgId, record: staged.record, pointer: wakeTextFor(input.payload, input.host.home, 'native') },
         {
           now: input.host.now,
           startedAt,
@@ -6357,7 +6358,7 @@ export async function walkReplyDelivery(input: {
         },
       );
       if (attempt.outcome === 'enqueue') {
-        const carriedBody = inlineWake(input.payload, input.host.home);
+        const carriedBody = exposedInline(input.payload, input.host.home, 'native');
         if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: carriedBody });
         const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
         if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
@@ -6696,6 +6697,10 @@ async function deliverSocketFrame(
   if (Buffer.byteLength(content, 'utf8') > RUNTIME_WAKE_MAX) {
     content = `${content.split('\n')[0]}\n\nMessage too long for this wake. Read it with: team drops --read --id ${msgId} --seat ${to.seat}`;
     bodyIncluded = false;
+  } else if (bodyExposure({ root: to.root, session: to.session, seat: to.seat, msgId }, 'socket', host.home).kind === 'pointer') {
+    // rfc-event-comms §3 (E6): another leg already exposed this body; the frame carries a pointer.
+    content = `${content.split('\n')[0]}\n\n${exposurePointer(msgId, null)}`;
+    bodyIncluded = false;
   }
   // The reader line rides with the body too: a seat handed the whole body still needs the id to
   // answer it on its thread.
@@ -6811,7 +6816,7 @@ async function deliverSocketFrame(
       return { kind: 'delivered-unrecorded', reason: settled.reason };
     }
   }
-  if (bodyIncluded) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home });
+  if (bodyIncluded) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, leg: 'socket' });
   // Under the readable-wake policy, accepted full bodies settle their durable copies.
   // An oversized-body pointer stays unread until the receiver follows its explicit read hint.
   if (!wait && writeHistory) {

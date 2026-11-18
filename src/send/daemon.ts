@@ -1,4 +1,5 @@
 import { hostedCommit } from '../host/request-scope.ts';
+import { bodyExposure, exposurePointer } from '../queue/exposure.ts';
 import { recordDeliveredBody, RUNTIME_WAKE_MAX } from './readable-wake.ts';
 import { typedWakeMaxFor } from './readable-wake.ts';
 import { refuseTyping } from './no-pane-messaging.ts';
@@ -1845,8 +1846,12 @@ async function executeSocketSend(
     : compact
       ? compactReaderLine(msgId, existingIds)
       : readerLine(msgId, existingIds);
-  const bodyIncluded = Buffer.byteLength(content, 'utf8') <= RUNTIME_WAKE_MAX;
-  if (!bodyIncluded) content = `${content.split('\n')[0]}\n\nBody too long for this wake; read it with: team drops --read.`;
+  const fits = Buffer.byteLength(content, 'utf8') <= RUNTIME_WAKE_MAX;
+  // rfc-event-comms §3 (E6): the body rides only when this leg holds the message's exposure claim.
+  const pointerOnly = fits && bodyExposure({ root, session: team.session, seat: seatName, msgId }, 'socket', host.home).kind === 'pointer';
+  const bodyIncluded = fits && !pointerOnly;
+  if (!fits) content = `${content.split('\n')[0]}\n\nBody too long for this wake; read it with: team drops --read.`;
+  else if (pointerOnly) content = `${content.split('\n')[0]}\n\n${exposurePointer(msgId, null)}`;
   // The reader line rides with the body too: a seat handed the whole body still needs the id
   // to answer it on its thread.
   const frame = frameFor(content, msgId, reply);
@@ -1968,7 +1973,7 @@ async function executeSocketSend(
         });
         return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: taken.reason };
       }
-      if (bodyIncluded) recordDeliveredBody({ dropDir, id: msgId, root, session: team.session, seat: seatName, home: host.home });
+      if (bodyIncluded) recordDeliveredBody({ dropDir, id: msgId, root, session: team.session, seat: seatName, home: host.home, leg: 'socket' });
       logLine(dir, 'send', who, `${seatName}: sent on the socket (${String(frame.length)} characters)`, host.now());
       const outcome = await listener.wait(timeoutS * 1000);
       if (outcome.kind === 'answered') {

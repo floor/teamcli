@@ -8,6 +8,8 @@
 // callers turn into their own refusals: `team messages` says a body was not shown, `team ack` says
 // the message was not marked read. A `replied` receipt is the read that came before an answer and
 // serves the id exactly as a `read` receipt does.
+import { shadowQueueReceipt } from '../queue/receipt-store.ts';
+import { queuePlaceOf } from '../queue/append.ts';
 import { type KeyObject } from 'node:crypto';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
@@ -51,6 +53,13 @@ export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
   // sink every reader passes. A hint that cannot be cleared is settled by the sweep it feeds:
   // the sweep verifies the record it names and marks nothing when it is already read.
   if (outcome.kind === 'published' || outcome.kind === 'served') clearUnread(input.dropDir, input.id);
+  // rfc-event-comms §2 (E6): the per-seat receipt store is written in shadow beside this receipt.
+  if (outcome.kind === 'published') {
+    shadowQueueReceipt({
+      dropDir: input.dropDir, root: input.root, session: input.session, seat: input.to, msgId: input.id,
+      kind: 'read', actor: { kind: 'recipient', name: input.readBy ?? input.to }, home: input.home, place: queuePlaceOf,
+    });
+  }
   return outcome;
 }
 

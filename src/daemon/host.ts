@@ -10,6 +10,7 @@ import { createBeatWork, observeBeatWork, traceBeatWork } from '../diagnostics/b
 // A crash is the service manager's job (the unit restarts a failed process). A hang is not, so
 // the daemon refreshes a heartbeat and records any request it has held too long; a probe that
 // gets no answer is reported as running with an unanswered probe, never as healthy.
+import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { appendFileSync, chmodSync, fchmodSync, ftruncateSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
@@ -1009,6 +1010,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       gitHead: input.gitHead ?? null,
       heartbeatAt,
       socket: socketPath,
+      floorLevel: ACTOR_LEVEL,
       features,
       stuck: stuckNow(),
       roots: [...roots],

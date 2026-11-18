@@ -227,6 +227,9 @@ export type DaemonState = {
   reaper?: ReaperRecord;
   /** The temporary folder the daemon answers, written at its start; absent in older records. */
   tempDir?: string;
+  /** The fence capability level this daemon enforces (rfc-event-comms §3): 2 from E6. An older
+   *  record carries none, and its level is unknown: it blocks activation. */
+  floorLevel?: number;
 };
 
 export type DaemonStateRead =
@@ -333,6 +336,8 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     ...(reaper === undefined ? {} : { reaper }),
     ...(typeof record.tempDir === 'string' && record.tempDir.startsWith('/') && record.tempDir.length <= 4096
       ? { tempDir: record.tempDir } : {}),
+    ...(typeof record.floorLevel === 'number' && Number.isInteger(record.floorLevel) && record.floorLevel > 0
+      ? { floorLevel: record.floorLevel } : {}),
   };
 }
 

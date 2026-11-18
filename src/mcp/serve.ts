@@ -77,6 +77,9 @@ import {
   type InboxListener,
 } from './inbox.ts';
 import { selfRunner } from './register.ts';
+import { ACTOR_LEVEL } from '../queue/floor.ts';
+import { bodyExposure, exposurePointer } from '../queue/exposure.ts';
+import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 
 /** The protocol version this server speaks when the client names one it does not know. */
@@ -535,6 +538,10 @@ function watchChannel(
       // the notification. The record was already read above; this does not open it again.
       const staleNow = serving.alive?.();
       if (staleNow !== undefined && staleNow !== null) return 'skip' as const;
+      // The exposure claim (rfc-event-comms §3, E6), immediately before the frame can carry the
+      // body: on an active root only its creator pushes the body; any other push carries a pointer.
+      const exposure = bodyExposure({ root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
+      if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(serving.dropDir, id)?.seq ?? null);
       const reserved = recordChannelPush(serving.dropDir, {
         v: 1,
         kind: 'channel-push',
@@ -554,7 +561,7 @@ function watchChannel(
         ? serving.channelMark(serving.dropDir, id)
         : markChannelNotified(serving.dropDir, id);
       if (!marked) return 'uncertain' as const;
-      recordDeliveredBody({ dropDir: serving.dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home });
+      if (exposure.kind !== 'pointer') recordDeliveredBody({ dropDir: serving.dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home, leg: 'channel' });
       return 'pushed' as const;
     });
     if (committed === 'busy') {
@@ -1709,6 +1716,7 @@ export async function runMcpServe(
     ...(build.head === null ? {} : { head: build.head }),
     ...(channel ? { channel: true as const } : {}),
     ...(boundEpoch === undefined ? {} : { epoch: boundEpoch }),
+    level: ACTOR_LEVEL,
   };
   // A server keeps the code it started with, and an install neither reloads it nor ends it. The
   // installed identity is read from disk while this one serves: when it differs from the identity

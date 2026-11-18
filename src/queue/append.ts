@@ -746,6 +746,20 @@ export function queuedHint(dropDir: string, msgId: string): boolean {
   return /^\d+\n$/.test(readNoFollow(join(base, named, 'ids', msgId)) ?? '');
 }
 
+/** Where `msgId` sits in the seat's current generation: its generation and seq, or null when it
+ *  holds none (no queue, no generation, not committed, or unreadable). A lookup, never authority:
+ *  every use re-verifies against the receipts it writes. */
+export function queuePlaceOf(dropDir: string, msgId: string): { generation: string; seq: number } | null {
+  const base = queueBaseOf(dropDir);
+  if (base === null || !NAME.test(msgId)) return null;
+  const named = currentGenerationName(dropDir);
+  if (named === null) return null;
+  const text = readNoFollow(join(base, named, 'ids', msgId)) ?? '';
+  if (!/^\d+\n$/.test(text)) return null;
+  const seq = Number(text.trim());
+  return Number.isSafeInteger(seq) && seq > 0 ? { generation: named, seq } : null;
+}
+
 /** The seat's current generation's name, read without the lock; null when there is none. A
  *  reader's cache key: an answer bound to one generation is asked again when it changes. */
 export function currentGenerationName(dropDir: string): string | null {
