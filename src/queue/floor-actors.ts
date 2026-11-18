@@ -49,6 +49,10 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
     return null;
   }
   const seen = new Set<string>();
+  // Seats looked at while they had no launch record: looked at again once the scan ends, so a
+  // launch published while the scan ran is never skipped (the activation proof also holds the
+  // activation lock, under which every launch record is written).
+  const noRecordYet = new Set<string>();
   const unknown = (name: string, pid: number): void => { actors.push({ kind: 'other', name, pid, build: null, level: null }); };
   const consider = (session: string, seat: string, launchedLive: boolean, currentCli: readonly number[] = []): void => {
     const name = `${session}/${seat}`;
@@ -63,6 +67,7 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
     } catch {
       launch = { kind: 'unknown', why: 'the launch record cannot be read' };
     }
+    if (launch.kind === 'absent') noRecordYet.add(`${session}\u0000${seat}`);
     if (launch.kind === 'pending') return unknown(`${name} (managed launch in flight)`, 0);
     if (launch.kind === 'unknown') return unknown(`${name} (${launch.why})`, 0);
     const marker = markerState(dropDir);
@@ -99,9 +104,12 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
   }
   // A launch record is a footprint of its own: a seat that only has one (an L1 before any state or
   // drop folder names it) is considered too.
-  const launches = launchRecordSeats(root);
+  const launches = launchRecordSeats(root, home);
   if (launches === null) return null;
-  for (const [session, seat] of launches) consider(session, seat, false);
+  for (const entry of launches) {
+    if ('unknown' in entry) unknown(`launch record ${entry.unknown} (does not verify or names another seat)`, 0);
+    else consider(entry.session, entry.seat, false);
+  }
   // Markers for seats the state does not record are actors too.
   const base = join(root, '.agents', 'send-drops');
   let sessions: string[];
@@ -120,6 +128,16 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
       return null;
     }
     for (const seat of seats) if (!seat.startsWith('.')) consider(session, seat, false);
+  }
+  for (const at of noRecordYet) {
+    const [session, seat] = at.split('\u0000') as [string, string];
+    let now: ReturnType<typeof readLaunchRecord>;
+    try {
+      now = readLaunchRecord(root, home, session, seat);
+    } catch {
+      now = { kind: 'unknown', why: 'the launch record cannot be read' };
+    }
+    if (now.kind !== 'absent') unknown(`${session}/${seat} (a launch record appeared during the scan)`, 0);
   }
   return actors;
 }

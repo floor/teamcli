@@ -46,7 +46,7 @@ import { featureDialog, featureDialogClose } from './reboot.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { processStartOf } from '../watch/pane.ts';
-import { launchPending, launchProven } from '../queue/launch-level.ts';
+import { launchPending, launchProven, launchRetire } from '../queue/launch-level.ts';
 import { classifyComposer, readScreen, vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import { codexThreadLockedScreen } from './codex-thread-release.ts';
 
@@ -1859,6 +1859,10 @@ export async function executePlan(
               ? `the terminal host did not take the line in pane ${here.pane}`
               : null;
         if (notRun !== null || !here) {
+          // E7b: each of these is positively a launch that submitted nothing (no pane, a lease no
+          // longer current, a terminal that did not take the line): its own pending launch record
+          // is retired, so it never blocks activation. An ambiguous outcome keeps it.
+          if (host.launchLevelAt !== undefined) launchRetire(host.launchLevelAt.root, host.launchLevelAt.home, session, op.seat);
           // The fresh-start fallback is logged with its real outcome, never as a launch that
           // did not happen: the terminal's scrollback loses this, so the log keeps the truth.
           if (freshFrom !== undefined) {

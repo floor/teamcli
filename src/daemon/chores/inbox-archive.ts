@@ -28,7 +28,7 @@ import { isStampedPayload, readRecord, recordAuthOf, recordFile, sameFolder, sta
 import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE } from '../../send/drop-folder.ts';
 import { createExclusive, fsyncFolder, removeDurable } from '../../queue/durable.ts';
 import { messageKeyOf, signDomain, verifyDomain, type Json } from '../../store/keys.ts';
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readdirSync, readFileSync, readSync } from 'node:fs';
 import { openSync } from '../../host/guarded-fs.ts';
 import type { KeyObject } from 'node:crypto';
 import { archiveLegacySeat, legacySeatFolders } from '../../send/legacy-inbox-retention.ts';
@@ -232,9 +232,11 @@ export function noticeBeforeMove(input: {
   try {
     input.hooks?.beforeOpen?.();
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const opened = fstatSync(fd);
+    const opened = fstatSync(fd, { bigint: true });
     if (!opened.isFile()) return false;
-    const read = recordAuthOf(JSON.parse(readFileSync(fd, 'utf8')) as unknown, input.key);
+    const bytes = readAt(fd);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const read = recordAuthOf(JSON.parse(bytes.toString('utf8')) as unknown, input.key);
     if (read.kind !== 'ok' || !noticeIsObligation(read.value.payload, { archived: input.item.id, notice: noticeId, to, session, root: input.root })) return false;
     if (input.fsync === undefined) fsyncSync(fd);
     else input.fsync(path, false);
@@ -243,8 +245,13 @@ export function noticeBeforeMove(input: {
     syncFolder(dirname(seatDir));
     syncFolder(dirname(dirname(seatDir)));
     input.hooks?.afterFlush?.();
-    const standing = lstatSync(path);
-    return standing.isFile() && standing.dev === opened.dev && standing.ino === opened.ino;
+    // The name still holds the same file, and the file still holds exactly the verified bytes: an
+    // in-place rewrite or truncate after the verification (same inode) holds the move too.
+    const standing = lstatSync(path, { bigint: true });
+    if (!standing.isFile() || standing.dev !== opened.dev || standing.ino !== opened.ino) return false;
+    const after = fstatSync(fd, { bigint: true });
+    if (after.size !== opened.size || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs) return false;
+    return createHash('sha256').update(readAt(fd)).digest('hex') === digest;
   } catch {
     return false;
   } finally {
@@ -252,6 +259,20 @@ export function noticeBeforeMove(input: {
       try { closeSync(fd); } catch { /* closed */ }
     }
   }
+}
+
+/** The whole file behind `fd`, read from its start (never from the descriptor's position). */
+function readAt(fd: number): Buffer {
+  const chunks: Buffer[] = [];
+  let position = 0;
+  for (;;) {
+    const chunk = Buffer.alloc(65536);
+    const got = readSync(fd, chunk, 0, chunk.length, position);
+    if (got <= 0) break;
+    chunks.push(chunk.subarray(0, got));
+    position += got;
+  }
+  return Buffer.concat(chunks);
 }
 
 /** One not-delivered notice obligation: the archived message, its notice id, and the route. */

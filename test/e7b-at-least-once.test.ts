@@ -773,3 +773,83 @@ describe('round 9 fixes', () => {
     }
   }, 30_000);
 });
+
+describe('round 10 fixes', () => {
+  const scan = async (at: At) => {
+    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
+    return (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
+  };
+  const state = (at: At, session: string, seat: string, cli: number[]) => writeFileSync(join(at.root, '.agents', 'team.state.json'), JSON.stringify({
+    format: 1, sessions: { [session]: { seats: { [seat]: { stage: 'ready', launched: { shell: process.pid, cli } } } } },
+  }));
+
+  test('a launch record cannot be published while the activation proof holds the lock', async () => {
+    const { launchPending } = await import('../src/queue/launch-level.ts');
+    const { withActivationLock } = await import('../src/queue/floor.ts');
+    const at = place();
+    const inside = withActivationLock(at.root, () => launchPending(at.root, at.home, SESSION, 'builder', process.pid));
+    expect(inside).toBe(false);
+    expect(launchPending(at.root, at.home, SESSION, 'builder', process.pid)).toBe(true);
+  }, 30_000);
+
+  test('L1 to L2 replaces the record in one step: the record is always readable, no temp file is left', async () => {
+    const { launchPending, launchProven, readLaunchRecord } = await import('../src/queue/launch-level.ts');
+    const { processStartOf } = await import('../src/watch/pane.ts');
+    const { queuesFolder } = await import('../src/queue/floor.ts');
+    const at = place();
+    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    expect(readLaunchRecord(at.root, at.home, SESSION, 'builder').kind).toBe('pending');
+    launchProven(at.root, at.home, SESSION, 'builder', process.pid, processStartOf(process.pid) as number);
+    expect(readLaunchRecord(at.root, at.home, SESSION, 'builder').kind).toBe('proven');
+    expect(readdirSync(join(queuesFolder(at.root), 'launches'))).toEqual([`${SESSION}.builder.json`]);
+  });
+
+  test('a launch that submitted nothing retires its pending record: activation is allowed with no relaunch', async () => {
+    const { launchPending, launchRetire } = await import('../src/queue/launch-level.ts');
+    const at = place();
+    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...[]] }).kind).toBe('activated');
+    deactivate(at.root, at.home);
+    // Ambiguous outcome: nothing retired, so the scan refuses.
+    let actors = await scan(at);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
+    // The lease failed before submission: the executor retires the record.
+    expect(launchRetire(at.root, at.home, SESSION, 'builder')).toBe(true);
+    actors = await scan(at);
+    expect(actors).toEqual([]);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('activated');
+  });
+
+  test('a retirement never removes a proven record', async () => {
+    const { launchPending, launchProven, launchRetire, readLaunchRecord } = await import('../src/queue/launch-level.ts');
+    const at = place();
+    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    launchProven(at.root, at.home, SESSION, 'builder', process.pid, 1);
+    launchRetire(at.root, at.home, SESSION, 'builder');
+    expect(readLaunchRecord(at.root, at.home, SESSION, 'builder').kind).toBe('proven');
+  });
+
+  test('an in-place overwrite of the notice after the flush (same inode) holds the move', async () => {
+    const { noticeBeforeMove } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeBeforeMove>[0]['team'];
+    const notice = join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M1));
+    const overwrite = () => writeFileSync(notice, '{"truncated":true}\n');
+    expect(noticeBeforeMove({ home: at.home, root: at.root, session: SESSION, seat: 'lead', team, key: key(at), at: new Date().toISOString(), item: { id: M1, undelivered: { from: 'worker', from_id: null } }, hooks: { afterFlush: overwrite } })).toBe(false);
+  });
+
+  test('a dotted session is enumerated from its verified record: a valid current launch passes, an L1-only footprint is in flight', async () => {
+    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
+    const { processStartOf } = await import('../src/watch/pane.ts');
+    const at = place();
+    const dotted = 'team.one';
+    state(at, dotted, 'builder', [process.pid]);
+    launchPending(at.root, at.home, dotted, 'builder', process.pid);
+    launchProven(at.root, at.home, dotted, 'builder', process.pid, processStartOf(process.pid) as number);
+    expect(await scan(at)).toEqual([]);
+    launchPending(at.root, at.home, 'other.session', 'solo', process.pid);
+    const actors = await scan(at);
+    expect(actors.map((a) => a.name)).toEqual(['other.session/solo (managed launch in flight)']);
+  });
+});

@@ -18,8 +18,11 @@
 import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { createExclusive, ensureFolder, readFence, removeDurable } from './durable.ts';
-import { ACTOR_LEVEL, queuesFolder } from './floor.ts';
+import { ensureFolder, fsyncFolder, readFence, removeDurable } from './durable.ts';
+import { randomBytes } from 'node:crypto';
+import { closeSync, constants, fsyncSync, writeSync } from 'node:fs';
+import { openSync, renameSync } from '../host/guarded-fs.ts';
+import { ACTOR_LEVEL, queuesFolder, withActivationLock } from './floor.ts';
 
 export const LAUNCH_LEVEL_DOMAIN = 'team-launch-level-v1\n';
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -44,8 +47,47 @@ function write(root: string, home: string, payload: LaunchLevelPayload): boolean
     return false;
   }
   if (!ensureFolder(dirname(path))) return false;
-  if (removeDurable(path) === 'failed') return false;
-  return createExclusive(path, `${JSON.stringify({ payload, signature })}\n`) === 'created';
+  // Under the root's activation lock, for this write only (never the whole launch): the activation
+  // proof, which runs under the same lock, sees the record before or after, never in between. The
+  // record is replaced in one step (a durable temp file renamed over the old one, then the folder
+  // fsynced), so the earlier evidence stands until its replacement is durable.
+  const text = `${JSON.stringify({ payload, signature })}\n`;
+  const done = withActivationLock(root, () => replaceDurable(path, text));
+  return done === true;
+}
+
+function replaceDurable(path: string, text: string): boolean {
+  const temp = `${path}.${String(process.pid)}.${randomBytes(6).toString('hex')}.tmp`;
+  let fd: number | null = null;
+  try {
+    fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    writeSync(fd, text);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    renameSync(temp, path);
+    fsyncFolder(dirname(path));
+    return true;
+  } catch {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* closed */ }
+    }
+    removeDurable(temp);
+    return false;
+  }
+}
+
+/** On a launch positively known not to have submitted its line (no pane, a channel lease no longer
+ *  current, a terminal that did not take the line), its own pending record is retired, under the
+ *  activation lock, and only if it is still the pending record (a proven or later one stays). */
+export function launchRetire(root: string, home: string, session: string, seat: string): boolean {
+  const path = recordPath(root, session, seat);
+  if (path === null) return false;
+  const done = withActivationLock(root, () => {
+    if (readLaunchRecord(root, home, session, seat).kind !== 'pending') return true;
+    return removeDurable(path) === 'removed';
+  });
+  return done === true;
 }
 
 /** L1, before the CLI starts: the earlier record goes, and a pending one (proving nothing) stands. */
@@ -98,9 +140,11 @@ export function readLaunchRecord(root: string, home: string, session: string, se
   return { kind: 'proven', level: payload.level, cli: payload.cli, cliStart: payload.cli_start };
 }
 
-/** The seats that have a launch record under `root`, as `[session, seat]` (an unlistable folder
- *  is null: unknown, never none). */
-export function launchRecordSeats(root: string): [string, string][] | null {
+/** The launch records under `root`, enumerated from their verified contents: each file must hold
+ *  a verified record whose own session and seat encode to its name. A file that does not (cannot
+ *  be read, does not verify, names another seat than its file name) is returned as `unknown` by
+ *  file name. Null when the folder cannot be listed (unknown, never none). */
+export function launchRecordSeats(root: string, home: string): ({ session: string; seat: string } | { unknown: string })[] | null {
   const folder = join(queuesFolder(root), 'launches');
   let names: string[];
   try {
@@ -108,13 +152,26 @@ export function launchRecordSeats(root: string): [string, string][] | null {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
   }
-  const out: [string, string][] = [];
-  for (const name of names) {
+  const out: ({ session: string; seat: string } | { unknown: string })[] = [];
+  const key = messageKeyState(home);
+  for (const name of names.sort()) {
     if (name.startsWith('.') || !name.endsWith('.json')) continue;
-    const stem = name.slice(0, -'.json'.length);
-    const dot = stem.indexOf('.');
-    if (dot <= 0) continue;
-    out.push([stem.slice(0, dot), stem.slice(dot + 1)]);
+    const text = readFence(join(folder, name));
+    let payload: LaunchLevelPayload | null = null;
+    try {
+      const envelope = text === null || text === '' ? null : JSON.parse(text) as { payload?: LaunchLevelPayload; signature?: unknown } | null;
+      if (envelope !== null && typeof envelope === 'object' && envelope.payload && typeof envelope.signature === 'string'
+        && key.kind === 'key' && verifyDomain(LAUNCH_LEVEL_DOMAIN, envelope.payload as unknown as Json, envelope.signature, key.key)) payload = envelope.payload;
+    } catch {
+      payload = null;
+    }
+    if (text === '') continue;
+    if (payload === null || typeof payload.session !== 'string' || typeof payload.seat !== 'string'
+      || recordPath(root, payload.session, payload.seat) !== join(folder, name)) {
+      out.push({ unknown: name });
+      continue;
+    }
+    out.push({ session: payload.session, seat: payload.seat });
   }
   return out;
 }
