@@ -47,6 +47,7 @@ import {
   isStampedPayload,
   readVerifiedReceipt,
   COPY_READ_BY,
+  stampedSettled,
   keyPrintForCache,
   leadAckReceiptAt,
   settledReadOf,
@@ -824,7 +825,12 @@ export function readMessage(
     session: target.session,
     ...(target.lead === undefined ? {} : { lead: target.lead }),
   };
-  const receiptHeldNow = (): boolean => isRead(target.dropDir, id, context, key, binding);
+  // E7b: a stamped record is settled only by its recipient's confirmation (the strict rule), so an
+  // exact-id read of one with a plain read standing is served again, numbered.
+  const stampedRecord = isStampedPayload(payload);
+  const receiptHeldNow = (): boolean => stampedRecord
+    ? stampedSettled(target.dropDir, id, context, key)
+    : isRead(target.dropDir, id, context, key, binding);
   // A lead's clearance holds the one read name without being the seat's read: the id is served
   // and no body follows. A brief's own delivery never takes this path — only a seat reads it.
   const clearedNow = (): boolean =>
@@ -846,7 +852,6 @@ export function readMessage(
   const atRead = heldAt(readName);
   // E7b: a stamped record is settled only by its recipient. A verifying writer-side read that
   // already holds the read name (an earlier copy) is reused: the body is served again, numbered.
-  const stampedRecord = isStampedPayload(payload);
   const reuse = stampedRecord && atRead.kind === 'file' && readVerifiedReceipt(readName, id, 'read', context, key, binding) !== null;
   if (atRead.kind === 'file' && !reuse) return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
   if (atRead.kind !== 'missing' && !reuse) {

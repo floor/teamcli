@@ -32,6 +32,7 @@ import { folderOfDrop } from './drop-folder.ts';
 import { readNoFollow, type MessageStatus } from './history.ts';
 import { dropMessage } from './native.ts';
 import { floorState } from '../queue/floor.ts';
+import { EXPOSURES } from '../queue/handover.ts';
 
 /** The `kind` a message record's payload carries. A receipt carries `receipt`, a thread's close
  *  `thread-close`. */
@@ -224,10 +225,24 @@ export function isConfirmedReadBy(readBy: string | undefined): boolean {
  * trusts a read with no reader word because only an older build writes one, and an older build
  * cannot read a stamped record.)
  */
+/** Whether the record has a delivery history (`.exposures/<id>`), by one lstat. Only stamped copies
+ *  are numbered there. An lstat that fails other than ENOENT counts as a history (strict rule). */
+function hasDeliveryHistory(dropDir: string, id: string): boolean {
+  try {
+    return lstatSync(join(dropDir, EXPOSURES, id)).isDirectory();
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
 export function stampedSettled(dropDir: string, id: string, context: StatusContext, key: KeyObject): boolean {
   if (receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key)) return true;
   const read = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
-  if (read !== null && isConfirmedReadBy(read.payload.read_by)) return true;
+  const word = read?.payload.read_by;
+  // The recipient's own confirmations; a clearance counts only with its authority proved (the
+  // owner, or the lead the caller bound in `context.lead`), exactly as `leadAckReceiptAt` asks.
+  if (read !== null && (word === 'ack' || word === 'channel' || word === 'reply')) return true;
+  if (read !== null && isLeadAckReadBy(word) && leadAckReceiptAt(dropDir, id, context, key) !== null) return true;
   const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
   return note !== null && note.payload.read_by === 'ack';
 }
@@ -1257,7 +1272,11 @@ export function statusOf(dropDir: string, id: string, context: StatusContext, ke
  * reader that asks only this question does not stat them.
  */
 export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
-  // E7b: an unconfirmed copy's read (`read_by: copy`) settles nothing; the acknowledgement note does.
+  // E7b: a record that has a delivery history was handed out as a stamped copy, so the strict rule
+  // decides (only the recipient's confirmation settles it). The history folder is looked at, never
+  // read, and no record body is read: the hot listing stays body-free.
+  if (brief === undefined && hasDeliveryHistory(dropDir, id)) return stampedSettled(dropDir, id, context, key);
+  // An unconfirmed copy's read (`read_by: copy`) settles nothing; the acknowledgement note does.
   const readName = receiptFile(dropDir, id, 'read');
   if (receiptHolds(readName, id, 'read', context, key, brief)) {
     if (!copyReceipt(readName, id, context, key, brief)) return true;

@@ -445,3 +445,60 @@ describe('code round 1 fixes', () => {
     expect(isRead(at.dropDir, M1, context(at), key(at))).toBe(true);
   });
 });
+
+describe('code round 3 fixes', () => {
+  const plainRead = async (at: At, id: string, readBy?: string) => {
+    const { signReceiptPayload, receiptFile } = await import('../src/send/record.ts');
+    const plain = signReceiptPayload({ kind: 'receipt', status: 'read', id, to: 'lead', root: at.root, session: SESSION, at: new Date().toISOString(), ...(readBy === undefined ? {} : { read_by: readBy }) }, at.home);
+    writeFileSync(receiptFile(at.dropDir, id, 'read'), `${JSON.stringify(plain, null, 2)}\n`, { mode: 0o600 });
+  };
+
+  test('a delivered stamped record with a plain read stays in the listing and is served again by an exact-id read', async () => {
+    const { listUnread } = await import('../src/mcp/inbox.ts');
+    const at = place();
+    activateRoot(at);
+    write(at, M1);
+    takeCopyNumber(at.dropDir, M1, 'channel'); // delivered once, numbered
+    await plainRead(at, M1);
+    expect(isRead(at.dropDir, M1, context(at), key(at))).toBe(false);
+    expect(listUnread(at.dropDir, context(at), at.home).map((m) => m.id)).toEqual([M1]);
+    const shown = readMessage({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead' }, M1, at.home);
+    expect(shown.ok ? shown.body : '').toContain(`message ${M1} · delivery 2 — a re-send`);
+  });
+
+  test('a clearance counts only with its authority: a lead-ack naming another seat does not settle', async () => {
+    const { stampedSettled, LEAD_ACK_PREFIX } = await import('../src/send/record.ts');
+    const at = place();
+    activateRoot(at);
+    write(at, M1);
+    await plainRead(at, M1, `${LEAD_ACK_PREFIX}intruder`);
+    expect(stampedSettled(at.dropDir, M1, { ...context(at), lead: 'boss' }, key(at))).toBe(false);
+    await plainRead(at, M1, `${LEAD_ACK_PREFIX}boss`);
+    expect(stampedSettled(at.dropDir, M1, { ...context(at), lead: 'boss' }, key(at))).toBe(true);
+    await plainRead(at, M1, `${LEAD_ACK_PREFIX}owner`);
+    expect(stampedSettled(at.dropDir, M1, context(at), key(at))).toBe(true);
+  });
+
+  test('the notice follows the sender\'s current session, and an archived notice is never written again', async () => {
+    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
+    mkdirSync(archived, { recursive: true, mode: 0o700 });
+    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(stampedPayload({ ...payloadOf(at, M1), from_id: 'agt_000000000007' }, at.home), at.home), null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(join(archived, M2), `${JSON.stringify(signRecord(stampedPayload({ ...payloadOf(at, M2), from_id: 'agt_000000000007' }, at.home), at.home), null, 2)}\n`, { mode: 0o600 });
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'worker' }, { name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
+    const agents = [{ id: 'agt_000000000007', reach: { team: 't', seat: 'worker', session: 'other' }, lifecycle: 'running' }] as unknown as NonNullable<Parameters<typeof noticeUndelivered>[0]['agents']>;
+    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString(), agents, teamId: 't' };
+    // M2's notice was written earlier and has since been archived from the sender's folder.
+    const senderDir = join(at.root, '.agents', 'send-drops', 'other', 'worker');
+    mkdirSync(join(senderDir, 'archive', '2026-11'), { recursive: true });
+    writeFileSync(join(senderDir, 'archive', '2026-11', undeliveredNoticeId(M2)), '{}\n');
+    expect(noticeUndelivered(input)).toBe(1);
+    expect(existsSync(join(senderDir, undeliveredNoticeId(M1)))).toBe(true);
+    expect(existsSync(join(senderDir, undeliveredNoticeId(M2)))).toBe(false);
+    expect(existsSync(join(archived, `${M1}.noticed`))).toBe(true);
+    expect(existsSync(join(archived, `${M2}.noticed`))).toBe(true);
+    expect(noticeUndelivered(input)).toBe(0);
+  });
+});

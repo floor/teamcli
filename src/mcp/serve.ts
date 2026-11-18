@@ -431,7 +431,17 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
  * history says so (60 s doubling to 30 minutes after its newest copy); a record with no copy yet
  * waits one first backoff from its arrival, so the arrival's own push is not doubled.
  */
-export function channelRedeliveryDue(serving: Pick<Serving, 'dropDir' | 'seat' | 'root' | 'session' | 'home'>, nowMs: number): string[] {
+/** The team's lead, for a clearance's authority (E7b); none when the team cannot be read. */
+function leadOf(serving: { loadTeam?: () => { orchestrator?: string | null } | null }): { lead?: string } {
+  try {
+    const lead = serving.loadTeam?.()?.orchestrator;
+    return typeof lead === 'string' && lead !== '' ? { lead } : {};
+  } catch {
+    return {};
+  }
+}
+
+export function channelRedeliveryDue(serving: Pick<Serving, 'dropDir' | 'seat' | 'root' | 'session' | 'home'> & { loadTeam?: Serving['loadTeam'] }, nowMs: number): string[] {
   let names: string[];
   try {
     names = readdirSync(serving.dropDir);
@@ -444,7 +454,7 @@ export function channelRedeliveryDue(serving: Pick<Serving, 'dropDir' | 'seat' |
   for (const name of names.sort()) {
     if (name.startsWith('.') || isRecordSidecarName(name) || !MESSAGE_ID.test(name)) continue;
     if (recordStampAt(serving.dropDir, name) !== true) continue;
-    if (key === null || stampedSettled(serving.dropDir, name, { to: serving.seat, root: serving.root, session: serving.session }, key)) continue;
+    if (key === null || stampedSettled(serving.dropDir, name, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key)) continue;
     if (!deliveryDue(serving.dropDir, name, nowMs)) continue;
     const history = copyHistory(serving.dropDir, name);
     if (history !== 'unknown' && history.copies === 0) {
@@ -554,8 +564,12 @@ function watchChannel(
     // walk takes the message leaves a held marker at the same name: either marker says this id
     // is not to be pushed, and a second notification is a duplicate wake.
     if (channelPushHeld(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelAborted(serving.dropDir, id)) return 'done';
-    // A record the seat already read, or already replied to, is not a channel message again.
-    if (receiptHeld(
+    // A record the seat already read, or already replied to, is not a channel message again. A
+    // stamped record is settled only by its recipient's confirmation (E7b, the strict rule).
+    if (recordStampAt(serving.dropDir, id) !== false) {
+      const keyNow = messageKeyState(serving.home);
+      if (keyNow.kind === 'key' && stampedSettled(serving.dropDir, id, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, keyNow.key)) return 'done';
+    } else if (receiptHeld(
       serving.dropDir,
       id,
       { to: serving.seat, root: serving.root, session: serving.session },
