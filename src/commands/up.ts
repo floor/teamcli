@@ -4793,7 +4793,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         if (over) return over;
         // The managed launch boundary (E7): under the activation lock, a build below the root's
         // floor is refused. Boot restore runs this same `up`, so it is covered too.
-        return admitManagedLaunch(root, sources.home);
+        return admitManagedLaunch(root, sources.home, { session, seat: name });
       },
       record(name, patch) {
         if (restoreKeepOf(name) !== undefined) return;

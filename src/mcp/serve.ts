@@ -74,11 +74,12 @@ import {
   readMessage,
   removeListener,
   writeListener,
+  flushListener,
   type BriefRead,
   type InboxListener,
 } from './inbox.ts';
 import { selfRunner } from './register.ts';
-import { ACTOR_LEVEL, admitManagedLaunch } from '../queue/floor.ts';
+import { ACTOR_LEVEL, admitManagedLaunch, releaseLaunch } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
@@ -1714,7 +1715,7 @@ export async function runMcpServe(
   }
   // The managed launch boundary (E7): an inbox server is an actor of the root, so it is admitted
   // under the activation lock exactly as a seat launch is. A refusal serves nothing.
-  const admission = admitManagedLaunch(loaded.root, host.home);
+  const admission = admitManagedLaunch(loaded.root, host.home, { session: team.session, seat: seat.name }, ACTOR_LEVEL, process.pid, 'mcp serve');
   if (admission !== null) return refuse(`the inbox server is not admitted: ${admission}`);
   const build = host.build ?? buildIdentity();
   const listener: InboxListener = {
@@ -1822,6 +1823,10 @@ export async function runMcpServe(
     stopChannel?.();
     return refuse('the inbox listener marker could not be written');
   }
+  // The hand-off (E7): this process's own actor record is now published; once it is durable the
+  // seat's launch intent is released, under the activation lock. Until then the intent stands and
+  // the actor proof counts it.
+  if (flushListener(dropDir)) releaseLaunch(loaded.root, { session: team.session, seat: seat.name });
   try {
     // The line the placement wait left owed is the first one served here.
     let next = placed.first();

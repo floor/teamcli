@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { pidAlive, readListener } from '../mcp/inbox.ts';
 import { readDaemonState } from '../daemon/state.ts';
 import { readState } from '../state.ts';
-import type { FloorActor } from './floor.ts';
+import { launchIntents, releaseLaunch, type FloorActor } from './floor.ts';
 
 function markerState(dropDir: string): 'absent' | 'unknown' | 'present' {
   try {
@@ -90,4 +90,45 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
     for (const seat of seats) if (!seat.startsWith('.')) consider(session, seat, false);
   }
   return actors;
+}
+
+/** How long an intent whose launcher is gone, with nothing of its seat running, is kept before the
+ *  start counts as abandoned. A terminal start can outlive the command that submitted it; a seat
+ *  that runs anything (a recorded CLI pid alive, a live listener) is never judged abandoned. */
+export const LAUNCH_ABANDON_MS = 10 * 60_000;
+
+/**
+ * Recovery for launch intents (E7). An intent whose launcher still runs is left alone (the launch
+ * is in flight). For a gone launcher: the start is PROVED when the seat's own listener is live and
+ * was published after the intent, and the intent is released; the start is ABANDONED only when the
+ * intent is older than LAUNCH_ABANDON_MS and nothing of the seat runs. Anything else keeps the
+ * intent, which the actor proof counts at unknown level (fail closed). Returns what it released.
+ */
+export function resolveLaunchReservations(root: string, nowMs: number = Date.now()): { released: string[]; kept: string[] } | null {
+  const intents = launchIntents(root);
+  if (intents === null) return null;
+  let state;
+  try {
+    state = readState(join(root, '.agents'));
+  } catch {
+    return null;
+  }
+  const released: string[] = [];
+  const kept: string[] = [];
+  for (const intent of intents) {
+    const name = `${intent.session}/${intent.seat}`;
+    if (pidAlive(intent.pid)) {
+      kept.push(name);
+      continue;
+    }
+    const listener = readListener(join(root, '.agents', 'send-drops', intent.session, intent.seat));
+    const listenerLive = listener !== null && listener.root === root && listener.session === intent.session
+      && listener.seat === intent.seat && pidAlive(listener.pid);
+    const proved = listenerLive && Date.parse(listener.ts) >= Date.parse(intent.at);
+    const cliLive = (state.sessions?.[intent.session]?.seats?.[intent.seat]?.launched?.cli ?? []).some(pid => pidAlive(pid));
+    const abandoned = !listenerLive && !cliLive && nowMs - Date.parse(intent.at) >= LAUNCH_ABANDON_MS;
+    if ((proved || abandoned) && releaseLaunch(root, { session: intent.session, seat: intent.seat })) released.push(name);
+    else kept.push(name);
+  }
+  return { released, kept };
 }

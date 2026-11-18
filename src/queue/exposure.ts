@@ -30,7 +30,7 @@ import { claimRead, ownerOfClaim, READ_CLAIMS, removeOwnedClaim } from '../send/
 import { lstatSync } from 'node:fs';
 import { receiptFile } from '../send/record.ts';
 import { ensureFolder } from './durable.ts';
-import { mayCreateFence } from './floor.ts';
+import { floorState, mayCreateFence } from './floor.ts';
 
 export type BodyLeg = 'channel' | 'typed' | 'native' | 'socket';
 
@@ -65,7 +65,16 @@ export function exposeBody(target: ExposureTarget, leg: BodyLeg, home: string): 
   const standing = ownerOfClaim(target.dropDir, target.msgId);
   if (standing === 'unknown') return { kind: 'pointer', why: 'the message read claim cannot be read' };
   if (isExposeOwner(standing)) return { kind: 'pointer', why: 'already shown by another hand-over' };
-  if (!mayCreateFence(target.root, home, 'exposure')) return { kind: 'legacy' };
+  if (!mayCreateFence(target.root, home, 'exposure')) {
+    // No new claim off an active root. But a root that is not proven dark (unknown, fenced, or a
+    // publication lost to a crash) still honours the durable evidence of an earlier exposure: a
+    // sealed read or replied receipt is a pointer, never a second body (E7 round 3).
+    if (floorState(target.root, home).kind !== 'dark') {
+      const prior = priorExposure(target.dropDir, target.msgId);
+      if (prior !== null) return { kind: 'pointer', why: prior };
+    }
+    return { kind: 'legacy' };
+  }
   const owner = `${EXPOSE_PREFIX}${leg}:${target.msgId}:${randomBytes(6).toString('hex')}`;
   // The claim folder chain is made durable before the owner file can be (§3 first write).
   if (!ensureFolder(join(target.dropDir, READ_CLAIMS))) return { kind: 'pointer', why: 'the read claim folder could not be made durable' };

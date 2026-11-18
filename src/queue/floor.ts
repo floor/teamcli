@@ -32,8 +32,8 @@
 // After activation an actor below the floor flips the root to FENCED: no new fence is created,
 // every existing fence stays honoured by every floor actor, and the state names the actor. A later
 // activation check that proves every live actor at the floor again removes FENCED (under the lock).
-import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { acquireLockAt } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { randomBytes } from 'node:crypto';
@@ -245,8 +245,6 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
     const state = floorState(root, options.home);
     const resume = state.kind === 'unknown' && unpublishedRecord(root, options.home);
     if (state.kind === 'unknown' && !resume) return { kind: 'failed', why: state.why };
-    // Stale launch reservations (their launcher is gone) are cleared before the proof reads them.
-    clearStaleLaunches(root);
     // A1: the proof, fresh, immediately before the first write. Live launch reservations are
     // actors too (a managed launch admitted and not yet visible as its own actor).
     const live = options.actors();
@@ -388,17 +386,26 @@ export function floorPass(root: string, home: string, nowMs: number, actors: () 
  * lock, so a launch and an activation never interleave. Null admits; a string is the refusal.
  * A lock that cannot be taken refuses (fail closed): the next run asks again.
  */
-export function admitManagedLaunch(root: string, home: string, level: number = ACTOR_LEVEL, launcherPid: number = process.pid, label = 'launch'): string | null {
+export function admitManagedLaunch(
+  root: string,
+  home: string,
+  target: { session: string; seat: string },
+  level: number | null = installedActorLevel(),
+  launcherPid: number = process.pid,
+  label = 'launch',
+): string | null {
   const result = withActivationLock(root, () => {
-    const answer = launchAdmission(root, home, level);
+    const answer = level === null
+      ? (floorState(root, home).kind === 'dark' ? null : 'the level of the code this launch starts cannot be read')
+      : launchAdmission(root, home, level);
     if (answer !== null) return { answer };
-    // The admitted launch is represented BEFORE the lock is let go: a durable reservation, bound to
-    // the launcher's live pid and the level of the code it starts, that activation's actor proof
-    // counts until the launcher is gone. So an activation can never prove an inventory that misses
-    // an admitted start (E7 gate 3), whatever the launch awaits between admission and its own
-    // listener, and an answer reused before an in-place exit is still represented.
-    const reservation = reserveLaunch(root, launcherPid, level, label);
-    return { answer: reservation ? null : 'the launch could not be reserved durably' };
+    // The admitted launch is represented BEFORE the lock is let go: a durable launch intent naming
+    // the seat, the launcher's pid and the level of the code it starts. The actor proof counts it
+    // until the launched process proves its start (its own actor record, durable, then
+    // `releaseLaunch`) or recovery resolves it (`resolveLaunchReservations`). A launcher that dies
+    // first leaves the intent: counted as an actor of unknown level, so activation fails closed.
+    const reserved = reserveLaunch(root, target, launcherPid, level, label);
+    return { answer: reserved ? null : 'the launch could not be reserved durably' };
   });
   if ('answer' in result) return result.answer;
   if (result.kind === 'busy') return 'the activation lock is held; the launch is asked again on the next run';
@@ -406,17 +413,55 @@ export function admitManagedLaunch(root: string, home: string, level: number = A
 }
 
 const LAUNCHING = 'launching';
-const LAUNCH_NAME = /^(\d{1,10})\.[0-9a-f]{12}\.json$/;
+const SEAT_PART = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
-function reserveLaunch(root: string, pid: number, level: number, label: string): boolean {
+export type LaunchIntent = { v: 1; session: string; seat: string; pid: number; level: number | null; label: string; at: string };
+
+const ACTOR_LEVEL_FILE = 'actor-level';
+
+/**
+ * The capability level of the code a managed launch starts: the `actor-level` stamp the build
+ * writes beside the CLI entry (scripts/build.ts), read from the artifact itself, never assumed
+ * from the caller. A source run (a `.ts` entry) is its own artifact at ACTOR_LEVEL. Null when the
+ * stamp cannot be read: such a launch is admitted only on a dark root, and its intent counts at
+ * unknown level (activation fails closed while it stands).
+ */
+export function installedActorLevel(entry: string | undefined = process.argv[1]): number | null {
+  if (entry === undefined) return null;
+  if (entry.endsWith('.ts')) return ACTOR_LEVEL;
+  try {
+    const text = readFileSync(join(dirname(realpathSync(entry)), ACTOR_LEVEL_FILE), 'utf8').trim();
+    return /^\d{1,3}$/.test(text) ? Number(text) : null;
+  } catch {
+    return null;
+  }
+}
+
+function intentName(target: { session: string; seat: string }): string | null {
+  return SEAT_PART.test(target.session) && SEAT_PART.test(target.seat) ? `${target.session}.${target.seat}.json` : null;
+}
+
+function reserveLaunch(root: string, target: { session: string; seat: string }, pid: number, level: number | null, label: string): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
+  const name = intentName(target);
+  if (name === null) return false;
+  if (!ensureFolder(join(queuesFolder(root), LAUNCHING))) return false;
+  const path = join(queuesFolder(root), LAUNCHING, name);
+  // One intent per seat, the latest launcher's: an earlier one is replaced (removed durably first).
+  if (removeDurable(path) !== 'removed') return false;
+  const intent: LaunchIntent = { v: 1, session: target.session, seat: target.seat, pid, level, label, at: new Date().toISOString() };
+  return createExclusive(path, `${JSON.stringify(intent)}\n`) === 'created';
+}
+
+/** Releases a seat's launch intent once the launched process has proved its start (its own actor
+ *  record is durable). Under the activation lock. Also the explicit failure path. */
+export function releaseLaunch(root: string, target: { session: string; seat: string }): boolean {
+  const name = intentName(target);
+  if (name === null) return false;
   const folder = join(queuesFolder(root), LAUNCHING);
-  // One reservation per launcher process is enough: it stands until that process is gone.
-  const standing = readFolder(folder);
-  if (standing === null) return false;
-  if (standing.some(name => name.startsWith(`${String(pid)}.`))) return true;
-  const name = `${String(pid)}.${randomBytes(6).toString('hex')}.json`;
-  return createExclusive(join(folder, name), `${JSON.stringify({ v: 1, pid, level, label, at: new Date().toISOString() })}\n`) === 'created';
+  if (readFolder(folder)?.length === 0) return true; // no intent stands (an absent folder included)
+  const result = withActivationLock(root, () => ({ ok: removeDurable(join(folder, name)) === 'removed' }));
+  return 'ok' in result && result.ok;
 }
 
 function readFolder(folder: string): string[] | null {
@@ -427,7 +472,7 @@ function readFolder(folder: string): string[] | null {
   }
 }
 
-function alive(pid: number): boolean {
+export function pidLive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -436,34 +481,36 @@ function alive(pid: number): boolean {
   }
 }
 
-/** The live launch reservations as actors; null when any cannot be read (fail closed). */
-export function launchReservations(root: string): FloorActor[] | null {
+/** The launch intents standing, read-only; null when the folder or any intent cannot be read. */
+export function launchIntents(root: string): LaunchIntent[] | null {
   const folder = join(queuesFolder(root), LAUNCHING);
   const names = readFolder(folder);
   if (names === null) return null;
-  const actors: FloorActor[] = [];
+  const out: LaunchIntent[] = [];
   for (const name of names) {
-    const match = LAUNCH_NAME.exec(name);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    if (!alive(pid)) continue;
+    if (!name.endsWith('.json') || name.startsWith('.')) continue;
     const read = readJson(join(folder, name));
     if (read.kind !== 'ok') return null;
-    const value = read.value as { pid?: unknown; level?: unknown; label?: unknown };
-    if (value.pid !== pid) return null;
-    const level = typeof value.level === 'number' && Number.isInteger(value.level) ? value.level : null;
-    actors.push({ kind: 'other', name: `launch reserved by pid ${String(pid)} (${typeof value.label === 'string' ? value.label : 'launch'})`, pid, build: null, level });
+    const value = read.value as Partial<LaunchIntent>;
+    if (value.v !== 1 || typeof value.session !== 'string' || typeof value.seat !== 'string' || typeof value.pid !== 'number'
+      || intentName({ session: value.session, seat: value.seat }) !== name) return null;
+    out.push(value as LaunchIntent);
   }
-  return actors;
+  return out;
 }
 
-/** Removes reservations whose launcher is gone. Under the activation lock; best effort. */
-function clearStaleLaunches(root: string): void {
-  const folder = join(queuesFolder(root), LAUNCHING);
-  for (const name of readFolder(folder) ?? []) {
-    const match = LAUNCH_NAME.exec(name);
-    if (match && !alive(Number(match[1]))) removeDurable(join(folder, name));
-  }
+/** The launch intents as actors: a live launcher at the level it starts; a gone launcher whose
+ *  intent stands (a crash before the start was proved) at unknown level (fail closed). */
+export function launchReservations(root: string): FloorActor[] | null {
+  const intents = launchIntents(root);
+  if (intents === null) return null;
+  return intents.map((intent) => ({
+    kind: 'other' as const,
+    name: `launch of ${intent.session}/${intent.seat} by pid ${String(intent.pid)} (${intent.label})`,
+    pid: intent.pid,
+    build: null,
+    level: pidLive(intent.pid) && typeof intent.level === 'number' && Number.isInteger(intent.level) ? intent.level : null,
+  }));
 }
 
 /** Every seat drop folder of the root, or null when any level cannot be listed (an unreadable

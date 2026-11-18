@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
+import { ACTOR_LEVEL } from '../src/queue/floor.ts';
 
 function exit(message: string, code: number): never {
   console.error(message);
@@ -123,6 +124,10 @@ function build(): void {
     }
   }
 
+  // The capability level of this build's actors, beside the entry (src/queue/floor.ts
+  // `installedActorLevel`): a managed launch reads the level of the code it starts from here.
+  // Written before the build id, which therefore covers it.
+  writeFileSync(join(process.cwd(), 'dist', 'actor-level'), `${String(ACTOR_LEVEL)}\n`);
   writeBuildId(join(process.cwd(), 'dist'));
 
   try {

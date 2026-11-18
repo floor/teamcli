@@ -968,3 +968,45 @@ export function lockedQueueOrder(
     lock.release();
   }
 }
+
+/**
+ * The same order proof, OBSERVED (`team queues status`): no lock is taken, nothing is flushed,
+ * truncated, poisoned or cleared, so a public read changes no byte. A poisoned, torn, corrupt or
+ * unreadable journal answers unknown (the reason), never a repaired state. An observation is not
+ * authority: only the locked proof (`lockedQueueOrder`) orders a listing.
+ */
+export function observedQueueOrder(
+  dropDir: string,
+  binding: { root: string; session: string; seat: string },
+  ids: readonly string[],
+  home: string,
+): { generation: string; seq: Map<string, number> } | { why: string } {
+  const base = queueBaseOf(dropDir);
+  if (base === null) return { why: 'the folder has no queue' };
+  const named = currentGenerationName(dropDir);
+  if (named === null) return { why: 'the queue has no current generation' };
+  const folder = join(base, named);
+  try {
+    lstatSync(join(folder, POISONED));
+    return { why: 'the queue journal is poisoned (its last flush failed); the next lock holder repairs it' };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { why: 'the poison marker cannot be read' };
+  }
+  const journal = readJournal(join(folder, 'journal.jsonl'));
+  if (journal.unreadable === true || journal.corrupt || journal.tornAt !== null) return { why: 'the queue journal is not whole' };
+  const folded = fold(journal.lines);
+  const seq = new Map<string, number>();
+  let highest = 0;
+  for (const id of ids) {
+    const at = folded.committedIds.get(id);
+    if (at === undefined) return { why: `message ${id} has no committed queue entry` };
+    const entry = readEntry(folder, at, { root: binding.root, session: binding.session, seat: binding.seat, generation: named }, home);
+    if (entry === null || entry.payload.msg_id !== id) return { why: `message ${id}'s queue entry does not verify` };
+    seq.set(id, at);
+    if (at > highest) highest = at;
+  }
+  for (const [at, last] of folded.last) {
+    if (last.state === 'reserved' && at <= highest) return { why: `seq ${String(at)} is still reserved` };
+  }
+  return { generation: named, seq };
+}

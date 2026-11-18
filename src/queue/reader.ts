@@ -33,7 +33,7 @@
 
 import { join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { lockedQueueOrder, queueBaseOf } from './append.ts';
+import { lockedQueueOrder, observedQueueOrder, queueBaseOf } from './append.ts';
 import { createExclusive, readFence, removeDurable, type DurableFaults } from './durable.ts';
 import { floorState, launchReservations, queuesFolder, seatDropFoldersStrict, withActivationLock, type FloorActor } from './floor.ts';
 import { drainPendingReceipts, pendingMarkers, quarantinedPending } from './receipt-store.ts';
@@ -96,7 +96,8 @@ export function seatQueueCheck(dropDir: string, binding: SeatBinding, unread: re
   const quarantined = quarantinedPending(dropDir);
   if (quarantined === null) return { kind: 'incomplete', why: 'the receipt quarantine cannot be listed' };
   if (quarantined.length > 0) return { kind: 'incomplete', why: `${String(quarantined.length)} quarantined receipt marker(s) are not accounted for` };
-  const order = lockedQueueOrder(dropDir, binding, unread, home);
+  // The read-only check observes (no lock, no repair); the authorized path proves under the lock.
+  const order = mode.drain ? lockedQueueOrder(dropDir, binding, unread, home) : observedQueueOrder(dropDir, binding, unread, home);
   if ('why' in order) return { kind: 'incomplete', why: order.why };
   return { kind: 'complete', generation: order.generation, committed: order.seq.size, pending: 0, quarantined: 0 };
 }

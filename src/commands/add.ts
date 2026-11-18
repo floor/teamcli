@@ -1946,7 +1946,7 @@ function hostOf(input: {
       const over = ceilingProblem(input.ceilings, running, seat, Boolean(temporary));
       if (over) return over;
       // The managed launch boundary (E7): under the activation lock.
-      return admitManagedLaunch(input.root, input.home);
+      return admitManagedLaunch(input.root, input.home, { session: input.session, seat: name });
     },
     record(name, patch) {
       let replaced: string | undefined;

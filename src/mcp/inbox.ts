@@ -19,8 +19,8 @@ import type { KeyObject } from 'node:crypto';
 // session or the seat refuses service; an id is a lowercase UUID — or the `unread-<uuid>` name a
 // build before 0.5.3 wrote for a runtime report to a lead — and nothing else, so no id can name a
 // path; a drop or receipt that is a link is refused, never followed.
-import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
-import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
+import { closeSync, fsyncSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { chmodSync, mkdirSync, openSync, unlinkSync } from '../host/guarded-fs.ts';
 import { claimRead, ownerOfClaim, READ_CLAIMS } from '../send/read-claim.ts';
 import { join } from 'node:path';
 import {
@@ -212,6 +212,27 @@ export function writeListener(dropDir: string, listener: InboxListener): boolean
   hostedCommit('writeListener');
   try {
     dropMessage(dropDir, LISTENER_FILE, `${JSON.stringify(listener)}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Makes the listener marker durable: the file and its folder fsynced. False on any fault. */
+export function flushListener(dropDir: string): boolean {
+  try {
+    const fd = openSync(listenerPath(dropDir), 'r');
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    const dir = openSync(dropDir, 'r');
+    try {
+      fsyncSync(dir);
+    } finally {
+      closeSync(dir);
+    }
     return true;
   } catch {
     return false;
@@ -500,7 +521,7 @@ export function listUnread(
   /** `include` lists plain-text drops an earlier build wrote, marked `legacy`. By default they
    *  are left out: no reader can serve one, so they are not mail waiting, and a counter that
    *  rang for them rang forever. */
-  options: { legacy?: 'include' } = {},
+  options: { legacy?: 'include'; /** `skip`: no queue annotation (a read-only caller takes no lock). */ queue?: 'skip' } = {},
 ): InboxMessage[] {
   let names: string[];
   try {
@@ -567,7 +588,7 @@ export function listUnread(
   // wake ages, the wake picker) keep their own criteria; only the model-facing inbox listing is
   // offered in seq order (`inQueueOrder`). The set never depends on the switch.
   messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
-  if (messages.length > 0 && !messages.some(message => message.legacy === true)) {
+  if (options.queue !== 'skip' && messages.length > 0 && !messages.some(message => message.legacy === true)) {
     const order = readerOrder(dropDir, { root: context.root, session: context.session, seat: context.to }, messages.map(message => message.id), home);
     if (order.kind === 'queue') return messages.map(message => ({ ...message, seq: order.seq.get(message.id) as number }));
   }

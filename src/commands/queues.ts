@@ -8,7 +8,7 @@ import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
 import { listUnread } from '../mcp/inbox.ts';
 import { activate, floorState, seatDropFoldersStrict } from '../queue/floor.ts';
-import { liveFloorActors } from '../queue/floor-actors.ts';
+import { liveFloorActors, resolveLaunchReservations } from '../queue/floor-actors.ts';
 import { readerSwitch, seatQueueCheck, setReaderSwitch, type SeatBinding } from '../queue/reader.ts';
 import { buildIdentity } from '../version.ts';
 
@@ -33,13 +33,13 @@ export default queues;
 /** One seat folder's binding and unread ids, read exactly as the seat's own inbox reads them (the
  *  lead binding included, so a lead's clearance settles a message here too). Null when the folder
  *  cannot be listed: an unreadable inbox is never certified as an empty one. */
-export function unreadOf(root: string, home: string, lead: string | undefined, dropDir: string): { binding: SeatBinding; ids: string[] } | null {
+export function unreadOf(root: string, home: string, lead: string | undefined, dropDir: string, observe = false): { binding: SeatBinding; ids: string[] } | null {
   const parts = dropDir.split('/');
   const seat = parts[parts.length - 1];
   const session = parts[parts.length - 2];
   if (!seat || !session || join(root, '.agents', 'send-drops', session, seat) !== dropDir) return null;
   let listedOk = false;
-  const ids = listUnread(dropDir, { to: seat, root, session, ...(lead === undefined ? {} : { lead }) }, home, undefined, () => { listedOk = true; }).map(message => message.id);
+  const ids = listUnread(dropDir, { to: seat, root, session, ...(lead === undefined ? {} : { lead }) }, home, undefined, () => { listedOk = true; }, observe ? { queue: 'skip' } : {}).map(message => message.id);
   if (!listedOk) return null;
   return { binding: { root, session, seat }, ids };
 }
@@ -70,14 +70,14 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
     const folders = seatDropFoldersStrict(root);
     if (folders === null) out.stdout('seats: the seat folders cannot all be listed\n');
     for (const dropDir of folders ?? []) {
-      const unread = unreadOf(root, home, lead, dropDir);
+      const unread = unreadOf(root, home, lead, dropDir, true);
       if (unread === null) {
         out.stdout(`${dropDir}: the inbox cannot be listed\n`);
         continue;
       }
       // Read-only: status drains nothing, signs nothing and moves nothing.
       const check = seatQueueCheck(dropDir, unread.binding, unread.ids, home, { drain: false });
-      out.stdout(`${unread.binding.session}/${unread.binding.seat}: ${check.kind === 'complete' ? `complete (${String(check.committed)} unread placed)` : `incomplete — ${check.why}`}\n`);
+      out.stdout(`${unread.binding.session}/${unread.binding.seat}: ${check.kind === 'complete' ? `complete, observed (${String(check.committed)} unread placed)` : `incomplete — ${check.why}`}\n`);
     }
     // exit: queues.status
     return 0;
@@ -86,6 +86,9 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
     // exit: queues.not-owner
     return 1;
   }
+  // Recovery first: launch intents whose start is proved or abandoned are released; the rest are
+  // counted by the proof below (an intent of a gone launcher at unknown level: fail closed).
+  resolveLaunchReservations(root);
   if (verb === 'activate') {
     const outcome = activate(root, {
       home,
