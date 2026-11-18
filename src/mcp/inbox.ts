@@ -1,3 +1,4 @@
+import { copyFor, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import type { KeyObject } from 'node:crypto';
 // The seat's inbox: the drop folder `team send` already writes, read from the seat's own side.
@@ -43,6 +44,10 @@ import {
   fileStatStamp,
   isRead,
   isReadOrCleared,
+  isStampedPayload,
+  readVerifiedReceipt,
+  COPY_READ_BY,
+  stampedSettled,
   keyPrintForCache,
   leadAckReceiptAt,
   settledReadOf,
@@ -820,7 +825,12 @@ export function readMessage(
     session: target.session,
     ...(target.lead === undefined ? {} : { lead: target.lead }),
   };
-  const receiptHeldNow = (): boolean => isRead(target.dropDir, id, context, key, binding);
+  // E7b: a stamped record is settled only by its recipient's confirmation (the strict rule), so an
+  // exact-id read of one with a plain read standing is served again, numbered.
+  const stampedRecord = isStampedPayload(payload);
+  const receiptHeldNow = (): boolean => stampedRecord
+    ? stampedSettled(target.dropDir, id, context, key)
+    : isRead(target.dropDir, id, context, key, binding);
   // A lead's clearance holds the one read name without being the seat's read: the id is served
   // and no body follows. A brief's own delivery never takes this path — only a seat reads it.
   const clearedNow = (): boolean =>
@@ -840,8 +850,11 @@ export function readMessage(
   });
   if (receiptHeldNow()) return alreadyServed();
   const atRead = heldAt(readName);
-  if (atRead.kind === 'file') return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
-  if (atRead.kind !== 'missing') {
+  // E7b: a stamped record is settled only by its recipient. A verifying writer-side read that
+  // already holds the read name (an earlier copy) is reused: the body is served again, numbered.
+  const reuse = stampedRecord && atRead.kind === 'file' && readVerifiedReceipt(readName, id, 'read', context, key, binding) !== null;
+  if (atRead.kind === 'file' && !reuse) return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
+  if (atRead.kind !== 'missing' && !reuse) {
     return { ok: false, reason: 'the receipt path is held by something that is not a file' };
   }
   const atReplied = heldAt(repliedName);
@@ -880,6 +893,8 @@ export function readMessage(
     root: target.root,
     session: target.session,
     at: new Date().toISOString(),
+    // E7b: a stamped record's read is an unconfirmed copy; only its recipient's ack settles it.
+    ...(stampedRecord ? { read_by: COPY_READ_BY } : {}),
     ...(binding === undefined ? {} : {
       brief_sha256: binding.sha256,
       incarnation: binding.incarnation,
@@ -905,6 +920,7 @@ export function readMessage(
   // body first and seals only after the hand-over returns, so a hand-over that throws leaves the
   // message unread.
   const publish = (): InboxRead | true => {
+    if (reuse) return true;
     const published = publishReadReceipt(readName, `${JSON.stringify(signedReceipt, null, 2)}\n`);
     if (published === 'exists') {
       // A rival won the name between the check and this link. Its receipt is the single serving of
@@ -925,6 +941,19 @@ export function readMessage(
     });
     return true;
   };
+  // E7b: every copy of a stamped record names its message and its delivery number, taken durably
+  // immediately before the body is handed back. A history that cannot be written returns nothing
+  // now; the message stays unread and due.
+  const numberedCopy = (): string | null => {
+    if (!stampedRecord) return body;
+    const n = takeCopyNumber(target.dropDir, id, 'read');
+    return n === null ? null : wrapCopy(body, id, n);
+  };
+  const historyUnwritable = (): InboxRead => ({
+    ok: false,
+    reason: `message ${JSON.stringify(id)} was not returned: its delivery history cannot be written now; read it again in a moment`,
+    served: 'busy',
+  });
   // The exclusive read claim (rfc-event-comms E5, review round 3): one reader holds the id from
   // before its body is handed over until its receipt is sealed or it gives up. A rival that finds a
   // live claim gets no body; a claim whose holder died is taken over (the seat lock's rule).
@@ -971,9 +1000,14 @@ export function readMessage(
       released = true;
       claim.keep();
     };
+    const copy = numberedCopy();
+    if (copy === null) {
+      done();
+      return historyUnwritable();
+    }
     return {
       ok: true,
-      body,
+      body: copy,
       seal: () => {
         try {
           return publish() === true;
@@ -996,7 +1030,9 @@ export function readMessage(
   // this is the at-most-once side — and the caller returns this refusal instead of the body.
   const lostAfterReceipt = guard?.();
   if (lostAfterReceipt !== undefined && lostAfterReceipt !== null) return { ok: false, reason: lostAfterReceipt };
-  return { ok: true, body };
+  const copy = numberedCopy();
+  if (copy === null) return historyUnwritable();
+  return { ok: true, body: copy };
 }
 
 /**
@@ -1055,7 +1091,8 @@ export function peekMessage(target: InboxTarget, id: string, home: string, seats
         root: target.root,
         rule: payload.rule,
       });
-      return takesReaderLine(payload, isGeneralBriefRecord(payload)) ? bodyWithReaderLine(attributed, id, existingRecordIdsIn(target.dropDir)) : attributed;
+      const shown = takesReaderLine(payload, isGeneralBriefRecord(payload)) ? bodyWithReaderLine(attributed, id, existingRecordIdsIn(target.dropDir)) : attributed;
+      return copyFor(shown, target.dropDir, id, isStampedPayload(payload), 'read');
     })(),
   };
 }

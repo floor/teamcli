@@ -1,3 +1,5 @@
+import { copyFor } from '../queue/handover.ts';
+import { isStampedPayload } from '../send/record.ts';
 // `team show <id>`: prints the full rendered body of one message record in the caller's own
 // mailbox and marks it read with the same signed read receipt `team messages` and `team ack`
 // publish (`src/send/read-receipt.ts`).
@@ -269,12 +271,13 @@ export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<n
 
   const existingIds = existingRecordIdsIn(dropDir);
   const prefix = shortIdPrefix(resolvedId, existingIds);
-  const renderedBody = attributedBody(shown.body, shown.from, {
+  // E7b: a deliberate reread of a stamped record is one more numbered copy.
+  const renderedBody = copyFor(attributedBody(shown.body, shown.from, {
     record: shown,
     home: host.home,
     root,
     rule: shown.rule,
-  }).replace(/\n+$/, '');
+  }).replace(/\n+$/, ''), dropDir, resolvedId, isStampedPayload(shown), 'read');
   const footer = readerLine(resolvedId, existingIds);
   const content = `${renderedBody}\n\n${footer}`;
 

@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readMessage } from '../src/mcp/inbox.ts';
-import { signRecord } from '../src/send/record.ts';
+import { signRecord, stampedPayload } from '../src/send/record.ts';
 import { appendDeliverySync } from '../src/queue/append.ts';
 import { activate, floorState, type FloorActor } from '../src/queue/floor.ts';
 import { liveFloorActors } from '../src/queue/floor-actors.ts';
@@ -25,7 +25,7 @@ import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
 
 const SESSION = 'acme';
-const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 2 };
+const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
 
 function place(): { root: string; home: string; dropDir: string } {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'e6-legacy-')));
@@ -63,10 +63,11 @@ seats:
 }
 
 function message(at: { root: string; home: string; dropDir: string }, id: string): void {
-  const record = signRecord({
+  // The sender decides the era when it builds the payload (E7b), as `team send` does.
+  const record = signRecord(stampedPayload({
     kind: 'message', id, to: 'lead', to_id: null, root: at.root, session: SESSION,
     at: '2026-11-18T00:00:00.000Z', body: `body of ${id}`, from: 'worker', from_id: null, rule: 'the owner', thread: id,
-  }, at.home);
+  }, at.home), at.home);
   appendDeliverySync({ dropDir: at.dropDir, record }, () => {
     writeFileSync(join(at.dropDir, id), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     return { ok: true, value: true };
@@ -83,7 +84,7 @@ describe('E6 body hand-over on the E5 read claim', () => {
   const M1 = '4f0b8d82-7a8e-4da2-9e6f-9b5aac2d3e41';
   const M2 = '4f0b8d82-7a8e-4da2-9e6f-9b5aac2d3e42';
   const leg = (at: { root: string; dropDir: string }, id: string) => ({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: id });
-  const on = (at: { root: string; home: string }) => expect(activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon] }).kind).toBe('activated');
+  const on = (at: { root: string; home: string }) => expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
 
   test('dark: no claim is taken and the read serves the body exactly as before', () => {
     const at = place();
@@ -136,9 +137,11 @@ describe('E6 body hand-over on the E5 read claim', () => {
     const first = exposeBody(leg(at, M1), 'channel', at.home);
     if (first.kind === 'expose') first.settle('yes', (owner) => recordDeliveredBody({ dropDir: at.dropDir, id: M1, root: at.root, session: SESSION, seat: 'lead', home: at.home, owner }));
     expect(exposeBody(leg(at, M1), 'socket', at.home).kind).toBe('pointer');
+    // E7b: M2 is signed while the root is active, so it is stamped (at-least-once). A read is an
+    // unconfirmed copy; a later carrier sends the body again, numbered, never a pointer.
     message(at, M2);
     expect(readMessage(target(at), M2, at.home).ok).toBe(true);
-    expect(exposeBody(leg(at, M2), 'native', at.home).kind).toBe('pointer');
+    expect(exposeBody(leg(at, M2), 'native', at.home).kind).toBe('legacy');
   });
 
   test('a sealed receipt that later cannot be proved keeps every later carrier on a pointer', () => {
@@ -387,15 +390,17 @@ describe('E6 activation against a pre-E6 inbox server', () => {
     writeFileSync(join(at.dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), version: '0.5.22', build: 'old' })}\n`);
     const actors = liveFloorActors(at.root, at.home)!;
     expect(actors.find(a => a.kind === 'inbox-server')).toMatchObject({ level: null });
-    const out = activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon, ...actors] });
+    const out = activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] });
     expect(out.kind).toBe('refused');
     expect(floorState(at.root, at.home).kind).toBe('dark');
   });
 
-  test('the same marker at level 2 lets the root activate', () => {
+  test('E7b: the same marker at level 2 (an E7a listener) refuses activation; at level 3 the root activates', () => {
     const at = place();
-    writeFileSync(join(at.dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), level: 2 })}\n`);
-    const actors = liveFloorActors(at.root, at.home)!;
-    expect(activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon, ...actors] }).kind).toBe('activated');
+    const marker = (level: number) => writeFileSync(join(at.dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), level })}\n`);
+    marker(2);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...liveFloorActors(at.root, at.home)!] }).kind).toBe('refused');
+    marker(3);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...liveFloorActors(at.root, at.home)!] }).kind).toBe('activated');
   });
 });

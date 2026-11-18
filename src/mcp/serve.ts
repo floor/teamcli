@@ -33,7 +33,7 @@ import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { namingFor, senderDisplayName } from '../send/names.ts';
-import { alreadyReadSentence, readSealedRecord, recordAuthOfSealed, settledReadOf } from '../send/record.ts';
+import { alreadyReadSentence, isRecordSidecarName, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -50,6 +50,8 @@ import {
   CHANNEL_PUSH_STATUS,
   CHANNEL_READ_BY,
   CHANNEL_IDLE_MS,
+  CHANNEL_REDELIVER_MS,
+  retireChannelAttempt,
   CHANNEL_SAFETY_MS,
   CHANNEL_TICK_MS,
   channelAborted,
@@ -80,6 +82,7 @@ import {
 import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
+import { copyHistory, deliveryDue, FIRST_BACKOFF_MS, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 
@@ -422,6 +425,53 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
 }
 
 /**
+ * rfc-event-comms E7b (R3.4): the records of one seat the channel offers again now. Every
+ * verified, unsettled stamped record is a candidate, whether or not a push marker stands (a first
+ * push that failed before its marker, an abort, a record primed by a restart). It is due when its
+ * history says so (60 s doubling to 30 minutes after its newest copy); a record with no copy yet
+ * waits one first backoff from its arrival, so the arrival's own push is not doubled.
+ */
+/** The team's lead, for a clearance's authority (E7b); none when the team cannot be read. */
+function leadOf(serving: { loadTeam?: () => { orchestrator?: string | null } | null }): { lead?: string } {
+  try {
+    const lead = serving.loadTeam?.()?.orchestrator;
+    return typeof lead === 'string' && lead !== '' ? { lead } : {};
+  } catch {
+    return {};
+  }
+}
+
+export function channelRedeliveryDue(serving: Pick<Serving, 'dropDir' | 'seat' | 'root' | 'session' | 'home'> & { loadTeam?: Serving['loadTeam'] }, nowMs: number): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(serving.dropDir);
+  } catch {
+    return [];
+  }
+  const state = messageKeyState(serving.home);
+  const key = state.kind === 'key' ? state.key : null;
+  const due: string[] = [];
+  for (const name of names.sort()) {
+    if (name.startsWith('.') || isRecordSidecarName(name) || !MESSAGE_ID.test(name)) continue;
+    if (recordStampAt(serving.dropDir, name) !== true) continue;
+    if (key === null || stampedSettled(serving.dropDir, name, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key)) continue;
+    if (!deliveryDue(serving.dropDir, name, nowMs)) continue;
+    const history = copyHistory(serving.dropDir, name);
+    if (history !== 'unknown' && history.copies === 0) {
+      let arrived: number;
+      try {
+        arrived = lstatSync(join(serving.dropDir, name)).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (nowMs - arrived < FIRST_BACKOFF_MS) continue;
+    }
+    due.push(name);
+  }
+  return due;
+}
+
+/**
  * Watches the inbox for signed records that arrive after this server starts, and writes one
  * channel notification per new record. Mail already waiting at startup is left to `inbox_check`,
  * so a fresh session starts quiet. Each push writes its `<id>.channel-push.json` marker before
@@ -438,7 +488,7 @@ function watchChannel(
   serving: Serving,
   write: (line: string) => void,
   notice?: () => boolean,
-  options: { follow?: typeof followBus; fallbackMs?: number; safetyMs?: number; retryMinMs?: number; retryMaxMs?: number } = {},
+  options: { follow?: typeof followBus; fallbackMs?: number; safetyMs?: number; retryMinMs?: number; retryMaxMs?: number; redeliverMs?: number } = {},
 ): () => void {
   const seen = new Set<string>();
   let primed = false;
@@ -447,6 +497,7 @@ function watchChannel(
   let namesTimer: ReturnType<typeof setInterval> | null = null;
   let pulse: ReturnType<typeof setTimeout> | null = null;
   let drainTimer: ReturnType<typeof setTimeout> | null = null;
+  let redeliverTimer: ReturnType<typeof setInterval> | null = null;
   let folder: FSWatcher | null = null;
   let subscription: BusFollow | null = null;
   /** Busy commits retried off the main wait. Five tries, then one logged give-up. The id stays
@@ -464,6 +515,8 @@ function watchChannel(
     pulse = null;
     if (drainTimer !== null) clearTimeout(drainTimer);
     drainTimer = null;
+    if (redeliverTimer !== null) clearInterval(redeliverTimer);
+    redeliverTimer = null;
     for (const pending of retryTimer.values()) clearTimeout(pending);
     retryTimer.clear();
     folder?.close();
@@ -511,8 +564,12 @@ function watchChannel(
     // walk takes the message leaves a held marker at the same name: either marker says this id
     // is not to be pushed, and a second notification is a duplicate wake.
     if (channelPushHeld(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelAborted(serving.dropDir, id)) return 'done';
-    // A record the seat already read, or already replied to, is not a channel message again.
-    if (receiptHeld(
+    // A record the seat already read, or already replied to, is not a channel message again. A
+    // stamped record is settled only by its recipient's confirmation (E7b, the strict rule).
+    if (recordStampAt(serving.dropDir, id) !== false) {
+      const keyNow = messageKeyState(serving.home);
+      if (keyNow.kind === 'key' && stampedSettled(serving.dropDir, id, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, keyNow.key)) return 'done';
+    } else if (receiptHeld(
       serving.dropDir,
       id,
       { to: serving.seat, root: serving.root, session: serving.session },
@@ -545,6 +602,13 @@ function watchChannel(
       const exposure = exposeBody({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
       heldExposure = exposure;
       if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(serving.dropDir, id)?.seq ?? null);
+      // E7b: a stamped record's copy is numbered immediately before the line leaves; a history
+      // that cannot be written sends nothing now, and the redelivery pass offers it again.
+      if (recordStampAt(serving.dropDir, id) === true) {
+        const n = takeCopyNumber(serving.dropDir, id, 'channel');
+        if (n === null) return 'skip' as const;
+        push.content = wrapCopy(push.content, id, n);
+      }
       const reserved = recordChannelPush(serving.dropDir, {
         v: 1,
         kind: 'channel-push',
@@ -803,6 +867,28 @@ function watchChannel(
   // the inbox is read whole only on the slow safety pass, for a sender that could not reach the bus.
   namesEvery();
   every(options.fallbackMs ?? CHANNEL_IDLE_MS);
+  // rfc-event-comms E7b (R3.4): every verified, unsettled stamped record of this seat stays due
+  // until its recipient acknowledges it, whether or not a push marker stands (a first push that
+  // failed before its marker, an abort, a record primed by a restart are all due). Each pass
+  // retires a due record's channel attempt (any markers move into its history) and pushes the next
+  // numbered copy. A record with no copy yet waits one first backoff from its arrival, so the
+  // arrival's own push is not doubled.
+  const redeliverPass = (): void => {
+    if (halted()) return;
+    const nowMs = Date.now();
+    for (const name of channelRedeliveryDue(serving, nowMs)) {
+      // One record's failure (a frame write that throws) never stops the pass: the record stays
+      // due and the next pass offers it again.
+      try {
+        if (!retireChannelAttempt(serving.dropDir, name, nowMs)) continue;
+        seen.delete(name);
+        pushOne(name);
+      } catch {
+        seen.delete(name);
+      }
+    }
+  };
+  redeliverTimer = setInterval(redeliverPass, options.redeliverMs ?? CHANNEL_REDELIVER_MS);
   // A dropped or absent bus is dialled again with a doubling wait, so a seat that fell back to
   // its poll returns to events when the bus comes back, without a server restart.
   subscription = followBusRetrying(serving.root, { seat: serving.seat, kinds: ['message.arrived'], skipBacklog: true }, {

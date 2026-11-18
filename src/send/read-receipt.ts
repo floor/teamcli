@@ -13,7 +13,7 @@ import { queuePlaceOf } from '../queue/append.ts';
 import { type KeyObject } from 'node:crypto';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
-import { isRead, leadAckReceiptAt, receiptFile, signReceiptPayload, type ReceiptPayload } from './record.ts';
+import { ackedFile, COPY_READ_BY, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
 import { clearUnread } from './unread-hint.ts';
 
 /** The message whose read is being recorded: its folder, its id, the seat it was addressed to,
@@ -69,7 +69,30 @@ function publish(input: RecordReadInput): RecordReadOutcome {
   const servedNow = (): boolean => isRead(dropDir, id, context, key);
   // The caller's own filter may already have asked `isRead`; this re-check is the race with every
   // other reader.
-  if (servedNow()) return { kind: 'served' };
+  const stamped = recordStampAt(dropDir, id) !== false;
+  // A stamped record is served only on a positively confirming receipt (the strict rule); a
+  // legacy record keeps the hot predicate.
+  if (stamped ? stampedSettled(dropDir, id, context, key) : servedNow()) return { kind: 'served' };
+  // rfc-event-comms E7b: a stamped record is settled only by its recipient (`isRead` above). A
+  // writer-side read of one is an unconfirmed copy: it is published with `read_by: copy`, or reuses
+  // the copy receipt already standing, so the body can be served again, numbered. A confirming read
+  // (an ack, a reply, a clearance) whose read name a copy's receipt already holds is published as
+  // the acknowledgement note instead.
+  const confirming = isConfirmedReadBy(readBy);
+  if (stamped) {
+    const standing = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
+    if (standing !== null && !confirming) return { kind: 'published' };
+    if (standing !== null) {
+      const acked = ackedFile(dropDir, id);
+      const receipt: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at, read_by: 'ack' };
+      const made = publishReadReceipt(acked, `${JSON.stringify(signReceiptPayload(receipt, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
+      if (made === 'failed') return { kind: 'unwritten', reason: 'write' };
+      if (made === 'exists') return stampedSettled(dropDir, id, context, key) ? { kind: 'served' } : { kind: 'held', status: 'read', entry: 'file' };
+      if (!flushReceipt(acked, dropDir)) return { kind: 'unwritten', reason: 'durable' };
+      return { kind: 'published' };
+    }
+  }
+  const shownBy = stamped && !confirming ? COPY_READ_BY : readBy;
   // A lead already cleared this message: its receipt holds the one read name, and the message is
   // settled for the seat. A second sweep, or the seat's own later ack, finds the id served; the
   // clearance is never rewritten as the seat's own read.
@@ -93,7 +116,7 @@ function publish(input: RecordReadInput): RecordReadOutcome {
     root,
     session,
     at,
-    ...(readBy === undefined ? {} : { read_by: readBy }),
+    ...(shownBy === undefined ? {} : { read_by: shownBy }),
   };
   const published = publishReadReceipt(readName, `${JSON.stringify(signReceiptPayload(receipt, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
   if (published === 'exists') {

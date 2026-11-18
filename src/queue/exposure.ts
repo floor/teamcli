@@ -31,6 +31,7 @@ import { lstatSync } from 'node:fs';
 import { receiptFile } from '../send/record.ts';
 import { ensureFolder } from './durable.ts';
 import { mayCreateFence } from './floor.ts';
+import { recordStampAt } from '../send/record.ts';
 
 export type BodyLeg = 'channel' | 'typed' | 'native' | 'socket';
 
@@ -62,6 +63,10 @@ export type ExposureDecision =
  * root, `expose` only when this call took a fresh owned claim; every refusal is a pointer.
  */
 export function exposeBody(target: ExposureTarget, leg: BodyLeg, home: string): ExposureDecision {
+  // E7b: a stamped record is at-least-once. It takes no exclusive claim and is never answered with
+  // a pointer: its copies are numbered instead (src/queue/handover.ts), and its settlement is its
+  // recipient's own acknowledgement.
+  if (recordStampAt(target.dropDir, target.msgId) !== false) return { kind: 'legacy' };
   const standing = ownerOfClaim(target.dropDir, target.msgId);
   if (standing === 'unknown') return { kind: 'pointer', why: 'the message read claim cannot be read' };
   if (isExposeOwner(standing)) return { kind: 'pointer', why: 'already shown by another hand-over' };

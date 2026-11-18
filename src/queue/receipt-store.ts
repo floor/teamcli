@@ -261,8 +261,10 @@ function writePending(input: PendingInput): boolean {
   // each marker's verified signed content (record id, kind and actor, signed with this home's
   // key), never its file name, so an unverifiable file can never stand in for a real decision.
   const key = messageKeyState(input.home);
-  const standingNames = listPending(folder);
-  if (standingNames === null) return false;
+  // E7b (R6 parity gate): an unlistable pending folder dedupes against nothing and the exclusive
+  // write is still tried, exactly as E6 did (a folder can deny enumeration and permit creation).
+  // The strict listing (null is never empty) stays in the completeness check (`pendingMarkers`).
+  const standingNames = listPending(folder) ?? [];
   if (key.kind === 'key' && standingNames.some((name) => {
     const text = readFence(join(folder, name));
     const standing = text === null ? null : verifiedPending(text, name, key.key);

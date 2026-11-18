@@ -1,3 +1,5 @@
+import { EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
@@ -68,7 +70,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, isRead, isRecordSidecarName, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -2102,7 +2104,11 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // send walks the same delivery order and then waits on the thread for the first verified reply
   // record within the timeout window.
   const msgId = host.sendId?.() ?? randomUUID();
-  const record = recordOf(msgId, to, body, from, admission, host.modelDriftNotice?.at ?? host.now().toISOString(), subject === '' ? undefined : subject);
+  // E7b: the delivery era is decided once, here, and this exact payload is what is signed, staged,
+  // carried by every leg and retried. A send that keeps no record (`messaging.store: none`) has no
+  // stored copy to retry or acknowledge, so it stays on legacy delivery (unstamped).
+  const unstamped = recordOf(msgId, to, body, from, admission, host.modelDriftNotice?.at ?? host.now().toISOString(), subject === '' ? undefined : subject);
+  const record = store === 'none' ? unstamped : stampedPayload(unstamped, host.home);
   const callerRoot = { root, session: team.session };
   if (dry) {
     // A dry run reports the same ordered legs a real send would, but it can only say whether each
@@ -2381,7 +2387,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     // steps still name the legs it took.
     if (store === 'none') {
       try {
-        const signed = signRecord(record, host.home);
+        const signed = signRecord(record, host.home, { stamp: false });
         stagedWalk = { ok: true, path: null, record: recordTextOf(signed), signed };
       } catch {
         stagedWalk = { ok: false, reason: 'the record could not be signed' };
@@ -3912,7 +3918,7 @@ async function postArrivalNow(
  * The event is a record, never a delivery fact: an append that cannot be written is logged and
  * changes nothing about the send.
  */
-async function stageSendRecord(
+export async function stageSendRecord(
   dropDir: string,
   payload: RecordPayload,
   home: string,
@@ -3938,6 +3944,12 @@ async function stageSendRecord(
   const { value: staged } = await appendDelivery(
     { dropDir, record: signed },
     async () => {
+      // E7b: a stamped record's era evidence (its delivery-history folder) stands, durably, before
+      // the record is published, on the queued path and the queue-skip fallback alike (this is the
+      // one writer both run), so no receipt can ever stand on it without the strict rule.
+      if (isStampedPayload(signed.payload) && !ensureFolder(join(dropDir, EXPOSURES, payload.id))) {
+        return { ok: false, value: { outcome: 'refused' as const, reason: 'the delivery history folder could not be made durable' } };
+      }
       const result = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
       return { ok: result.outcome !== 'refused', value: result };
     },
@@ -5342,7 +5354,8 @@ async function deliverTypedWakeSeat(
     const typedBody: LegBody = carrying
       ? legBody(payload, host.home, 'typed', dropDir, typedWakeMaxFor(cli), 'typed')
       : { text: trigger, carriesBody: false, handle: null };
-    const line = typedBody.text ?? trigger;
+    // E7b: a body that could not be numbered never goes out raw: the leg carries the pointer.
+    const line = carrying ? legText(typedBody, payload) : trigger;
     const wake = await deliverTypedWake(wakeHost, pane, line, cli, {
       ...(host.wakeVerifyMs === undefined ? {} : { verifyMs: host.wakeVerifyMs, workingBoundMs: host.wakeVerifyMs }),
       ...(host.wakePollMs === undefined ? {} : { pollMs: host.wakePollMs }),
@@ -6710,7 +6723,7 @@ async function deliverSocketFrame(
   let carried: string | null = null;
   if (store !== undefined && (store.mode === 'parallel' || store.mode === 'none')) {
     try {
-      carried = recordTextOf(signRecord(payload, host.home));
+      carried = recordTextOf(signRecord(payload, host.home, store.mode === 'none' ? { stamp: false } : {}));
     } catch {
       return { kind: 'fallback', reason: 'the record could not be signed' };
     }
@@ -6725,6 +6738,12 @@ async function deliverSocketFrame(
   if (socketExposure?.kind === 'pointer') {
     content = `${content.split('\n')[0]}\n\n${pointerFor(msgId, null)}`;
     bodyIncluded = false;
+  }
+  // E7b: a stamped record's copy carries its delivery number, taken durably before the frame.
+  if (bodyIncluded && isStampedPayload(payload)) {
+    const n = takeCopyNumber(dropDir, msgId, 'socket');
+    if (n === null) return { kind: 'fallback', reason: 'the delivery history could not be written' };
+    content = wrapCopy(content, msgId, n);
   }
   // The reader line rides with the body too: a seat handed the whole body still needs the id to
   // answer it on its thread.

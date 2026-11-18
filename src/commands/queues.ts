@@ -7,25 +7,33 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
 import { listUnread } from '../mcp/inbox.ts';
-import { activate, floorState, seatDropFoldersStrict } from '../queue/floor.ts';
+import { activate, deactivate, floorState, seatDropFoldersStrict } from '../queue/floor.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { readerSwitch, seatQueueCheck, setReaderSwitch, type SeatBinding } from '../queue/reader.ts';
 import { buildIdentity } from '../version.ts';
 
 export const USAGE = `Usage: team queues status
        team queues activate
+       team queues deactivate
        team queues reader on|off
 
 The per-seat delivery queues of this checkout (rfc-event-comms, steps E6-E7).
-status    the root's floor state, the reader switch, and each seat queue's check.
-activate  dark in this build: activation waits for the managed launch boundary (E7b).
-reader    turns the reader switch on (seats read their mail in queue order, once every seat
-          queue is complete) or off (every reader is back on the legacy listing at once).
+status      the root's floor state, the reader switch, and each seat queue's check.
+activate    turns on at-least-once delivery for this team, once every live TeamCLI process of
+            the team runs this build: from then on every message is delivered until its
+            recipient acknowledges it (team ack), and every copy names its message and its
+            delivery number; any copy after the first says it is a re-send. If an older TeamCLI
+            process appears later, the daemon rolls the team back to dark on its next pass.
+            Messages sent while the team was active keep the guarantee after a rollback. Not
+            covered: an older TeamCLI process started outside TeamCLI's own launch.
+deactivate  the rollback to dark, in one command; it resumes a cut-off rollback.
+reader      turns the reader switch on (seats read their mail in queue order, once every seat
+            queue is complete) or off (every reader is back on the legacy listing at once).
 
 Exits 0 on success, 1 when the change is refused or fails, 2 when the invocation or project can't be read.
 `;
 
-export type QueuesSources = { home: string; now?: () => Date; /** E7b turns this on; E7a never does. */ activationEnabled?: true };
+export type QueuesSources = { home: string; now?: () => Date };
 
 export const queues: Command = (argv, io) => runQueues(argv, io, { home: homedir() });
 export default queues;
@@ -50,7 +58,7 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
   if (args.error) return invocation(out, args.error);
   const [verb, value, extra] = args.rest;
   if (verb === undefined || extra !== undefined) return invocation(out, verb === undefined ? 'a verb is required' : `unexpected "${extra}"`);
-  if (verb !== 'status' && verb !== 'activate' && verb !== 'reader') return invocation(out, `unknown verb "${verb}"`);
+  if (verb !== 'status' && verb !== 'activate' && verb !== 'deactivate' && verb !== 'reader') return invocation(out, `unknown verb "${verb}"`);
   if (verb === 'reader' && value !== 'on' && value !== 'off') return invocation(out, 'reader takes on or off');
   if (verb !== 'reader' && value !== undefined) return invocation(out, `unexpected "${value}"`);
   const loaded = readTeamConfig(io.cwd, { home: sources.home });
@@ -82,13 +90,6 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
     // exit: queues.status
     return 0;
   }
-  if (verb === 'activate' && sources.activationEnabled !== true) {
-    // E7a keeps every root dark, whoever asks: activation waits for E7b, whose managed launch
-    // boundary (owned launch intents, a positive recovery proof) is reviewed as a design first.
-    out.stderr('team queues: activation stays dark until the managed launch boundary (E7b) is reviewed and merged\n');
-    // exit: queues.activation-dark
-    return 1;
-  }
   if (!allowed(io, out, sources, verb)) {
     // exit: queues.not-owner
     return 1;
@@ -99,7 +100,6 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
       build: buildIdentity().build,
       actors: () => liveFloorActors(root, home),
       ...(sources.now ? { now: sources.now } : {}),
-      launchBoundary: true,
     });
     if (outcome.kind === 'activated' || outcome.kind === 'already') {
       out.stdout(`activated at level ${String(outcome.level)}\n`);
@@ -108,6 +108,17 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
     }
     out.stderr(`team queues: activation ${outcome.kind}${'why' in outcome ? `: ${outcome.why}` : ''}${'below' in outcome && outcome.below.length > 0 ? ` (${outcome.below.map(actor => `${actor.name} pid ${String(actor.pid)} level ${actor.level === null ? 'unknown' : String(actor.level)}`).join(', ')})` : ''}\n`);
     // exit: queues.activation-refused
+    return 1;
+  }
+  if (verb === 'deactivate') {
+    const rolled = deactivate(root, home);
+    if (rolled.kind === 'dark') {
+      out.stdout('dark: the team is back on legacy delivery; messages sent while it was active keep the guarantee\n');
+      // exit: queues.deactivated
+      return 0;
+    }
+    out.stderr(`team queues: deactivation ${rolled.kind}${rolled.kind === 'failed' ? `: ${rolled.why}` : ''}; run it again to finish the rollback\n`);
+    // exit: queues.deactivation-failed
     return 1;
   }
   const outcome = setReaderSwitch(root, value === 'on', {

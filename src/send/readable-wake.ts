@@ -1,6 +1,8 @@
 // Body-carrying wakes and their post-delivery receipt. Resolution and admission stay with
 // the caller; a receipt is published only after that caller proves transport acceptance.
 import { exposeBody, exposurePointer, type BodyLeg, type ExposureHandle } from '../queue/exposure.ts';
+import { takeCopyNumber, unwrapCopy, wrapCopy } from '../queue/handover.ts';
+import { isStampedPayload } from './record.ts';
 import { join } from 'node:path';
 import { currentClaimIn, readMessage } from '../mcp/inbox.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -51,8 +53,10 @@ export function recordDeliveredBody(input: {
     const payload = verifiedRecordAt(join(input.dropDir, input.id), input.id, key.key);
     if (payload === null || payload.to !== input.seat || payload.session !== input.session) return false;
     // The wake must be this record's own body, in either shape a wake carries it.
-    if (input.wake !== undefined && inlineWake(payload, input.home) !== input.wake
-      && inlineWake(payload, input.home, RUNTIME_WAKE_MAX, 'typed') !== input.wake) return false;
+    // A stamped record is never settled by its carrier: only its recipient acknowledges it (E7b).
+    if (isStampedPayload(payload)) return false;
+    if (input.wake !== undefined && inlineWake(payload, input.home) !== unwrapCopy(input.wake, input.id)
+      && inlineWake(payload, input.home, RUNTIME_WAKE_MAX, 'typed') !== unwrapCopy(input.wake, input.id)) return false;
     const brief = { claim: () => currentClaimIn(input.root, input.session, input.seat) };
     if (input.owner !== undefined) {
       // The seal of one hand-over (E3): the same owned claim, adopted; never a new exposure.
@@ -75,6 +79,13 @@ export type LegBody = { text: string | null; carriesBody: boolean; handle: Expos
 export function legBody(payload: RecordPayload, home: string, leg: BodyLeg, dropDir: string, limit = RUNTIME_WAKE_MAX, shape: 'runtime' | 'typed' = 'runtime'): LegBody {
   const text = inlineWake(payload, home, limit, shape);
   if (text === null) return { text: null, carriesBody: false, handle: null };
+  if (isStampedPayload(payload)) {
+    // E7b: a stamped record's copy is numbered, durably, immediately before it leaves. History
+    // that cannot be written sends no body now (the pointer); the record stays due.
+    const n = takeCopyNumber(dropDir, payload.id, leg);
+    if (n === null) return { text: null, carriesBody: false, handle: null };
+    return { text: wrapCopy(text, payload.id, n), carriesBody: true, handle: null };
+  }
   const decision = exposeBody({ dropDir, root: payload.root, session: payload.session, seat: payload.to, msgId: payload.id }, leg, home);
   if (decision.kind === 'pointer') return { text: exposurePointer(payload.id, null), carriesBody: false, handle: null };
   return { text, carriesBody: true, handle: decision.kind === 'expose' ? decision : null };

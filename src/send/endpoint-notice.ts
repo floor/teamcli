@@ -27,6 +27,8 @@ export const RUNTIME_RULE = "the team's unread-message report";
 export function writeRuntimeNotice(input: {
   home: string; root: string; session: string; lead: string; id: string; body: string; at: string;
   prepareOnly?: boolean;
+  /** The record this notice answers (E7b: a not-delivered notice names its message exactly). */
+  inReplyTo?: string;
 }): { ok: true; payload: RecordPayload; existing: boolean } | { ok: false; reason: string } {
   hostedCommit('writeRuntimeNotice');
   try {
@@ -34,6 +36,7 @@ export function writeRuntimeNotice(input: {
       kind: 'message', id: input.id, to: input.lead, to_id: null,
       root: realpathSync(input.root), session: input.session, at: input.at,
       body: input.body, from: RUNTIME_FROM, from_id: null, rule: RUNTIME_RULE, thread: input.id,
+      ...(input.inReplyTo === undefined ? {} : { in_reply_to: input.inReplyTo }),
     };
     const leadDir = join(input.root, '.agents', 'send-drops', input.session, input.lead);
     const problem = ensureFoldersBelow(payload.root, [join('.agents', 'send-drops', input.session, input.lead)]);

@@ -14,15 +14,23 @@
 // A pass while the load per core is above the limit does nothing and tries again on the next.
 // When the day's run ends having moved anything, the team's lead gets one line saying so.
 // The day, the totals and the line's state live in `<root>/.agents/send-drops/.drops-archive-run.json`.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { RUNTIME_FROM, writeRuntimeNotice } from '../../send/endpoint-notice.ts';
 import { cpus, loadavg } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { TeamFile } from '../../file/types.ts';
 import { logLine } from '../../log.ts';
 import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
 import { teamIdOf } from '../../registry/teams.ts';
 import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
-import { archiveSeatInbox, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
+import { archiveSeatInbox, listArchivedUnread, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
+import { isStampedPayload, readRecord, recordFile, sameFolder, stampedSettled, verifyRecord, type RecordPayload } from '../../send/record.ts';
+import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE } from '../../send/drop-folder.ts';
+import { createExclusive, fsyncFolder, removeDurable } from '../../queue/durable.ts';
+import { messageKeyOf, signDomain, verifyDomain, type Json } from '../../store/keys.ts';
+import { closeSync, constants, fsyncSync, readdirSync, readFileSync } from 'node:fs';
+import { openSync } from '../../host/guarded-fs.ts';
+import type { KeyObject } from 'node:crypto';
 import { archiveLegacySeat, legacySeatFolders } from '../../send/legacy-inbox-retention.ts';
 import { heldAt } from '../../held.ts';
 import type { StatusContext } from '../../send/record.ts';
@@ -168,6 +176,85 @@ export function seatAtRest(agents: readonly Agent[], teamId: string, team: TeamF
     || records.some((agent) => agent.reach.session.toLowerCase() === session.toLowerCase() && agent.lifecycle === 'stopped');
 }
 
+/** Whether the seat is retired or removed (E7b decision 4): the team file no longer declares it and
+ *  no registry record for it is running, registered or stopped. A stopped seat is not retired. */
+export function seatRetired(agents: readonly Agent[], teamId: string, team: TeamFile, seat: string): boolean {
+  const name = seat.toLowerCase();
+  if (name === 'owner') return false;
+  if (team.seats.some((entry) => entry.name.toLowerCase() === name)) return false;
+  return !agents.some((agent) => agent.reach.team === teamId && agent.reach.seat.toLowerCase() === name
+    && (agent.lifecycle === 'running' || agent.lifecycle === 'registered' || agent.lifecycle === 'stopped'));
+}
+
+/**
+ * The sender's not-delivered notice for one unacknowledged stamped record about to leave a retired
+ * seat's live folder (E7b decision 4), written before the move. The notice goes to the sender's
+ * current route, resolved from its signed agent id (a seat name alone may now be another
+ * occupant's); otherwise to the lead of the archived seat's session, naming the sender. It names
+ * the message exactly (`in_reply_to`) and carries a stable id, so a notice already standing is
+ * found and accepted only when it verifies as this obligation's own: the checkout's runtime record
+ * to that recipient, in that session and root, answering this message. True when such a notice
+ * stands; false leaves the record in place for the next pass.
+ */
+export function noticeBeforeMove(input: {
+  home: string; root: string; session: string; seat: string; team: TeamFile; key: KeyObject; at: string;
+  item: { id: string; undelivered?: { from: string; from_id: string | null } };
+  agents?: readonly Agent[]; teamId?: string;
+  /** Test seam: the fsync of a file or folder (throws on failure). */
+  fsync?: (path: string, folder: boolean) => void;
+}): boolean {
+  const from = input.item.undelivered?.from ?? 'unknown';
+  const fromId = input.item.undelivered?.from_id ?? null;
+  const agent = fromId === null || input.agents === undefined
+    ? undefined
+    : input.agents.find((one) => one.id === fromId && one.reach.team === input.teamId && one.lifecycle !== 'retired');
+  const to = agent !== undefined ? agent.reach.seat : input.team.orchestrator;
+  const session = agent !== undefined ? agent.reach.session : input.session;
+  if (to === undefined || to === null || to === '') return false;
+  const noticeId = undeliveredNoticeId(input.item.id);
+  const notice = writeRuntimeNotice({
+    home: input.home, root: input.root, session, lead: to, id: noticeId, inReplyTo: input.item.id,
+    body: `not delivered: seat retired (${input.seat}). The message ${input.item.id} from ${from} was never acknowledged and is archived; list it with \`team drops archive --unread\`.`,
+    at: input.at,
+  });
+  if (!notice.ok) return false;
+  const found = notice.payload;
+  if (!(found.id === noticeId && found.to === to && found.session === session && sameFolder(found.root, input.root)
+    && found.from === RUNTIME_FROM && found.in_reply_to === input.item.id)) return false;
+  // The notice must be durable before the source may move (written now or reused): the notice file
+  // and its folder chain (seat, session, send-drops) are fsynced, and any failure holds the move.
+  const seatDir = join(input.root, '.agents', 'send-drops', session, to);
+  const path = recordFile(seatDir, noticeId);
+  const sync = input.fsync ?? ((target: string, folder: boolean) => {
+    if (folder) {
+      fsyncFolder(target);
+      return;
+    }
+    const fd = openSync(target, constants.O_RDONLY);
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  });
+  try {
+    sync(path, false);
+    sync(dirname(path), true);
+    if (dirname(path) !== seatDir) sync(seatDir, true);
+    sync(dirname(seatDir), true);
+    sync(dirname(dirname(seatDir)), true);
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/** A stable, UUID-shaped id for one message's not-delivered notice. */
+export function undeliveredNoticeId(id: string): string {
+  const hex = createHash('sha256').update(`not-delivered\n${id}`).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
 /** Whether send-drops, the session folder and the seat folder are each a plain folder, not a
  *  link: checked before the folder is used and again after every turn the loop gave away. */
 function folderChainOk(root: string, session: string, seat: string): boolean {
@@ -214,7 +301,8 @@ export async function inboxArchivePass(input: {
     ? held
     : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0, cursor: {}, recovered: [], recoverCursor: {}, completed: [] };
   if (run.done) {
-    // The day's work is over. A line that did not go is tried again, a bounded number of times.
+    // The day's work is over.
+    // A line that did not go is tried again, a bounded number of times.
     const notice = run.notice;
     if (notice !== undefined && !notice.sent && notice.tries < NOTICE_TRIES) {
       const sent = await sendNotice(run, root, team, deps);
@@ -241,7 +329,8 @@ export async function inboxArchivePass(input: {
   let registrySaid = false;
   const stop = async (after: 'recovery' | 'chunk'): Promise<boolean> => deps.yieldTurn !== undefined && !(await deps.yieldTurn(after));
   seats: for (const folder of seatDropFolders(root)) {
-    const context: StatusContext = { to: folder.seat, root, session: folder.session };
+    // The lead binds a clearance's authority (E7b: the stamped planner rule asks it).
+    const context: StatusContext = { to: folder.seat, root, session: folder.session, ...(team.orchestrator ? { lead: team.orchestrator } : {}) };
     const key2 = `${folder.session}/${folder.seat}`;
     // A folder fully looked at today is not looked at again until tomorrow.
     if (run.completed.includes(key2)) continue;
@@ -322,8 +411,15 @@ export async function inboxArchivePass(input: {
         refused.push('the registry could not be read whole; no unread mail moved');
       }
       const atRest = agents !== null && seatAtRest(agents, teamId, team, folder.session, folder.seat);
+      const retired = agents !== null && seatRetired(agents, teamId, team, folder.seat);
       const after = run.cursor[key2];
       const report = archiveSeatInbox({
+        // E7b (decision 4): a retired seat's unacknowledged stamped record moves only once its
+        // sender's not-delivered notice stands (written now, or found as this obligation's own).
+        beforeUndelivered: (item) => noticeBeforeMove({
+          home, root, session: folder.session, seat: folder.seat, team, key: key.key, at: now.toISOString(), item,
+          ...(agents === null ? {} : { agents, teamId }),
+        }),
         dropDir: folder.dropDir,
         seat: folder.seat,
         context,
@@ -334,6 +430,7 @@ export async function inboxArchivePass(input: {
         options: {
           markPreChannel: false,
           unreadKeepMs: atRest ? STOPPED_UNREAD_KEEP_MS : null,
+          retired,
           limit: budget,
           scanLimit: Math.min(INBOX_ARCHIVE_SCAN_CHUNK, scanBudget),
           orphans: false,

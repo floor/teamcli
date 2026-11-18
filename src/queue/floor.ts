@@ -38,18 +38,20 @@ import { acquireLockAt } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { createExclusive, ensureFolder, fsyncFolder, readFence, removeDurable, type DurableFaults } from './durable.ts';
 
-/** The capability level this build enforces: exposure claims and wake-attempt states. */
-export const ACTOR_LEVEL = 2;
-/** The level a root is activated at by this build. A later fence family raises it (§3). E7a
- *  keeps E6's level: it changes no live behaviour while the root is dark, and the reader switch
- *  needs READER_LEVEL (3), which only the activation boundary (E7b) raises the floor to. */
-export const FLOOR_LEVEL = 2;
+/** The capability level this build reports: exposure claims, wake-attempt states, and (E7b) the
+ *  at-least-once hand-over of stamped records with numbered copies. */
+export const ACTOR_LEVEL = 3;
+/** The level a root is activated at by this build (E7b, at-least-once): every live actor must
+ *  report it, and the reader switch (READER_LEVEL 3) can then go on. */
+export const FLOOR_LEVEL = 3;
 
 export const ACTIVATION_DOMAIN = 'team-activation-v1\n';
 const PROTOCOL = 'PROTOCOL';
 const ACTIVATION = 'ACTIVATION';
 const FENCED = 'FENCED';
 const PUBLISHED = 'PUBLISHED';
+/** The rollback's own marker (E7b): created first and removed last by `deactivate`. */
+const DEACTIVATING = 'DEACTIVATING';
 const LOCK = 'activation.lock';
 
 export function queuesFolder(root: string): string {
@@ -88,12 +90,7 @@ export type ActivationOptions = {
   /** Test seam: runs after a step completes; a crash test exits here. */
   after?: (step: ActivationStep) => void;
   faults?: DurableFaults;
-  /** The managed launch boundary (§3 step 4): managed launches take the activation lock and refuse
-   *  a binary below the floor. E6 does not wire it yet, so no production caller passes this and the
-   *  root stays dark: the fences are written in shadow and enforced by nobody. */
-  launchBoundary?: true;
-  /** The floor this run activates at; FLOOR_LEVEL by default. The reader switch (E7a) is exercised
-   *  in tests at READER_LEVEL; production activation stays refused until E7b. */
+  /** The floor this run activates at; FLOOR_LEVEL by default. */
   level?: number;
 };
 
@@ -141,6 +138,10 @@ function readActivation(root: string, home: string): { kind: 'absent' } | { kind
  * fence then, and every reader still honours the fences that exist.
  */
 export function floorState(root: string, home: string): FloorState {
+  // E7b: a rollback that has begun and not finished. No new fence; rerunning `deactivate` finishes it.
+  const rolling = readJson(join(queuesFolder(root), DEACTIVATING));
+  if (rolling.kind === 'unknown') return { kind: 'unknown', why: 'the rollback marker cannot be read' };
+  if (rolling.kind === 'ok') return { kind: 'unknown', why: 'a rollback to dark is in progress; finish it with `team queues deactivate`' };
   const marker = readJson(join(queuesFolder(root), PROTOCOL));
   const record = readActivation(root, home);
   if (marker.kind === 'unknown') return { kind: 'unknown', why: 'the floor marker cannot be read' };
@@ -239,8 +240,9 @@ function publishUnderLock(root: string, faults?: DurableFaults): { kind: 'ok' } 
  * root whose actors are all at the floor again has FENCED removed.
  */
 export function activate(root: string, options: ActivationOptions): ActivationOutcome {
-  if (options.launchBoundary !== true) return { kind: 'refused', why: 'the managed launch boundary is not wired yet; the root stays dark', below: [] };
   const result = withActivationLock(root, (): ActivationOutcome => {
+    const rolling = readJson(join(queuesFolder(root), DEACTIVATING));
+    if (rolling.kind !== 'absent') return { kind: 'refused', why: 'a rollback to dark is in progress; finish it first with `team queues deactivate`', below: [] };
     const recovered = recoverUnderLock(root, options.home, options.faults);
     if (recovered.kind === 'failed') return recovered;
     options.after?.('recover');
@@ -321,17 +323,46 @@ export function checkActors(root: string, home: string, actors: FloorActor[] | n
   if (state.kind !== 'active') return state;
   const below = actors === null ? null : belowFloor(actors, state.level);
   if (below !== null && below.length === 0) return state;
-  const why = below === null ? 'fenced: the live actors cannot be read' : `fenced: legacy actor present (${(below ?? []).map(actor => `${actor.name} pid ${String(actor.pid)} level ${actor.level === null ? 'unknown' : String(actor.level)}`).join(', ')})`;
-  const made = createExclusive(join(queuesFolder(root), FENCED), `${JSON.stringify({ v: 1, why, at: new Date().toISOString() })}\n`);
-  return made === 'failed' ? { kind: 'unknown', why: 'the fenced marker could not be written' } : { kind: 'fenced', level: state.level, why };
+  // E7b (the coordinator's decision after design round 4): an actor below the floor, of unknown level, or an actor
+  // list that cannot be read, rolls the root back to dark. Stamped records keep their contract
+  // through the rollback (they are settled only by their recipient, whatever the floor), and an
+  // older build refuses a stamped record as unsupported, so it never presents a stamped body.
+  const why = below === null ? 'the live actors cannot be read' : `an actor below the floor is live (${below.map(actor => `${actor.name} pid ${String(actor.pid)} level ${actor.level === null ? 'unknown' : String(actor.level)}`).join(', ')})`;
+  const rolled = deactivate(root, home);
+  if (rolled.kind === 'dark') return { kind: 'dark' };
+  return { kind: 'unknown', why: `rolling back to dark (${why}): ${rolled.kind === 'failed' ? rolled.why : 'the activation lock is busy'}` };
 }
 
-/** Managed launch admission (§3 step 4): after activation, a binary below the floor is refused. */
-export function launchAdmission(root: string, home: string, level: number = ACTOR_LEVEL): string | null {
-  const state = floorState(root, home);
-  if (state.kind === 'dark') return null;
-  if (state.kind === 'unknown') return null; // the launch itself is this build, at ACTOR_LEVEL
-  return level >= state.level ? null : `this build enforces level ${String(level)}, below the root's floor ${String(state.level)}`;
+export type DeactivationStep = 'begin' | 'reader' | 'published' | 'record' | 'marker' | 'fenced' | 'end';
+
+export type DeactivationOutcome = { kind: 'dark' } | { kind: 'busy' } | { kind: 'failed'; why: string };
+
+/**
+ * The one-command rollback to dark (E7b §3, `team queues deactivate`), under the activation lock,
+ * each removal durable before the next: D1 DEACTIVATING, D2 READER, D3 PUBLISHED (from here no
+ * reader trusts `active` and no new fence is created), D4 ACTIVATION, D5 PROTOCOL, D6 FENCED, D7
+ * DEACTIVATING removed. A cut-off run leaves DEACTIVATING (`unknown`); running it again resumes at
+ * the first file still standing. Idempotent: a dark root answers dark and writes nothing.
+ */
+export function deactivate(root: string, home: string, options: { after?: (step: DeactivationStep) => void; faults?: DurableFaults; removeFaults?: { before?: (step: 'unlink' | 'folder-fsync', path: string) => void } } = {}): DeactivationOutcome {
+  void home;
+  const result = withActivationLock(root, (): DeactivationOutcome => {
+    const folder = queuesFolder(root);
+    const names = [PROTOCOL, ACTIVATION, PUBLISHED, FENCED, DEACTIVATING, 'READER'];
+    const standing = names.map(name => readFence(join(folder, name)));
+    if (standing.some(text => text === null)) return { kind: 'failed', why: 'a floor file cannot be read' };
+    if (standing.every(text => text === '')) return { kind: 'dark' };
+    const begun = createExclusive(join(folder, DEACTIVATING), `${JSON.stringify({ v: 1, at: new Date().toISOString() })}\n`, options.faults);
+    if (begun === 'failed') return { kind: 'failed', why: 'the rollback marker could not be made durable' };
+    options.after?.('begin');
+    const steps: [string, DeactivationStep][] = [['READER', 'reader'], [PUBLISHED, 'published'], [ACTIVATION, 'record'], [PROTOCOL, 'marker'], [FENCED, 'fenced'], [DEACTIVATING, 'end']];
+    for (const [name, step] of steps) {
+      if (removeDurable(join(folder, name), options.removeFaults) === 'failed') return { kind: 'failed', why: `${name} could not be removed` };
+      options.after?.(step);
+    }
+    return { kind: 'dark' };
+  });
+  return result;
 }
 
 /** Lists the folders a root's live actors leave markers in: one per seat drop folder. */

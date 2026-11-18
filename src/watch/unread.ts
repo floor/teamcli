@@ -1,3 +1,4 @@
+import { recordStampAt } from '../send/record.ts';
 // Waking an idle seat whose message is still unread, and telling the sender and the lead.
 //
 // A delivery is a deposit until the seat's signed read receipt follows: a trigger can leave the
@@ -235,6 +236,11 @@ function recordWakeTry(dropDir: string, id: string, record: WakeTry): void {
   }
 }
 
+/** Whether a record is under the at-least-once contract (E7b); an unreadable stamp counts. */
+function stampedRecord(dropDir: string, id: string): boolean {
+  return recordStampAt(dropDir, id) !== false;
+}
+
 /** The most messages one pass re-offers to one seat on its event legs. */
 const EVENT_REOFFER_PER_PASS = 5;
 
@@ -242,7 +248,8 @@ const EVENT_REOFFER_PER_PASS = 5;
  *  ladder's last day, not held by the held-drop retry, and past the next attempt its ledger set. */
 function eventLadderDue(dropDir: string, message: { id: string; ts: string }, nowMs: number, unreadAfter: number, pendingOwned = true): boolean {
   const age = nowMs - Date.parse(message.ts);
-  if (!(age >= unreadAfter * 1000) || !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
+  // E7b: a stamped record is offered until its recipient acknowledges it, with no last day.
+  if (!(age >= unreadAfter * 1000) || !(age < WAKE_SLOW_MAX_AGE_MS || stampedRecord(dropDir, message.id))) return false;
   if (pendingOwned && existsSync(pendingDropPath(dropDir, message.id))) return false;
   const ledger = wakeTryOf(dropDir, message.id);
   if (ledger === null) return true;
@@ -425,7 +432,7 @@ function dueForWake(
   const ledger = wakeTryOf(dropDir, message.id);
   // Before any typed attempt, a report already written is the word that stands.
   if (ledger === null) return !reported;
-  if (ledger.tries >= retryTries && !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
+  if (ledger.tries >= retryTries && !(age < WAKE_SLOW_MAX_AGE_MS || stampedRecord(dropDir, message.id))) return false;
   const next = Date.parse(ledger.next_at);
   if (Number.isFinite(next) && nowMs < next) return false;
   return true;
