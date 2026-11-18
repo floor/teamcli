@@ -84,18 +84,54 @@ export function copyHistory(dropDir: string, id: string): CopyHistory | 'unknown
  * Takes the next delivery number for one copy, durably, immediately before it leaves. Null when
  * the history cannot be read or written: the caller sends no copy now (the record stays due).
  */
-export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs: number = Date.now()): number | null {
+export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs: number = Date.now(), offer?: ChannelOffer): number | null {
   const folder = historyFolder(dropDir, id);
   if (!ensureFolder(join(seatFolderOf(dropDir, id), EXPOSURES)) || !ensureFolder(folder)) return null;
   const seen = copyHistory(dropDir, id);
   if (seen === 'unknown') return null;
+  // A channel copy keeps its offer token and the listener that pushed it beside its number
+  // (the Claude adapter §2.2). No reader prints a history entry.
+  const extra = leg === 'channel' && offer !== undefined ? { offer: offer.token, listener: offer.listener } : {};
   for (let n = seen.copies + 1; n <= seen.copies + 8; n++) {
-    const made = createExclusive(join(folder, String(n)), `${JSON.stringify({ v: 1, n, leg, at: new Date(nowMs).toISOString() })}\n`);
+    const made = createExclusive(join(folder, String(n)), `${JSON.stringify({ v: 1, n, leg, at: new Date(nowMs).toISOString(), ...extra })}\n`);
     if (made === 'created') return n;
     if (made === 'failed') return null;
     // `exists`: a rival took n; try the next number.
   }
   return null;
+}
+
+/** The offer a channel copy carries (the Claude adapter §2.2): a fresh random token, and the
+ *  listener incarnation that pushed it (`<pid>@<listener ts>`). */
+export type ChannelOffer = { token: string; listener: string };
+
+/** One channel copy's offer, as its history entry keeps it. */
+export type OfferedCopy = { n: number; token: string; listener: string; atMs: number };
+
+/** The channel copies of one message that carry an offer token, in number order. A history that
+ *  cannot be read, and an entry that cannot be parsed, offer nothing. */
+export function offeredCopies(dropDir: string, id: string): OfferedCopy[] {
+  const folder = historyFolder(dropDir, id);
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return [];
+  }
+  const out: OfferedCopy[] = [];
+  for (const name of names) {
+    const match = COPY_NAME.exec(name);
+    if (match === null) continue;
+    try {
+      const entry = JSON.parse(readFileSync(join(folder, name), 'utf8')) as { leg?: unknown; offer?: unknown; listener?: unknown; at?: unknown };
+      if (entry.leg !== 'channel' || typeof entry.offer !== 'string' || typeof entry.listener !== 'string') continue;
+      const atMs = Date.parse(typeof entry.at === 'string' ? entry.at : '');
+      out.push({ n: Number(match[1]), token: entry.offer, listener: entry.listener, atMs: Number.isFinite(atMs) ? atMs : 0 });
+    } catch {
+      continue;
+    }
+  }
+  return out.sort((a, b) => a.n - b.n);
 }
 
 /**
