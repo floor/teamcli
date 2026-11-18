@@ -2923,7 +2923,7 @@ async function relayConfinedOutboxes(
       const brief = { claim: () => currentClaimIn(root, session, seat) };
       return ids.every((id) => sealRecoveredRead(target, id, home, brief, owner));
     },
-    run: async (command, argv, cwd, caller, persist, owner) => {
+    run: async (command, argv, cwd, caller, persist, owner, protocol) => {
       let out = '';
       let err = '';
       let handed: readonly string[] = [];
@@ -2940,6 +2940,7 @@ async function relayConfinedOutboxes(
         stderrIsTTY: false,
         caller,
         handoverOwner: owner,
+        ...(protocol === 1 ? { legacyRelay: true as const } : {}),
       };
       let code: number;
       try {

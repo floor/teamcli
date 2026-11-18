@@ -38,7 +38,8 @@ export type OutboxCommand = 'send' | 'reply' | 'ack' | 'drops';
 const OUTBOX_COMMANDS: readonly OutboxCommand[] = ['send', 'reply', 'ack', 'drops'];
 
 export type OutboxRequest = {
-  v: 1;
+  /** The outbox protocol: 1 in `outbox/`, 2 in `outbox-v2/` (E7b revision 3, carrier 4). */
+  v: OutboxProtocol;
   id: string;
   command: OutboxCommand;
   argv: string[];
@@ -62,11 +63,18 @@ export const RELAY_WAIT_MS = 45_000;
 /** Results nobody collected are removed after a day. */
 const RESULT_KEEP_MS = 24 * 60 * 60_000;
 
-/** The seat's outbox: `outbox/` in the seat-state folder its launch grants. Null when the session
- *  or seat name names no grant. */
-export function outboxFolder(dir: string, session: string, seat: string): string | null {
+/** E7b revision 3 (carrier 4): the outbox protocol. A level-3 requester writes protocol 2 into
+ *  its own folder, `outbox-v2/`, which no older watch lists or recovers, so a relayed read that
+ *  holds stamped bodies only ever lands there. An older requester's protocol-1 request, in
+ *  `outbox/`, is served with stamped mail left out (and said so in one line). */
+export type OutboxProtocol = 1 | 2;
+export const OUTBOX_PROTOCOL: OutboxProtocol = 2;
+
+/** The seat's outbox: `outbox/` (protocol 1) or `outbox-v2/` (protocol 2) in the seat-state folder
+ *  its launch grants. Null when the session or seat name names no grant. */
+export function outboxFolder(dir: string, session: string, seat: string, protocol: OutboxProtocol = 1): string | null {
   const state = cliHookStatePath(dir, session, seat);
-  return state === null ? null : join(dirname(state), 'outbox');
+  return state === null ? null : join(dirname(state), protocol === 2 ? 'outbox-v2' : 'outbox');
 }
 
 /** What a relayed run may carry beyond its words: for a send, a subject, a channel, `--json`,
@@ -155,6 +163,7 @@ function relayBindingCheck(
   }
   const id = args.rest[0] ?? '';
   if (!recordNameOk(id)) return 'its id is not a record id';
+  // E7b revision 3: the seat's mail is that of both its folders (src/queue/mail-tree.ts).
   const folder = seatMailDirIn(dir, request.session, request.seat);
   let names: string[];
   try {
@@ -162,6 +171,11 @@ function relayBindingCheck(
     names = readdirSync(folder);
   } catch {
     return 'the seat has no drop folder';
+  }
+  try {
+    names = [...names, ...readdirSync(seatMailDirIn(dir, request.session, request.seat, 'stamped'))];
+  } catch {
+    // No stamped folder: the legacy folder's names are the seat's mail.
   }
   const records = names.filter((name) => name.startsWith(id) && !name.startsWith('.') && !isRecordSidecarName(name));
   if (records.length === 0) return 'no message of that id waits in the seat\'s own folder';
@@ -215,7 +229,7 @@ export async function relayThroughOutbox(input: {
   sleep?: (ms: number) => Promise<void>;
   now?: () => Date;
 }): Promise<number> {
-  const folder = outboxFolder(input.dir, input.session, input.seat);
+  const folder = outboxFolder(input.dir, input.session, input.seat, OUTBOX_PROTOCOL);
   const say = (text: string) => input.stderr(`team ${input.command}: ${text}\n`);
   if (folder === null) {
     say(`${input.seat} runs in a sandbox and its outbox can't be named; nothing was sent`);
@@ -224,7 +238,7 @@ export async function relayThroughOutbox(input: {
   const now = input.now ?? (() => new Date());
   const id = randomUUID();
   const request: OutboxRequest = {
-    v: 1, id, command: input.command, argv: input.argv, cwd: input.cwd,
+    v: OUTBOX_PROTOCOL, id, command: input.command, argv: input.argv, cwd: input.cwd,
     seat: input.seat, session: input.session, pane: input.pane, at: now().toISOString(),
   };
   const text = `${JSON.stringify(request)}\n`;
@@ -309,7 +323,8 @@ export type RelaySources = {
   /** Runs the seat's command as that seat; returns what it said. `persist` is the command's stdout
    *  made durable in the seat's outbox as it is written: a read hands its bodies over through it
    *  before it seals their receipts, so a run cut off after the hand-over still answers with them. */
-  run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller, persist: (text: string, ids?: readonly string[]) => void, owner: string): Promise<{ code: number; out: string; err: string }>;
+  /** `protocol` is the request's: a protocol-1 run (an older requester) leaves stamped mail out. */
+  run(command: OutboxCommand, argv: string[], cwd: string, caller: RelayCaller, persist: (text: string, ids?: readonly string[]) => void, owner: string, protocol: OutboxProtocol): Promise<{ code: number; out: string; err: string }>;
   /** Seals the seat's read receipts for ids a cut-off relayed read already handed over (its saved
    *  output holds their bodies), as the live read would have: the seat's reader, adopting the
    *  claim `owner` left, brief binding included. True once every one is read, false when any
@@ -343,8 +358,9 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
   let ran = 0;
   const realDir = realFolderOf(dir);
   if (realDir === null) return 0;
-  for (const seat of seats) {
-    const folder = outboxFolder(dir, session, seat);
+  // E7b revision 3: each seat's two outboxes, the older protocol first.
+  for (const seat of seats) for (const protocol of [1, 2] as const) {
+    const folder = outboxFolder(dir, session, seat, protocol);
     if (folder === null || !existsSync(folder)) continue;
     // The outbox must be itself, below the real `.agents`: a link cannot lend another seat's.
     if (realFolderOf(folder) !== realDir + folder.slice(dir.length)) {
@@ -380,7 +396,7 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
       let result: OutboxResult;
       try {
         result = plain
-          ? await runRequest(dir, taking, id, seat, session, sources)
+          ? await runRequest(dir, taking, id, seat, session, sources, protocol)
           : refusal(id, seat, sources, 'it is not a plain file of this user of at most 256 KiB');
       } catch (error) {
         if (!(error instanceof SavedOutputUnreadable)) throw error;
@@ -612,9 +628,9 @@ function identityOf(folder: string): string | null {
   }
 }
 
-async function runRequest(dir: string, path: string, id: string, seat: string, session: string, sources: RelaySources): Promise<OutboxResult> {
+async function runRequest(dir: string, path: string, id: string, seat: string, session: string, sources: RelaySources, protocol: OutboxProtocol): Promise<OutboxResult> {
   try {
-    return await checkedRun(dir, path, id, seat, session, sources);
+    return await checkedRun(dir, path, id, seat, session, sources, protocol);
   } catch (error) {
     // What the command already handed over stays the seat's: its durable output is the result's.
     const handed = readPartial(dirname(path), id, sources.stat);
@@ -716,7 +732,7 @@ function readPartial(folder: string, id: string, stat?: RelaySources['stat']): S
 
 
 
-async function checkedRun(dir: string, path: string, id: string, seat: string, session: string, sources: RelaySources): Promise<OutboxResult> {
+async function checkedRun(dir: string, path: string, id: string, seat: string, session: string, sources: RelaySources, protocol: OutboxProtocol): Promise<OutboxResult> {
   const at = sources.now();
   const refuse = (why: string): OutboxResult => refusal(id, seat, sources, why);
   let request: OutboxRequest;
@@ -729,7 +745,8 @@ async function checkedRun(dir: string, path: string, id: string, seat: string, s
   } catch {
     return refuse('it is not a request this build reads');
   }
-  if (request.v !== 1 || request.id !== id) return refuse('it is not a request this build reads');
+  // A request's protocol is its folder's: a protocol-2 request in the older folder is not read.
+  if (request.v !== protocol || request.id !== id) return refuse('it is not a request this build reads');
   if (!OUTBOX_COMMANDS.includes(request.command)) return refuse('it names no send, reply, ack or read');
   if (!Array.isArray(request.argv) || !request.argv.every((word) => typeof word === 'string')) return refuse('its words are not text');
   const optionRefusal = relayRefusal(request.command, request.argv);
@@ -758,7 +775,7 @@ async function checkedRun(dir: string, path: string, id: string, seat: string, s
   }
   if (cwd === '') return refuse('its working folder is not a folder');
   const persist = (text: string, ids: readonly string[] = []): void => appendPartial(dirname(path), id, text, ids, sources.trace);
-  const ran = await sources.run(request.command, bound.argv, cwd, { kind: 'seat', name: seat, pane: request.pane, session }, persist, relayClaimOwner(dirname(path), id));
+  const ran = await sources.run(request.command, bound.argv, cwd, { kind: 'seat', name: seat, pane: request.pane, session }, persist, relayClaimOwner(dirname(path), id), protocol);
   sources.log(`${seat}: outbox request ${id} (${request.command}) ran, exit ${String(ran.code)}`);
   return { id, code: ran.code, out: ran.out, err: ran.err, at: at.toISOString() };
 }

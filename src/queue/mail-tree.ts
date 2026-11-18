@@ -126,3 +126,9 @@ export function recordFolderFor(dropDir: string, stamped: boolean): string | nul
 
 /** The refusal a writer gives when `recordFolderFor` names no folder. */
 export const NO_STAMPED_FOLDER = 'a stamped record has no stamped folder here, and it is never written where an older reader lists mail';
+
+/** Where a stamped send's native handoff waits (E7b revision 3, carrier 1): under the stamped
+ *  tree, never the project state's `pending/` folder an older watch reads and expires. */
+export function nativePendingDir(root: string): string {
+  return join(mailTreeOf(root, 'stamped'), '.native-pending');
+}

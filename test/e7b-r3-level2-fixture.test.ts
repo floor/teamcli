@@ -6,8 +6,8 @@
 // settle nothing, while this build lists and reads the record. Skipped when the repository's
 // history is not at hand (a packed copy, a shallow clone).
 import { describe, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync } from 'node:fs';
+import { level2Tree } from './e7a-fixture.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { activate, type FloorActor } from '../src/queue/floor.ts';
@@ -19,25 +19,8 @@ import { recordChannelAbort } from '../src/mcp/channel.ts';
 import { markPending } from '../src/send/pending.ts';
 import { seatMailDirs } from '../src/queue/mail-tree.ts';
 
-/** The level-2 build: E7a, the reader switch, installed before E7b. */
-export const LEVEL2_COMMIT = 'd8cd0ae3d';
-const REPO = join(import.meta.dir, '..');
 const SESSION = 'acme';
 const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
-
-/** The E7a source tree as a fixture, or null when the history is not at hand. */
-export function level2Tree(): string | null {
-  try {
-    execFileSync('git', ['-C', REPO, 'cat-file', '-e', `${LEVEL2_COMMIT}^{commit}`], { stdio: 'ignore' });
-  } catch {
-    return null;
-  }
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'e7a-fixture-')));
-  const archive = execFileSync('git', ['-C', REPO, 'archive', LEVEL2_COMMIT, 'src', 'package.json'], { maxBuffer: 256 * 1024 * 1024 });
-  execFileSync('tar', ['-x', '-C', dir], { input: archive });
-  symlinkSync(join(REPO, 'node_modules'), join(dir, 'node_modules'));
-  return join(dir, 'src');
-}
 
 // The fixture folder is left to the system's temporary-folder sweep.
 const e7a = level2Tree();

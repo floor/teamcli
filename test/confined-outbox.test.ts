@@ -69,7 +69,8 @@ describe('the confined seat outbox', () => {
     expect(ran).toEqual([{ command: 'send', argv: ['lead', 'hello'], cwd: root, caller: { kind: 'seat', name: 'keeper', pane: 'pane-k', session: 's' } }]);
     // The seat marked its result consumed; the next pass retires the take, and nothing is left.
     await relayOutboxes(dir, 's', ['keeper'], sources);
-    expect(readdirSync(outboxFolder(dir, 's', 'keeper')!)).toEqual([]);
+    // E7b revision 3: this build's requests use protocol 2, in its own folder.
+    expect(readdirSync(outboxFolder(dir, 's', 'keeper', 2)!)).toEqual([]);
   });
 
   test('a request is run once, however many passes see it', async () => {

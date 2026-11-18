@@ -123,6 +123,7 @@ import { modelDiffers, positiveModelObservation, signedSeatModel, signedSeatMode
 import { clearPreflightReports, reportHeldSend } from '../send/held-reports.ts';
 import { NO_STAMPED_FOLDER, identityDirOf, mailTreeIn, recordFolderFor, seatMailDirIn, sessionMailDir } from '../queue/mail-tree.ts';
 import { liveRecordPath } from '../send/drop-folder.ts';
+import { FLOOR_LEVEL } from '../queue/floor.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -1449,6 +1450,13 @@ const HANDOFF_RETRY_POLL_MS = 500;
 /** Asks the daemon again for a typed handoff its endpoint dropped: once the endpoint answers a
  *  ping within `HANDOFF_RETRY_WAIT_MS`, the same request goes once more. Null when the endpoint
  *  never came back or did not answer the second time either. */
+/** The pid of a daemon whose ping proved delivery level 3 or later; null for any other answer
+ *  (an older daemon's ping names no level). */
+export function levelThreePeer(answer: DaemonResponse | null): number | null {
+  if (answer === null || !('pong' in answer) || answer.pong !== true) return null;
+  return typeof answer.level === 'number' && answer.level >= FLOOR_LEVEL ? answer.pid : null;
+}
+
 export async function retryDaemonHandoff(
   socketPath: string,
   request: Parameters<typeof requestDaemon>[1],
@@ -1464,6 +1472,13 @@ export async function retryDaemonHandoff(
     const pingBudget = left() - reserve;
     if (pingBudget < 50) return null;
     if (await probeDaemonSocket(socketPath, Math.min(400, pingBudget))) {
+      // E7b revision 3: a stamped send's replay proves its peer again; a daemon that changed and
+      // is not at level 3 is never handed it.
+      if (request.op === 'send-stamped') {
+        const peer = levelThreePeer(await requestDaemon(socketPath, { v: 1, op: 'ping' }, Math.min(400, Math.max(50, Math.floor(left() - reserve)))));
+        if (peer === null) return null;
+        request = { ...request, pid: peer };
+      }
       const replayBudget = Math.floor(left());
       if (replayBudget < 50) return null;
       return requestDaemon(socketPath, request, Math.min(HANDOFF_REPLAY_MS, replayBudget));
@@ -3311,14 +3326,19 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     const dialled = existsSync(daemonSock)
       && (handoff || (!to.cross && compose === null && typedWake === null && !wait));
     if (dialled) await ensureEpisode();
-    const daemonRequest = { v: 1 as const, op: 'send' as const, id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) };
-    let viaDaemon = dialled ? await requestDaemon(daemonSock, daemonRequest) : null;
+    // E7b revision 3 (carrier 2): a stamped send is handed only to a daemon whose ping proved
+    // level 3, under its own request kind bound to that daemon's pid. Any other answer means no
+    // daemon: the record is already staged, and the walk runs in this process.
+    const stampedSend = isStampedPayload(record);
+    const stampedPeer = dialled && stampedSend ? levelThreePeer(await requestDaemon(daemonSock, { v: 1, op: 'ping' }, 2_000)) : null;
+    const daemonRequest = { v: 1 as const, op: stampedSend ? 'send-stamped' as const : 'send' as const, ...(stampedPeer === null ? {} : { pid: stampedPeer }), id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) };
+    let viaDaemon = dialled && (!stampedSend || stampedPeer !== null) ? await requestDaemon(daemonSock, daemonRequest) : null;
     // A typed handoff the endpoint dropped without answering (the daemon restarts an endpoint
     // that missed its probes, and a restart closes the connection) is asked again once the
     // endpoint answers a ping, under the same id: the daemon reserves the wake by id, so a
     // request it had already taken is coalesced, never typed twice (2026-11-15, vlist: two
     // messages to an idle Antigravity seat were kept unwoken this way).
-    if (viaDaemon === null && handoff && dialled) {
+    if (viaDaemon === null && handoff && dialled && (!stampedSend || stampedPeer !== null)) {
       viaDaemon = await retryDaemonHandoff(daemonSock, daemonRequest, host);
     }
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
@@ -4145,7 +4165,8 @@ async function handOff(
   if (!signed.ok) {
     return { kind: 'refused', why: `the record could not be written (${signed.reason}); nothing was sent` };
   }
-  const written = writePending(storeProject, storeRoot, host.home, pending);
+  // E7b revision 3 (carrier 1): a stamped send's handoff waits only under the stamped tree.
+  const written = writePending(storeProject, storeRoot, host.home, pending, isStampedPayload(payload));
   if (!written.ok) {
     return { kind: 'refused', why: `the native handoff could not be written down (${written.reason}); nothing was sent` };
   }

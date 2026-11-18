@@ -66,7 +66,7 @@ import {
 import { listArchivedUnread, runInboxRetention, seatDropFolders } from '../send/inbox-retention.ts';
 import { legacySeatFolders, listLegacyArchivedUnread } from '../send/legacy-inbox-retention.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, settledReadOf, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, recordStampAt, settledReadOf, signedRecordOf, type RecordPayload, type StatusContext, verifyRecord } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { LEGACY_TREE, seatMailDirIn, seatMailParts, stampedListing } from '../queue/mail-tree.ts';
 
@@ -252,6 +252,17 @@ export function dropFolderReadable(dir: string, session: string, seat: string): 
     }
   }
   return true;
+}
+
+/** The messages an older requester's relayed read may carry: those whose record is not stamped
+ *  (an unreadable record counts as stamped, so it is left out too). */
+export function withoutStamped<T extends { id: string }>(dropDir: string, messages: readonly T[]): T[] {
+  return messages.filter((message) => recordStampAt(dropDir, message.id) === false);
+}
+
+/** The one line an older requester's relayed read gets in place of stamped mail. */
+export function stampedLeftOut(count: number): string {
+  return `${String(count)} stamped message${count === 1 ? '' : 's'}: run the installed team drops`;
 }
 
 export const drops: Command = (argv, io) => runDrops(argv, io, realSources);
@@ -781,6 +792,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
     const asked = args.values.id;
     if (asked !== undefined) {
+      // E7b revision 3 (carrier 4): an older requester's relayed read never carries a stamped body.
+      if (io.legacyRelay === true && recordStampAt(dropDir, asked) !== false) {
+        io.stdout(`${stampedLeftOut(1)}\n`);
+        return readOk();
+      }
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const key = messageKeyState(sources.home);
       const settled = key.kind === 'key' ? settledReadOf(dropDir, asked, context, key.key) : null;
@@ -827,7 +843,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const settled = settledFacts(dropDir, context, sources.home);
     // Only a name the inbox lists is served. A file whose name is not a message id stays on the
     // folder listing and is not handed over here.
-    const waiting = listUnread(dropDir, context, sources.home, undefined, undefined, { legacy: 'include' });
+    const listed = listUnread(dropDir, context, sources.home, undefined, undefined, { legacy: 'include' });
+    // E7b revision 3 (carrier 4): an older requester's relayed read leaves stamped mail out and
+    // says, in one line with no body, how many it left.
+    const waiting = io.legacyRelay === true ? withoutStamped(dropDir, listed) : listed;
+    if (waiting.length < listed.length) io.stdout(`${stampedLeftOut(listed.length - waiting.length)}\n`);
     const bodies: string[] = [];
     const seals: Array<() => boolean> = [];
     // Each deferred read holds the id's exclusive claim until its seal, or until this run gives up.

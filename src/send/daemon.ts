@@ -56,6 +56,7 @@ import {
   socketSkipReason,
 } from './inbound.ts';
 import { seatMailDirIn } from '../queue/mail-tree.ts';
+import { FLOOR_LEVEL } from '../queue/floor.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
 export const MAX_QUEUE_DEPTH = 32;
@@ -130,7 +131,15 @@ export const realDaemonHost: DaemonHost = {
 
 export type DaemonSendRequest = {
   v: 1;
-  op: 'send';
+  /** E7b revision 3 (carrier 2): `send-stamped` is a stamped send's own kind. An older daemon
+   *  answers it as an invalid request and takes nothing; the caller sends it only to the daemon
+   *  whose ping proved level 3, naming that daemon's pid. */
+  op: 'send' | 'send-stamped';
+  /** The pid of the daemon whose ping proved level 3 (`send-stamped` only). */
+  pid?: number;
+  /** Set by this daemon on a `send-stamped` it accepted: its copies are staged in the stamped
+   *  ladder, never the `drops` ladder an older daemon reads. Never read from the wire. */
+  stamped?: true;
   id?: string;
   session?: string;
   from: string;
@@ -253,7 +262,7 @@ export type DaemonSendResponse =
     };
 
 export type DaemonResponse =
-  | { v: 1; ok: true; pong: true; pid: number }
+  | { v: 1; ok: true; pong: true; pid: number; level?: number }
   | { v: 1; ok: true; shutdown: true }
   | DaemonSendResponse;
 
@@ -865,7 +874,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
       }
       const typedSession = input.team.session;
       const handoffId = request.id ?? randomUUID();
-      const dropLadder = ensureLadder(host.home, store, ['drops', typedSession, seatName]);
+      const dropLadder = ensureLadder(host.home, store, [request.stamped === true ? 'drops-stamped' : 'drops', typedSession, seatName]);
       if (!dropLadder.ok) {
         return Promise.resolve(refuseTyped(`${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`));
       }
@@ -980,7 +989,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     // BEFORE answering `queued`, so a conflicting holder at the id still refuses with the held
     // file untouched and `queued` means the durable copy is stored in the daemon's drop folder.
     const queuedId = request.id ?? randomUUID();
-    const dropLadder = ensureLadder(host.home, store, ['drops', input.team.session, seatName]);
+    const dropLadder = ensureLadder(host.home, store, [request.stamped === true ? 'drops-stamped' : 'drops', input.team.session, seatName]);
     if (!dropLadder.ok) {
       return Promise.resolve({
         v: 1,
@@ -1060,7 +1069,8 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     onRequest: (input) => {
       const req = input as { op?: unknown } | null;
       const op = req !== null && typeof req === 'object' ? req.op : undefined;
-      if (op === 'ping') return `${JSON.stringify({ v: 1, ok: true, pong: true, pid })}\n`;
+      // E7b revision 3: the ping names this build's delivery level, the handshake a stamped send needs.
+      if (op === 'ping') return `${JSON.stringify({ v: 1, ok: true, pong: true, pid, level: FLOOR_LEVEL })}\n`;
       if (op === 'shutdown') {
         // The host writes this answer; the listener stops just behind it.
         setImmediate(() => {
@@ -1069,7 +1079,14 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         return `${JSON.stringify({ v: 1, ok: true, shutdown: true })}\n`;
       }
       if (op === 'send') {
-        return deliver(input as DaemonSendRequest).then((res) => `${JSON.stringify(res)}\n`);
+        const { stamped: _ignored, ...sent } = input as DaemonSendRequest;
+        void _ignored;
+        return deliver({ ...sent, op: 'send' }).then((res) => `${JSON.stringify(res)}\n`);
+      }
+      if (op === 'send-stamped') {
+        // Only for the daemon the caller's handshake named: a replaced daemon is never handed it.
+        if ((input as DaemonSendRequest).pid !== pid) return refusalLine('the stamped send names another daemon');
+        return deliver({ ...(input as DaemonSendRequest), op: 'send', stamped: true }).then((res) => `${JSON.stringify(res)}\n`);
       }
       return refusalLine('invalid daemon request');
     },
@@ -1392,7 +1409,7 @@ async function executeQueuedSend(
   // Write the 0600 drop file under the project state folder `<storeDir>/drops/<session>/<seat>/<id>`
   // (after checking the state folder ladder with lstat + O_NOFOLLOW).
   const store = storePath(team.project, root, host.home);
-  const dropLadder = ensureLadder(host.home, store, ['drops', team.session, seatName]);
+  const dropLadder = ensureLadder(host.home, store, [request.stamped === true ? 'drops-stamped' : 'drops', team.session, seatName]);
   if (!dropLadder.ok) {
     return {
       v: 1,
