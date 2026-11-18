@@ -8,7 +8,7 @@ import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
 import { listUnread } from '../mcp/inbox.ts';
 import { activate, floorState, seatDropFoldersStrict } from '../queue/floor.ts';
-import { liveFloorActors, resolveLaunchReservations } from '../queue/floor-actors.ts';
+import { liveFloorActors } from '../queue/floor-actors.ts';
 import { readerSwitch, seatQueueCheck, setReaderSwitch, type SeatBinding } from '../queue/reader.ts';
 import { buildIdentity } from '../version.ts';
 
@@ -18,14 +18,14 @@ export const USAGE = `Usage: team queues status
 
 The per-seat delivery queues of this checkout (rfc-event-comms, steps E6-E7).
 status    the root's floor state, the reader switch, and each seat queue's check.
-activate  proves every live actor at the floor and activates the root (the fences go live).
+activate  dark in this build: activation waits for the managed launch boundary (E7b).
 reader    turns the reader switch on (seats read their mail in queue order, once every seat
           queue is complete) or off (every reader is back on the legacy listing at once).
 
 Exits 0 on success, 1 when the change is refused or fails, 2 when the invocation or project can't be read.
 `;
 
-export type QueuesSources = { home: string; now?: () => Date };
+export type QueuesSources = { home: string; now?: () => Date; /** E7b turns this on; E7a never does. */ activationEnabled?: true };
 
 export const queues: Command = (argv, io) => runQueues(argv, io, { home: homedir() });
 export default queues;
@@ -82,13 +82,17 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
     // exit: queues.status
     return 0;
   }
+  if (verb === 'activate' && sources.activationEnabled !== true) {
+    // E7a keeps every root dark, whoever asks: activation waits for E7b, whose managed launch
+    // boundary (owned launch intents, a positive recovery proof) is reviewed as a design first.
+    out.stderr('team queues: activation stays dark until the managed launch boundary (E7b) is reviewed and merged\n');
+    // exit: queues.activation-dark
+    return 1;
+  }
   if (!allowed(io, out, sources, verb)) {
     // exit: queues.not-owner
     return 1;
   }
-  // Recovery first: launch intents whose start is proved or abandoned are released; the rest are
-  // counted by the proof below (an intent of a gone launcher at unknown level: fail closed).
-  resolveLaunchReservations(root);
   if (verb === 'activate') {
     const outcome = activate(root, {
       home,

@@ -6,19 +6,19 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { flushListener, inQueueOrder, listUnread } from '../src/mcp/inbox.ts';
+import { inQueueOrder, listUnread } from '../src/mcp/inbox.ts';
 import { unreadOf } from '../src/commands/queues.ts';
 import { LEAD_ACK_PREFIX } from '../src/send/record.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { spawnSync } from 'node:child_process';
 import { signRecord } from '../src/send/record.ts';
 import { appendDeliverySync, lockedQueueOrder, queueBaseOf } from '../src/queue/append.ts';
-import { activate, admitManagedLaunch, fencesEnforced, floorState, launchIntents, launchReservations, mayCreateFence, queuesFolder, releaseLaunch, seatDropFoldersStrict, type FloorActor } from '../src/queue/floor.ts';
-import { LAUNCH_ABANDON_MS, resolveLaunchReservations } from '../src/queue/floor-actors.ts';
+import { activate, fencesEnforced, floorState, mayCreateFence, queuesFolder, seatDropFoldersStrict, type FloorActor } from '../src/queue/floor.ts';
 import { exposeBody } from '../src/queue/exposure.ts';
 import { drainPendingReceipts, pendingMarkers, shadowQueueReceipt } from '../src/queue/receipt-store.ts';
 import { readerOrder, readerSwitch, seatQueueCheck, setReaderSwitch } from '../src/queue/reader.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
+import { runQueues } from '../src/commands/queues.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import type { DurableStep } from '../src/queue/durable.ts';
 
@@ -115,21 +115,6 @@ describe('E7 entry gates', () => {
     expect(floorState(at.root, at.home).kind).toBe('active');
   });
 
-  test('gate 3: the managed launch boundary admits this build, refuses one below the floor, and refuses when the lock is held', () => {
-    const at = place();
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' })).toBeNull(); // dark
-    expect(activateRoot(at).kind).toBe('activated');
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' })).toBeNull();
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' }, 2)).toContain('below the root');
-    const folder = queuesFolder(at.root);
-    const held = acquireLockAt(join(folder, 'activation.lock'), folder, undefined, { waitMs: 0, pollMs: 10 });
-    expect('release' in held).toBe(true);
-    try {
-      expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' })).toContain('activation lock is held');
-    } finally {
-      if ('release' in held) held.release();
-    }
-  });
 });
 
 describe('E7 reader switch', () => {
@@ -258,68 +243,6 @@ describe('E7 round 2', () => {
     }
   });
 
-  test('P1 admission: an admitted launch is represented before the lock is let go; a lower-level launch in flight refuses activation', () => {
-    const at = place();
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' }, 2, process.pid, 'restart worker')).toBeNull();
-    expect(launchReservations(at.root)).toMatchObject([{ level: 2, pid: process.pid }]);
-    expect(activateRoot(at).kind).toBe('refused');
-    expect(floorState(at.root, at.home).kind).toBe('dark');
-  });
-
-  test('P1 admission: the latest admission for a seat states its own level; one launcher, two seats, both counted', () => {
-    const at = place();
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' }, 3, process.pid, 'up')).toBeNull();
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' }, 2, process.pid, 'up')).toBeNull();
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'other' }, 3, process.pid, 'up')).toBeNull();
-    const levels = (launchReservations(at.root) ?? []).map(actor => actor.level).sort();
-    expect(levels).toEqual([2, 3]);
-    expect(activateRoot(at).kind).toBe('refused');
-  });
-
-  test('P1 hand-off: a launcher that exits before the actor registers leaves its intent at unknown level (fail closed) until recovery proves the start', () => {
-    const at = place();
-    const gone = spawnSync('true').pid as number;
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' }, 3, gone, 'terminal start')).toBeNull();
-    expect(launchReservations(at.root)).toMatchObject([{ level: null }]);
-    expect(activateRoot(at).kind).toBe('refused');
-    // Nothing proves the start yet: recovery keeps the intent.
-    expect(resolveLaunchReservations(at.root)).toMatchObject({ released: [], kept: [`${SESSION}/worker`] });
-    // The child registers: its own listener, live, published after the intent, made durable.
-    const seatDir = join(at.root, '.agents', 'send-drops', SESSION, 'worker');
-    mkdirSync(seatDir, { recursive: true });
-    writeFileSync(join(seatDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'worker', session: SESSION, root: at.root, cli: 'codex', pid: process.pid, ts: new Date(Date.now() + 1000).toISOString(), level: 3 })}\n`);
-    expect(flushListener(seatDir)).toBe(true);
-    expect(resolveLaunchReservations(at.root)).toMatchObject({ released: [`${SESSION}/worker`] });
-    expect(launchReservations(at.root)).toEqual([]);
-  });
-
-  test('P1 hand-off: an intent whose launcher is gone and whose seat runs nothing is abandoned only after the bound', () => {
-    const at = place();
-    const gone = spawnSync('true').pid as number;
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' }, 3, gone, 'terminal start')).toBeNull();
-    expect(resolveLaunchReservations(at.root, Date.now() + 60_000)?.released).toEqual([]);
-    expect(resolveLaunchReservations(at.root, Date.now() + LAUNCH_ABANDON_MS + 1000)?.released).toEqual([`${SESSION}/worker`]);
-    expect(activateRoot(at).kind).toBe('activated');
-  });
-
-  test('P1 hand-off: the serve path releases its intent once its listener is durable', () => {
-    const at = place();
-    expect(admitManagedLaunch(at.root, at.home, { session: SESSION, seat: 'worker' }, 3, process.pid, 'mcp serve')).toBeNull();
-    expect(launchIntents(at.root)).toHaveLength(1);
-    expect(releaseLaunch(at.root, { session: SESSION, seat: 'worker' })).toBe(true);
-    expect(launchIntents(at.root)).toEqual([]);
-  });
-
-  test('P1 exposure: a sealed read keeps a pointer after the publication marker is lost (root unknown)', () => {
-    const at = place();
-    message(at, M1, LATER);
-    expect(activateRoot(at).kind).toBe('activated');
-    expect(publishRecordRead({ dropDir: at.dropDir, id: M1, to: 'lead', root: at.root, session: SESSION, home: at.home, key: messageKeyOf(at.home), at: '2026-11-18T00:01:00.000Z', readBy: 'lead' })).toBeTruthy();
-    unlinkSync(join(queuesFolder(at.root), 'PUBLISHED')); // lost to a crash before its folder fsync
-    expect(floorState(at.root, at.home).kind).toBe('unknown');
-    expect(exposeBody({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: M1 }, 'channel', at.home)).toMatchObject({ kind: 'pointer' });
-  });
-
   test('P2 completeness: an unlistable session or inbox is never certified; the bound view honours a lead clearance', () => {
     const at = place();
     message(at, M1, LATER);
@@ -414,5 +337,76 @@ describe('E7 round 3', () => {
     expect(unread?.ids).toEqual([M1]);
     expect(seatQueueCheck(at.dropDir, binding(at), unread?.ids ?? [], at.home)).toMatchObject({ kind: 'incomplete', why: expect.stringContaining('poisoned') });
     expect(snapshot()).toBe(before);
+  });
+});
+
+describe('E7a first-body admission', () => {
+  const carrier = (at: At) => ({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: M1 });
+
+  test('two automatic carriers, no prior receipt, publication lost (root unknown): one body, one pointer', () => {
+    const at = place();
+    message(at, M1, LATER);
+    expect(activateRoot(at).kind).toBe('activated');
+    unlinkSync(join(queuesFolder(at.root), 'PUBLISHED'));
+    expect(floorState(at.root, at.home).kind).toBe('unknown');
+    const first = exposeBody(carrier(at), 'channel', at.home);
+    const second = exposeBody(carrier(at), 'typed', at.home);
+    expect(first.kind).toBe('expose');
+    expect(second.kind).toBe('pointer');
+  });
+
+  test('across recovery: a carrier admitted while unknown still excludes a carrier after the root is active again', () => {
+    const at = place();
+    message(at, M1, LATER);
+    expect(() => activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon], after: (step) => { if (step === 'record') throw new Error('crash'); } })).toThrow('crash');
+    expect(floorState(at.root, at.home).kind).toBe('unknown');
+    const first = exposeBody(carrier(at), 'channel', at.home);
+    expect(first.kind).toBe('expose');
+    expect(activateRoot(at).kind).toBe('already');
+    expect(floorState(at.root, at.home).kind).toBe('active');
+    expect(exposeBody(carrier(at), 'native', at.home).kind).toBe('pointer');
+  });
+
+  test('a fenced root and a dark root admit a first body only through the claim', async () => {
+    for (const fence of [true, false]) {
+      const at = place();
+      message(at, M1, LATER);
+      if (fence) {
+        expect(activateRoot(at).kind).toBe('activated');
+        const { checkActors } = await import('../src/queue/floor.ts');
+        expect(checkActors(at.root, at.home, [daemon, e6Server]).kind).toBe('fenced');
+      }
+      expect(exposeBody(carrier(at), 'channel', at.home).kind).toBe('expose');
+      expect(exposeBody(carrier(at), 'socket', at.home).kind).toBe('pointer');
+    }
+  });
+});
+
+describe('E7a activation stays dark', () => {
+  test('team queues activate refuses in this build and writes nothing', async () => {
+    const at = place();
+    writeFileSync(join(at.root, '.agents', 'team.yaml'), `format: 1
+project: acme
+coordinator: lead
+operator: lead
+session: ${SESSION}
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: test
+    model: Grok
+    version: "4.7"
+    launch: claude
+`);
+    const out: string[] = [];
+    const io = { cwd: at.root, env: { TEAMCLI_DEV_MODE: '1' }, stdout: (t: string) => { out.push(t); }, stderr: (t: string) => { out.push(t); } } as unknown as Parameters<typeof runQueues>[1];
+    const code = await runQueues(['activate'], io, { home: at.home });
+    expect(code).toBe(1);
+    expect(out.join('')).toContain('activation stays dark');
+    expect(existsSync(join(queuesFolder(at.root), 'PROTOCOL'))).toBe(false);
+    expect(floorState(at.root, at.home).kind).toBe('dark');
   });
 });

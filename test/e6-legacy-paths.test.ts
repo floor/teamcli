@@ -85,10 +85,14 @@ describe('E6 body hand-over on the E5 read claim', () => {
   const leg = (at: { root: string; dropDir: string }, id: string) => ({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: id });
   const on = (at: { root: string; home: string }) => expect(activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon] }).kind).toBe('activated');
 
-  test('dark: no claim is taken and the read serves the body exactly as before', () => {
+  test('E7a dark: the first body takes the durable claim too; a second carrier gets a pointer, and a settled hand-over leaves the read', () => {
     const at = place();
     message(at, M1);
-    expect(exposeBody(leg(at, M1), 'channel', at.home).kind).toBe('legacy');
+    const first = exposeBody(leg(at, M1), 'channel', at.home);
+    expect(first.kind).toBe('expose');
+    expect(exposeBody(leg(at, M1), 'typed', at.home).kind).toBe('pointer');
+    if (first.kind === 'expose') first.settle('no', () => true);
+    // Given back (nothing left): the inbox read serves the body as before.
     expect(readMessage(target(at), M1, at.home).ok).toBe(true);
   });
 

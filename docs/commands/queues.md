@@ -13,7 +13,7 @@ The per-seat delivery queues of a checkout (rfc-event-comms, steps E6 and E7).
 | Verb | Effect | Who |
 | --- | --- | --- |
 | `status` | prints the root's floor state (`dark`, `active`, `fenced`, `unknown`), the reader switch, and each seat queue's check (`complete` or `incomplete` with the reason) | anyone |
-| `activate` | proves every live actor of the root at the floor (level 3) and activates it: PROTOCOL, the signed ACTIVATION record, then PUBLISHED once the record is durable. Refused, with the actors named, while any live actor reports a lower level or none | the owner, or a lead in development mode |
+| `activate` | dark in this build: refused for everyone (exit 1) until the managed launch boundary (E7b) is reviewed and merged. The transaction it will run proves every live actor at the floor (level 3), then writes PROTOCOL, the signed ACTIVATION record, and PUBLISHED once the record is durable | — |
 | `reader on` | on an active root at level 3 whose every seat queue is complete (no hole, every unread message placed, pending dual writes drained, quarantine empty), writes the signed READER switch: seats then read their mail in queue order, each message with its seq | the owner, or a lead in development mode |
 | `reader off` | removes the switch: every reader is back on the legacy listing at once (the rollback) | the owner, or a lead in development mode |
 
@@ -22,8 +22,8 @@ the receipts that settle a message are the same in both modes. A listing that ca
 queue order at read time (a lock held, a hole, a message with no entry, a root not active) is the
 legacy listing, so a fallback delays order and never hides a message.
 
-The daemon never activates a root on its own. `team up`, `team restart`, `team add` and the MCP inbox
-server ask the launch admission under the activation lock before they launch.
+The daemon never activates a root on its own. Every first-body hand-over takes the durable read claim
+whatever the root's floor state, so a second carrier gets a pointer.
 
 ## Exit codes
 

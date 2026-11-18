@@ -19,8 +19,8 @@ import type { KeyObject } from 'node:crypto';
 // session or the seat refuses service; an id is a lowercase UUID — or the `unread-<uuid>` name a
 // build before 0.5.3 wrote for a runtime report to a lead — and nothing else, so no id can name a
 // path; a drop or receipt that is a link is refused, never followed.
-import { closeSync, fsyncSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
-import { chmodSync, mkdirSync, openSync, unlinkSync } from '../host/guarded-fs.ts';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import { claimRead, ownerOfClaim, READ_CLAIMS } from '../send/read-claim.ts';
 import { join } from 'node:path';
 import {
@@ -212,27 +212,6 @@ export function writeListener(dropDir: string, listener: InboxListener): boolean
   hostedCommit('writeListener');
   try {
     dropMessage(dropDir, LISTENER_FILE, `${JSON.stringify(listener)}\n`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Makes the listener marker durable: the file and its folder fsynced. False on any fault. */
-export function flushListener(dropDir: string): boolean {
-  try {
-    const fd = openSync(listenerPath(dropDir), 'r');
-    try {
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    const dir = openSync(dropDir, 'r');
-    try {
-      fsyncSync(dir);
-    } finally {
-      closeSync(dir);
-    }
     return true;
   } catch {
     return false;

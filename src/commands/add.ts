@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { admitManagedLaunch } from '../queue/floor.ts';
 import { basename, dirname, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, clientRosterText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
@@ -1943,10 +1942,7 @@ function hostOf(input: {
         }
       }
       if (name !== seat.name) return null;
-      const over = ceilingProblem(input.ceilings, running, seat, Boolean(temporary));
-      if (over) return over;
-      // The managed launch boundary (E7): under the activation lock.
-      return admitManagedLaunch(input.root, input.home, { session: input.session, seat: name });
+      return ceilingProblem(input.ceilings, running, seat, Boolean(temporary));
     },
     record(name, patch) {
       let replaced: string | undefined;

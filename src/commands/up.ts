@@ -1,6 +1,5 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { admitManagedLaunch } from '../queue/floor.ts';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
@@ -4789,11 +4788,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         }
         const seat = team.seats.find((item) => item.name === name);
         if (!seat) return null;
-        const over = overCeiling(ceilings, running, seat);
-        if (over) return over;
-        // The managed launch boundary (E7): under the activation lock, a build below the root's
-        // floor is refused. Boot restore runs this same `up`, so it is covered too.
-        return admitManagedLaunch(root, sources.home, { session, seat: name });
+        return overCeiling(ceilings, running, seat);
       },
       record(name, patch) {
         if (restoreKeepOf(name) !== undefined) return;

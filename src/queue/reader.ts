@@ -28,14 +28,14 @@
 // order, never hide a message (fail closed toward visibility).
 //
 // `seatQueueCheck` is read-only by default (`team queues status`); only the authorized switch
-// path drains pending dual writes. Admitted managed launches are reservations the actor proof
-// counts (floor.ts), so the switch's proof sees a launch that is not yet its own actor.
+// path drains pending dual writes. The switch needs an ACTIVE root, and activation stays dark
+// until E7b (activation and the managed launch boundary) passes its own review.
 
 import { join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { lockedQueueOrder, observedQueueOrder, queueBaseOf } from './append.ts';
 import { createExclusive, readFence, removeDurable, type DurableFaults } from './durable.ts';
-import { floorState, launchReservations, queuesFolder, seatDropFoldersStrict, withActivationLock, type FloorActor } from './floor.ts';
+import { floorState, queuesFolder, seatDropFoldersStrict, withActivationLock, type FloorActor } from './floor.ts';
 import { drainPendingReceipts, pendingMarkers, quarantinedPending } from './receipt-store.ts';
 
 /** The level a root must be active at before the switch may be on. */
@@ -169,10 +169,8 @@ export function setReaderSwitch(root: string, on: boolean, options: SwitchOption
     }
     if (blocked.length > 0) return { kind: 'refused', why: 'a seat queue is not complete', seats: blocked };
     // The actors are proved last, with nothing awaited before the record.
-    const live = options.actors();
-    const reserved = launchReservations(root);
-    if (live === null || reserved === null) return { kind: 'refused', why: 'the live actors cannot be read' };
-    const actors = [...live, ...reserved];
+    const actors = options.actors();
+    if (actors === null) return { kind: 'refused', why: 'the live actors cannot be read' };
     const below = actors.filter(actor => actor.level === null || actor.level < READER_LEVEL);
     if (below.length > 0) return { kind: 'refused', why: `an actor below the reader level is live (${below.map(actor => actor.name).join(', ')})` };
     const payload: ReaderPayload = { v: 1, kind: 'queue-reader', root, level: READER_LEVEL, at: (options.now?.() ?? new Date()).toISOString() };
