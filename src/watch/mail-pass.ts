@@ -20,6 +20,7 @@ import { listUnackedMessages, type UnackedMessage } from '../commands/messages.t
 import { listUnread, type InboxMessage } from '../mcp/inbox.ts';
 import { verifiedRecordAt, type RecordPayload, type RecordReader } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 /** What every reader of one pass names: the checkout's `.agents` directory, the checkout, the
  *  session whose drops are read, the home whose message key verifies them, and the team's resolved
@@ -61,7 +62,7 @@ export class MailPass {
 
   /** One seat's drop folder. */
   dropDir(seat: string): string {
-    return join(this.input.dir, 'send-drops', this.input.session, seat);
+    return seatMailDirIn(this.input.dir, this.input.session, seat);
   }
 
   /** Every message still waiting in `seat`'s own folder, listed once for the pass. */

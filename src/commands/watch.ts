@@ -131,6 +131,7 @@ import {
   type StatusWaitSeat,
   type StatusClimb,
 } from '../watch/status-events.ts';
+import { mailTreeIn, seatMailDirIn } from '../queue/mail-tree.ts';
 
 export {
   classifyPromptKind,
@@ -2152,14 +2153,14 @@ function writeWorkDrop(
 ): { trigger: string } | { error: string } {
   // A work nudge is not a message: its name says so, and the receive side reads only records.
   const id = `work-${randomUUID()}`;
-  const dropDir = join(dir, 'send-drops', session, seat);
+  const dropDir = seatMailDirIn(dir, session, seat);
   // Checked before the write, as `team send` does: a path that will not fit is not written.
   if (triggerLine(join(dropDir, id)) === null) {
     return { error: `${seat}: the trigger would exceed the limit; nothing was sent` };
   }
   let path: string;
   try {
-    const root = join(dir, 'send-drops');
+    const root = mailTreeIn(dir);
     const sessionDir = join(root, session);
     mkdirSync(dropDir, { recursive: true });
     chmodSync(root, 0o700);
@@ -2918,7 +2919,7 @@ async function relayConfinedOutboxes(
     // A cut-off relayed read's saved bodies are the seat's: their receipts are sealed as the seat's
     // own reads, through the one receipt act every reader uses.
     seal: (seat, ids, owner) => {
-      const target = { dropDir: join(dir, 'send-drops', session, seat), root, seat, session, ...(team.orchestrator === undefined ? {} : { lead: team.orchestrator }) };
+      const target = { dropDir: seatMailDirIn(dir, session, seat), root, seat, session, ...(team.orchestrator === undefined ? {} : { lead: team.orchestrator }) };
       const brief = { claim: () => currentClaimIn(root, session, seat) };
       return ids.every((id) => sealRecoveredRead(target, id, home, brief, owner));
     },

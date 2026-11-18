@@ -121,6 +121,8 @@ import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 import { modelDiffers, positiveModelObservation, signedSeatModel, signedSeatModelObservation, type SeatModelObservation } from '../status/statusline.ts';
 import { clearPreflightReports, reportHeldSend } from '../send/held-reports.ts';
+import { mailTreeIn, seatMailDirIn, sessionMailDir } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -1201,7 +1203,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // client to load the channel, the listener marker says the server declared it, and a seat
   // with either word missing walks its order exactly as a send without the channel would. A
   // declared order is walked as written, and the channel is never a declared word.
-  const dropDir = join(input.dir, 'send-drops', input.session, input.seat);
+  const dropDir = seatMailDirIn(input.dir, input.session, input.seat);
   // The listener is probed whenever the seat's launch enables the channel, even for a declared
   // order the channel is never a word of: a serving channel this build cannot vouch for pushes
   // whatever the sender's walk chooses, so the sender leaves its held marker before a wake of its
@@ -2236,7 +2238,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
           // Only a post-admission ending may inspect its own notice copy. Admission refusals
           // never reach this read, and there is no fallback writer or transport here.
           if (!recorded && ['send.held', 'send.not-delivered', 'send.not-submitted', 'send.unreachable'].includes(result.error?.id ?? '')) {
-            const copy = readRecord(join(to.dir, 'send-drops', to.session, lead, notice.id), notice.id);
+            const copy = readRecord(liveRecordPath(seatMailDirIn(to.dir, to.session, lead), notice.id), notice.id);
             const key = messageKeyState(host.home);
             if (key.kind === 'key' && copy.ok && copy.record !== null && verifyRecord(copy.record, key.key)) {
               const payload = copy.record.payload;
@@ -4718,8 +4720,9 @@ function findThreadReply(
   const keyState = messageKeyState(home);
   if (keyState.kind !== 'key') return null;
   const hits: { at: number; id: string; body: string }[] = [];
-  for (const { root, session } of roots) {
-    const sessionDir = join(root, '.agents', 'send-drops', session);
+  // E7b revision 3: both trees of each session (src/queue/mail-tree.ts).
+  for (const { root, session, tree } of roots.flatMap((place) => (['legacy', 'stamped'] as const).map((tree) => ({ ...place, tree })))) {
+    const sessionDir = sessionMailDir(root, session, tree);
     let seats: string[];
     try {
       seats = readdirSync(sessionDir).sort();
@@ -5592,7 +5595,7 @@ export async function walkBriefDelivery(input: {
   }
   const from = input.payload.from;
   const startedAt = input.host.now().getTime();
-  const dropDir = join(input.dir, 'send-drops', input.session, seatName);
+  const dropDir = seatMailDirIn(input.dir, input.session, seatName);
   const read = resolveSeatOverrides({ home: input.host.home, root: input.root, seat: seatName });
   if (!read.ok) {
     return {
@@ -5956,7 +5959,7 @@ export async function walkReplyDelivery(input: {
   const from = input.payload.from;
   const msgId = input.payload.id;
   const startedAt = input.host.now().getTime();
-  const dropDir = join(input.dir, 'send-drops', input.session, seatName);
+  const dropDir = seatMailDirIn(input.dir, input.session, seatName);
   const quiet: Io = {
     ...input.io,
     stdout: () => { /* the reply prints its own one line */ },
@@ -6441,7 +6444,7 @@ function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: 
 export function sealDropTree(dir: string, session: string, seat: string): void {
   // Creates the drop folders and narrows their modes: an effect.
   hostedCommit('drop tree');
-  const root = join(dir, 'send-drops');
+  const root = mailTreeIn(dir);
   const sessionDir = join(root, session);
   const leaf = join(sessionDir, seat);
   mkdirSync(leaf, { recursive: true });
@@ -6697,7 +6700,7 @@ async function deliverSocketFrame(
   // and both write its own signed read receipt (ADR D3). It addresses the record, never the
   // sender, so an owner-origin frame needs no reply target and no sending team. A person-pane
   // seat has no reader line at all: a person answers in their own client.
-  const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
+  const dropDir = seatMailDirIn(to.dir, to.session, to.seat);
   const existingIds = existingRecordIdsIn(dropDir);
   const compact = declaredCompactDeliveryAt(to, host.home);
   const reply = personPane
@@ -6779,7 +6782,7 @@ async function deliverSocketFrame(
   // signed record in its folder, which is the copy `team messages` and the watch read. Under
   // `parallel` the walk's own write is already running beside this dial, and under `none` there
   // is no copy at all: the frame carries the signed bytes instead.
-  const copy = { dir: join(to.dir, 'send-drops', to.session, to.seat), name: msgId };
+  const copy = { dir: seatMailDirIn(to.dir, to.session, to.seat), name: msgId };
   let recordText: string;
   if (carried !== null) {
     recordText = carried;

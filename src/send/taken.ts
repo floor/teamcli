@@ -14,6 +14,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { unlinkSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { dropMessage } from './native.ts';
+import { seatFolderOf } from './drop-folder.ts';
+import { stampedListing } from '../queue/mail-tree.ts';
 
 /** How long after a taken delivery the watch keeps looking for the sign the seat acted on it. */
 export const TAKEN_MAX_AGE_MS = 30 * 60_000;
@@ -44,14 +46,15 @@ export type TakenDrop = {
 
 /** The marker's path: the drop's own name with `.taken` after it. */
 export function takenDropPath(dropDir: string, id: string): string {
-  return join(dropDir, `${id}.taken`);
+  // E7b revision 3: a marker carries the body, so it sits in the seat folder of its record's tree.
+  return join(seatFolderOf(dropDir, id), `${id}.taken`);
 }
 
 /** Writes the record whole, mode 0600 by rename of a temporary file in the drop's directory —
  *  the write shape and modes the drop itself gets (`dropMessage`). */
 function writeTaken(dropDir: string, drop: TakenDrop): void {
   try {
-    dropMessage(dropDir, `${drop.id}.taken`, JSON.stringify(drop));
+    dropMessage(seatFolderOf(dropDir, drop.id), `${drop.id}.taken`, JSON.stringify(drop));
   } catch {
     // The drop is the message; this record only carries the later confirmation.
   }
@@ -73,15 +76,18 @@ export function clearTaken(dropDir: string, id: string): void {
 
 /** The taken drops in one seat's directory, oldest first. A marker that cannot be read, or whose
  *  name does not match the id it holds, is not a record: it is skipped, never guessed at. */
-export function readTaken(dropDir: string): TakenDrop[] {
-  let names: string[];
+export function readTaken(seatDir: string): TakenDrop[] {
+  let legacyNames: string[];
   try {
-    names = readdirSync(dropDir);
+    legacyNames = readdirSync(seatDir);
   } catch {
     return [];
   }
+  // E7b revision 3: the seat's stamped folder holds the markers of its stamped records.
+  const stamped = stampedListing(seatDir);
+  const folders = [{ folder: seatDir, names: legacyNames }, ...(stamped === null || stamped === 'unreadable' ? [] : [stamped])];
   const drops: TakenDrop[] = [];
-  for (const name of names) {
+  for (const { folder: dropDir, names } of folders) for (const name of names) {
     if (!name.endsWith('.taken')) continue;
     try {
       const parsed = JSON.parse(readFileSync(join(dropDir, name), 'utf8')) as Partial<TakenDrop>;

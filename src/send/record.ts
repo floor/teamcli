@@ -28,7 +28,7 @@ import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/b
 import { heldAt } from '../launch/rules-file.ts';
 import { messageKeyOf, messageKeyState, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { version } from '../version.ts';
-import { folderOfDrop } from './drop-folder.ts';
+import { folderOfDrop, seatFolderOf } from './drop-folder.ts';
 import { readNoFollow, type MessageStatus } from './history.ts';
 import { dropMessage } from './native.ts';
 import { floorState } from '../queue/floor.ts';
@@ -230,7 +230,7 @@ export function isConfirmedReadBy(readBy: string | undefined): boolean {
  *  are numbered there. An lstat that fails other than ENOENT counts as a history (strict rule). */
 function hasDeliveryHistory(dropDir: string, id: string): boolean {
   try {
-    return lstatSync(join(dropDir, EXPOSURES, id)).isDirectory();
+    return lstatSync(join(seatFolderOf(dropDir, id), EXPOSURES, id)).isDirectory();
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== 'ENOENT';
   }

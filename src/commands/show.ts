@@ -47,6 +47,7 @@ import {
   recordHits,
   samePath,
 } from './reply.ts';
+import { mailDirOf, seatMailParts } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team show <id> [--json]
 
@@ -97,8 +98,10 @@ function shownOut(io: Io, json: boolean, doc: Record<string, unknown>, text: str
 }
 
 /** The relative path of one record's receipt, as the caller reads it in a repair line. */
-function receiptPath(session: string, seat: string, id: string, status: 'read' | 'replied'): string {
-  return join('.agents', 'send-drops', session, seat, `${id}.${status}.json`);
+function receiptPath(session: string, seat: string, id: string, status: 'read' | 'replied', recordPath?: string): string {
+  // The tree the record lives in (src/queue/mail-tree.ts): a stamped record's receipt is beside it.
+  const tree = recordPath === undefined ? 'legacy' : (mailDirOf(dirname(recordPath))?.tree ?? 'legacy');
+  return join(...seatMailParts(session, seat, tree), `${id}.${status}.json`);
 }
 
 export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<number> {
@@ -235,7 +238,7 @@ export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<n
     claim.release();
   }
   if (outcome.kind === 'held') {
-    const where = receiptPath(session, found.seat, resolvedId, outcome.status);
+    const where = receiptPath(session, found.seat, resolvedId, outcome.status, found.path);
     const what =
       outcome.entry === 'file'
         ? `the ${outcome.status} receipt name is held by a file that does not verify for this message`

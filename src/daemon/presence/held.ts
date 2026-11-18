@@ -41,6 +41,8 @@ import { reportHeldSend } from '../../send/held-reports.ts';
 import { nudgeBus } from '../../bus/server.ts';
 import { ARRIVAL_NUDGE_MS } from '../../commands/send.ts';
 import type { Seat } from '../../file/types.ts';
+import { seatMailDirIn } from '../../queue/mail-tree.ts';
+import { liveRecordPath } from '../../send/drop-folder.ts';
 
 /** How far back a delivered line is watched. A line older than this has had its whole look
  *  schedule; a frame still unread then is the watch's unread retry to report, not a dialog. */
@@ -136,8 +138,8 @@ export function createPresenceHeld(input: PresenceHeldInput): PresenceHeldStep {
    *  another checkout's, or carries the seat's read receipt — or a lead's clearance, which
    *  settles it without the seat ever reading it. */
   const bound = (id: string, seat: string, key: KeyObject): Bound | null => {
-    const dropDir = join(input.stateDir, 'send-drops', input.session, seat);
-    const read = readRecord(join(dropDir, id), id);
+    const dropDir = seatMailDirIn(input.stateDir, input.session, seat);
+    const read = readRecord(liveRecordPath(dropDir, id), id);
     if (!read.ok || read.record === null) return null;
     if (!verifyRecord(read.record, key)) return null;
     const payload = read.record.payload;

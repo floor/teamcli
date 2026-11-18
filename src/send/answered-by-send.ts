@@ -23,6 +23,7 @@ import { readHistory, type HistoryEntry } from './history.ts';
 import { publishRecordRead } from './read-receipt.ts';
 import { recordAuthOfSealed, isReadOrCleared, readRecord, sealedOfRecord } from './record.ts';
 import { readUnreadHint } from './unread-hint.ts';
+import { liveRecordPath } from './drop-folder.ts';
 
 /** The legs whose delivery is evidence enough to answer: a frame the receiver's session took, a
  *  push its channel carried, or its own native handoff. A typed wake is that leg's own act and a
@@ -93,7 +94,7 @@ export function markAnsweredBySend(input: AnsweredBySendInput): AnsweredBySendOu
   // searching the tree.
   const context = { to: seat, root, session, ...(lead === undefined ? {} : { lead }) };
   for (const hint of hints) {
-    const read = readRecord(join(dropDir, hint.id), hint.id);
+    const read = readRecord(liveRecordPath(dropDir, hint.id), hint.id);
     if (!read.ok || read.record === null) continue;
     const sealed = sealedOfRecord(read.record);
     const auth = recordAuthOfSealed(sealed, state.key);

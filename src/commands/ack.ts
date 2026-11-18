@@ -53,6 +53,7 @@ import {
   samePath,
 } from './reply.ts';
 import { recordDir } from './messages.ts';
+import { mailDirOf, seatMailParts } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team ack <id> [--json]
 Usage: team ack --seat <seat> --older-than <dur> [--dry-run] [--json]
@@ -142,8 +143,10 @@ function scopedRefused(io: Io, json: boolean, message: string): number {
 }
 
 /** The relative path of one record's receipt, as the caller reads it in a repair line. */
-function receiptPath(session: string, seat: string, id: string, status: 'read' | 'replied'): string {
-  return join('.agents', 'send-drops', session, seat, `${id}.${status}.json`);
+function receiptPath(session: string, seat: string, id: string, status: 'read' | 'replied', recordPath?: string): string {
+  // The tree the record lives in (src/queue/mail-tree.ts): a stamped record's receipt is beside it.
+  const tree = recordPath === undefined ? 'legacy' : (mailDirOf(dirname(recordPath))?.tree ?? 'legacy');
+  return join(...seatMailParts(session, seat, tree), `${id}.${status}.json`);
 }
 
 export async function runAck(argv: string[], io: Io, host: AckHost): Promise<number> {
@@ -333,7 +336,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     outcome = settled.outcome;
   }
   if (outcome.kind === 'held') {
-    const where = receiptPath(session, found.seat, resolvedId, outcome.status);
+    const where = receiptPath(session, found.seat, resolvedId, outcome.status, found.path);
     const what = outcome.entry === 'file'
       ? `the ${outcome.status} receipt name is held by a file that does not verify for this message`
       : `the ${outcome.status} receipt path is held by something that is not a file`;

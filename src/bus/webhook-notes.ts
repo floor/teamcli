@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import type { Seat } from '../file/types.ts';
 import type { SessionState, WebhookDeliveryRecord } from '../state.ts';
 import { busHealth } from './server.ts';
+import { mailTreeOf, stampedListing } from '../queue/mail-tree.ts';
 
 function attemptsWord(count: number): string {
   return `${String(count)} attempt${count === 1 ? '' : 's'}`;
@@ -62,16 +63,21 @@ function sentClaimsIn(dropDir: string): number {
     return 0;
   }
   let count = 0;
-  for (const name of names) {
-    if (!name.endsWith(CLAIM_SUFFIX)) continue;
-    try {
-      const held = lstatSync(join(dropDir, name));
-      if (!held.isFile()) continue;
-      if (process.getuid !== undefined && held.uid !== process.getuid()) continue;
-      const parsed = JSON.parse(readFileSync(join(dropDir, name), 'utf8')) as { state?: unknown };
-      if (parsed.state === 'sent') count += 1;
-    } catch {
-      // An unreadable claim proves nothing and is not counted.
+  // E7b revision 3: the seat's stamped folder is read with it (src/queue/mail-tree.ts).
+  const stamped = stampedListing(dropDir);
+  const seatFolders = [{ folder: dropDir, names: names }, ...(stamped === null || stamped === 'unreadable' ? [] : [stamped])];
+  for (const { folder: dropDir, names: names } of seatFolders) {
+    for (const name of names) {
+      if (!name.endsWith(CLAIM_SUFFIX)) continue;
+      try {
+        const held = lstatSync(join(dropDir, name));
+        if (!held.isFile()) continue;
+        if (process.getuid !== undefined && held.uid !== process.getuid()) continue;
+        const parsed = JSON.parse(readFileSync(join(dropDir, name), 'utf8')) as { state?: unknown };
+        if (parsed.state === 'sent') count += 1;
+      } catch {
+        // An unreadable claim proves nothing and is not counted.
+      }
     }
   }
   return count;
@@ -84,7 +90,7 @@ function sentClaims(root: string): number {
   let drops: string;
   try {
     const realRoot = realpathSync(root);
-    drops = join(realRoot, '.agents', 'send-drops');
+    drops = mailTreeOf(realRoot);
     if (realpathSync(drops) !== drops) return 0;
   } catch {
     return 0;

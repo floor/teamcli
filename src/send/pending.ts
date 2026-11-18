@@ -39,6 +39,8 @@ import { heldAt } from '../launch/rules-file.ts';
 import { storePath } from '../store/store.ts';
 import { ensureStoreLadder, readNoFollow, createDir0700 } from './history.ts';
 import { dropMessage } from './native.ts';
+import { seatFolderOf } from './drop-folder.ts';
+import { stampedListing } from '../queue/mail-tree.ts';
 
 /** How many typed retries one held send is given, after the send's own attempt. */
 export const PENDING_MAX_TRIES = 3;
@@ -77,14 +79,15 @@ export type PendingDrop = {
 
 /** The marker's path: the drop's own name with `.pending` after it. */
 export function pendingDropPath(dropDir: string, id: string): string {
-  return join(dropDir, `${id}.pending`);
+  // E7b revision 3: a marker carries the body, so it sits in the seat folder of its record's tree.
+  return join(seatFolderOf(dropDir, id), `${id}.pending`);
 }
 
 /** Writes the record whole, mode 0600 by rename of a temporary file in the drop's directory —
  *  the write shape and modes the drop itself gets (`dropMessage`). */
 function writePendingDrop(dropDir: string, drop: PendingDrop): void {
   try {
-    dropMessage(dropDir, `${drop.id}.pending`, JSON.stringify(drop));
+    dropMessage(seatFolderOf(dropDir, drop.id), `${drop.id}.pending`, JSON.stringify(drop));
   } catch {
     // The drop is the message; this record only saves a retry.
   }
@@ -131,15 +134,18 @@ export function clearPending(dropDir: string, id: string): void {
   }
 }
 
-function readPendingDrops(dropDir: string): PendingDrop[] {
-  let names: string[];
+function readPendingDrops(seatDir: string): PendingDrop[] {
+  let legacyNames: string[];
   try {
-    names = readdirSync(dropDir);
+    legacyNames = readdirSync(seatDir);
   } catch {
     return [];
   }
+  // E7b revision 3: the seat's stamped folder holds the markers of its stamped records.
+  const stamped = stampedListing(seatDir);
+  const folders = [{ folder: seatDir, names: legacyNames }, ...(stamped === null || stamped === 'unreadable' ? [] : [stamped])];
   const drops: PendingDrop[] = [];
-  for (const name of names) {
+  for (const { folder: dropDir, names } of folders) for (const name of names) {
     if (!name.endsWith('.pending')) continue;
     try {
       const parsed = JSON.parse(readFileSync(join(dropDir, name), 'utf8')) as Partial<PendingDrop>;

@@ -39,6 +39,7 @@ import {
   type ClientGrantRecord,
 } from './records.ts';
 import { verifyClientRequest, type ClientRequest } from './verify.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
 
 /** The seat a client grant addresses when the team file's `clients:` names none: the grant's
  *  signed seat is the one it addresses, checked against that list at every use. */
@@ -114,7 +115,7 @@ export function resolveClientTarget(
       teamId: coordinator.teamId,
       teamRoot: coordinator.teamRoot,
       session: coordinator.session,
-      dropDir: join(coordinator.teamRoot, '.agents', 'send-drops', coordinator.session, coordinator.recipientSeat),
+      dropDir: seatDropDir(coordinator.teamRoot, coordinator.session, coordinator.recipientSeat),
     },
   };
 }

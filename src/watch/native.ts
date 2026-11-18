@@ -47,6 +47,7 @@ import { markTaken } from '../send/taken.ts';
 import { readState } from '../state.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
+import { mailTreeOf, seatMailDirIn } from '../queue/mail-tree.ts';
 
 const NATIVE_UNCONFIRMED_10M = 'native: unconfirmed after 10m';
 
@@ -106,7 +107,7 @@ function paneIdentityProblem(
  * the handoff's own copy is the same message.
  */
 function writeRecordFile(record: PendingNative, home: string): string {
-  const dropsRoot = join(record.root, '.agents', 'send-drops');
+  const dropsRoot = mailTreeOf(record.root);
   const sessionDir = join(dropsRoot, record.session);
   const dropDir = join(sessionDir, record.to);
   mkdirSync(dropDir, { recursive: true });
@@ -176,7 +177,7 @@ async function expireOne(
       ? { spec: record.spec, resolved: record.resolved }
       : {};
   const toDir = join(record.root, '.agents');
-  const dropDir = join(toDir, 'send-drops', record.session, record.to);
+  const dropDir = seatMailDirIn(toDir, record.session, record.to);
   const elapsedMs = Math.max(0, scene.now.getTime() - Date.parse(record.ts));
 
   for (const leg of legs) {

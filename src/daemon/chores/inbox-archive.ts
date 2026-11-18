@@ -36,6 +36,8 @@ import { heldAt } from '../../held.ts';
 import type { StatusContext } from '../../send/record.ts';
 import { readParsed, writeAtomic } from '../../state.ts';
 import { messageKeyState } from '../../store/keys.ts';
+import { mailTreeOf, seatDropDir, sessionMailDir, type MailTree } from '../../queue/mail-tree.ts';
+import { seatFolderOf } from '../../send/drop-folder.ts';
 
 /** The local hours the run may start or go on in: from 03:00 up to 06:00, machine time. */
 export const INBOX_ARCHIVE_WINDOW = { fromHour: 3, toHour: 6 } as const;
@@ -104,14 +106,14 @@ export function inWindow(now: Date): boolean {
 }
 
 function runPath(root: string): string {
-  return join(root, '.agents', 'send-drops', INBOX_ARCHIVE_RUN_FILE);
+  return sessionMailDir(root, INBOX_ARCHIVE_RUN_FILE);
 }
 
 /** Whether `.agents` and `send-drops` are plain folders and the run file, when there, a plain
  *  file: the run file is read and written only then, never through a link. */
 function runPlaceOk(root: string): boolean {
   if (heldAt(join(root, '.agents')).kind !== 'folder') return false;
-  if (heldAt(join(root, '.agents', 'send-drops')).kind !== 'folder') return false;
+  if (heldAt(mailTreeOf(root)).kind !== 'folder') return false;
   const held = heldAt(runPath(root)).kind;
   return held === 'file' || held === 'missing';
 }
@@ -225,7 +227,8 @@ export function noticeBeforeMove(input: {
   // verified from that descriptor, the same descriptor is fsynced, then the folder chain (seat,
   // session, send-drops) is fsynced, and the name must still hold that same file. Any failure, or a
   // different file at the name, holds the move (the next pass tries again).
-  const seatDir = join(input.root, '.agents', 'send-drops', session, to);
+  // E7b revision 3: the chain fsynced is the one of the tree that holds the notice.
+  const seatDir = seatFolderOf(seatDropDir(input.root, session, to), noticeId);
   const path = recordFile(seatDir, noticeId);
   const syncFolder = input.fsync === undefined ? fsyncFolder : (folder: string) => input.fsync?.(folder, true);
   let fd: number | null = null;
@@ -293,8 +296,8 @@ export function undeliveredNoticeId(id: string): string {
 
 /** Whether send-drops, the session folder and the seat folder are each a plain folder, not a
  *  link: checked before the folder is used and again after every turn the loop gave away. */
-function folderChainOk(root: string, session: string, seat: string): boolean {
-  const base = join(root, '.agents', 'send-drops');
+function folderChainOk(root: string, session: string, seat: string, tree: MailTree = 'legacy'): boolean {
+  const base = mailTreeOf(root, tree);
   for (const path of [join(root, '.agents'), base, join(base, session), join(base, session, seat)]) {
     if (heldAt(path).kind !== 'folder') return false;
   }
@@ -367,10 +370,11 @@ export async function inboxArchivePass(input: {
   seats: for (const folder of seatDropFolders(root)) {
     // The lead binds a clearance's authority (E7b: the stamped planner rule asks it).
     const context: StatusContext = { to: folder.seat, root, session: folder.session, ...(team.orchestrator ? { lead: team.orchestrator } : {}) };
-    const key2 = `${folder.session}/${folder.seat}`;
+    // E7b revision 3: a seat's stamped folder is its own unit of the run (src/queue/mail-tree.ts).
+    const key2 = folder.tree === 'stamped' ? `${folder.session}/${folder.seat} (stamped)` : `${folder.session}/${folder.seat}`;
     // A folder fully looked at today is not looked at again until tomorrow.
     if (run.completed.includes(key2)) continue;
-    const chainOk = (): boolean => folderChainOk(root, folder.session, folder.seat);
+    const chainOk = (): boolean => folderChainOk(root, folder.session, folder.seat, folder.tree);
     // 1. What an earlier move left part way: listed once a pass, worked through from a cursor
     //    that moves past every unit looked at, whatever it found, so nothing starves the rest.
     if (!run.recovered.includes(key2)) {

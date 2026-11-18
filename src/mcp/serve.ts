@@ -85,6 +85,9 @@ import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { copyHistory, deliveryDue, FIRST_BACKOFF_MS, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
+import { heldAt } from '../held.ts';
+import { seatListingDirs } from '../queue/mail-tree.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
 
 /** The protocol version this server speaks when the client names one it does not know. */
 export const PROTOCOL_VERSION = '2025-06-18';
@@ -371,7 +374,8 @@ function negotiate(params: unknown): string {
  *  line. The record's complete raw payload must carry this key's signature before any field is
  *  read: a tampered or unsupported record is shown nowhere, not even as a header. */
 function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string> } | null {
-  const looked = readSealedRecord(join(serving.dropDir, id));
+  const dropDir = seatFolderOf(serving.dropDir, id);
+  const looked = readSealedRecord(join(dropDir, id));
   if (!looked.ok || looked.sealed === null) return null;
   const key = messageKeyState(serving.home);
   if (key.kind !== 'key') return null;
@@ -419,7 +423,7 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   // take it. The meta carries the id too, but a client may show only the content, and a seat
   // that cannot see the id cannot answer on the thread.
   return {
-    content: takesReaderLine(payload, false) ? bodyWithReaderLine(content, id, existingRecordIdsIn(serving.dropDir)) : content,
+    content: takesReaderLine(payload, false) ? bodyWithReaderLine(content, id, existingRecordIdsIn(dropDir)) : content,
     meta: { id, from: payload.from, seat: serving.seat, team: serving.project },
   };
 }
@@ -442,25 +446,28 @@ function leadOf(serving: { loadTeam?: () => { orchestrator?: string | null } | n
 }
 
 export function channelRedeliveryDue(serving: Pick<Serving, 'dropDir' | 'seat' | 'root' | 'session' | 'home'> & { loadTeam?: Serving['loadTeam'] }, nowMs: number): string[] {
-  let names: string[];
-  try {
-    names = readdirSync(serving.dropDir);
-  } catch {
-    return [];
+  // E7b revision 3: stamped records sit in the seat's stamped folder; both folders are read.
+  const entries: { folder: string; name: string }[] = [];
+  for (const folder of seatListingDirs(serving.dropDir)) {
+    try {
+      for (const name of readdirSync(folder)) entries.push({ folder, name });
+    } catch {
+      // A folder that cannot be listed offers nothing this pass.
+    }
   }
   const state = messageKeyState(serving.home);
   const key = state.kind === 'key' ? state.key : null;
   const due: string[] = [];
-  for (const name of names.sort()) {
+  for (const { folder: dropDir, name } of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
     if (name.startsWith('.') || isRecordSidecarName(name) || !MESSAGE_ID.test(name)) continue;
-    if (recordStampAt(serving.dropDir, name) !== true) continue;
-    if (key === null || stampedSettled(serving.dropDir, name, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key)) continue;
-    if (!deliveryDue(serving.dropDir, name, nowMs)) continue;
-    const history = copyHistory(serving.dropDir, name);
+    if (recordStampAt(dropDir, name) !== true) continue;
+    if (key === null || stampedSettled(dropDir, name, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key)) continue;
+    if (!deliveryDue(dropDir, name, nowMs)) continue;
+    const history = copyHistory(dropDir, name);
     if (history !== 'unknown' && history.copies === 0) {
       let arrived: number;
       try {
-        arrived = lstatSync(join(serving.dropDir, name)).mtimeMs;
+        arrived = lstatSync(join(dropDir, name)).mtimeMs;
       } catch {
         continue;
       }
@@ -498,7 +505,8 @@ function watchChannel(
   let pulse: ReturnType<typeof setTimeout> | null = null;
   let drainTimer: ReturnType<typeof setTimeout> | null = null;
   let redeliverTimer: ReturnType<typeof setInterval> | null = null;
-  let folder: FSWatcher | null = null;
+  /** One watch per folder of the seat (src/queue/mail-tree.ts): the stamped one once it stands. */
+  const folders = new Map<string, FSWatcher>();
   let subscription: BusFollow | null = null;
   /** Busy commits retried off the main wait. Five tries, then one logged give-up. The id stays
    *  unseen, so a later names pass tries it again once the lock is gone. */
@@ -519,8 +527,8 @@ function watchChannel(
     redeliverTimer = null;
     for (const pending of retryTimer.values()) clearTimeout(pending);
     retryTimer.clear();
-    folder?.close();
-    folder = null;
+    for (const watcher of folders.values()) watcher.close();
+    folders.clear();
     subscription?.close();
     subscription = null;
   };
@@ -559,18 +567,20 @@ function watchChannel(
   const pushOne = (id: string): 'done' | 'retry' | 'rejected' => {
     if (seen.has(id)) return 'done';
     seen.add(id);
-    if (legacyDropAt(join(serving.dropDir, id))) return 'done';
+    // E7b revision 3: everything about this record sits in the seat folder of its own tree.
+    const dropDir = seatFolderOf(serving.dropDir, id);
+    if (legacyDropAt(join(dropDir, id))) return 'done';
     // An earlier server may have pushed this id before this one started, and a sender whose own
     // walk takes the message leaves a held marker at the same name: either marker says this id
     // is not to be pushed, and a second notification is a duplicate wake.
-    if (channelPushHeld(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelAborted(serving.dropDir, id)) return 'done';
+    if (channelPushHeld(dropDir, id) || channelNotified(dropDir, id) || channelAborted(dropDir, id)) return 'done';
     // A record the seat already read, or already replied to, is not a channel message again. A
     // stamped record is settled only by its recipient's confirmation (E7b, the strict rule).
-    if (recordStampAt(serving.dropDir, id) !== false) {
+    if (recordStampAt(dropDir, id) !== false) {
       const keyNow = messageKeyState(serving.home);
-      if (keyNow.kind === 'key' && stampedSettled(serving.dropDir, id, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, keyNow.key)) return 'done';
+      if (keyNow.kind === 'key' && stampedSettled(dropDir, id, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, keyNow.key)) return 'done';
     } else if (receiptHeld(
-      serving.dropDir,
+      dropDir,
       id,
       { to: serving.seat, root: serving.root, session: serving.session },
       serving.home,
@@ -589,8 +599,8 @@ function watchChannel(
     // and does not start another leg. The record stays unread until ack, inbox read, or reply.
     // A stream write still does not prove the client processed the line.
     let heldExposure: ReturnType<typeof exposeBody> | null = null;
-    const committed = withChannelCommit(serving.dropDir, id, () => {
-      if (channelAborted(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelPushHeld(serving.dropDir, id)) {
+    const committed = withChannelCommit(dropDir, id, () => {
+      if (channelAborted(dropDir, id) || channelNotified(dropDir, id) || channelPushHeld(dropDir, id)) {
         return 'skip' as const;
       }
       // The seat can stop while the record is open. One re-check here, before the marker and
@@ -599,17 +609,17 @@ function watchChannel(
       if (staleNow !== undefined && staleNow !== null) return 'skip' as const;
       // The exposure claim (rfc-event-comms §3, E6), immediately before the frame can carry the
       // body: on an active root only its creator pushes the body; any other push carries a pointer.
-      const exposure = exposeBody({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
+      const exposure = exposeBody({ dropDir: dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
       heldExposure = exposure;
-      if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(serving.dropDir, id)?.seq ?? null);
+      if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(dropDir, id)?.seq ?? null);
       // E7b: a stamped record's copy is numbered immediately before the line leaves; a history
       // that cannot be written sends nothing now, and the redelivery pass offers it again.
-      if (recordStampAt(serving.dropDir, id) === true) {
-        const n = takeCopyNumber(serving.dropDir, id, 'channel');
+      if (recordStampAt(dropDir, id) === true) {
+        const n = takeCopyNumber(dropDir, id, 'channel');
         if (n === null) return 'skip' as const;
         push.content = wrapCopy(push.content, id, n);
       }
-      const reserved = recordChannelPush(serving.dropDir, {
+      const reserved = recordChannelPush(dropDir, {
         v: 1,
         kind: 'channel-push',
         id,
@@ -621,15 +631,15 @@ function watchChannel(
         content_sha256: createHash('sha256').update(push.content).digest('hex'),
         status: CHANNEL_PUSH_STATUS,
       });
-      if (!reserved || channelAborted(serving.dropDir, id)) return 'skip' as const;
-      if (!recordChannelEmitted(serving.dropDir, id, new Date().toISOString())) return 'skip' as const;
+      if (!reserved || channelAborted(dropDir, id)) return 'skip' as const;
+      if (!recordChannelEmitted(dropDir, id, new Date().toISOString())) return 'skip' as const;
       write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
       const marked = serving.channelMark
-        ? serving.channelMark(serving.dropDir, id)
-        : markChannelNotified(serving.dropDir, id);
+        ? serving.channelMark(dropDir, id)
+        : markChannelNotified(dropDir, id);
       if (!marked) return 'uncertain' as const;
       // E3: the frame was written; the read is sealed through this hand-over's own claim only.
-      const delivered = { dropDir: serving.dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home };
+      const delivered = { dropDir: dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home };
       if (exposure.kind === 'expose') exposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
       else if (exposure.kind === 'legacy') recordDeliveredBody(delivered);
       return 'pushed' as const;
@@ -681,7 +691,7 @@ function watchChannel(
       let mtime = listed;
       if (mtime < 0) {
         try {
-          const stat = lstatSync(join(serving.dropDir, name));
+          const stat = lstatSync(join(seatFolderOf(serving.dropDir, name), name));
           if (!stat.isFile()) {
             if (waiting.size > 0) scheduleDrain();
             return;
@@ -707,19 +717,22 @@ function watchChannel(
    *  nothing, and every later pass parses only names that were not in that memory. */
   const tick = (): void => {
     if (halted()) return;
-    let names: string[] = [];
-    try {
-      names = readdirSync(serving.dropDir);
-    } catch {
-      names = [];
+    // E7b revision 3: the seat's two folders are one inbox (a record lives in one of them).
+    const entries: { folder: string; name: string }[] = [];
+    for (const folder of seatListingDirs(serving.dropDir)) {
+      try {
+        for (const name of readdirSync(folder)) entries.push({ folder, name });
+      } catch {
+        // A folder that cannot be listed holds nothing this tick.
+      }
     }
     const present = new Set<string>();
     const changed: { name: string; mtime: number }[] = [];
-    for (const name of names) {
+    for (const { folder: dropDir, name } of entries) {
       present.add(name);
       let mtime = 0;
       try {
-        const stat = lstatSync(join(serving.dropDir, name));
+        const stat = lstatSync(join(dropDir, name));
         if (!stat.isFile()) continue;
         mtime = stat.mtimeMs;
       } catch {
@@ -764,7 +777,7 @@ function watchChannel(
     if (halted() || !messageNameOk(name)) return;
     let mtime = 0;
     try {
-      const stat = lstatSync(join(serving.dropDir, name));
+      const stat = lstatSync(join(seatFolderOf(serving.dropDir, name), name));
       if (!stat.isFile()) return;
       mtime = stat.mtimeMs;
     } catch {
@@ -784,11 +797,13 @@ function watchChannel(
    *  Seen names are not stated and not parsed. The reads happen one per turn. */
   const namesPass = (): void => {
     if (halted() || !primed) return;
-    let names: string[] = [];
-    try {
-      names = readdirSync(serving.dropDir);
-    } catch {
-      names = [];
+    const names: string[] = [];
+    for (const folder of seatListingDirs(serving.dropDir)) {
+      try {
+        names.push(...readdirSync(folder));
+      } catch {
+        // A folder that cannot be listed adds no name this pass.
+      }
     }
     for (const name of names) {
       if (known.has(name) || waiting.has(name)) continue;
@@ -814,9 +829,16 @@ function watchChannel(
    *  with no name lists the folder once, and the watch stays open. A watch that cannot start, or
    *  that later errors, does that same one listing and then arms again. */
   const armFolder = (): void => {
-    if (stopped || folder !== null) return;
+    if (stopped) return;
+    for (const at of seatListingDirs(serving.dropDir)) {
+      if (folders.has(at)) continue;
+      if (at !== serving.dropDir && heldAt(at).kind !== 'folder') continue;
+      armOne(at);
+    }
+  };
+  const armOne = (at: string): void => {
     try {
-      folder = watch(serving.dropDir, (_event, filename) => {
+      const watcher = watch(at, (_event, filename) => {
         if (stopped) return;
         const name = typeof filename === 'string' ? filename : '';
         if (name === '') {
@@ -829,18 +851,18 @@ function watchChannel(
         }
         noteFile(name);
       });
-      folder.on('error', () => {
-        const current = folder;
-        folder = null;
+      folders.set(at, watcher);
+      watcher.on('error', () => {
+        if (folders.get(at) === watcher) folders.delete(at);
         try {
-          current?.close();
+          watcher.close();
         } catch {
           // The watch is already closed.
         }
         listBurst();
       });
     } catch {
-      folder = null;
+      folders.delete(at);
     }
   };
   const every = (ms: number): void => {
@@ -880,7 +902,7 @@ function watchChannel(
       // One record's failure (a frame write that throws) never stops the pass: the record stays
       // due and the next pass offers it again.
       try {
-        if (!retireChannelAttempt(serving.dropDir, name, nowMs)) continue;
+        if (!retireChannelAttempt(seatFolderOf(serving.dropDir, name), name, nowMs)) continue;
         seen.delete(name);
         pushOne(name);
       } catch {
@@ -921,7 +943,8 @@ function ackTool(args: unknown, serving: Serving): unknown {
   if (!inboxFolderHeld(serving.root, serving.session, serving.seat)) {
     return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
   }
-  const looked = readSealedRecord(join(serving.dropDir, id));
+  const dropDir = seatFolderOf(serving.dropDir, id);
+  const looked = readSealedRecord(join(dropDir, id));
   if (!looked.ok || looked.sealed === null) return toolError(`no message ${id} is waiting in this inbox`);
   // The complete raw payload is authenticated before any field is read or any receipt written.
   const key = messageKeyState(serving.home);
@@ -942,7 +965,7 @@ function ackTool(args: unknown, serving: Serving): unknown {
   const staleNow = serving.alive?.();
   if (staleNow !== undefined && staleNow !== null) return toolError(staleNow);
   const outcome = publishRecordRead({
-    dropDir: serving.dropDir,
+    dropDir: dropDir,
     id,
     to: serving.seat,
     root: serving.root,
@@ -984,7 +1007,7 @@ function callTool(params: unknown, serving: Serving): unknown {
       serving.dropDir,
       { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
       serving.home,
-    ).filter((message) => !legacyDropAt(join(serving.dropDir, message.id))));
+    ).filter((message) => !legacyDropAt(join(seatFolderOf(serving.dropDir, message.id), message.id))));
     return toolText(JSON.stringify({ unread }));
   }
   if (name === 'inbox_read') {

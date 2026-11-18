@@ -55,6 +55,7 @@ import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketEligible, socketHeldReason,
   socketSkipReason,
 } from './inbound.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
 export const MAX_QUEUE_DEPTH = 32;
@@ -1594,7 +1595,7 @@ async function executeQueuedSend(
       break;
     }
 
-    const projectDropDir = join(dir, 'send-drops', team.session, seatName);
+    const projectDropDir = seatMailDirIn(dir, team.session, seatName);
     const hasVerifiedReceipt = (): boolean => {
       const context = { to: seatName, root, session: team.session };
       const binding = claimBindingIn(root, team.session, seatName, msgId);
@@ -1832,7 +1833,7 @@ async function executeSocketSend(
   // No caller attestation exists yet: the frame names the claim the daemon was asked to deliver
   // for and marks it attributed, so the receiving seat never reads the displayed name as proof.
   // The mark is its own line; the display header and the body follow in their usual order.
-  const dropDir = join(dir, 'send-drops', team.session, seatName);
+  const dropDir = seatMailDirIn(dir, team.session, seatName);
   const existingIds = existingRecordIdsIn(dropDir);
   const compact = receiver?.compactDelivery === true;
   let content = attributedBody(body, from, {

@@ -6,6 +6,7 @@ import { writeRuntimeNotice } from './endpoint-notice.ts';
 import { isReadOrCleared, type RecordPayload } from './record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { storePath } from '../store/store.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
 
 const REPORTS = 'held-send-reports.jsonl';
 type Scope = { project: string; root: string; home: string; session: string; lead: string };
@@ -47,7 +48,7 @@ function reportsIn(input: Scope): Reports {
   return {
     ok: true,
     entries: [...entries.values()].filter((entry) => !entry.stored || key.kind !== 'key' || !isReadOrCleared(
-      join(input.root, '.agents', 'send-drops', input.session, entry.seat), entry.id,
+      seatDropDir(input.root, input.session, entry.seat), entry.id,
       { root: input.root, session: input.session, to: entry.seat, lead: input.lead }, key.key,
     )),
   };

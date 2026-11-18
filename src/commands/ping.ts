@@ -38,6 +38,8 @@ import { sameFolder, signedReceiptOf, verifiedRecordAt, verifyReceipt, type Reco
 import { resolveTarget } from '../send/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { hostedCommit } from '../host/request-scope.ts';
+import { seatDropDir, stampedListing } from '../queue/mail-tree.ts';
+import { liveRecordPath, seatFolderOf } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team ping <seat> [--wait <seconds>] [--json]
        team ping --all [--wait <seconds>] [--json]
@@ -153,7 +155,7 @@ function placesOf(home: string, io: Io): { places: Place[]; teams: TeamRecord[] 
  *  its own signed fields must name that id, that recipient and the folder it sits in. */
 export function sentRecordOf(places: readonly Place[], seat: string, id: string, key: KeyObject): RecordPayload | null {
   for (const place of places) {
-    const payload = verifiedRecordAt(join(place.root, '.agents', 'send-drops', place.session, seat, id), id, key);
+    const payload = verifiedRecordAt(liveRecordPath(seatDropDir(place.root, place.session, seat), id), id, key);
     if (payload === null) continue;
     if (payload.id !== id || payload.to !== seat || payload.session !== place.session || !sameFolder(payload.root, place.root)) continue;
     return payload;
@@ -164,7 +166,7 @@ export function sentRecordOf(places: readonly Place[], seat: string, id: string,
 /** When the recipient's verified read receipt for `sent` was written, in epoch milliseconds;
  *  null while there is none that verifies and names that record, recipient, root and session. */
 export function receiptAt(sent: RecordPayload, key: KeyObject): number | null {
-  const path = join(sent.root, '.agents', 'send-drops', sent.session, sent.to, `${sent.id}.read.json`);
+  const path = join(seatFolderOf(seatDropDir(sent.root, sent.session, sent.to), sent.id), `${sent.id}.read.json`);
   let receipt;
   try {
     receipt = signedReceiptOf(JSON.parse(readFileSync(path, 'utf8')));
@@ -209,7 +211,7 @@ export function replyDestinationOf(home: string, io: Io, sent: RecordPayload, te
     const endpoint = resolveTarget(home, replyTo.target, io);
     if ('error' in endpoint) return null;
     const seat = endpoint.agent.reach.seat;
-    return { folder: join(endpoint.team.root, '.agents', 'send-drops', endpoint.agent.reach.session, seat), to: seat, to_id: endpoint.agent.id };
+    return { folder: seatDropDir(endpoint.team.root, endpoint.agent.reach.session, seat), to: seat, to_id: endpoint.agent.id };
   }
   const byId = sent.from_id === null ? [] : teams.filter((team) => team.roster.some((entry) => entry.agent === sent.from_id));
   let place: Place | null = byId.length === 1 ? { root: byId[0]!.root, session: byId[0]!.session } : null;
@@ -225,7 +227,7 @@ export function replyDestinationOf(home: string, io: Io, sent: RecordPayload, te
       place = null;
     }
   }
-  return place === null ? null : { folder: join(place.root, '.agents', 'send-drops', place.session, sent.from), to: sent.from, to_id: sent.from_id };
+  return place === null ? null : { folder: seatDropDir(place.root, place.session, sent.from), to: sent.from, to_id: sent.from_id };
 }
 
 /** The recipient's verified answer to `sent` at its destination, newer than `since`: a record
@@ -244,28 +246,33 @@ export function replyTo(destination: ReplyDestination, sent: RecordPayload, toke
     return null;
   }
   let bySend: { sent: number; landed: number; by: 'send' } | null = null;
-  for (const name of names) {
-    if (name.includes('.') || name === sent.id) continue;
-    const path = join(folder, name);
-    let landed: number;
-    try {
-      landed = statSync(path).mtimeMs;
-    } catch {
-      continue;
+  // E7b revision 3: the seat's stamped folder is read with it (src/queue/mail-tree.ts).
+  const stamped = stampedListing(folder);
+  const seatFolders = [{ folder: folder, names: names }, ...(stamped === null || stamped === 'unreadable' ? [] : [stamped])];
+  for (const { folder: folder, names: names } of seatFolders) {
+    for (const name of names) {
+      if (name.includes('.') || name === sent.id) continue;
+      const path = join(folder, name);
+      let landed: number;
+      try {
+        landed = statSync(path).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (landed < since) continue;
+      const reply = verifiedRecordAt(path, name, key);
+      if (reply === null) continue;
+      if (reply.from !== sent.to || reply.to !== destination.to) continue;
+      if (sent.to_id !== null && reply.from_id !== sent.to_id) continue;
+      if (destination.to_id !== null && reply.to_id !== destination.to_id) continue;
+      if (!reply.body.includes(`pong ${token}`)) continue;
+      const at = Date.parse(reply.at);
+      const answer = { sent: Number.isNaN(at) ? landed : at, landed };
+      if (reply.thread === sent.thread) return { ...answer, by: 'reply' };
+      // Off the thread, only a standalone send counts: a record that opens its own thread and
+      // answers no record. A reply on some other thread is an answer to that thread, not this ping.
+      if (bySend === null && reply.thread === reply.id && reply.in_reply_to === undefined) bySend = { ...answer, by: 'send' };
     }
-    if (landed < since) continue;
-    const reply = verifiedRecordAt(path, name, key);
-    if (reply === null) continue;
-    if (reply.from !== sent.to || reply.to !== destination.to) continue;
-    if (sent.to_id !== null && reply.from_id !== sent.to_id) continue;
-    if (destination.to_id !== null && reply.to_id !== destination.to_id) continue;
-    if (!reply.body.includes(`pong ${token}`)) continue;
-    const at = Date.parse(reply.at);
-    const answer = { sent: Number.isNaN(at) ? landed : at, landed };
-    if (reply.thread === sent.thread) return { ...answer, by: 'reply' };
-    // Off the thread, only a standalone send counts: a record that opens its own thread and
-    // answers no record. A reply on some other thread is an answer to that thread, not this ping.
-    if (bySend === null && reply.thread === reply.id && reply.in_reply_to === undefined) bySend = { ...answer, by: 'send' };
   }
   return bySend;
 }

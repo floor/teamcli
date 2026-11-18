@@ -27,6 +27,7 @@ import type { TypedWakeHost, TypedWakeResult } from '../../send/typed-wake.ts';
 import { markWake, releaseWake, wakeMarkAt, wakePath } from '../../send/wake-marker.ts';
 import { findSeatAgent, isBareShellPane, type SeatAgents } from '../seat-live.ts';
 import type { WakeChildRequest } from './token.ts';
+import { seatMailDirIn } from '../../queue/mail-tree.ts';
 
 /** What the child may read and run. The real entry binds herdr and the typed walk; a scene
  *  hands in its own answers, so no pane is typed into and no session is touched. */
@@ -186,7 +187,7 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
       record(walk.reason, false, ms, walk);
       return { outcome: 'failed', reason: walk.reason };
     }
-    recordDeliveredBody({ dropDir: join(request.dir, 'send-drops', request.session, request.seat), id: request.id, root: request.root, session: request.session, seat: request.seat, home: request.home, wake: request.line });
+    recordDeliveredBody({ dropDir: seatMailDirIn(request.dir, request.session, request.seat), id: request.id, root: request.root, session: request.session, seat: request.seat, home: request.home, wake: request.line });
     markWake(marker, {
       id: request.id,
       at: deps.now().toISOString(),

@@ -69,6 +69,7 @@ import {
 import { approvalStanding, storePath, type Standing } from '../store/store.ts';
 import { renameSeatLeases } from '../tasks/lease.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { mailTreeOf, sessionMailDir, type MailTree } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
        team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
@@ -142,8 +143,13 @@ function moveFolder(fromDir: string, toDir: string): boolean {
 
 /** Moves `.agents/send-drops/<bucket>/<from>` to `.agents/send-drops/<bucket>/<to>`. */
 function moveSendDrops(root: string, fromSeat: string, toSeat: string): string[] {
+  // E7b revision 3: the stamped tree's seat folders move the same way (src/queue/mail-tree.ts).
+  return [...moveSendDropsIn(root, fromSeat, toSeat, 'legacy'), ...moveSendDropsIn(root, fromSeat, toSeat, 'stamped')];
+}
+
+function moveSendDropsIn(root: string, fromSeat: string, toSeat: string, tree: MailTree): string[] {
   const moved: string[] = [];
-  const dropsRoot = join(root, '.agents', 'send-drops');
+  const dropsRoot = mailTreeOf(root, tree);
   let entries: string[];
   try {
     entries = readdirSync(dropsRoot).sort();
@@ -1152,10 +1158,12 @@ async function executeTeamRename(
   }
 
   if (newSession !== oldSession) {
-    const fromDrops = join(root, '.agents', 'send-drops', oldSession);
-    const toDrops = join(root, '.agents', 'send-drops', newSession);
-    if (moveFolder(fromDrops, toDrops)) {
-      moved.push(relative(root, toDrops));
+    for (const tree of ['legacy', 'stamped'] as const) {
+      const fromDrops = sessionMailDir(root, oldSession, tree);
+      const toDrops = sessionMailDir(root, newSession, tree);
+      if (moveFolder(fromDrops, toDrops)) {
+        moved.push(relative(root, toDrops));
+      }
     }
   }
 

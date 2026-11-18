@@ -15,6 +15,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from './names.ts';
 import type { TriggerSender } from './native.ts';
 import { readRecord, verifyRecord, type RecordPayload } from './record.ts';
+import { liveRecordPath } from './drop-folder.ts';
 
 /** The receiving side a wake is typed into: the team file in force, its checkout and session. */
 export type WakeReceiver = { root: string; session: string; team: TeamFile };
@@ -93,7 +94,7 @@ export function wakeSender(
 export function verifiedPayloadOf(dropDir: string, id: string, home: string): RecordPayload | null {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return null;
-  const looked = readRecord(join(dropDir, id), id);
+  const looked = readRecord(liveRecordPath(dropDir, id), id);
   if (!looked.ok || looked.record === null) return null;
   if (!verifyRecord(looked.record, key.key)) return null;
   return looked.record.payload;

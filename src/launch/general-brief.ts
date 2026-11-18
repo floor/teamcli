@@ -35,6 +35,7 @@ import {
 } from './brief-id.ts';
 import { heldAt } from './rules-file.ts';
 import { GENERAL_BRIEF, GENERAL_BRIEF_SHA256 } from './general-brief-text.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
 
 export { GENERAL_BRIEF, GENERAL_BRIEF_SHA256 };
 
@@ -271,7 +272,7 @@ export function deliverGeneralBrief(input: {
   if (payload.id !== claim.id) {
     return { seat, ok: false, reason: 'the claim and the record disagree on the expected id' };
   }
-  const dropDir = join(input.root, '.agents', 'send-drops', input.session, seat);
+  const dropDir = seatDropDir(input.root, input.session, seat);
   const path = recordFile(dropDir, payload.id);
   const held = heldAt(path);
   const refusal = heldReason(held.kind);

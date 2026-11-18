@@ -22,6 +22,7 @@
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createExclusive, ensureFolder } from './durable.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
 
 export const EXPOSURES = '.exposures';
 
@@ -43,7 +44,8 @@ export function backoffMs(copies: number): number {
 }
 
 function historyFolder(dropDir: string, id: string): string {
-  return join(dropDir, EXPOSURES, id);
+  // E7b revision 3: the history sits in the seat folder of the record's own tree.
+  return join(seatFolderOf(dropDir, id), EXPOSURES, id);
 }
 
 export type CopyHistory = { copies: number; lastMs: number | null };
@@ -82,7 +84,7 @@ export function copyHistory(dropDir: string, id: string): CopyHistory | 'unknown
  */
 export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs: number = Date.now()): number | null {
   const folder = historyFolder(dropDir, id);
-  if (!ensureFolder(join(dropDir, EXPOSURES)) || !ensureFolder(folder)) return null;
+  if (!ensureFolder(join(seatFolderOf(dropDir, id), EXPOSURES)) || !ensureFolder(folder)) return null;
   const seen = copyHistory(dropDir, id);
   if (seen === 'unknown') return null;
   for (let n = seen.copies + 1; n <= seen.copies + 8; n++) {

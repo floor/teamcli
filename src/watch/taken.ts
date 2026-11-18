@@ -24,6 +24,8 @@ import {
   type TakenDrop,
 } from '../send/taken.ts';
 import { clearedAt, passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 /** The two statuses a free seat reads: past the grace, a taken line it never showed is gone. */
 const FREE = new Set(['idle', 'done']);
@@ -76,7 +78,7 @@ function confirmOne(
   }
   if (pane !== undefined) {
     const status = passPaneStatus(scene, pane, agentStatus);
-    const line = triggerLine(join(dropDir, drop.id));
+    const line = triggerLine(liveRecordPath(dropDir, drop.id));
     // The transcript's sign, for a trigger that names the drop's path: a row that names the
     // drop's id and is not the trigger's own echo. The trigger line may be unreadable (a path too
     // long to have been typed); the status still counts.
@@ -113,7 +115,7 @@ function confirmOne(
   }
   // The drop is still the message: name the record when it is there, so it can be read by hand
   // or sent again — the one thing this pass never does is type the line.
-  const path = join(dropDir, drop.id);
+  const path = liveRecordPath(dropDir, drop.id);
   const tail = existsSync(path) ? `; the record is at ${path}` : '';
   scene.say(`${drop.to}: a send from ${drop.from} was ${NEVER_ACTED_ON}${tail}`, true);
 }
@@ -134,7 +136,7 @@ export function confirmTakenDrops(scene: RetryScene): void | Promise<void> {
   }[] = [];
   let needsAsyncScreen = false;
   for (const seat of scene.team.seats) {
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     const drops = readTaken(dropDir);
     if (drops.length === 0) continue;
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);

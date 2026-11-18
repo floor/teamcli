@@ -23,6 +23,7 @@ import { syncChildTimeout } from '../child.ts';
 import { cliHookStatePath } from './cli-hook.ts';
 import { tomlString, writePrivateAtomic } from './private-file.ts';
 import { parseToml } from './toml.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 /** The filesystem root Grok reads beside its own home, and the profile TeamCLI keeps there. */
 export interface GrokSandbox {
@@ -172,7 +173,7 @@ function agentGrants(root: string, session: string, seat: string): string[] {
   const agents = join(root, '.agents');
   const grants: string[] = [];
   if (oneSegment(session) && oneSegment(seat)) {
-    grants.push(realFolder(join(agents, 'send-drops', session, seat)));
+    grants.push(realFolder(seatMailDirIn(agents, session, seat)));
     grants.push(realFolder(join(agents, 'messages', seat)));
   }
   const state = cliHookStatePath(agents, session, seat);

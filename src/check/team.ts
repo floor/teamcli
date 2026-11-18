@@ -156,6 +156,8 @@ import {
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 import { hostedCommit } from '../host/request-scope.ts';
+import { seatDropDir, stampedListing } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 export type { CheckSidebarSources };
 
@@ -1520,7 +1522,7 @@ function generalBriefDifferences(
       }
       continue;
     }
-    const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
+    const dropDir = seatDropDir(root, session, seat.name);
     const expected = {
       ...generalBriefRecord({
         to: seat.name,
@@ -1626,7 +1628,7 @@ function unreadDifferences(
       ...(brief === undefined ? [] : [brief.id]),
       ...(brief?.superseded ?? []),
     ]);
-    const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
+    const dropDir = seatDropDir(root, session, seat.name);
     const context = { to: seat.name, root, session, lead: team.orchestrator };
     const unread = listUnread(dropDir, context, home).filter((message) => {
       if (briefIds.has(message.id)) return false;
@@ -1661,7 +1663,7 @@ function unreadDifferences(
     // owner's name or a seat's standing. A record that cannot be opened or verified is named as
     // what it is — an unverified message — and keeps its age, its id and its count.
     let who = 'an unverified message';
-    const looked = readRecord(join(dropDir, oldest.id), oldest.id);
+    const looked = readRecord(liveRecordPath(dropDir, oldest.id), oldest.id);
     if (looked.ok && looked.record !== null && verifyRecord(looked.record, key.key)) {
       const from = looked.record.payload.from;
       who = typeof from === 'string' && from !== '' ? `a message from ${from}` : 'a message from an unknown sender';
@@ -1700,13 +1702,19 @@ function olderReadReceipt(
   } catch {
     return false;
   }
-  for (const name of names) {
-    const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(read|replied)\.json$/.exec(name);
-    if (match === null) continue;
-    const id = match[1]!;
-    if (id === claimId) continue;
-    const status = match[2] as 'read' | 'replied';
-    if (receiptHolds(join(dropDir, name), id, status, context, key)) return true;
+  // E7b revision 3: the seat's stamped folder is read with it (src/queue/mail-tree.ts).
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return false;
+  const seatFolders = [{ folder: dropDir, names: names }, ...(stamped === null ? [] : [stamped])];
+  for (const { folder: dropDir, names: names } of seatFolders) {
+    for (const name of names) {
+      const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(read|replied)\.json$/.exec(name);
+      if (match === null) continue;
+      const id = match[1]!;
+      if (id === claimId) continue;
+      const status = match[2] as 'read' | 'replied';
+      if (receiptHolds(join(dropDir, name), id, status, context, key)) return true;
+    }
   }
   return false;
 }

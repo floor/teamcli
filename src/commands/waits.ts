@@ -44,6 +44,7 @@ import {
   type RecordPayload,
 } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { mailTreeOf, seatDropDir } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team waits [--json]
 
@@ -177,7 +178,7 @@ function readWait(path: string, root: string, rootId: string, session: string, s
   if (!sameFolder(payload.root, root)) return null;
   const kind = payload.message_kind;
   if (kind === undefined || !WAITING_KINDS.includes(kind)) return null;
-  const dir = join(root, '.agents', 'send-drops', session, seat);
+  const dir = seatDropDir(root, session, seat);
   if (receiptHolds(receiptFile(dir, name, 'replied'), name, 'replied', { to: seat, root, session }, ctx.key)) return null;
   const sender = seatOfSender(payload, rootId, ctx);
   if (sender === null) return null;
@@ -204,10 +205,10 @@ function readWait(path: string, root: string, rootId: string, session: string, s
 
 /** Every waiting record in one checkout: the recipient's folders of every session and seat. */
 function waitsInRoot(root: string, ctx: ScanContext): Wait[] {
-  const base = join(root, '.agents', 'send-drops');
   const rootId = teamIdOf(root);
   const out: Wait[] = [];
-  for (const session of namesIn(base)) {
+  // E7b revision 3: both trees (src/queue/mail-tree.ts), legacy first.
+  for (const [base, session] of (['legacy', 'stamped'] as const).flatMap((tree) => namesIn(mailTreeOf(root, tree)).map((session) => [mailTreeOf(root, tree), session] as const))) {
     if (!NAME.test(session)) continue;
     const sessionDir = join(base, session);
     if (!isDirAt(sessionDir)) continue;

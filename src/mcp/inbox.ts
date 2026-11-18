@@ -70,6 +70,8 @@ import { exposurePointer, isExposeOwner } from '../queue/exposure.ts';
 import { shadowQueueReceipt } from '../queue/receipt-store.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { readerOrder } from '../queue/reader.ts';
+import { seatMailParts, stampedListing } from '../queue/mail-tree.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
@@ -182,7 +184,7 @@ export function receiptPath(dropDir: string, id: string): string {
  */
 export function inboxFolderHeld(root: string, session: string, seat: string): boolean {
   let at = root;
-  for (const part of ['.agents', 'send-drops', session, seat]) {
+  for (const part of seatMailParts(session, seat)) {
     at = join(at, part);
     if (heldAt(at).kind !== 'folder') return false;
   }
@@ -196,7 +198,7 @@ export function inboxFolderHeld(root: string, session: string, seat: string): bo
  */
 export function ensureInboxFolder(root: string, session: string, seat: string): string | null {
   let at = root;
-  for (const part of ['.agents', 'send-drops', session, seat]) {
+  for (const part of seatMailParts(session, seat)) {
     at = join(at, part);
     const held = heldAt(at);
     if (held.kind === 'folder') continue;
@@ -513,11 +515,15 @@ export function listUnread(
   } catch {
     return [];
   }
+  // E7b revision 3: the seat's stamped folder is listed with it (src/queue/mail-tree.ts); one that
+  // stands but cannot be listed fails the listing as an unreadable legacy folder does.
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return [];
   // The listing as read, before any message rule narrows it: a dot-named marker beside the mail
   // is not a message, and a caller that shares one pass's reading takes its presence from here
   // rather than opening the folder again. A folder that could not be listed is never reported.
   listed?.(names);
-  const nameSet = new Set(names);
+  const folders = [{ folder: dropDir, names }, ...(stamped === null ? [] : [stamped])];
   const key = messageKeyState(home);
   const readRecordAt: RecordReader | null = key.kind !== 'key'
     ? null
@@ -525,47 +531,50 @@ export function listUnread(
   const claim = currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
   const messages: InboxMessage[] = [];
-  for (const name of names) {
-    if (!messageNameOk(name)) continue;
-    if (superseded.has(name)) continue;
-    const at = join(dropDir, name);
-    if (heldAt(at).kind !== 'file') continue;
-    const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
-    const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
-    // A message a lead cleared is settled exactly as one the seat read: it is not waiting mail.
-    if (key.kind === 'key' && hasReceiptFile && isReadOrCleared(dropDir, name, context, key.key, binding)) continue;
-    const payload = readRecordAt === null ? null : readRecordAt(at, name);
-    if (payload !== null && supersededBrief(payload, name, context, claim)) continue;
-    let size = 0;
-    let mtime: number;
-    try {
-      const stat = lstatSync(at);
-      if (!stat.isFile()) continue;
-      size = stat.size;
-      mtime = stat.mtimeMs;
-    } catch {
-      continue;
+  for (const { folder, names: folderNames } of folders) {
+    const nameSet = new Set(folderNames);
+    for (const name of folderNames) {
+      if (!messageNameOk(name)) continue;
+      if (superseded.has(name)) continue;
+      const at = join(folder, name);
+      if (heldAt(at).kind !== 'file') continue;
+      const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
+      const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
+      // A message a lead cleared is settled exactly as one the seat read: it is not waiting mail.
+      if (key.kind === 'key' && hasReceiptFile && isReadOrCleared(folder, name, context, key.key, binding)) continue;
+      const payload = readRecordAt === null ? null : readRecordAt(at, name);
+      if (payload !== null && supersededBrief(payload, name, context, claim)) continue;
+      let size = 0;
+      let mtime: number;
+      try {
+        const stat = lstatSync(at);
+        if (!stat.isFile()) continue;
+        size = stat.size;
+        mtime = stat.mtimeMs;
+      } catch {
+        continue;
+      }
+      const marker = nameSet.has(`${name}.pending`) ? markerOf(folder, name) : {};
+      // A record this key signed is dated by its own `at`; an unsigned marker or the file's mtime
+      // dates only a record the key cannot vouch for. The sender follows the same rule: the
+      // record's own signed claim when it verifies, the marker's word only when it does not — and
+      // only the record's claim can be attributed to anything.
+      const legacy = payload === null && legacyDropAt(at);
+      if (legacy && options.legacy !== 'include') continue;
+      const signedAt = signedTimeOfPayload(payload);
+      const sender = payload !== null ? payload.from : marker.from;
+      const senderAttribution = payload === null
+        ? 'none' as const
+        : attributeSenderClaim(payload, { briefClaim: claim });
+      messages.push({
+        id: name,
+        ...(sender !== undefined ? { from: sender } : {}),
+        ts: signedAt ?? marker.ts ?? new Date(mtime).toISOString(),
+        bytes: size,
+        sender_attribution: senderAttribution,
+        ...(legacy ? { legacy: true as const } : {}),
+      });
     }
-    const marker = nameSet.has(`${name}.pending`) ? markerOf(dropDir, name) : {};
-    // A record this key signed is dated by its own `at`; an unsigned marker or the file's mtime
-    // dates only a record the key cannot vouch for. The sender follows the same rule: the
-    // record's own signed claim when it verifies, the marker's word only when it does not — and
-    // only the record's claim can be attributed to anything.
-    const legacy = payload === null && legacyDropAt(at);
-    if (legacy && options.legacy !== 'include') continue;
-    const signedAt = signedTimeOfPayload(payload);
-    const sender = payload !== null ? payload.from : marker.from;
-    const senderAttribution = payload === null
-      ? 'none' as const
-      : attributeSenderClaim(payload, { briefClaim: claim });
-    messages.push({
-      id: name,
-      ...(sender !== undefined ? { from: sender } : {}),
-      ts: signedAt ?? marker.ts ?? new Date(mtime).toISOString(),
-      bytes: size,
-      sender_attribution: senderAttribution,
-      ...(legacy ? { legacy: true as const } : {}),
-    });
   }
   // E7: the same set and the same (signed-time) order for every consumer; each message carries its
   // queue seq when the reader switch holds for this seat. Time-driven consumers (the drops batch,
@@ -715,12 +724,21 @@ export type InboxTarget = {
  *  launch's own record is admitted only as the seat's current brief, resolved again after the
  *  signature so a delivery that landed during the read is noticed. Nothing is written here: this
  *  is the check a read and a peek both make before a body is shown. */
+/** E7b revision 3: the target re-pointed at the seat folder of the tree that holds `id`
+ *  (src/queue/mail-tree.ts), so every sidecar, receipt and folder fsync follows the record. The
+ *  seat's identity (its queue, its binding) is the same from either folder. */
+function atRecordTree(target: InboxTarget, id: string): InboxTarget {
+  const dropDir = seatFolderOf(target.dropDir, id);
+  return dropDir === target.dropDir ? target : { ...target, dropDir };
+}
+
 function openInboxMessage(
   target: InboxTarget,
   id: string,
   home: string,
   brief: BriefRead | undefined,
 ): OpenedMessage {
+  target = atRecordTree(target, id);
   const at = recordFile(target.dropDir, id);
   const refused = (rule: InboxRefusal['rule'], reason: string): OpenedMessage => ({
     ok: false,
@@ -805,6 +823,7 @@ export function readMessage(
   handover?: { receipt: 'after'; owner?: string; adopt?: boolean },
 ): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  target = atRecordTree(target, id);
   const at = recordFile(target.dropDir, id);
   if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const atReceipt = heldAt(receiptPath(target.dropDir, id));
@@ -1049,6 +1068,7 @@ export function sealRecoveredRead(
   owner: string,
   flush: (path: string, folder: string) => boolean = flushReceipt,
 ): boolean {
+  target = atRecordTree(target, id);
   const got = readMessage(target, id, home, brief, undefined, { receipt: 'after', owner, adopt: true });
   if (got.ok) return got.seal?.() === true;
   if (got.served !== 'already-served') return false;
@@ -1070,6 +1090,7 @@ export function sealRecoveredRead(
  */
 export function peekMessage(target: InboxTarget, id: string, home: string, seats: readonly string[], brief?: BriefRead): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  target = atRecordTree(target, id);
   if (heldAt(recordFile(target.dropDir, id)).kind !== 'file') {
     return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   }

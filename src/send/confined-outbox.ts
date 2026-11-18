@@ -31,6 +31,7 @@ import { cliHookStatePath } from '../launch/cli-hook.ts';
 import { confinedSeatAt } from '../placement/confined.ts';
 import { isRecordSidecarName, recordNameOk } from './record.ts';
 import { claimsOwnedBy, relayClaimOwner, removeOwnedClaim } from './read-claim.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 export type OutboxCommand = 'send' | 'reply' | 'ack' | 'drops';
 
@@ -154,7 +155,7 @@ function relayBindingCheck(
   }
   const id = args.rest[0] ?? '';
   if (!recordNameOk(id)) return 'its id is not a record id';
-  const folder = join(dir, 'send-drops', request.session, request.seat);
+  const folder = seatMailDirIn(dir, request.session, request.seat);
   let names: string[];
   try {
     if (!lstatSync(folder).isDirectory()) return 'the seat has no drop folder';
@@ -359,7 +360,7 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
     }
     const nowMs = sources.now().getTime();
     // Unanswered takes are answered first: the sweep only removes what has its result.
-    recoverTaken(join(dir, 'send-drops', session, seat), seat, folder, names, nowMs, sources);
+    recoverTaken(seatMailDirIn(dir, session, seat), seat, folder, names, nowMs, sources);
     sweepResults(folder, readdirSafe(folder), nowMs);
     for (const name of names) {
       if (ran >= RELAY_PER_PASS) return ran;
@@ -396,7 +397,7 @@ export async function relayOutboxes(dir: string, session: string, seats: readonl
       // marker, and a later pass answers it as cut off.
       // The run's own result enters the one lifecycle at its publish step. Any step that fails
       // stops there; the take stays, and the recovery pass resumes from the last durable step.
-      finishTake(join(dir, 'send-drops', session, seat), seat, folder, id, sources, result);
+      finishTake(seatMailDirIn(dir, session, seat), seat, folder, id, sources, result);
       ran += 1;
     }
   }

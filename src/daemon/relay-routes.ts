@@ -92,6 +92,7 @@ import { deliveryOrder } from '../settings/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { Dial, RelayReceipt as PackageRelayReceipt, RelayStage } from '../../packages/relay/index.js';
 import { canonicalRoot, type HostedRoute } from './routes.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 export {
   deliverRuntimeRelayRoute,
@@ -317,7 +318,7 @@ export function selectDaemonRelayRoutes(
   const stateDir =
     input.stateDir
     ?? (input.teamFile !== undefined ? dirname(input.teamFile) : join(route.root, '.agents'));
-  const dropDir = join(stateDir, 'send-drops', route.session, seat);
+  const dropDir = seatMailDirIn(stateDir, route.session, seat);
 
   const capabilities = runtimeRelayCapabilities(declaredSeat.cli, declaredSeat.version);
 

@@ -91,6 +91,8 @@ import { publishRecordRead } from '../send/read-receipt.ts';
 import { noteUnread } from '../send/unread-hint.ts';
 import { recordDir } from './messages.ts';
 import { reportedConversationProblem, admissionOf, labelNameOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
+import { seatDropDir, seatListingDirs, sessionMailDir } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team reply <id> [<text>] [--close] [--json]
        team reply <id> --close
@@ -164,6 +166,11 @@ export function samePath(a: string, b: string): boolean {
 /** The live seat folder, or `archive/<YYYY-MM>` directly under it. A link that resolves outside
  *  that seat, or any other subfolder, is not this mailbox. */
 function inOwnMailbox(seatDir: string, folder: string): boolean {
+  // E7b revision 3: either of the seat's two folders (src/queue/mail-tree.ts) is its mailbox.
+  return seatListingDirs(seatDir).some((dir) => inOneMailbox(dir, folder));
+}
+
+function inOneMailbox(seatDir: string, folder: string): boolean {
   let live: string;
   let held: string;
   try {
@@ -192,7 +199,7 @@ export function landsWhereRead(home: string, folder: string, id: string, root: s
   } catch {
     return false;
   }
-  const read = readRecord(join(folder, id), id);
+  const read = readRecord(liveRecordPath(folder, id), id);
   if (!read.ok || read.record === null) return false;
   const payload = read.record.payload;
   if (payload.to !== seat) return false;
@@ -213,29 +220,33 @@ export function landsWhereRead(home: string, folder: string, id: string, root: s
  * read, which is what a caller that does not know the pair asks for.
  */
 function candidatesOf(root: string, session: string, seats?: readonly string[]): { seat: string; path: string }[] {
-  const dir = join(root, '.agents', 'send-drops', session);
-  if (!isDir(dir)) return [];
-  let names: string[];
-  try {
-    names = seats === undefined ? readdirSync(dir).sort() : [...new Set(seats)].filter((seat) => NAME.test(seat)).sort();
-  } catch {
-    return [];
-  }
   const out: { seat: string; path: string }[] = [];
-  for (const seat of names) {
-    if (!NAME.test(seat)) continue;
-    const seatDir = join(dir, seat);
-    if (!isDir(seatDir)) continue;
-    let entries: string[];
+  // E7b revision 3: the session's two trees (src/queue/mail-tree.ts), legacy first.
+  for (const tree of ['legacy', 'stamped'] as const) {
+    const dir = sessionMailDir(root, session, tree);
+    if (!isDir(dir)) continue;
+    let names: string[];
     try {
-      entries = readdirSync(seatDir).sort();
+      names = seats === undefined ? readdirSync(dir).sort() : [...new Set(seats)].filter((seat) => NAME.test(seat)).sort();
     } catch {
+      if (tree === 'legacy') return [];
       continue;
     }
-    for (const name of entries) {
-      if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith('work-')) continue;
-      const path = join(seatDir, name);
-      if (isFile(path)) out.push({ seat, path });
+    for (const seat of names) {
+      if (!NAME.test(seat)) continue;
+      const seatDir = join(dir, seat);
+      if (!isDir(seatDir)) continue;
+      let entries: string[];
+      try {
+        entries = readdirSync(seatDir).sort();
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith('work-')) continue;
+        const path = join(seatDir, name);
+        if (isFile(path)) out.push({ seat, path });
+      }
     }
   }
   return out;
@@ -259,13 +270,18 @@ export const MIN_ID_PREFIX_LEN = 8;
 /** The seat folders this session names: a listing of the session's own folder, one entry per
  *  seat, never a listing of the records in them. */
 function seatNamesOf(root: string, session: string): string[] {
-  const dir = join(root, '.agents', 'send-drops', session);
-  if (!isDir(dir)) return [];
-  try {
-    return readdirSync(dir).filter((seat) => NAME.test(seat) && isDir(join(dir, seat))).sort();
-  } catch {
-    return [];
+  // E7b revision 3: a seat with only a stamped folder is a seat of the session too.
+  const seats = new Set<string>();
+  for (const tree of ['legacy', 'stamped'] as const) {
+    const dir = sessionMailDir(root, session, tree);
+    if (!isDir(dir)) continue;
+    try {
+      for (const seat of readdirSync(dir)) if (NAME.test(seat) && isDir(join(dir, seat))) seats.add(seat);
+    } catch {
+      // A tree that cannot be listed names no seat.
+    }
   }
+  return [...seats].sort();
 }
 
 /** The candidate files named exactly `id` in this session's tree: what a lookup has to weigh,
@@ -284,7 +300,7 @@ export function recordHits(root: string, session: string, id: string): { seat: s
   if (emitted && !NAME.test(id)) return [];
   const hits: { seat: string; path: string }[] = [];
   for (const seat of seatNamesOf(root, session)) {
-    const seatDir = join(root, '.agents', 'send-drops', session, seat);
+    const seatDir = seatDropDir(root, session, seat);
     const path = recordFile(seatDir, looked);
     if (emitted) {
       const marker = join(dirname(path), id);
