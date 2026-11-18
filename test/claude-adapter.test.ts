@@ -7,7 +7,8 @@
 // at once; there is one clock, the re-send scheduler's. Only an ack, a reply or a clearance
 // settles; a read is a copy. Fixtures only: a synthetic team, a scripted typed seam, no live pane.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as send from '../src/commands/send.ts';
 import type { SendHost } from '../src/commands/send.ts';
@@ -15,13 +16,13 @@ import { listenerKeyOf, proveOffer } from '../src/comms/offer.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { readMessage, writeListener, type InboxListener } from '../src/mcp/inbox.ts';
 import { activate, deactivate, queuesFolder, type FloorActor } from '../src/queue/floor.ts';
-import { attemptLedger, EXPOSURES, reserveAttempt, takeCopyNumber } from '../src/queue/handover.ts';
+import { attemptLedger, EXPOSURES, offeredCopies, reserveAttempt, takeCopyNumber } from '../src/queue/handover.ts';
 import { nativePendingDir, seatMailDirIn } from '../src/queue/mail-tree.ts';
-import { channelUnproven, CHANNEL_OVERDUE_MS } from '../src/queue/resend.ts';
+import { channelUnproven, CHANNEL_OVERDUE_MS, overdueChannelRecords } from '../src/queue/resend.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
-import { signRecord, stampedPayload, stampedSettled, writeRecord, type RecordPayload } from '../src/send/record.ts';
+import { clearedFile, leadAckReceiptAt, signReceiptPayload, signRecord, stampedPayload, stampedSettled, stampedSettlement, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { adapterPointerLine, deliverTypedWake, type TypedWakeResult } from '../src/send/typed-wake.ts';
 import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { typedWakeMaxFor } from '../src/send/readable-wake.ts';
@@ -536,5 +537,81 @@ describe('round 2: an overdue record stays owed a pointer when another message p
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
     expectPointer(lines[0], ID, 2);
+  });
+});
+
+describe('round 3: an overdue record\'s pointer keeps its own clock', () => {
+  test('an unconfirmed read just before the deadline does not postpone the pointer', async () => {
+    const at = place();
+    stamped(at, ID);
+    pushed(at, ID, 'f'.repeat(32));
+    age(at, ID, CHANNEL_OVERDUE_MS + 1_000);
+    stamped(at, OTHER);
+    pushed(at, OTHER, 'a'.repeat(32));
+    ack(at, OTHER, 'channel');
+    expect(proveOffer(dropOf(at), OTHER, 'a'.repeat(32), listenerKeyOf(at.listener), { root: at.root, session: SESSION, seat: SEAT, key: keyOf(at.home) })).not.toBeNull();
+    // A writer-side read takes a fresh copy now: it settles nothing and moves no pointer clock.
+    expect(readMessage({ dropDir: dropOf(at), root: at.root, session: SESSION, seat: SEAT }, ID, at.home).ok).toBe(true);
+    expect(settled(at, ID)).toBe(false);
+    const lines: string[] = [];
+    await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`team show ${ID.slice(0, 8)}`);
+  });
+});
+
+describe('round 3: a clearance note counts only with the ack it was committed with', () => {
+  const ctx = (at: Place) => ({ to: SEAT, root: at.root, session: SESSION, lead: 'lead' });
+  test('a note left without its ack (an interrupted pair), and a garbage note, are no clearance', () => {
+    const at = place();
+    stamped(at, ID);
+    expect(readMessage({ dropDir: dropOf(at), root: at.root, session: SESSION, seat: SEAT }, ID, at.home).ok).toBe(true);
+    // The clearance note alone, as if the ack write never happened.
+    const note = signReceiptPayload({ kind: 'receipt', status: 'read', id: ID, to: SEAT, root: at.root, session: SESSION, at: new Date().toISOString(), read_by: 'lead-ack:lead' }, at.home);
+    writeFileSync(clearedFile(stampedOf(at), ID), `${JSON.stringify(note, null, 2)}\n`);
+    expect(leadAckReceiptAt(stampedOf(at), ID, ctx(at), keyOf(at.home))).toBeNull();
+    expect(settled(at, ID)).toBe(false);
+    writeFileSync(clearedFile(stampedOf(at), ID), 'not a receipt');
+    expect(leadAckReceiptAt(stampedOf(at), ID, ctx(at), keyOf(at.home))).toBeNull();
+  });
+
+  test('a recipient ack that wins the name is never reported as the clearer\'s', () => {
+    const at = place();
+    stamped(at, ID);
+    expect(readMessage({ dropDir: dropOf(at), root: at.root, session: SESSION, seat: SEAT }, ID, at.home).ok).toBe(true);
+    ack(at, ID);
+    publishRecordRead({ dropDir: dropOf(at), id: ID, to: SEAT, root: at.root, session: SESSION, home: at.home, key: keyOf(at.home), at: new Date().toISOString(), readBy: 'lead-ack:lead', lead: 'lead' });
+    expect(stampedSettlement(stampedOf(at), ID, ctx(at), keyOf(at.home))).toEqual({ kind: 'acked' });
+    expect(existsSync(clearedFile(stampedOf(at), ID))).toBe(false);
+  });
+
+  test('a clearer without authority writes nothing', () => {
+    const at = place();
+    stamped(at, ID);
+    expect(readMessage({ dropDir: dropOf(at), root: at.root, session: SESSION, seat: SEAT }, ID, at.home).ok).toBe(true);
+    const outcome = publishRecordRead({ dropDir: dropOf(at), id: ID, to: SEAT, root: at.root, session: SESSION, home: at.home, key: keyOf(at.home), at: new Date().toISOString(), readBy: 'lead-ack:native', lead: 'lead' });
+    expect(outcome.kind).not.toBe('published');
+    expect(settled(at, ID)).toBe(false);
+  });
+});
+
+describe('round 3: the overdue sweep reads history only inside the seat tree', () => {
+  test('a fifo attempt entry and a linked seat folder authorize nothing and block nothing', async () => {
+    const at = place();
+    proven(at);
+    stamped(at, ID);
+    pushed(at, ID, 'f'.repeat(32));
+    age(at, ID, CHANNEL_OVERDUE_MS + 1_000);
+    execFileSync('mkfifo', [join(stampedOf(at), EXPOSURES, ID, '.attempt-1')]);
+    expect(overdueChannelRecords({ dropDir: dropOf(at), context: { to: SEAT, root: at.root, session: SESSION, lead: 'lead' }, key: keyOf(at.home), nowMs: Date.now() })).toEqual(new Map());
+    const lines: string[] = [];
+    await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+    // A stamped seat folder that is a link: no history is read through it.
+    const real = stampedOf(at);
+    const moved = join(at.root, 'moved-seat');
+    renameSync(real, moved);
+    symlinkSync(moved, real);
+    expect(offeredCopies(real, ID)).toEqual([]);
   });
 });

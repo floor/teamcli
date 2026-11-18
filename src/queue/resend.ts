@@ -24,7 +24,7 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { join } from 'node:path';
 import { stampedListing } from './mail-tree.ts';
 import { ACTOR_LEVEL } from './floor.ts';
-import { copyHistory, firstChannelOffer, newestOffer, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
+import { attemptTimes, backoffMs, copyHistory, firstChannelOffer, newestOffer, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
 import { floorState } from './floor.ts';
 import { inboxLive } from '../mcp/inbox.ts';
 import { listenerKeyOf, offerAcks } from '../comms/offer.ts';
@@ -102,7 +102,8 @@ export function overdueChannelRecords(input: { dropDir: string; context: StatusC
     }
     if (recordStampAt(listing.folder, name) !== true) continue;
     const start = firstChannelOffer(listing.folder, name, arrived);
-    if (start === null || input.nowMs - start < CHANNEL_OVERDUE_MS) continue;
+    // An unreadable history authorizes nothing: the record is not listed as overdue.
+    if (start === null || start === 'unknown' || input.nowMs - start < CHANNEL_OVERDUE_MS) continue;
     if (stampedSettled(listing.folder, name, input.context, input.key)) continue;
     out.set(name, start);
   }
@@ -170,6 +171,18 @@ export function claudeAdapterRoot(cli: string, root: string, home: string, webho
 function dueNow(folder: string, id: string, seat: ResendSeat, nowMs: number, arrived: number): boolean {
   if (seat.only !== undefined && !seat.only.has(id)) return false;
   if (recordStampAt(folder, id) !== true || stampedSettled(folder, id, seat.context, seat.key)) return false;
+  // An overdue record's pointers (a proven seat's `only` set) keep their own clock: the first is
+  // due at the first channel offer's deadline, whatever copy a read took since, and each later one
+  // waits `backoffMs(1 + attempts)` from the newest attempt made since that offer, never a copy.
+  if (seat.only !== undefined) {
+    const start = firstChannelOffer(folder, id, arrived);
+    const attempts = attemptTimes(folder, id);
+    if (start === null || start === 'unknown' || attempts === 'unknown') return false;
+    const since = attempts.filter((one) => !one.channel && one.atMs >= start);
+    if (since.length === 0) return nowMs - start >= CHANNEL_OVERDUE_MS;
+    const newest = Math.max(...since.map((one) => one.atMs));
+    return nowMs - newest >= backoffMs(1 + since.length);
+  }
   // The adapter change (§2.3): the newest offer went by the channel and the seat is unproven now.
   const changed = seat.unproven !== undefined && newestOffer(folder, id, arrived).channel && seat.unproven();
   return resendDue(folder, id, nowMs, arrived, changed);

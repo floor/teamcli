@@ -1590,6 +1590,12 @@ export function leadAckReceiptAt(
   for (const path of [receiptFile(dropDir, id, 'read'), clearedFile(dropDir, id)]) {
     const verified = readVerifiedReceipt(path, id, 'read', context, key);
     if (verified === null) continue;
+    // The clearance note counts only beside the committed ack note it was written with: the same
+    // time, and the `ack` word. A note alone is an intent that never committed.
+    if (path !== receiptFile(dropDir, id, 'read')) {
+      const ack = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
+      if (ack === null || ack.payload.read_by !== 'ack' || ack.payload.at !== verified.payload.at) continue;
+    }
     const by = leadAckActorOf(verified.payload.read_by);
     if (by === null) continue;
     if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) continue;

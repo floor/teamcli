@@ -13,7 +13,7 @@ import { queuePlaceOf } from '../queue/append.ts';
 import { type KeyObject } from 'node:crypto';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
-import { ackedFile, clearedFile, COPY_READ_BY, isLeadAckReadBy, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
+import { ackedFile, clearedFile, COPY_READ_BY, isLeadAckReadBy, leadAckActorOf, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
 import { clearUnread } from './unread-hint.ts';
 
 /** The message whose read is being recorded: its folder, its id, the seat it was addressed to,
@@ -84,21 +84,24 @@ function publish(input: RecordReadInput): RecordReadOutcome {
     if (standing !== null && !confirming) return { kind: 'published' };
     if (standing !== null) {
       const acked = ackedFile(dropDir, id);
-      // A lead's or the owner's clearance is kept with its actor in its own note first (the Claude
-      // adapter §3), so the sender is told who cleared it; the ack note keeps the `ack` word every
-      // level-3 reader, the installed one included, settles by.
-      if (isLeadAckReadBy(readBy)) {
-        const clearance: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at, read_by: readBy as string };
-        const cleared = clearedFile(dropDir, id);
-        const wrote = publishReadReceipt(cleared, `${JSON.stringify(signReceiptPayload(clearance, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
-        if (wrote === 'failed') return { kind: 'unwritten', reason: 'write' };
-        if (wrote === 'written' && !flushReceipt(cleared, dropDir)) return { kind: 'unwritten', reason: 'durable' };
-      }
+      // A lead's or the owner's clearance (the Claude adapter §3): its authority is checked
+      // first, the ack note every level-3 reader settles by (`ack`) is committed first, and only
+      // then is the actor kept in its own note, bound to that ack by its time. An ack name another
+      // act already holds (the recipient's own ack) is never claimed for the clearer.
+      const clearing = isLeadAckReadBy(readBy) ? leadAckActorOf(readBy) : null;
+      if (clearing !== null && clearing !== 'owner' && clearing !== lead) return { kind: 'held', status: 'read', entry: 'file' };
       const receipt: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at, read_by: 'ack' };
       const made = publishReadReceipt(acked, `${JSON.stringify(signReceiptPayload(receipt, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
       if (made === 'failed') return { kind: 'unwritten', reason: 'write' };
       if (made === 'exists') return stampedSettled(dropDir, id, context, key) ? { kind: 'served' } : { kind: 'held', status: 'read', entry: 'file' };
       if (!flushReceipt(acked, dropDir)) return { kind: 'unwritten', reason: 'durable' };
+      if (clearing !== null) {
+        // Best effort after the commit: a note that is not written leaves the message settled,
+        // reported as acked.
+        const clearance: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at, read_by: readBy as string };
+        const cleared = clearedFile(dropDir, id);
+        if (publishReadReceipt(cleared, `${JSON.stringify(signReceiptPayload(clearance, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`) === 'written') flushReceipt(cleared, dropDir);
+      }
       return { kind: 'published' };
     }
   }
