@@ -10,8 +10,6 @@ import { activate, type FloorActor } from '../src/queue/floor.ts';
 import { nativePendingDir, seatMailDirs } from '../src/queue/mail-tree.ts';
 import { listPendingNative, readPending, restoreTaken, takePending, writePending, type PendingNative } from '../src/send/pending.ts';
 import { appendHistory, readHistory } from '../src/send/history.ts';
-import { requestDaemon } from '../src/send/daemon.ts';
-import { levelThreePeer } from '../src/commands/send.ts';
 import { outboxFolder, relayOutboxes, relayThroughOutbox, type OutboxProtocol, type RelaySources } from '../src/send/confined-outbox.ts';
 import { stampedLeftOut, withoutStamped } from '../src/commands/drops.ts';
 import { listUnread } from '../src/mcp/inbox.ts';
@@ -91,36 +89,8 @@ describe('carrier 1: a stamped native handoff waits under the stamped tree', () 
   });
 });
 
-describe.skipIf(e7a === null)('carrier 2: the daemon request', () => {
-  test('an E7a ping names no level, so no stamped send is handed to it; a level-3 ping names its pid', () => {
-    expect(levelThreePeer({ v: 1, ok: true, pong: true, pid: 42 })).toBe(null);
-    expect(levelThreePeer({ v: 1, ok: true, pong: true, pid: 42, level: 2 })).toBe(null);
-    expect(levelThreePeer({ v: 1, ok: true, pong: true, pid: 42, level: 3 })).toBe(42);
-    expect(levelThreePeer(null)).toBe(null);
-  });
-
-  test('a real E7a daemon given the stamped kind refuses it and stages nothing', async () => {
-    const at = place();
-    const daemonModule = await import(`${e7a}/send/daemon.ts`);
-    const socketPath = join(at.base, 'send.sock');
-    const team = { session: SESSION, project: 'acme', orchestrator: 'lead', seats: [{ name: 'lead' }] };
-    const started = await daemonModule.startSendDaemon({
-      root: at.root, dir: join(at.root, '.agents'), team, host: { ...daemonModule.realDaemonHost, home: at.home },
-      socketPath, lockPath: join(at.base, 'send.lock'),
-    });
-    expect(started.kind).toBe('serving');
-    try {
-      const ping = await requestDaemon(socketPath, { v: 1, op: 'ping' }, 2_000);
-      expect(levelThreePeer(ping)).toBe(null);
-      const answer = await requestDaemon(socketPath, { v: 1, op: 'send-stamped', pid: started.handle?.pid ?? 0, id: ID, from: 'worker', to: 'lead', body: SECRET }, 5_000);
-      expect(answer).toMatchObject({ ok: false });
-      expect(holding(at.home, SECRET)).toEqual([]);
-      expect(holding(at.root, SECRET)).toEqual([]);
-    } finally {
-      await started.handle?.close();
-    }
-  });
-});
+// Carrier 2 (the daemon request) is deleted, not guarded: a stamped send never dials the
+// daemon (test/e7b-r3-round2.test.ts).
 
 describe('carrier 3: history on a root not proven dark carries no body', () => {
   test('the line keeps the id and a digest; E7a reads no body from it', async () => {

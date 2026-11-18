@@ -132,3 +132,18 @@ export const NO_STAMPED_FOLDER = 'a stamped record has no stamped folder here, a
 export function nativePendingDir(root: string): string {
   return join(mailTreeOf(root, 'stamped'), '.native-pending');
 }
+
+/** The ids this process stamped (E7b revision 3, history era): a history line written by the
+ *  process that signed a stamped record carries no body, whatever the floor says by then. */
+const stampedHere = new Set<string>();
+
+/** Notes an id this process stamped. */
+export function noteStampedId(id: string): void {
+  if (stampedHere.size > 65_536) stampedHere.clear();
+  stampedHere.add(id);
+}
+
+/** Whether this process stamped the id. */
+export function stampedHereId(id: string): boolean {
+  return stampedHere.has(id);
+}

@@ -1,6 +1,8 @@
 import { hostedCommit } from '../host/request-scope.ts';
 import { createHash } from 'node:crypto';
 import { floorState } from '../queue/floor.ts';
+import { mailTreeOf, nativePendingDir, seatMailDirs, stampedHereId } from '../queue/mail-tree.ts';
+import { folderOfDrop } from './drop-folder.ts';
 import { closeSync, constants, existsSync, fstatSync, readdirSync, readSync, statSync } from 'node:fs';
 import { chmodSync, fchmodSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join, sep } from 'node:path';
@@ -278,6 +280,27 @@ function rotateHistory(path: string): string | null {
  * Appends one JSONL record `{ts, from, to, body, id, outcome}` to `<storeDir>/messages.jsonl`
  * at mode 0600 without following symbolic links. Rotates at 1 MB keeping 3 files at mode 0600.
  */
+/** Whether a stamped record of `id` for seat `to`, or a stamped native handoff of `id`, stands
+ *  under `root` (any session; the live folder or its month archive). */
+function stampedOnDisk(root: string, to: string, id: string): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(to)) return false;
+  if (heldAt(join(nativePendingDir(root), `${id}.json`)).kind !== 'missing') return true;
+  let sessions: string[];
+  try {
+    sessions = readdirSync(mailTreeOf(root, 'stamped'));
+  } catch {
+    return false;
+  }
+  for (const session of sessions) {
+    if (session.startsWith('.')) continue;
+    const seatDir = seatMailDirs(root, session, to).stamped;
+    if (heldAt(join(seatDir, id)).kind !== 'missing') return true;
+    // An archived stamped record: its month folder sits inside the stamped seat folder.
+    if (folderOfDrop(seatDir, id).startsWith(`${seatDir}/`)) return true;
+  }
+  return false;
+}
+
 export function appendHistory(project: string, root: string, home: string, entry: HistoryEntry): HistoryWrite {
   hostedCommit('appendHistory');
   const record: HistoryEntry = {
@@ -288,10 +311,13 @@ export function appendHistory(project: string, root: string, home: string, entry
     id: entry.id,
     outcome: entry.outcome,
   };
-  // E7b revision 3 (carrier 3): history is read by older watches, so on a root not proven dark
-  // (where a send stamps its record) a line never carries a body: the id and a digest only. An
-  // unreadable floor counts as not dark (fail closed). A dark root keeps its exact older lines.
-  if (entry.body !== '' && floorState(root, home).kind !== 'dark') {
+  // E7b revision 3 (carrier 3): history is read by older watches, so a line never carries the body
+  // of a stamped message: the id and a digest only. The era rides with the message, not the
+  // floor at write time: the line is body-free when it says it is stamped, when this process
+  // stamped that id, when a stamped record or stamped native handoff of that id stands under the
+  // root, or when the root is not proven dark (an unreadable floor counts as not dark). A dark
+  // root's line for an unstamped message keeps its exact older shape.
+  if (entry.body !== '' && (entry.stamped === true || stampedHereId(entry.id) || stampedOnDisk(root, entry.to, entry.id) || floorState(root, home).kind !== 'dark')) {
     record.body = '';
     record.stamped = true;
     record.body_sha256 = createHash('sha256').update(entry.body, 'utf8').digest('hex');

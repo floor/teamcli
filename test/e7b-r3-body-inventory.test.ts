@@ -118,9 +118,9 @@ describe('revision 3: the body-write inventory', () => {
   test('the four other carriers keep their stamped containers', () => {
     const pending = code(byPath.get('src/send/pending.ts') as string);
     expect(pending).toMatch(/if \(stamped\) \{\s*\n[^\n]*\n\s*dir = nativePendingDir\(root\);/);
-    const daemon = code(byPath.get('src/send/daemon.ts') as string);
-    expect((daemon.match(/request\.stamped === true \? 'drops-stamped' : 'drops'/g) ?? []).length).toBe(3);
-    expect((daemon.match(/ensureLadder\(host\.home, store, \['drops'/g) ?? []).length).toBe(0);
+    // Carrier 2 is deleted: a stamped send never dials the daemon, and the daemon has no stamped kind.
+    expect(code(byPath.get('src/commands/send.ts') as string)).toContain('const dialled = !isStampedPayload(record) && existsSync(daemonSock)');
+    expect(code(byPath.get('src/send/daemon.ts') as string)).not.toContain('send-stamped');
     const history = code(byPath.get('src/send/history.ts') as string);
     expect(history).toContain("floorState(root, home).kind !== 'dark'");
     const outbox = code(byPath.get('src/send/confined-outbox.ts') as string);
@@ -130,7 +130,7 @@ describe('revision 3: the body-write inventory', () => {
   test('every delivery leg that hands a stamped body over numbers its copy', () => {
     // The legs: the channel push, the inbox read, the typed wake, the socket frame and the daemon's
     // handoff. Each one that reads a body for a stamped record takes a copy number.
-    for (const path of ['src/mcp/serve.ts', 'src/mcp/inbox.ts', 'src/send/readable-wake.ts', 'src/commands/send.ts', 'src/send/daemon.ts']) {
+    for (const path of ['src/mcp/serve.ts', 'src/mcp/inbox.ts', 'src/send/readable-wake.ts', 'src/commands/send.ts']) {
       expect(code(byPath.get(path) as string)).toMatch(/takeCopyNumber\(|wrapCopy\(/);
     }
   });

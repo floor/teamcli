@@ -34,7 +34,7 @@ import { dropMessage } from './native.ts';
 import { floorState } from '../queue/floor.ts';
 import { EXPOSURES } from '../queue/handover.ts';
 import { ensureFolder } from '../queue/durable.ts';
-import { NO_STAMPED_FOLDER, recordFolderFor } from '../queue/mail-tree.ts';
+import { NO_STAMPED_FOLDER, noteStampedId, recordFolderFor } from '../queue/mail-tree.ts';
 
 /** The `kind` a message record's payload carries. A receipt carries `receipt`, a thread's close
  *  `thread-close`. */
@@ -144,14 +144,22 @@ export const DELIVERY_LEVEL = 3 as const;
 export function stampedPayload(payload: RecordPayload, home: string): RecordPayload {
   // A general seat brief keeps its own epoch-bound lifecycle (served once per launch at the turn
   // start, never acknowledged with `team ack`), so it is never stamped either.
-  if (payload.lvl === DELIVERY_LEVEL || payload.to_client !== undefined || payload.brief_sha256 !== undefined) return payload;
+  if (payload.lvl === DELIVERY_LEVEL) {
+    noteStampedId(payload.id);
+    return payload;
+  }
+  if (payload.to_client !== undefined || payload.brief_sha256 !== undefined) return payload;
   let dark: boolean;
   try {
     dark = floorState(payload.root, home).kind === 'dark';
   } catch {
     dark = false;
   }
-  return dark ? payload : { ...payload, lvl: DELIVERY_LEVEL };
+  if (dark) return payload;
+  // E7b revision 3: the era rides with the id in this process, so its history lines stay
+  // body-free even if the floor rolls back to dark before they are written.
+  noteStampedId(payload.id);
+  return { ...payload, lvl: DELIVERY_LEVEL };
 }
 
 /** Whether a payload is under the at-least-once contract. */

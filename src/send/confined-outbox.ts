@@ -29,7 +29,7 @@ import { ACK_FLAG_OPTIONS, DROPS_FLAG_OPTIONS, DROPS_VALUED_OPTIONS, REPLY_FLAG_
 import type { Io } from '../io.ts';
 import { cliHookStatePath } from '../launch/cli-hook.ts';
 import { confinedSeatAt } from '../placement/confined.ts';
-import { isRecordSidecarName, recordNameOk } from './record.ts';
+import { isRecordSidecarName, recordNameOk, recordStampAt } from './record.ts';
 import { claimsOwnedBy, relayClaimOwner, removeOwnedClaim } from './read-claim.ts';
 import { seatMailDirIn } from '../queue/mail-tree.ts';
 
@@ -142,12 +142,41 @@ export function relayBindingRefusal(
  */
 export function relayBinding(
   dir: string,
-  request: { command: OutboxCommand; argv: readonly string[]; seat: string; session: string; cwd?: string },
+  request: { command: OutboxCommand; argv: readonly string[]; seat: string; session: string; cwd?: string; v?: OutboxProtocol },
 ): { refused: string } | { argv: string[]; cwd: string | undefined } {
+  // E7b revision 3 (carrier 4): an older requester (protocol 1) never settles a stamped message;
+  // only the installed command does. Checked before anything runs, so nothing is written.
+  if (request.v === 1 && (request.command === 'ack' || request.command === 'reply')) {
+    const stamped = stampedTargetOf(dir, request);
+    if (stamped) return { refused: `a stamped message: run the installed team ${request.command}` };
+  }
   if (request.command !== 'ack' && request.command !== 'drops') return { argv: [...request.argv], cwd: request.cwd };
   const refused = relayBindingCheck(dir, request);
   if (typeof refused === 'string') return { refused };
   return { argv: refused.argv, cwd: dirname(dir) };
+}
+
+/** Whether an ack's or reply's id (or id prefix) names a stamped record in either of the seat's
+ *  folders. A record that cannot be read counts as stamped (fail closed). */
+function stampedTargetOf(dir: string, request: { command: OutboxCommand; argv: readonly string[]; seat: string; session: string }): boolean {
+  const grammar = GRAMMAR[request.command];
+  const args = readArgs([...request.argv], [...grammar.valued], [...grammar.flags]);
+  const id = args.rest[0] ?? '';
+  if (id === '' || id.includes('/') || id.startsWith('.')) return false;
+  const legacy = seatMailDirIn(dir, request.session, request.seat);
+  for (const folder of [legacy, seatMailDirIn(dir, request.session, request.seat, 'stamped')]) {
+    let names: string[];
+    try {
+      names = readdirSync(folder);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.startsWith(id) || name.startsWith('.') || isRecordSidecarName(name) || !recordNameOk(name)) continue;
+      if (recordStampAt(legacy, name) !== false) return true;
+    }
+  }
+  return false;
 }
 
 function relayBindingCheck(
