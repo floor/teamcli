@@ -1843,26 +1843,35 @@ export async function executePlan(
         let channelCurrent = true;
         try { if (channel?.ok) channel.lease.check(); } catch { channelCurrent = false; }
         if (!guardRestore(op.seat)) break;
-        // E7b (L1): under the seat lock, before the CLI starts, the seat's earlier launch-level
-        // record goes and a pending one (proving nothing) stands. A record that cannot be written
-        // leaves the seat unknown to the actor proof (fail closed); the launch itself goes on.
+        // E7b (L1): before the CLI starts, a pending launch-level record (proving nothing, carrying
+        // this attempt's nonce) replaces the seat's earlier one, under the activation lock. When it
+        // cannot be published (the lock busy: an activation in progress; or the write not durable),
+        // the line is never typed: a launch the actor proof cannot see must not run.
+        let pendingNonce: string | null = null;
+        let recordUnpublished = false;
         if (here && host.launchLevelAt !== undefined) {
-          launchPending(host.launchLevelAt.root, host.launchLevelAt.home, session, op.seat, host.processInfo?.(session, here.pane)?.shell ?? null);
+          pendingNonce = launchPending(host.launchLevelAt.root, host.launchLevelAt.home, session, op.seat, host.processInfo?.(session, here.pane)?.shell ?? null);
+          recordUnpublished = pendingNonce === null;
         }
         // Each way the line can fail to run is named: one sentence for three causes hid which
         // one a stale pane hit (the Kimi and DeepSeek testers, 2026-11-12).
         const notRun = !here
           ? 'no pane was found for it'
-          : !channelCurrent
-            ? 'its channel lease was no longer current'
-            : !host.paneRun(session, here.pane, launch.command)
-              ? `the terminal host did not take the line in pane ${here.pane}`
-              : null;
+          : recordUnpublished
+            ? 'its launch record could not be published (activation in progress or the record not durable); nothing was typed'
+            : !channelCurrent
+              ? 'its channel lease was no longer current'
+              : !host.paneRun(session, here.pane, launch.command)
+                ? `the terminal host did not take the line in pane ${here.pane}`
+                : null;
         if (notRun !== null || !here) {
-          // E7b: each of these is positively a launch that submitted nothing (no pane, a lease no
-          // longer current, a terminal that did not take the line): its own pending launch record
-          // is retired, so it never blocks activation. An ambiguous outcome keeps it.
-          if (host.launchLevelAt !== undefined) launchRetire(host.launchLevelAt.root, host.launchLevelAt.home, session, op.seat);
+          // E7b: only an outcome known before submission retires this attempt's own pending record
+          // (a lease no longer current: checked before paneRun, nothing typed). A paneRun false is
+          // ambiguous (the herdr adapter also returns false when only its capture failed), so the
+          // record stays and the seat stays unknown until a later launch proves it.
+          if (host.launchLevelAt !== undefined && pendingNonce !== null && !channelCurrent) {
+            launchRetire(host.launchLevelAt.root, host.launchLevelAt.home, session, op.seat, pendingNonce);
+          }
           // The fresh-start fallback is logged with its real outcome, never as a launch that
           // did not happen: the terminal's scrollback loses this, so the log keeps the truth.
           if (freshFrom !== undefined) {

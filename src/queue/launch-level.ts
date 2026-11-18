@@ -3,7 +3,7 @@
 // A seat whose inbox-listener marker is absent is not an actor only on positive evidence that any
 // inbox server it has was started by this build or later: its current managed launch signed its
 // build level and names the seat's live CLI process. Each managed launch, under the seat lock:
-//   L1 pending  before the CLI starts, any earlier record is removed (durably) and a pending record
+//   L1 pending  before the CLI starts, a pending record (with a per-attempt nonce) replaces any earlier
 //               is written, signed, naming the pane's shell. A pending record proves nothing.
 //   L2 proven   once the CLI's idle prompt is up, the record is replaced (durably) by one that names
 //               the CLI's pid and that process's start instant, signed with the build's level.
@@ -14,7 +14,9 @@
 // the same pane leaves the seat with a pending or earlier record whose CLI pid is gone or another
 // process, so it is unknown.
 //
-// File: <root>/.agents/queues/launches/<session>.<seat>.json
+// File: <root>/.agents/queues/launches/<session>/<seat>.json (separate path components: NAME forbids
+// '/', so no two (session, seat) pairs can share a file). Each L1 carries a random nonce naming its
+// launch attempt; a retirement removes only the pending record carrying its own attempt's nonce.
 import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -30,11 +32,13 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 type LaunchLevelPayload = {
   v: 1; kind: 'launch-level'; root: string; session: string; seat: string; level: number;
   state: 'pending' | 'proven'; shell: number | null; cli: number | null; cli_start: number | null; at: string;
+  /** The launch attempt's identity (random hex), on the L1 and carried to its L2. */
+  nonce?: string;
 };
 
 function recordPath(root: string, session: string, seat: string): string | null {
   if (!NAME.test(session) || !NAME.test(seat)) return null;
-  return join(queuesFolder(root), 'launches', `${session}.${seat}.json`);
+  return join(queuesFolder(root), 'launches', session, `${seat}.json`);
 }
 
 function write(root: string, home: string, payload: LaunchLevelPayload): boolean {
@@ -77,22 +81,29 @@ function replaceDurable(path: string, text: string): boolean {
   }
 }
 
-/** On a launch positively known not to have submitted its line (no pane, a channel lease no longer
- *  current, a terminal that did not take the line), its own pending record is retired, under the
- *  activation lock, and only if it is still the pending record (a proven or later one stays). */
-export function launchRetire(root: string, home: string, session: string, seat: string): boolean {
+/** On a launch positively known, before submission, not to have typed its line (a channel lease no
+ *  longer current), its own pending record is retired: under the activation lock, and only if the
+ *  record standing is still pending AND carries this attempt's nonce (another attempt's record, a
+ *  proven one, or one that does not verify stays). An ambiguous outcome (the terminal host reported
+ *  false, which it also does when only its capture failed) never retires. */
+export function launchRetire(root: string, home: string, session: string, seat: string, nonce: string): boolean {
   const path = recordPath(root, session, seat);
   if (path === null) return false;
   const done = withActivationLock(root, () => {
-    if (readLaunchRecord(root, home, session, seat).kind !== 'pending') return true;
+    const now = readLaunchRecord(root, home, session, seat);
+    if (now.kind !== 'pending' || now.nonce !== nonce) return true;
     return removeDurable(path) === 'removed';
   });
   return done === true;
 }
 
-/** L1, before the CLI starts: the earlier record goes, and a pending one (proving nothing) stands. */
-export function launchPending(root: string, home: string, session: string, seat: string, shell: number | null, now: Date = new Date()): boolean {
-  return write(root, home, { v: 1, kind: 'launch-level', root, session, seat, level: ACTOR_LEVEL, state: 'pending', shell, cli: null, cli_start: null, at: now.toISOString() });
+/** L1, before the CLI starts: a pending record (proving nothing) replaces the earlier one. Returns
+ *  this attempt's nonce once the record is durable, or null when it could not be published (the
+ *  activation lock busy, or the write not durable): the caller must then not submit the line. */
+export function launchPending(root: string, home: string, session: string, seat: string, shell: number | null, now: Date = new Date()): string | null {
+  const nonce = randomBytes(16).toString('hex');
+  const ok = write(root, home, { v: 1, kind: 'launch-level', root, session, seat, level: ACTOR_LEVEL, state: 'pending', shell, cli: null, cli_start: null, at: now.toISOString(), nonce });
+  return ok ? nonce : null;
 }
 
 /** L2, at the idle prompt: the record names the CLI's pid and its start instant. */
@@ -106,7 +117,7 @@ export function launchProven(root: string, home: string, session: string, seat: 
  *  read only from a verified record. */
 export type LaunchRecord =
   | { kind: 'absent' }
-  | { kind: 'pending' }
+  | { kind: 'pending'; nonce: string | null }
   | { kind: 'proven'; level: number; cli: number; cliStart: number }
   | { kind: 'unknown'; why: string };
 
@@ -133,7 +144,7 @@ export function readLaunchRecord(root: string, home: string, session: string, se
     return { kind: 'unknown', why: 'the launch record does not verify' };
   }
   if (payload.root !== root || payload.session !== session || payload.seat !== seat) return { kind: 'unknown', why: 'the launch record is bound elsewhere' };
-  if (payload.state === 'pending') return { kind: 'pending' };
+  if (payload.state === 'pending') return { kind: 'pending', nonce: typeof payload.nonce === 'string' ? payload.nonce : null };
   if (payload.state !== 'proven' || typeof payload.cli !== 'number' || typeof payload.cli_start !== 'number' || typeof payload.level !== 'number') {
     return { kind: 'unknown', why: 'the launch record names no proven process' };
   }
@@ -146,32 +157,46 @@ export function readLaunchRecord(root: string, home: string, session: string, se
  *  file name. Null when the folder cannot be listed (unknown, never none). */
 export function launchRecordSeats(root: string, home: string): ({ session: string; seat: string } | { unknown: string })[] | null {
   const folder = join(queuesFolder(root), 'launches');
-  let names: string[];
+  let sessions: string[];
   try {
-    names = readdirSync(folder);
+    sessions = readdirSync(folder);
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
   }
   const out: ({ session: string; seat: string } | { unknown: string })[] = [];
   const key = messageKeyState(home);
-  for (const name of names.sort()) {
-    if (name.startsWith('.') || !name.endsWith('.json')) continue;
-    const text = readFence(join(folder, name));
-    let payload: LaunchLevelPayload | null = null;
+  for (const session of sessions.sort()) {
+    if (session.startsWith('.')) continue;
+    const sessionFolder = join(folder, session);
+    let names: string[];
     try {
-      const envelope = text === null || text === '' ? null : JSON.parse(text) as { payload?: LaunchLevelPayload; signature?: unknown } | null;
-      if (envelope !== null && typeof envelope === 'object' && envelope.payload && typeof envelope.signature === 'string'
-        && key.kind === 'key' && verifyDomain(LAUNCH_LEVEL_DOMAIN, envelope.payload as unknown as Json, envelope.signature, key.key)) payload = envelope.payload;
-    } catch {
-      payload = null;
+      names = readdirSync(sessionFolder);
+    } catch (error) {
+      // A plain file at the session level (an earlier build's flat name) is no record this build
+      // reads: unknown, never skipped.
+      if ((error as NodeJS.ErrnoException).code === 'ENOTDIR') { out.push({ unknown: session }); continue; }
+      return null;
     }
-    if (text === '') continue;
-    if (payload === null || typeof payload.session !== 'string' || typeof payload.seat !== 'string'
-      || recordPath(root, payload.session, payload.seat) !== join(folder, name)) {
-      out.push({ unknown: name });
-      continue;
+    for (const name of names.sort()) {
+      if (name.startsWith('.') || !name.endsWith('.json')) continue;
+      const at = join(sessionFolder, name);
+      const text = readFence(at);
+      if (text === '') continue;
+      let payload: LaunchLevelPayload | null = null;
+      try {
+        const envelope = text === null ? null : JSON.parse(text) as { payload?: LaunchLevelPayload; signature?: unknown } | null;
+        if (envelope !== null && typeof envelope === 'object' && envelope.payload && typeof envelope.signature === 'string'
+          && key.kind === 'key' && verifyDomain(LAUNCH_LEVEL_DOMAIN, envelope.payload as unknown as Json, envelope.signature, key.key)) payload = envelope.payload;
+      } catch {
+        payload = null;
+      }
+      if (payload === null || typeof payload.session !== 'string' || typeof payload.seat !== 'string'
+        || recordPath(root, payload.session, payload.seat) !== at) {
+        out.push({ unknown: `${session}/${name}` });
+        continue;
+      }
+      out.push({ session: payload.session, seat: payload.seat });
     }
-    out.push({ session: payload.session, seat: payload.seat });
   }
   return out;
 }

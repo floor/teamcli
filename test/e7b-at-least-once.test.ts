@@ -487,7 +487,7 @@ describe('the actor proof counts long-lived readers and carriers only (coordinat
     const { processStartOf } = await import('../src/watch/pane.ts');
     const at = place();
     launched(at, 'builder');
-    expect(launchPending(at.root, at.home, SESSION, 'builder', process.pid)).toBe(true);
+    expect(launchPending(at.root, at.home, SESSION, 'builder', process.pid)).toMatch(/^[0-9a-f]{32}$/);
     expect(launchProven(at.root, at.home, SESSION, 'builder', process.pid, processStartOf(process.pid) as number)).toBe(true);
     const run = await scanActivate(at);
     expect(run.scanned).toEqual([]);
@@ -788,8 +788,8 @@ describe('round 10 fixes', () => {
     const { withActivationLock } = await import('../src/queue/floor.ts');
     const at = place();
     const inside = withActivationLock(at.root, () => launchPending(at.root, at.home, SESSION, 'builder', process.pid));
-    expect(inside).toBe(false);
-    expect(launchPending(at.root, at.home, SESSION, 'builder', process.pid)).toBe(true);
+    expect(inside).toBeNull();
+    expect(launchPending(at.root, at.home, SESSION, 'builder', process.pid)).toMatch(/^[0-9a-f]{32}$/);
   }, 30_000);
 
   test('L1 to L2 replaces the record in one step: the record is always readable, no temp file is left', async () => {
@@ -801,20 +801,21 @@ describe('round 10 fixes', () => {
     expect(readLaunchRecord(at.root, at.home, SESSION, 'builder').kind).toBe('pending');
     launchProven(at.root, at.home, SESSION, 'builder', process.pid, processStartOf(process.pid) as number);
     expect(readLaunchRecord(at.root, at.home, SESSION, 'builder').kind).toBe('proven');
-    expect(readdirSync(join(queuesFolder(at.root), 'launches'))).toEqual([`${SESSION}.builder.json`]);
+    expect(readdirSync(join(queuesFolder(at.root), 'launches'))).toEqual([SESSION]);
+    expect(readdirSync(join(queuesFolder(at.root), 'launches', SESSION))).toEqual(['builder.json']);
   });
 
   test('a launch that submitted nothing retires its pending record: activation is allowed with no relaunch', async () => {
     const { launchPending, launchRetire } = await import('../src/queue/launch-level.ts');
     const at = place();
-    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    const nonce = launchPending(at.root, at.home, SESSION, 'builder', process.pid) as string;
     expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...[]] }).kind).toBe('activated');
     deactivate(at.root, at.home);
     // Ambiguous outcome: nothing retired, so the scan refuses.
     let actors = await scan(at);
     expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
     // The lease failed before submission: the executor retires the record.
-    expect(launchRetire(at.root, at.home, SESSION, 'builder')).toBe(true);
+    expect(launchRetire(at.root, at.home, SESSION, 'builder', nonce)).toBe(true);
     actors = await scan(at);
     expect(actors).toEqual([]);
     expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('activated');
@@ -823,9 +824,9 @@ describe('round 10 fixes', () => {
   test('a retirement never removes a proven record', async () => {
     const { launchPending, launchProven, launchRetire, readLaunchRecord } = await import('../src/queue/launch-level.ts');
     const at = place();
-    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    const nonce = launchPending(at.root, at.home, SESSION, 'builder', process.pid) as string;
     launchProven(at.root, at.home, SESSION, 'builder', process.pid, 1);
-    launchRetire(at.root, at.home, SESSION, 'builder');
+    launchRetire(at.root, at.home, SESSION, 'builder', nonce);
     expect(readLaunchRecord(at.root, at.home, SESSION, 'builder').kind).toBe('proven');
   });
 
