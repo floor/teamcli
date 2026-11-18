@@ -15,6 +15,7 @@
 // process, so it is unknown.
 //
 // File: <root>/.agents/queues/launches/<session>.<seat>.json
+import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { createExclusive, ensureFolder, readFence, removeDurable } from './durable.ts';
@@ -57,6 +58,67 @@ export function launchProven(root: string, home: string, session: string, seat: 
   return write(root, home, { v: 1, kind: 'launch-level', root, session, seat, level: ACTOR_LEVEL, state: 'proven', shell: null, cli, cli_start: cliStart, at: now.toISOString() });
 }
 
+/** A seat's launch-level record, read once and fully verified: `absent` (no file), `pending`
+ *  (a verified L1), `proven` (a verified L2, with its CLI pid and start), or `unknown` (anything
+ *  that does not verify, is bound elsewhere, is malformed or cannot be read). The state word is
+ *  read only from a verified record. */
+export type LaunchRecord =
+  | { kind: 'absent' }
+  | { kind: 'pending' }
+  | { kind: 'proven'; level: number; cli: number; cliStart: number }
+  | { kind: 'unknown'; why: string };
+
+export function readLaunchRecord(root: string, home: string, session: string, seat: string): LaunchRecord {
+  const path = recordPath(root, session, seat);
+  if (path === null) return { kind: 'unknown', why: 'the seat cannot name a launch record' };
+  const text = readFence(path);
+  if (text === '') return { kind: 'absent' };
+  if (text === null) return { kind: 'unknown', why: 'the launch record cannot be read' };
+  let record: unknown;
+  try {
+    record = JSON.parse(text);
+  } catch {
+    return { kind: 'unknown', why: 'the launch record does not parse' };
+  }
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) return { kind: 'unknown', why: 'the launch record is not an envelope' };
+  const envelope = record as { payload?: LaunchLevelPayload; signature?: unknown };
+  const payload = envelope.payload;
+  if (!payload || typeof payload !== 'object' || payload.kind !== 'launch-level' || payload.v !== 1 || typeof envelope.signature !== 'string') {
+    return { kind: 'unknown', why: 'the launch record has no shape this build reads' };
+  }
+  const key = messageKeyState(home);
+  if (key.kind !== 'key' || !verifyDomain(LAUNCH_LEVEL_DOMAIN, payload as unknown as Json, envelope.signature, key.key)) {
+    return { kind: 'unknown', why: 'the launch record does not verify' };
+  }
+  if (payload.root !== root || payload.session !== session || payload.seat !== seat) return { kind: 'unknown', why: 'the launch record is bound elsewhere' };
+  if (payload.state === 'pending') return { kind: 'pending' };
+  if (payload.state !== 'proven' || typeof payload.cli !== 'number' || typeof payload.cli_start !== 'number' || typeof payload.level !== 'number') {
+    return { kind: 'unknown', why: 'the launch record names no proven process' };
+  }
+  return { kind: 'proven', level: payload.level, cli: payload.cli, cliStart: payload.cli_start };
+}
+
+/** The seats that have a launch record under `root`, as `[session, seat]` (an unlistable folder
+ *  is null: unknown, never none). */
+export function launchRecordSeats(root: string): [string, string][] | null {
+  const folder = join(queuesFolder(root), 'launches');
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
+  }
+  const out: [string, string][] = [];
+  for (const name of names) {
+    if (name.startsWith('.') || !name.endsWith('.json')) continue;
+    const stem = name.slice(0, -'.json'.length);
+    const dot = stem.indexOf('.');
+    if (dot <= 0) continue;
+    out.push([stem.slice(0, dot), stem.slice(dot + 1)]);
+  }
+  return out;
+}
+
 /** Whether the seat's current managed launch proves level >= `floor` for its live CLI process. */
 export function launchLevelProves(
   root: string, home: string, session: string, seat: string, floor: number,
@@ -65,43 +127,9 @@ export function launchLevelProves(
    *  so a surviving earlier process can never vouch for a later launch. */
   currentCli: readonly number[],
 ): boolean {
-  const path = recordPath(root, session, seat);
-  if (path === null) return false;
-  const text = readFence(path);
-  if (text === null || text === '') return false;
-  let record: { payload?: LaunchLevelPayload; signature?: unknown };
-  try {
-    record = JSON.parse(text) as typeof record;
-  } catch {
-    return false;
-  }
-  if (record === null || typeof record !== 'object' || Array.isArray(record)) return false;
-  const payload = record.payload;
-  if (!payload || typeof payload !== 'object' || payload.kind !== 'launch-level' || payload.v !== 1 || typeof record.signature !== 'string') return false;
-  const key = messageKeyState(home);
-  if (key.kind !== 'key' || !verifyDomain(LAUNCH_LEVEL_DOMAIN, payload as unknown as Json, record.signature, key.key)) return false;
-  if (payload.root !== root || payload.session !== session || payload.seat !== seat) return false;
-  if (payload.state !== 'proven' || !(payload.level >= floor)) return false;
-  if (typeof payload.cli !== 'number' || typeof payload.cli_start !== 'number') return false;
-  if (!currentCli.includes(payload.cli)) return false;
-  if (!probe.alive(payload.cli)) return false;
-  return probe.startOf(payload.cli) === payload.cli_start;
-}
-
-/** Whether a pending launch record stands for the seat (L1 written, L2 not yet): an in-flight
- *  managed launch, which the actor proof counts as unknown until it resolves. An unreadable or
- *  malformed file counts as pending (fail closed). */
-export function launchPendingStands(root: string, session: string, seat: string): boolean {
-  const path = recordPath(root, session, seat);
-  if (path === null) return false;
-  const text = readFence(path);
-  if (text === '') return false;
-  if (text === null) return true;
-  try {
-    const record = JSON.parse(text) as { payload?: { state?: unknown } } | null;
-    if (record === null || typeof record !== 'object') return true;
-    return record.payload?.state !== 'proven';
-  } catch {
-    return true;
-  }
+  const record = readLaunchRecord(root, home, session, seat);
+  if (record.kind !== 'proven' || !(record.level >= floor)) return false;
+  if (!currentCli.includes(record.cli)) return false;
+  if (!probe.alive(record.cli)) return false;
+  return probe.startOf(record.cli) === record.cliStart;
 }

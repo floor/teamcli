@@ -696,3 +696,80 @@ describe('round 8 fixes', () => {
     expect(existsSync(join(bossDir, undeliveredNoticeId(M1)))).toBe(true);
   });
 });
+
+describe('round 9 fixes', () => {
+  const scan = async (at: At) => {
+    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
+    return (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
+  };
+  const refusedWith = async (at: At) => {
+    const actors = await scan(at);
+    return { actors, outcome: activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind };
+  };
+
+  test('a pending launch makes the seat unknown even while a live level-3 marker from the previous incarnation stands', async () => {
+    const { launchPending } = await import('../src/queue/launch-level.ts');
+    const at = place();
+    writeFileSync(join(at.dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), level: 3 })}\n`);
+    launchPending(at.root, at.home, SESSION, 'lead', process.pid);
+    const run = await refusedWith(at);
+    expect(run.actors.some((a) => a.name.includes('managed launch in flight'))).toBe(true);
+    expect(run.outcome).toBe('refused');
+  });
+
+  test('an L1 record that is the seat\'s only footprint is counted (refused)', async () => {
+    const { launchPending } = await import('../src/queue/launch-level.ts');
+    const at = place();
+    launchPending(at.root, at.home, SESSION, 'newcomer', process.pid);
+    expect((await refusedWith(at)).outcome).toBe('refused');
+  });
+
+  test('a proven-shaped record that does not verify is unknown, with no CLI recorded (refused)', async () => {
+    const { queuesFolder } = await import('../src/queue/floor.ts');
+    const at = place();
+    mkdirSync(join(queuesFolder(at.root), 'launches'), { recursive: true });
+    writeFileSync(join(queuesFolder(at.root), 'launches', `${SESSION}.builder.json`), JSON.stringify({ payload: { v: 1, kind: 'launch-level', root: at.root, session: SESSION, seat: 'builder', level: 3, state: 'proven', shell: null, cli: process.pid, cli_start: 1, at: 'x' }, signature: 'forged' }));
+    const run = await refusedWith(at);
+    expect(run.actors[0]?.name).toContain('does not verify');
+    expect(run.outcome).toBe('refused');
+  });
+
+  const noticeSetup = async () => {
+    const { noticeBeforeMove } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeBeforeMove>[0]['team'];
+    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', team, key: key(at), at: new Date().toISOString(), item: { id: M1, undelivered: { from: 'worker', from_id: null } } };
+    const bossDir = join(at.root, '.agents', 'send-drops', SESSION, 'boss');
+    const wrong = signRecord({ kind: 'message', id: undeliveredNoticeId(M1), to: 'boss', to_id: null, root: at.root, session: SESSION, at: new Date().toISOString(), body: `mentions ${M1}`, from: 'runtime', from_id: null, rule: "the team's unread-message report", thread: undeliveredNoticeId(M1) }, at.home);
+    return { noticeBeforeMove, at, input, bossDir, wrongText: `${JSON.stringify(wrong, null, 2)}\n` };
+  };
+
+  test('a replacement between verification and open is caught: the descriptor read is what is verified', async () => {
+    const { noticeBeforeMove, input, bossDir, wrongText } = await noticeSetup();
+    const swap = () => { writeFileSync(join(bossDir, `${undeliveredNoticeId(M1)}.swap`), wrongText); renameSync(join(bossDir, `${undeliveredNoticeId(M1)}.swap`), join(bossDir, undeliveredNoticeId(M1))); };
+    expect(noticeBeforeMove({ ...input, hooks: { beforeOpen: swap } })).toBe(false);
+  });
+
+  test('a different file at the name after the flush is caught (identity check)', async () => {
+    const { noticeBeforeMove, input, bossDir, wrongText } = await noticeSetup();
+    const swap = () => { writeFileSync(join(bossDir, `${undeliveredNoticeId(M1)}.swap`), wrongText); renameSync(join(bossDir, `${undeliveredNoticeId(M1)}.swap`), join(bossDir, undeliveredNoticeId(M1))); };
+    expect(noticeBeforeMove({ ...input, hooks: { afterFlush: swap } })).toBe(false);
+  });
+
+  test('a fresh notice under a held notice queue lock (taken before the first call) is written, verified and made durable', async () => {
+    const { noticeBeforeMove, input, bossDir } = await noticeSetup();
+    const { acquireLockAt } = await import('../src/launch/seat-lock.ts');
+    const { queueBaseOf } = await import('../src/queue/append.ts');
+    mkdirSync(bossDir, { recursive: true });
+    const base = queueBaseOf(bossDir);
+    if (base !== null) mkdirSync(base, { recursive: true });
+    const lock = base === null ? null : acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    expect(lock !== null && 'release' in lock).toBe(true);
+    try {
+      expect(noticeBeforeMove(input)).toBe(true);
+    } finally {
+      if (lock !== null && 'release' in lock) lock.release();
+    }
+  }, 30_000);
+});

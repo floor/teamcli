@@ -24,11 +24,11 @@ import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
 import { teamIdOf } from '../../registry/teams.ts';
 import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
 import { archiveSeatInbox, listArchivedUnread, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
-import { isStampedPayload, readRecord, recordFile, sameFolder, stampedSettled, verifyRecord, type RecordPayload } from '../../send/record.ts';
+import { isStampedPayload, readRecord, recordAuthOf, recordFile, sameFolder, stampedSettled, verifyRecord, type RecordPayload } from '../../send/record.ts';
 import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE } from '../../send/drop-folder.ts';
 import { createExclusive, fsyncFolder, removeDurable } from '../../queue/durable.ts';
 import { messageKeyOf, signDomain, verifyDomain, type Json } from '../../store/keys.ts';
-import { closeSync, constants, fsyncSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { openSync } from '../../host/guarded-fs.ts';
 import type { KeyObject } from 'node:crypto';
 import { archiveLegacySeat, legacySeatFolders } from '../../send/legacy-inbox-retention.ts';
@@ -202,6 +202,8 @@ export function noticeBeforeMove(input: {
   agents?: readonly Agent[]; teamId?: string;
   /** Test seam: the fsync of a file or folder (throws on failure). */
   fsync?: (path: string, folder: boolean) => void;
+  /** Test seams at the proof's boundaries: before the name is opened, after the folder flush. */
+  hooks?: { beforeOpen?: () => void; afterFlush?: () => void };
 }): boolean {
   const from = input.item.undelivered?.from ?? 'unknown';
   const fromId = input.item.undelivered?.from_id ?? null;
@@ -218,35 +220,48 @@ export function noticeBeforeMove(input: {
     at: input.at,
   });
   if (!notice.ok) return false;
-  const found = notice.payload;
-  if (!(found.id === noticeId && found.to === to && found.session === session && sameFolder(found.root, input.root)
-    && found.from === RUNTIME_FROM && found.in_reply_to === input.item.id)) return false;
-  // The notice must be durable before the source may move (written now or reused): the notice file
-  // and its folder chain (seat, session, send-drops) are fsynced, and any failure holds the move.
+  // The notice must be this obligation's own and durable before the source may move, proved on one
+  // handle: the name is opened once (no link followed, a regular file), the record is read and
+  // verified from that descriptor, the same descriptor is fsynced, then the folder chain (seat,
+  // session, send-drops) is fsynced, and the name must still hold that same file. Any failure, or a
+  // different file at the name, holds the move (the next pass tries again).
   const seatDir = join(input.root, '.agents', 'send-drops', session, to);
   const path = recordFile(seatDir, noticeId);
-  const sync = input.fsync ?? ((target: string, folder: boolean) => {
-    if (folder) {
-      fsyncFolder(target);
-      return;
-    }
-    const fd = openSync(target, constants.O_RDONLY);
-    try {
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-  });
+  const syncFolder = input.fsync === undefined ? fsyncFolder : (folder: string) => input.fsync?.(folder, true);
+  let fd: number | null = null;
   try {
-    sync(path, false);
-    sync(dirname(path), true);
-    if (dirname(path) !== seatDir) sync(seatDir, true);
-    sync(dirname(seatDir), true);
-    sync(dirname(dirname(seatDir)), true);
+    input.hooks?.beforeOpen?.();
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) return false;
+    const read = recordAuthOf(JSON.parse(readFileSync(fd, 'utf8')) as unknown, input.key);
+    if (read.kind !== 'ok' || !noticeIsObligation(read.value.payload, { archived: input.item.id, notice: noticeId, to, session, root: input.root })) return false;
+    if (input.fsync === undefined) fsyncSync(fd);
+    else input.fsync(path, false);
+    syncFolder(dirname(path));
+    if (dirname(path) !== seatDir) syncFolder(seatDir);
+    syncFolder(dirname(seatDir));
+    syncFolder(dirname(dirname(seatDir)));
+    input.hooks?.afterFlush?.();
+    const standing = lstatSync(path);
+    return standing.isFile() && standing.dev === opened.dev && standing.ino === opened.ino;
   } catch {
     return false;
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* closed */ }
+    }
   }
-  return true;
+}
+
+/** One not-delivered notice obligation: the archived message, its notice id, and the route. */
+type Obligation = { archived: string; notice: string; to: string; session: string; root: string };
+
+/** Whether a verified runtime record is exactly this obligation's notice: its id, recipient,
+ *  session and checkout (the signed root, resolved), the runtime sender, and `in_reply_to`. */
+function noticeIsObligation(notice: RecordPayload, obligation: Obligation): boolean {
+  return notice.id === obligation.notice && notice.to === obligation.to && notice.session === obligation.session
+    && sameFolder(notice.root, obligation.root) && notice.from === RUNTIME_FROM && notice.in_reply_to === obligation.archived;
 }
 
 /** A stable, UUID-shaped id for one message's not-delivered notice. */

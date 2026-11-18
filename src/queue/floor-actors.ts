@@ -22,7 +22,7 @@ import { pidAlive, readListener } from '../mcp/inbox.ts';
 import { readDaemonState } from '../daemon/state.ts';
 import { readState } from '../state.ts';
 import { FLOOR_LEVEL, type FloorActor } from './floor.ts';
-import { launchLevelProves, launchPendingStands } from './launch-level.ts';
+import { launchLevelProves, launchRecordSeats, readLaunchRecord } from './launch-level.ts';
 import { processStartOf } from '../watch/pane.ts';
 
 function markerState(dropDir: string): 'absent' | 'unknown' | 'present' {
@@ -55,6 +55,16 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
     if (seen.has(name)) return;
     seen.add(name);
     const dropDir = join(root, '.agents', 'send-drops', session, seat);
+    // A managed launch in flight (a verified L1), or a launch record that does not verify, makes
+    // the seat unknown whatever else stands: a live marker may be the previous incarnation's.
+    let launch: ReturnType<typeof readLaunchRecord>;
+    try {
+      launch = readLaunchRecord(root, home, session, seat);
+    } catch {
+      launch = { kind: 'unknown', why: 'the launch record cannot be read' };
+    }
+    if (launch.kind === 'pending') return unknown(`${name} (managed launch in flight)`, 0);
+    if (launch.kind === 'unknown') return unknown(`${name} (${launch.why})`, 0);
     const marker = markerState(dropDir);
     if (marker === 'unknown') return unknown(name, 0);
     // No marker. A seat whose CLI is not live is not an actor. A live one is not an actor only on
@@ -62,14 +72,6 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
     // CLI process (pid and start instant), so any inbox server it has came from this build or
     // later. Anything else (no record, a pending one, an older launch, another process) is unknown.
     if (marker === 'absent') {
-      // A managed launch in flight (L1 written, L2 not yet) is unknown, live CLI recorded or not.
-      let pending: boolean;
-      try {
-        pending = launchPendingStands(root, session, seat);
-      } catch {
-        pending = true;
-      }
-      if (pending) return unknown(`${name} (managed launch in flight, no inbox marker)`, 0);
       if (!launchedLive) return;
       let proved: boolean;
       try {
@@ -95,6 +97,11 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
       consider(session, seat, pids.some(pid => pidAlive(pid)), pids);
     }
   }
+  // A launch record is a footprint of its own: a seat that only has one (an L1 before any state or
+  // drop folder names it) is considered too.
+  const launches = launchRecordSeats(root);
+  if (launches === null) return null;
+  for (const [session, seat] of launches) consider(session, seat, false);
   // Markers for seats the state does not record are actors too.
   const base = join(root, '.agents', 'send-drops');
   let sessions: string[];
