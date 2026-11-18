@@ -288,8 +288,10 @@ function stampedOnDisk(root: string, to: string, id: string): boolean {
   let sessions: string[];
   try {
     sessions = readdirSync(mailTreeOf(root, 'stamped'));
-  } catch {
-    return false;
+  } catch (error) {
+    // No stamped tree: nothing stamped stands. A tree that stands but cannot be read is treated
+    // as holding the message (fail closed: the line goes body-free).
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
   }
   for (const session of sessions) {
     if (session.startsWith('.')) continue;
