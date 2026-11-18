@@ -538,6 +538,28 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(lines[0]).toContain(`message ${ID} · delivery`);
   });
 
+  test('a seat launched before the CLI start was recorded keeps the older proof: its typed wake still goes out', async () => {
+    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    activateRoot(at);
+    // The launch record of an earlier build: the pids and the shell's start, no `cli_start`.
+    writeFileSync(join(at.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { agy: {
+      stage: 'ready', pane: 'pane-agy', agent_session: 'session-of-agy', launched: { shell: 111, cli: [222] }, pane_shell: 111, pane_shell_start: 1_700_000_000_000,
+    } }, worktrees: {} } } })}\n`);
+    const dropDir = stamped(at, 'agy', ID, 'short');
+    takeCopyNumber(dropDir, ID, 'typed');
+    const lines: string[] = [];
+    const scene = (keyOwner: NonNullable<RetrySources['keyOwner']>) => passScene(at, new Date(), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE, keyOwner });
+    // The older proof still refuses a replaced shell start.
+    age(stampedFolder(at, 'agy'), ID, 31 * MIN);
+    await wakeUnreadDrops(scene(owner('agy', 'pane-agy', { start: 1_700_000_000_999 })), { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+    // The recorded pane, seat, shell pid and start, and CLI pid: the wake goes out.
+    age(stampedFolder(at, 'agy'), ID, 31 * MIN);
+    await wakeUnreadDrops(scene(owner('agy', 'pane-agy')), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`message ${ID} · delivery 2: run team drops`);
+  });
+
   test('the owner proof is asked before every key: a pane handed over after the line is typed gets no Enter, and no re-send is credited', async () => {
     const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
     activateRoot(at);
