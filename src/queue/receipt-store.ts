@@ -14,6 +14,7 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { createExclusive, readFence, type DurableFaults } from './durable.ts';
+import { verifiedQueuePlaceOf } from './append.ts';
 
 export const QUEUE_RECEIPT_DOMAIN = 'team-queue-receipt-v1\n';
 
@@ -115,7 +116,13 @@ export type VerifiedReceipt = { seq: number; kind: string; msg_id: string; actor
  * or names an actor the matrix refuses for its kind is ignored. `null` when the folder or the key
  * cannot be read (unknown, never "none").
  */
-export function readQueueReceipts(binding: Pick<QueueReceiptBinding, 'root' | 'session' | 'seat' | 'generation'>, home: string): VerifiedReceipt[] | null {
+export function readQueueReceipts(
+  binding: Pick<QueueReceiptBinding, 'root' | 'session' | 'seat' | 'generation'>,
+  home: string,
+  /** The committed entry's msg_id at a seq (`entryMsgIdAt`): a receipt whose msg_id differs from
+   *  its seq's committed entry, or whose seq holds none, is ignored and never counted. */
+  entryAt: (seq: number) => string | null,
+): VerifiedReceipt[] | null {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return null;
   const folder = receiptFolder(binding);
@@ -144,6 +151,7 @@ export function readQueueReceipts(binding: Pick<QueueReceiptBinding, 'root' | 's
     if (payload.root !== binding.root || payload.session !== binding.session || payload.seat !== binding.seat || payload.generation !== binding.generation) continue;
     if (!actorMay(payload.receipt, payload.actor?.kind)) continue;
     if (!verifyDomain(QUEUE_RECEIPT_DOMAIN, payload as unknown as Json, record.signature, key.key)) continue;
+    if (entryAt(seq) !== payload.msg_id) continue;
     out.push({ seq, kind: payload.receipt, msg_id: payload.msg_id, actor: payload.actor.kind });
   }
   return out.sort((a, b) => a.seq - b.seq);
@@ -176,10 +184,10 @@ export function shadowQueueReceipt(input: {
   kind: QueueReceiptKind;
   actor: { kind: ReceiptActorKind; name: string };
   home: string;
-  place: (dropDir: string, msgId: string) => { generation: string; seq: number } | null;
 }): WriteReceiptOutcome | 'unplaced' {
   try {
-    const place = input.place(input.dropDir, input.msgId);
+    // Only a proved placement is signed: a committed, verifying entry holding this msg_id.
+    const place = verifiedQueuePlaceOf(input.dropDir, input.msgId, { root: input.root, session: input.session, seat: input.seat }, input.home);
     if (place === null) return 'unplaced';
     return writeQueueReceipt(
       { root: input.root, session: input.session, seat: input.seat, generation: place.generation, seq: place.seq, msg_id: input.msgId },

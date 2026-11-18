@@ -17,7 +17,7 @@ const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 export type DurableStep = 'temp' | 'temp-fsync' | 'link' | 'unlink-temp' | 'folder-fsync';
 
 /** Test seam: `before(step)` runs before a step and may throw (a crash or an I/O fault). */
-export type DurableFaults = { before?: (step: DurableStep, path: string) => void };
+export type DurableFaults = { before?: (step: DurableStep | 'mkdir' | 'parent-fsync', path: string) => void };
 
 export type ExclusiveOutcome = 'created' | 'exists' | 'failed';
 
@@ -30,12 +30,43 @@ function fsyncFolder(folder: string): void {
   }
 }
 
-/** Makes `folder` and its parents, owner-only. Never follows a link at the last component. */
-export function ensureFolder(folder: string): boolean {
+/**
+ * Makes `folder` and every missing parent, owner-only, DURABLY: each directory this call creates
+ * has its new name made durable in its parent (the parent fsynced) before the next level, so the
+ * first fence written in a new tree cannot lose its folder chain to a machine crash. A component
+ * that exists must be a real directory, never a link. `before` is the fault seam (`mkdir` and
+ * `parent-fsync` steps).
+ */
+export function ensureFolder(folder: string, faults: { before?: (step: 'mkdir' | 'parent-fsync', path: string) => void } = {}): boolean {
+  const missing: string[] = [];
+  let at = folder;
+  for (;;) {
+    try {
+      const held = lstatSync(at);
+      if (!held.isDirectory() || held.isSymbolicLink()) return false;
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      missing.push(at);
+      const parent = dirname(at);
+      if (parent === at) return false;
+      at = parent;
+    }
+  }
   try {
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const held = lstatSync(folder);
-    return held.isDirectory() && !held.isSymbolicLink();
+    for (const path of missing.reverse()) {
+      faults.before?.('mkdir', path);
+      try {
+        mkdirSync(path, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const held = lstatSync(path);
+        if (!held.isDirectory() || held.isSymbolicLink()) return false;
+      }
+      faults.before?.('parent-fsync', path);
+      fsyncFolder(dirname(path));
+    }
+    return true;
   } catch {
     return false;
   }
@@ -50,7 +81,7 @@ export function ensureFolder(folder: string): boolean {
  */
 export function createExclusive(path: string, text: string, faults: DurableFaults = {}): ExclusiveOutcome {
   const folder = dirname(path);
-  if (!ensureFolder(folder)) return 'failed';
+  if (!ensureFolder(folder, faults)) return 'failed';
   const temp = join(folder, `.${basename(path)}.${String(process.pid)}.${randomBytes(6).toString('hex')}.tmp`);
   let fd: number | null = null;
   let linked = false;

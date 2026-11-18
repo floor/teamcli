@@ -7,11 +7,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
 import { activate, checkActors, fencesEnforced, floorState, mayCreateFence, queuesFolder, type FloorActor } from '../src/queue/floor.ts';
-import { decideExposure, exposurePath, EXPOSURE_DOMAIN } from '../src/queue/exposure.ts';
 import { derivedProgress, readQueueReceipts, writeQueueReceipt, receiptFolder, QUEUE_RECEIPT_DOMAIN } from '../src/queue/receipt-store.ts';
 import { attemptGate, attemptsOf, prepareAttempt, tokenText } from '../src/queue/wake-attempt.ts';
 import { createExclusive, type DurableStep } from '../src/queue/durable.ts';
-import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
+import { deliverLeadTypedWake, deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
 import { readFileSync } from 'node:fs';
 
 const IDLE = readFileSync(join(import.meta.dir, 'fixtures', 'muse', '1.4.11', 'idle.txt'), 'utf8');
@@ -31,7 +30,7 @@ const server = (level: number | null): FloorActor => ({ kind: 'inbox-server', na
 
 function active(): { root: string; home: string } {
   const s = scene();
-  expect(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon, server(2)] }).kind).toBe('activated');
+  expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(2)] }).kind).toBe('activated');
   return s;
 }
 
@@ -41,7 +40,7 @@ describe('activation floor', () => {
   test('an actor below the floor, or with no level, refuses activation and writes nothing', () => {
     for (const below of [server(null), server(1)]) {
       const s = scene();
-      const out = activate(s.root, { home: s.home, build: 'b', actors: () => [daemon, below] });
+      const out = activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, below] });
       expect(out.kind).toBe('refused');
       expect(floorState(s.root, s.home).kind).toBe('dark');
       expect(existsSync(join(queuesFolder(s.root), 'PROTOCOL'))).toBe(false);
@@ -50,7 +49,7 @@ describe('activation floor', () => {
 
   test('no live daemon means no activation', () => {
     const s = scene();
-    expect(activate(s.root, { home: s.home, build: 'b', actors: () => [server(2)] }).kind).toBe('refused');
+    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [server(2)] }).kind).toBe('refused');
     expect(floorState(s.root, s.home).kind).toBe('dark');
   });
 
@@ -62,11 +61,11 @@ describe('activation floor', () => {
 
   test('a crash after the marker leaves the root dark, and the next pass removes the marker and activates', () => {
     const s = scene();
-    expect(() => activate(s.root, { home: s.home, build: 'b', actors: () => [daemon], after: (step) => { if (step === 'marker') throw new Error('crash'); } })).toThrow('crash');
+    expect(() => activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon], after: (step) => { if (step === 'marker') throw new Error('crash'); } })).toThrow('crash');
     expect(existsSync(join(queuesFolder(s.root), 'PROTOCOL'))).toBe(true);
     expect(floorState(s.root, s.home).kind).toBe('dark');
     expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(false);
-    expect(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon] }).kind).toBe('activated');
     expect(floorState(s.root, s.home).kind).toBe('active');
   });
 
@@ -75,13 +74,17 @@ describe('activation floor', () => {
       for (const step of STEPS) {
         const s = scene();
         const out = activate(s.root, {
-          home: s.home, build: 'b', actors: () => [daemon],
+          home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon],
           faults: { before: (at, path) => { if (at === step && path.endsWith(file)) throw new Error('fault'); } },
         });
         expect(out.kind).toBe('failed');
-        expect(floorState(s.root, s.home).kind === 'active').toBe(false);
+        const after = floorState(s.root, s.home).kind;
+        // Before the record's link the root is dark; once the record is visible it is never taken
+        // back (a reader may have acted on it): it stays enforcing.
+        if (file === 'ACTIVATION' && (step === 'unlink-temp' || step === 'folder-fsync')) expect(after).toBe('active');
+        else expect(after).toBe('dark');
         // A clean pass afterwards reaches one consistent state: active.
-        expect(['activated', 'already']).toContain(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon] }).kind);
+        expect(['activated', 'already']).toContain(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon] }).kind);
         expect(floorState(s.root, s.home).kind).toBe('active');
       }
     }
@@ -92,8 +95,20 @@ describe('activation floor', () => {
     expect(checkActors(s.root, s.home, [daemon, server(null)]).kind).toBe('fenced');
     expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(false);
     expect(fencesEnforced(s.root, s.home)).toBe(true);
-    expect(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon, server(2)] }).kind).toBe('activated');
+    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(2)] }).kind).toBe('activated');
     expect(floorState(s.root, s.home).kind).toBe('active');
+  });
+
+  test('E6 ships dark: without the managed launch boundary nothing activates', () => {
+    const s = scene();
+    expect(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon] }).kind).toBe('refused');
+    expect(floorState(s.root, s.home).kind).toBe('dark');
+  });
+
+  test('an unreadable actor probe on an active root fences it (no new fences)', () => {
+    const s = active();
+    expect(checkActors(s.root, s.home, null).kind).toBe('fenced');
+    expect(mayCreateFence(s.root, s.home, 'wake-attempt')).toBe(false);
   });
 
   test('an activation record that does not verify, or stands without its marker, is unknown (fail closed)', () => {
@@ -105,60 +120,15 @@ describe('activation floor', () => {
   });
 });
 
-describe('exposure claims', () => {
-  const target = (root: string) => ({ root, session: 'floor', seat: 'tester', msg_id: 'm1' });
-
-  test('dark: the claim is written in shadow and decides nothing', () => {
-    const s = scene();
-    expect(decideExposure(target(s.root), 'channel', s.home).kind).toBe('legacy');
-    expect(existsSync(exposurePath(target(s.root))!)).toBe(true);
-    expect(decideExposure(target(s.root), 'inbox-read', s.home).kind).toBe('legacy');
-  });
-
-  test('active: only the creator exposes; every other actor gets a pointer; the same operation continues', () => {
-    const s = active();
-    expect(decideExposure(target(s.root), 'delivered:channel:m1', s.home).kind).toBe('expose');
-    expect(decideExposure(target(s.root), 'inbox-read', s.home).kind).toBe('pointer');
-    expect(decideExposure(target(s.root), 'delivered:typed:m1', s.home).kind).toBe('pointer');
-    expect(decideExposure(target(s.root), 'delivered:channel:m1', s.home).kind).toBe('expose');
-  });
-
-  test('a launch brief is claimed per epoch', () => {
-    const s = active();
-    expect(decideExposure({ ...target(s.root), epoch: 'e1' }, 'inbox-read', s.home).kind).toBe('expose');
-    expect(decideExposure({ ...target(s.root), epoch: 'e1' }, 'inbox-read', s.home).kind).toBe('pointer');
-    expect(decideExposure({ ...target(s.root), epoch: 'e2' }, 'inbox-read', s.home).kind).toBe('expose');
-  });
-
-  test('fault grid: a claim not made durable never exposes the body', () => {
-    for (const step of STEPS) {
-      const s = active();
-      const out = decideExposure(target(s.root), 'inbox-read', s.home, { before: (at) => { if (at === step) throw new Error('fault'); } });
-      expect(out.kind).toBe('pointer');
-      // The next exposer never exposes a second body when the earlier link stood.
-      const again = decideExposure(target(s.root), 'delivered:channel:m1', s.home);
-      if (step === 'unlink-temp' || step === 'folder-fsync') expect(again.kind).toBe('pointer');
-    }
-  });
-
-  test('fenced: an existing claim is honoured, none means legacy; a forged or misbound claim is a pointer', () => {
-    const s = active();
-    expect(decideExposure(target(s.root), 'inbox-read', s.home).kind).toBe('expose');
-    checkActors(s.root, s.home, [daemon, server(null)]);
-    expect(decideExposure(target(s.root), 'channel', s.home).kind).toBe('pointer');
-    expect(decideExposure({ ...target(s.root), msg_id: 'm2' }, 'channel', s.home).kind).toBe('legacy');
-    // A claim copied from another seat does not bind here.
-    const other = { ...target(s.root), seat: 'other', msg_id: 'm3' };
-    const payload = { v: 1, kind: 'exposure', root: s.root, session: 'floor', seat: 'tester', msg_id: 'm3', epoch: null, actor: 'x', at: 'now' };
-    const path = exposurePath(other)!;
-    mkdirSync(join(path, '..'), { recursive: true });
-    writeFileSync(path, JSON.stringify({ payload, signature: signDomain(EXPOSURE_DOMAIN, payload as unknown as Json, messageKeyOf(s.home)) }));
-    expect(decideExposure(other, 'channel', s.home).kind).toBe('pointer');
-  });
-});
-
 describe('per-seat receipt store', () => {
   const binding = (root: string, seq: number) => ({ root, session: 'floor', seat: 'tester', generation: 'g0123456789abcdef', seq, msg_id: `m${String(seq)}` });
+
+  test('a receipt whose msg_id is not the committed entry at its seq is never counted', () => {
+    const s = scene();
+    writeQueueReceipt(binding(s.root, 1), 'read', { kind: 'recipient', name: 't' }, s.home);
+    expect(readQueueReceipts(binding(s.root, 1), s.home, () => 'another-message')).toEqual([]);
+    expect(readQueueReceipts(binding(s.root, 1), s.home, () => null)).toEqual([]);
+  });
 
   test('the actor matrix refuses a writer the kind does not admit', () => {
     const s = scene();
@@ -173,7 +143,7 @@ describe('per-seat receipt store', () => {
     writeQueueReceipt(binding(s.root, 2), 'cleared', { kind: 'lead', name: 'l' }, s.home);
     writeQueueReceipt(binding(s.root, 3), 'offered', { kind: 'adapter', name: 'a' }, s.home);
     writeQueueReceipt(binding(s.root, 4), 'answered.op1', { kind: 'reply-op', name: 'r' }, s.home);
-    const read = readQueueReceipts(binding(s.root, 1), s.home)!;
+    const read = readQueueReceipts(binding(s.root, 1), s.home, (seq) => `m${String(seq)}`)!;
     expect(derivedProgress(read)).toEqual({ prefix: 2, sparse: [4] });
   });
 
@@ -191,9 +161,9 @@ describe('per-seat receipt store', () => {
     const other = { ...binding(s.root, 1), seat: 'other' };
     mkdirSync(receiptFolder(other), { recursive: true });
     writeFileSync(join(receiptFolder(other), '000000000001.read'), text);
-    expect(readQueueReceipts(other, s.home)).toEqual([]);
+    expect(readQueueReceipts(other, s.home, (seq) => `m${String(seq)}`)).toEqual([]);
     writeFileSync(from, text.replace('"recipient"', '"owner"'));
-    expect(readQueueReceipts(binding(s.root, 1), s.home)).toEqual([]);
+    expect(readQueueReceipts(binding(s.root, 1), s.home, (seq) => `m${String(seq)}`)).toEqual([]);
   });
 
   test('a signed receipt whose actor the matrix refuses for its kind is ignored at read', () => {
@@ -202,7 +172,7 @@ describe('per-seat receipt store', () => {
     const payload = { v: 1, kind: 'queue-receipt', ...b, receipt: 'read', actor: { kind: 'adapter', name: 'x' }, at: 'now' };
     mkdirSync(receiptFolder(b), { recursive: true });
     writeFileSync(join(receiptFolder(b), '000000000001.read'), JSON.stringify({ payload, signature: signDomain(QUEUE_RECEIPT_DOMAIN, payload as unknown as Json, messageKeyOf(s.home)) }));
-    expect(readQueueReceipts(b, s.home)).toEqual([]);
+    expect(readQueueReceipts(b, s.home, (seq) => `m${String(seq)}`)).toEqual([]);
   });
 
   test('fault grid: a receipt not made durable is reported failed, and a retry settles it once', () => {
@@ -212,7 +182,7 @@ describe('per-seat receipt store', () => {
       expect(out).toBe('failed');
       const retry = writeQueueReceipt(binding(s.root, 1), 'read', { kind: 'recipient', name: 't' }, s.home);
       expect(['written', 'exists']).toContain(retry);
-      expect(derivedProgress(readQueueReceipts(binding(s.root, 1), s.home)!).prefix).toBe(1);
+      expect(derivedProgress(readQueueReceipts(binding(s.root, 1), s.home, (seq) => `m${String(seq)}`)!).prefix).toBe(1);
     }
   });
 });
@@ -224,7 +194,7 @@ describe('wake-attempt states', () => {
 
   test('dark: the gate is open and enforces nothing', () => {
     const s = scene();
-    expect(attemptGate(scope(s.root), target, s.home, none)).toEqual({ kind: 'open', enforced: false });
+    expect(attemptGate(scope(s.root), target, s.home, none)).toEqual({ kind: 'open', enforced: false, create: 'shadow' });
   });
 
   test('prepared only (no key sent) allows a retry; emitted unconfirmed blocks a retype', () => {
@@ -257,6 +227,17 @@ describe('wake-attempt states', () => {
     c.emit();
     expect(attemptGate(scope(s.root), target, s.home, none).kind).toBe('blocked');
     expect(attemptGate(scope(s.root, 'i0000000000000002'), target, s.home, none).kind).toBe('open');
+  });
+
+  test('a fenced root honours an unresolved attempt and creates no new attempt state', () => {
+    const s = active();
+    const a = prepareAttempt(scope(s.root), target, s.home, true)!;
+    a.emit();
+    a.settle({ delivered: false, typed: true });
+    checkActors(s.root, s.home, [daemon, server(null)]);
+    expect(attemptGate(scope(s.root), target, s.home, none).kind).toBe('blocked');
+    const open = attemptGate(scope(s.root, 'i0000000000000003'), target, s.home, none);
+    expect(open).toMatchObject({ kind: 'open', create: 'none' });
   });
 
   test('an unknown incarnation, or unreadable attempts, block on an enforcing root', () => {
@@ -296,6 +277,23 @@ describe('wake-attempt states', () => {
     expect(typed.length).toBeGreaterThan(0);
   });
 
+  test("the lead's legacy fallback: a refused gate sends zero keys, the draft-clearing keys included", async () => {
+    const UNSENT = readFileSync(join(import.meta.dir, 'fixtures', 'muse', '1.4.11', 'unsent-synthetic.txt'), 'utf8');
+    const CLAUDE_DRAFT = readFileSync(join(import.meta.dir, 'fixtures/claude-code/2.1.289/unsent-paste-ansi.txt'), 'utf8');
+    for (const [screen, cli] of [[IDLE, 'muse'], [UNSENT, 'muse'], [CLAUDE_DRAFT, 'claude-code']] as const) {
+      const typed: string[] = [];
+      const host: TypedWakeHost = {
+        read: () => screen,
+        type: (_p, text) => { typed.push(text); return true; },
+        enter: () => { typed.push('\r'); return true; },
+        key: (_p, key) => { typed.push(key); return true; },
+        wait: async () => {},
+      };
+      await deliverLeadTypedWake(host, 'w1:p1', 'hello', cli, { beforeFirstKey: () => false, settleMs: 1, enterSettleMs: 1, pollMs: 1, ackSettleMs: 1, verifyMs: 1, rereadMs: 0 });
+      expect(typed).toEqual([]);
+    }
+  });
+
   test('a gate that refuses blocks every key path, including the scroll-back key', async () => {
     const typed: string[] = [];
     const host: TypedWakeHost = {
@@ -311,6 +309,23 @@ describe('wake-attempt states', () => {
 });
 
 describe('durable create', () => {
+  test('first-write trace: every new folder level is made durable in its parent before the file', () => {
+    const s = scene();
+    const steps: string[] = [];
+    expect(createExclusive(join(s.root, 'n1', 'n2', 'f'), 'x', { before: (at, path) => { steps.push(`${at}:${path.slice(s.root.length)}`); } })).toBe('created');
+    expect(steps.slice(0, 4)).toEqual(['mkdir:/n1', 'parent-fsync:/n1', 'mkdir:/n1/n2', 'parent-fsync:/n1/n2']);
+    expect(steps.slice(4)).toEqual(['temp:/n1/n2/f', 'temp-fsync:/n1/n2/f', 'link:/n1/n2/f', 'unlink-temp:/n1/n2/f', 'folder-fsync:/n1/n2/f']);
+  });
+
+  test('a fault making a new folder level never reports created, and a retry makes the whole chain', () => {
+    for (const step of ['mkdir', 'parent-fsync'] as const) {
+      const s = scene();
+      const path = join(s.root, 'a', 'b', 'c', 'f');
+      expect(createExclusive(path, 'x', { before: (at) => { if (at === step) throw new Error('fault'); } })).toBe('failed');
+      expect(createExclusive(path, 'x')).toBe('created');
+    }
+  });
+
   test('exists when the name stands; nothing replaces it', () => {
     const s = scene();
     const path = join(s.root, 'x', 'f');

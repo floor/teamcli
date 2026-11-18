@@ -79,6 +79,10 @@ export type ActivationOptions = {
   /** Test seam: runs after a step completes; a crash test exits here. */
   after?: (step: ActivationStep) => void;
   faults?: DurableFaults;
+  /** The managed launch boundary (§3 step 4): managed launches take the activation lock and refuse
+   *  a binary below the floor. E6 does not wire it yet, so no production caller passes this and the
+   *  root stays dark: the fences are written in shadow and enforced by nobody. */
+  launchBoundary?: true;
 };
 
 export type ActivationOutcome =
@@ -192,6 +196,7 @@ function recoverUnderLock(root: string, home: string): { kind: 'ok' } | { kind: 
  * root whose actors are all at the floor again has FENCED removed.
  */
 export function activate(root: string, options: ActivationOptions): ActivationOutcome {
+  if (options.launchBoundary !== true) return { kind: 'refused', why: 'the managed launch boundary is not wired yet; the root stays dark', below: [] };
   const result = withActivationLock(root, (): ActivationOutcome => {
     const recovered = recoverUnderLock(root, options.home);
     if (recovered.kind === 'failed') return recovered;
@@ -239,11 +244,10 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
     }
     const record = createExclusive(join(queuesFolder(root), ACTIVATION), `${JSON.stringify({ payload, signature })}\n`, options.faults);
     if (record === 'failed') {
-      // The record may be linked without its folder being durable: a root is never active on a
-      // record that was not made durable. Take back the record, then the marker; a removal that
-      // fails leaves the root unknown or dark on the next read, never active by accident of order.
-      if (removeDurable(join(queuesFolder(root), ACTIVATION)) === 'removed') removeDurable(join(queuesFolder(root), PROTOCOL));
-      return { kind: 'failed', why: 'the activation record could not be made durable' };
+      // A record that became visible is never taken back: a reader may already have acted on
+      // `active`, and a root never returns from enforcing to dark. A fault before the link leaves no
+      // record (the root stays dark, A0 removes the marker); a fault after it leaves the root active.
+      return { kind: 'failed', why: 'the activation record could not be confirmed durable' };
     }
     options.after?.('record');
     return { kind: 'activated', level: FLOOR_LEVEL };
@@ -259,10 +263,9 @@ export function activate(root: string, options: ActivationOptions): ActivationOu
 export function checkActors(root: string, home: string, actors: FloorActor[] | null): FloorState {
   const state = floorState(root, home);
   if (state.kind !== 'active') return state;
-  if (actors === null) return state;
-  const below = belowFloor(actors, state.level);
-  if (below.length === 0) return state;
-  const why = `fenced: legacy actor present (${below.map(actor => `${actor.name} pid ${String(actor.pid)} level ${actor.level === null ? 'unknown' : String(actor.level)}`).join(', ')})`;
+  const below = actors === null ? null : belowFloor(actors, state.level);
+  if (below !== null && below.length === 0) return state;
+  const why = below === null ? 'fenced: the live actors cannot be read' : `fenced: legacy actor present (${(below ?? []).map(actor => `${actor.name} pid ${String(actor.pid)} level ${actor.level === null ? 'unknown' : String(actor.level)}`).join(', ')})`;
   const made = createExclusive(join(queuesFolder(root), FENCED), `${JSON.stringify({ v: 1, why, at: new Date().toISOString() })}\n`);
   return made === 'failed' ? { kind: 'unknown', why: 'the fenced marker could not be written' } : { kind: 'fenced', level: state.level, why };
 }
@@ -312,9 +315,9 @@ export function floorPass(root: string, home: string, nowMs: number, actors: () 
     lastFloorPass.set(root, nowMs);
     const state = floorState(root, home);
     if (state.kind === 'active') return checkActors(root, home, actors());
-    if (state.kind === 'unknown') return state;
-    activate(root, { home, build, actors });
-    return floorState(root, home);
+    // E6 never activates: activation waits for the managed launch boundary (see `launchBoundary`).
+    void build;
+    return state;
   } catch {
     return { kind: 'unknown', why: 'the floor pass failed' };
   }

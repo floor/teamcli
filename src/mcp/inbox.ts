@@ -21,7 +21,7 @@ import type { KeyObject } from 'node:crypto';
 // path; a drop or receipt that is a link is refused, never followed.
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
-import { claimRead, READ_CLAIMS } from '../send/read-claim.ts';
+import { claimRead, ownerOfClaim, READ_CLAIMS } from '../send/read-claim.ts';
 import { join } from 'node:path';
 import {
   briefBindingOf,
@@ -61,7 +61,7 @@ import {
 import { messageKeyState } from '../store/keys.ts';
 import type { BuildIdentity } from '../version.ts';
 import { flushReceipt, publishReadReceipt } from './inbox-admission.ts';
-import { decideExposure, exposurePointer } from '../queue/exposure.ts';
+import { exposurePointer, isExposeOwner } from '../queue/exposure.ts';
 import { shadowQueueReceipt } from '../queue/receipt-store.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 
@@ -778,9 +778,6 @@ export function readMessage(
    *  operation's recovery taking back the claim it left (src/send/read-claim.ts), so a recovered
    *  read seals the same receipt, brief binding included, that the live read would have. */
   handover?: { receipt: 'after'; owner?: string; adopt?: boolean },
-  /** The exposure actor (rfc-event-comms §3) when this read records a body a leg already carried
-   *  (`recordDeliveredBody`): that leg's own claim then continues instead of yielding a pointer. */
-  exposureActor?: string,
 ): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = recordFile(target.dropDir, id);
@@ -904,7 +901,7 @@ export function readMessage(
     // rfc-event-comms §2 (E6): the per-seat receipt store, written in shadow once this is durable.
     shadowQueueReceipt({
       dropDir: target.dropDir, root: target.root, session: target.session, seat: target.seat, msgId: id,
-      kind: 'read', actor: { kind: handover?.owner === undefined ? 'recipient' : 'relay', name: handover?.owner ?? target.seat }, home, place: queuePlaceOf,
+      kind: 'read', actor: { kind: handover?.owner === undefined ? 'recipient' : 'relay', name: handover?.owner ?? target.seat }, home,
     });
     return true;
   };
@@ -915,6 +912,11 @@ export function readMessage(
   // and a cut-off run's claim belongs to its recovery alone (src/send/read-claim.ts).
   const claim = claimRead(target.dropDir, id, handover?.receipt === 'after' ? handover.owner : undefined, handover?.adopt === true);
   if (!claim.ok) {
+    // rfc-event-comms §3 (E6): a leg's owned exposure claim means another hand-over carries or
+    // carried this body; an automatic read answers with a pointer and writes no read.
+    if (claim.why === 'recovering' && isExposeOwner(ownerOfClaim(target.dropDir, id))) {
+      return { ok: false, reason: exposurePointer(id, queuePlaceOf(target.dropDir, id)?.seq ?? null), served: 'already-served' };
+    }
     const reason = claim.why === 'recovering'
       ? `message ${JSON.stringify(id)} is being recovered from an interrupted read`
       : claim.why === 'busy'
@@ -934,19 +936,6 @@ export function readMessage(
   if (receiptHeldNow()) {
     release();
     return alreadyServed();
-  }
-  // The exposure claim (rfc-event-comms §3, E6), taken under the read claim and immediately before
-  // the body can leave: on an active root only its creator exposes the body; every other reader
-  // gets a pointer, and no `read` receipt is written for a pointer. A dark root writes the claim in
-  // shadow and decides nothing.
-  const exposure = decideExposure(
-    { root: target.root, session: target.session, seat: target.seat, msg_id: id, ...(isGeneralBriefRecord(payload) && writerEpoch !== undefined ? { epoch: writerEpoch } : {}) },
-    exposureActor ?? handover?.owner ?? (handover?.receipt === 'after' ? 'relayed-read' : 'inbox-read'),
-    home,
-  );
-  if (exposure.kind === 'pointer') {
-    release();
-    return { ok: false, reason: `${exposurePointer(id, queuePlaceOf(target.dropDir, id)?.seq ?? null)} (${exposure.why})`, served: 'already-served' };
   }
   if (handover?.receipt === 'after') {
     // A named owner's claim is never removed by the reader: it stays the relayed read's through its

@@ -119,8 +119,12 @@ export type GateEvidence = {
   scrollback?: () => string | null;
 };
 
+/** `create`: whether this attempt may write new state files. `enforce` on an active root (a
+ *  record that cannot be made durable then blocks the keys), `shadow` on a dark root (written,
+ *  enforced by nobody), `none` on a fenced or unknown root (no new fence is created there; the
+ *  existing ones are still honoured by this gate). */
 export type GateOutcome =
-  | { kind: 'open'; enforced: boolean }
+  | { kind: 'open'; enforced: boolean; create: 'enforce' | 'shadow' | 'none' }
   | { kind: 'blocked'; why: string };
 
 function targets(later: AttemptTarget, earlier: AttemptTarget): boolean {
@@ -137,7 +141,8 @@ function targets(later: AttemptTarget, earlier: AttemptTarget): boolean {
 export function attemptGate(scope: AttemptScope, target: AttemptTarget, home: string, evidence: GateEvidence): GateOutcome {
   const state = floorState(scope.root, home);
   const enforced = state.kind !== 'dark';
-  if (!enforced) return { kind: 'open', enforced: false };
+  if (!enforced) return { kind: 'open', enforced: false, create: 'shadow' };
+  const create = state.kind === 'active' ? 'enforce' as const : 'none' as const;
   if (scope.incarnation === 'unknown') return { kind: 'blocked', why: 'the seat incarnation cannot be read, so a wake could not be told apart from an earlier one' };
   const attempts = attemptsOf(scope, home);
   if (attempts === null) return { kind: 'blocked', why: 'the wake attempts cannot be read' };
@@ -157,7 +162,7 @@ export function attemptGate(scope: AttemptScope, target: AttemptTarget, home: st
       return { kind: 'blocked', why: `blocked: wake uncertain (attempt ${String(attempt.n)})` };
     }
   }
-  return { kind: 'open', enforced: true };
+  return { kind: 'open', enforced: true, create };
 }
 
 /** The token text embedded in a wake line, so scrollback can prove the line was typed. */
@@ -180,6 +185,14 @@ export type AttemptHandle = {
  * failure to write it changes nothing.
  */
 export function prepareAttempt(scope: AttemptScope, target: AttemptTarget, home: string, enforced: boolean, faults?: DurableFaults): AttemptHandle | null {
+  return prepareAttemptAs(scope, target, home, enforced ? 'enforce' : 'shadow', faults);
+}
+
+/** Prepares an attempt under the gate's `create` answer. `none` records nothing and returns null:
+ *  the caller types as before E6 (only the existing fences, already checked by the gate, apply). */
+export function prepareAttemptAs(scope: AttemptScope, target: AttemptTarget, home: string, create: 'enforce' | 'shadow' | 'none', faults?: DurableFaults): AttemptHandle | null {
+  if (create === 'none') return null;
+  const enforced = create === 'enforce';
   const existing = attemptsOf(scope, home);
   if (existing === null && enforced) return null;
   const n = (existing ?? []).reduce((max, a) => Math.max(max, a.n), 0) + 1;

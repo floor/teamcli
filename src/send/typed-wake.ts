@@ -353,6 +353,9 @@ export async function deliverLeadTypedWake(
   cli: string,
   options: TypedWakeOptions = {},
 ): Promise<TypedWakeResult> {
+  // Every key this wake may press, the draft-clearing keys included, waits behind the attempt's
+  // `emitted` step (rfc-event-comms §5, E6).
+  if (options.beforeFirstKey !== undefined) host = keyFenced(host, options.beforeFirstKey);
   const screen = await host.read(pane);
   const kind = screen === null ? 'unreadable' : readScreen(cli, screen).kind;
   const holdsLine = screen !== null && boxHoldsText(cli, line, screen);

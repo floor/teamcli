@@ -57,7 +57,7 @@ export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
   if (outcome.kind === 'published') {
     shadowQueueReceipt({
       dropDir: input.dropDir, root: input.root, session: input.session, seat: input.to, msgId: input.id,
-      kind: 'read', actor: { kind: 'recipient', name: input.readBy ?? input.to }, home: input.home, place: queuePlaceOf,
+      kind: 'read', actor: { kind: 'recipient', name: input.readBy ?? input.to }, home: input.home,
     });
   }
   return outcome;

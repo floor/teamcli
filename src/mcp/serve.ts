@@ -78,7 +78,7 @@ import {
 } from './inbox.ts';
 import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
-import { bodyExposure, exposurePointer } from '../queue/exposure.ts';
+import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 
@@ -540,7 +540,7 @@ function watchChannel(
       if (staleNow !== undefined && staleNow !== null) return 'skip' as const;
       // The exposure claim (rfc-event-comms §3, E6), immediately before the frame can carry the
       // body: on an active root only its creator pushes the body; any other push carries a pointer.
-      const exposure = bodyExposure({ root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
+      const exposure = exposeBody({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
       if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(serving.dropDir, id)?.seq ?? null);
       const reserved = recordChannelPush(serving.dropDir, {
         v: 1,
@@ -561,7 +561,10 @@ function watchChannel(
         ? serving.channelMark(serving.dropDir, id)
         : markChannelNotified(serving.dropDir, id);
       if (!marked) return 'uncertain' as const;
-      if (exposure.kind !== 'pointer') recordDeliveredBody({ dropDir: serving.dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home, leg: 'channel' });
+      // E3: the frame was written; the read is sealed through this hand-over's own claim only.
+      const delivered = { dropDir: serving.dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home };
+      if (exposure.kind === 'expose') exposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
+      else if (exposure.kind === 'legacy') recordDeliveredBody(delivered);
       return 'pushed' as const;
     });
     if (committed === 'busy') {

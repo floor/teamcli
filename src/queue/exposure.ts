@@ -1,166 +1,90 @@
-// Exposure claims (rfc-event-comms §3, step E6).
+// Body exposure (rfc-event-comms §3, step E6), built on E5's one read claim
+// (src/send/read-claim.ts), not on a second mechanism.
 //
-// An automatic leg that would put a message body in front of the model first creates the
-// message's exposure claim; only its creator exposes the body. The claim is per canonical message,
-// outside every queue generation, so replacing a generation never resets it:
-//   .agents/exposures/<session>/<recipient>/<msg_id>.exposed        (a launch brief: <msg_id>@<epoch>)
-// It is a signed record, created exclusively and durably (file and folder fsynced) BEFORE the body
-// leaves, and never replaced or removed.
+// A leg about to carry a message's body to the model (the channel frame, a typed inline wake, a
+// native or socket frame) takes the message's exclusive read claim with an owner of its own:
+// `expose:<leg>:<msg_id>:<nonce>`, unique to this one hand-over. The owner file is durable before
+// the claim returns, so before the body leaves. The hand-over is then settled exactly once:
 //
-// The decision, one function for every automatic exposer:
-//   active root            create the claim; `expose` only when this call created it; `pointer`
-//                          when a verifying claim already stands; `pointer` when the claim cannot be
-//                          made or read (fail closed: no body without a durable claim).
-//   fenced or unknown root no new claim is made; a verifying claim that stands still means
-//                          `pointer` (every existing fence stays honoured); none standing means the
-//                          legacy behaviour (`legacy`), exactly as before E6.
-//   dark root              the claim is written in shadow and decides nothing: `legacy`.
-// A deliberate reread (`team show`, inbox `--again`) is not an exposure and never calls this.
-import { join } from 'node:path';
-import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { createExclusive, readFence, type DurableFaults } from './durable.ts';
-import { floorState } from './floor.ts';
+//   E1 claim     claimRead(owner) — durable owner file; a refused claim means POINTER, no body.
+//   E2 hand-over the leg carries the body (the caller's own step).
+//   E3 settle    `handedOver: 'yes'`     → seal the `read` receipt through the same claim (adopt),
+//                                          then remove the owned claim (durable). A seal that fails
+//                                          keeps the claim: the body stays exposed-unconfirmed.
+//                `handedOver: 'no'`      → nothing left the process: remove the owned claim (the
+//                                          message is not exposed and may be offered again).
+//                `handedOver: 'unknown'` → keep the claim: exposed-unconfirmed.
+//
+// A claim whose owner is an `expose:` owner is never adopted by another reader. Every automatic
+// reader that meets it gets a pointer and no body (`team messages`, the inbox read, `drops --read`
+// all go through `claimRead`); the deliberate reread (`team show`) prints the body and writes no
+// read receipt. The seal is a handle on the decision, never a new decision: a second hand-over of
+// the same message on any leg finds the owned claim (or the sealed receipt) and gets a pointer.
+//
+// Floor: only an ACTIVE root takes these claims (the fence is created). A dark, fenced or unknown
+// root takes none and the legs behave as before E6; an owned claim that already stands is still
+// honoured by every reader, whatever the floor.
+import { randomBytes } from 'node:crypto';
+import { claimRead, ownerOfClaim, removeOwnedClaim } from '../send/read-claim.ts';
+import { mayCreateFence } from './floor.ts';
 
-export const EXPOSURE_DOMAIN = 'team-exposure-v1\n';
-const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+export type BodyLeg = 'channel' | 'typed' | 'native' | 'socket';
 
-export type ExposureTarget = { root: string; session: string; seat: string; msg_id: string; epoch?: string };
+const EXPOSE_PREFIX = 'expose:';
 
-export type ExposurePayload = {
-  v: 1;
-  kind: 'exposure';
-  root: string;
-  session: string;
-  seat: string;
-  msg_id: string;
-  epoch: string | null;
-  actor: string;
-  at: string;
+/** Whether a claim owner is a leg's body exposure (never adopted by another reader). */
+export function isExposeOwner(owner: string | null | 'unknown'): boolean {
+  return typeof owner === 'string' && owner.startsWith(EXPOSE_PREFIX);
+}
+
+export type ExposureTarget = { dropDir: string; root: string; session: string; seat: string; msgId: string };
+
+export type ExposureHandle = {
+  kind: 'expose';
+  owner: string;
+  /** E3: settles the hand-over once. `seal` publishes the read receipt for 'yes'. */
+  settle(handedOver: 'yes' | 'no' | 'unknown', seal: (owner: string) => boolean): void;
 };
 
 export type ExposureDecision =
-  /** This call created the claim: expose the body once. */
-  | { kind: 'expose' }
-  /** A claim stands, or none could be made on an active root: send a pointer, never the body. */
+  | ExposureHandle
+  /** Another hand-over holds or held the body: carry a pointer, write no read. */
   | { kind: 'pointer'; why: string }
-  /** No fence applies (dark root, or no claim standing on a fenced or unknown root): legacy. */
+  /** No fence applies (the root is not active): the leg behaves as before E6. */
   | { kind: 'legacy' };
 
-function keyOf(target: ExposureTarget): string | null {
-  if (!NAME.test(target.session) || !NAME.test(target.seat) || !NAME.test(target.msg_id)) return null;
-  if (target.epoch === undefined) return target.msg_id;
-  return NAME.test(target.epoch) ? `${target.msg_id}@${target.epoch}` : null;
-}
-
-export function exposurePath(target: ExposureTarget): string | null {
-  const key = keyOf(target);
-  return key === null ? null : join(target.root, '.agents', 'exposures', target.session, target.seat, `${key}.exposed`);
-}
-
-/** The claim that stands for `target`: `absent` (proved by ENOENT), `held` (verifies and is bound to
- *  this target), or `unknown` (unreadable, not verifying, or bound elsewhere: never absent). */
-export function exposureClaimOf(target: ExposureTarget, home: string): 'absent' | 'held' | 'unknown' {
-  const read = exposureRecordOf(target, home);
-  return read === 'absent' || read === 'unknown' ? read : 'held';
-}
-
-/** The verifying claim's payload, or `absent` / `unknown` exactly as `exposureClaimOf`. */
-export function exposureRecordOf(target: ExposureTarget, home: string): 'absent' | 'unknown' | ExposurePayload {
-  const path = exposurePath(target);
-  if (path === null) return 'unknown';
-  const text = readFence(path);
-  if (text === null) return 'unknown';
-  if (text === '') return 'absent';
-  let record: { payload?: ExposurePayload; signature?: unknown };
-  try {
-    record = JSON.parse(text) as typeof record;
-  } catch {
-    return 'unknown';
-  }
-  const payload = record.payload;
-  if (!payload || payload.kind !== 'exposure' || payload.v !== 1 || typeof record.signature !== 'string') return 'unknown';
-  if (payload.root !== target.root || payload.session !== target.session || payload.seat !== target.seat
-    || payload.msg_id !== target.msg_id || payload.epoch !== (target.epoch ?? null)) return 'unknown';
-  const key = messageKeyState(home);
-  if (key.kind !== 'key') return 'unknown';
-  return verifyDomain(EXPOSURE_DOMAIN, payload as unknown as Json, record.signature, key.key) ? payload : 'unknown';
-}
-
-function writeClaim(target: ExposureTarget, actor: string, home: string, faults?: DurableFaults): 'created' | 'exists' | 'failed' {
-  const path = exposurePath(target);
-  if (path === null) return 'failed';
-  const payload: ExposurePayload = {
-    v: 1,
-    kind: 'exposure',
-    root: target.root,
-    session: target.session,
-    seat: target.seat,
-    msg_id: target.msg_id,
-    epoch: target.epoch ?? null,
-    actor,
-    at: new Date().toISOString(),
-  };
-  let signature: string;
-  try {
-    signature = signDomain(EXPOSURE_DOMAIN, payload as unknown as Json, messageKeyOf(home));
-  } catch {
-    return 'failed';
-  }
-  return createExclusive(path, `${JSON.stringify({ payload, signature })}\n`, faults);
-}
-
 /**
- * The exposure decision for one automatic body exposure, taken immediately before the body leaves.
- * Nothing that can fail sits between a returned `expose` and the hand-over in the caller.
+ * E1, taken by the leg immediately before it builds the frame that carries the body. On an active
+ * root, `expose` only when this call took a fresh owned claim; every refusal is a pointer.
  */
-export function decideExposure(target: ExposureTarget, actor: string, home: string, faults?: DurableFaults): ExposureDecision {
-  const state = floorState(target.root, home);
-  if (state.kind === 'active') {
-    const made = writeClaim(target, actor, home, faults);
-    if (made === 'created') return { kind: 'expose' };
-    if (made === 'failed') return { kind: 'pointer', why: 'the exposure claim could not be made durable' };
-    const held = exposureRecordOf(target, home);
-    // The same operation coming back (a relayed read's recovery re-entering its own read) continues
-    // its own exposure: one operation, one claim, one body. Any other actor gets the pointer.
-    if (typeof held === 'object' && operationActor(actor) && held.actor === actor) return { kind: 'expose' };
-    return { kind: 'pointer', why: typeof held === 'object' ? 'already shown by another leg' : 'an exposure claim that cannot be verified stands' };
-  }
-  if (state.kind === 'dark') {
-    // Shadow: written so a later activation finds the history, and decides nothing now.
-    writeClaim(target, actor, home, faults);
-    return { kind: 'legacy' };
-  }
-  // Fenced or unknown: no new fence; an existing one is still honoured.
-  const held = exposureRecordOf(target, home);
-  if (typeof held === 'object') {
-    if (operationActor(actor) && held.actor === actor) return { kind: 'expose' };
-    return { kind: 'pointer', why: 'already shown by another leg' };
-  }
-  if (held === 'unknown') return { kind: 'pointer', why: 'an exposure claim that cannot be read stands' };
-  return { kind: 'legacy' };
+export function exposeBody(target: ExposureTarget, leg: BodyLeg, home: string): ExposureDecision {
+  const standing = ownerOfClaim(target.dropDir, target.msgId);
+  if (standing === 'unknown') return { kind: 'pointer', why: 'the message read claim cannot be read' };
+  if (isExposeOwner(standing)) return { kind: 'pointer', why: 'already shown by another hand-over' };
+  if (!mayCreateFence(target.root, home, 'exposure')) return { kind: 'legacy' };
+  const owner = `${EXPOSE_PREFIX}${leg}:${target.msgId}:${randomBytes(6).toString('hex')}`;
+  const claim = claimRead(target.dropDir, target.msgId, owner);
+  if (!claim.ok) return { kind: 'pointer', why: claim.why === 'recovering' ? 'already shown by another hand-over' : `the read claim was not taken (${claim.why})` };
+  // The lock is let go at once; the durable owner file is the fence from here on.
+  claim.keep();
+  let settled = false;
+  return {
+    kind: 'expose',
+    owner,
+    settle: (handedOver, seal) => {
+      if (settled) return;
+      settled = true;
+      if (handedOver === 'unknown') return;
+      if (handedOver === 'no') {
+        removeOwnedClaim(target.dropDir, target.msgId, owner);
+        return;
+      }
+      if (seal(owner)) removeOwnedClaim(target.dropDir, target.msgId, owner);
+    },
+  };
 }
 
-/** An actor that names one operation (a relayed read's owner), not a kind of reader. */
-function operationActor(actor: string): boolean {
-  return actor.startsWith('relay:') || actor.startsWith('delivered:');
-}
-
-/** The leg that carries a body to the model, for `bodyExposure`. */
-export type BodyLeg = 'channel' | 'typed' | 'native' | 'socket';
-
-/** The actor one leg's delivery of one message claims under. The same leg recording its own
- *  delivery afterwards (`recordDeliveredBody`) continues that exposure; any other leg gets a
- *  pointer. */
-export function bodyActor(leg: BodyLeg, msgId: string): string {
-  return `delivered:${leg}:${msgId}`;
-}
-
-/** The exposure decision for a leg about to carry `msgId`'s body (§3), taken before the body leaves. */
-export function bodyExposure(target: { root: string; session: string; seat: string; msgId: string }, leg: BodyLeg, home: string): ExposureDecision {
-  return decideExposure({ root: target.root, session: target.session, seat: target.seat, msg_id: target.msgId }, bodyActor(leg, target.msgId), home);
-}
-
-/** The pointer text an automatic leg sends instead of a body (§3). */
+/** The pointer text an automatic leg carries instead of a body (§3). */
 export function exposurePointer(msgId: string, seq: number | null): string {
   return `message ${msgId}${seq === null ? '' : ` (seq ${String(seq)})`}: already shown, or reread it with \`team show ${msgId}\``;
 }

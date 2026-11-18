@@ -760,6 +760,27 @@ export function queuePlaceOf(dropDir: string, msgId: string): { generation: stri
   return Number.isSafeInteger(seq) && seq > 0 ? { generation: named, seq } : null;
 }
 
+/**
+ * Where `msgId` sits, PROVED: the id file's seq must hold a signed committed entry of the current
+ * generation, bound to this root, session and seat, whose msg_id is `msgId`. Null for any stale,
+ * partial or mismatched placement. The only placement a receipt may be signed at (E6).
+ */
+export function verifiedQueuePlaceOf(dropDir: string, msgId: string, binding: { root: string; session: string; seat: string }, home: string): { generation: string; seq: number } | null {
+  const place = queuePlaceOf(dropDir, msgId);
+  if (place === null) return null;
+  const base = queueBaseOf(dropDir);
+  if (base === null) return null;
+  const entry = readEntry(join(base, place.generation), place.seq, { root: binding.root, session: binding.session, seat: binding.seat, generation: place.generation }, home);
+  return entry !== null && entry.payload.msg_id === msgId ? place : null;
+}
+
+/** The msg_id a committed, verifying entry holds at `seq` of `generation`; null otherwise. */
+export function entryMsgIdAt(dropDir: string, generation: string, seq: number, binding: { root: string; session: string; seat: string }, home: string): string | null {
+  const base = queueBaseOf(dropDir);
+  if (base === null || !GENERATION.test(generation)) return null;
+  return readEntry(join(base, generation), seq, { ...binding, generation }, home)?.payload.msg_id ?? null;
+}
+
 /** The seat's current generation's name, read without the lock; null when there is none. A
  *  reader's cache key: an answer bound to one generation is asked again when it changes. */
 export function currentGenerationName(dropDir: string): string | null {

@@ -90,7 +90,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { MailPass, STUCK_MARKER } from './mail-pass.ts';
 import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
 import { climbUnreadLead } from './status-events.ts';
-import { attemptGate, incarnationOf, prepareAttempt, tokenText } from '../queue/wake-attempt.ts';
+import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutcome } from '../queue/wake-attempt.ts';
 import { floorPass } from '../queue/floor.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
@@ -1059,14 +1059,28 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         } catch {
           pushed = false;
         }
-        const typed = pushed
+        // The lead's legacy typed fallback is under the same wake-attempt fence (rfc-event-comms
+        // §5, E6): the gate first, then `emitted` before its first key of any kind.
+        const leadScope = { root: scene.root, session: scene.session, seat: seat.name, incarnation: seatIncarnation(scene.dir, scene.session, seat.name, pane) };
+        const leadTarget = { msg_id: message.id, seq: queuePlaceOf(dropDir, message.id)?.seq ?? null };
+        const leadGate: GateOutcome = pushed ? { kind: 'open', enforced: false, create: 'none' } : attemptGate(leadScope, leadTarget, home, {
+          settled: (id) => id === message.id ? receipt() : false,
+          scrollback: () => passPaneScreen(scene, pane),
+        });
+        const leadHandle = pushed || leadGate.kind === 'blocked' ? null : prepareAttemptAs(leadScope, leadTarget, home, leadGate.create);
+        const leadBlocked = leadGate.kind === 'blocked' || (leadHandle === null && leadGate.kind === 'open' && leadGate.create === 'enforce');
+        if (leadBlocked) scene.say(`${seat.name}: ${leadGate.kind === 'blocked' ? leadGate.why : 'the wake attempt could not be recorded'}; no wake line was typed`, false);
+        const leadLine = leadHandle !== null && leadGate.kind === 'open' && leadGate.create === 'enforce' ? `${line} ${tokenText(leadHandle.attempt.token)}` : line;
+        const typed = pushed || leadBlocked
           ? null
-          : await deliverLeadTypedWake(leadWakeHost(scene, pane), pane, line, seat.cli, {
+          : await deliverLeadTypedWake(leadWakeHost(scene, pane), pane, leadLine, seat.cli, {
               now: () => scene.now.getTime(),
               dropPath: join(dropDir, message.id),
               seatDir: join(scene.dir, 'seats', seat.name),
               log: (kept) => logLine(join(scene.root, '.agents'), 'watch', seat.name, kept, scene.now),
+              ...(leadHandle === null ? {} : { beforeFirstKey: leadHandle.emit }),
             });
+        if (typed !== null) leadHandle?.settle(typed);
         if (!pushed && (typed === null || !typed.typed)) {
           for (const id of reserved) release(wakePath(dropDir, id));
           continue;
@@ -1125,8 +1139,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         // the scrollback, or a new seat incarnation. Dark roots write the states in shadow only.
         const attemptScope = { root: scene.root, session: scene.session, seat: seat.name, incarnation: seatIncarnation(scene.dir, scene.session, seat.name, pane) };
         const attemptTarget = { msg_id: message.id, seq: queuePlaceOf(dropDir, message.id)?.seq ?? null };
-        const gate = scene.sources.typedWake === undefined
-          ? { kind: 'open' as const, enforced: false }
+        const gate: GateOutcome = scene.sources.typedWake === undefined
+          ? { kind: 'open', enforced: false, create: 'none' }
           : attemptGate(attemptScope, attemptTarget, home, {
               settled: (id) => id === message.id ? receipt() : false,
               scrollback: () => passPaneScreen(scene, pane),
@@ -1136,13 +1150,13 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           scene.say(`${seat.name}: ${gate.why}; no wake line was typed`, false);
           continue;
         }
-        const handle = scene.sources.typedWake === undefined ? null : prepareAttempt(attemptScope, attemptTarget, home, gate.enforced);
-        if (handle === null && gate.enforced) {
+        const handle = scene.sources.typedWake === undefined ? null : prepareAttemptAs(attemptScope, attemptTarget, home, gate.create);
+        if (handle === null && gate.create === 'enforce') {
           for (const id of reserved) release(wakePath(dropDir, id));
           scene.say(`${seat.name}: the wake attempt could not be recorded; no wake line was typed`, false);
           continue;
         }
-        const typedLine = handle !== null && gate.enforced ? `${line} ${tokenText(handle.attempt.token)}` : line;
+        const typedLine = handle !== null && gate.create === 'enforce' ? `${line} ${tokenText(handle.attempt.token)}` : line;
         const typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, handle === null ? undefined : { beforeFirstKey: handle.emit });
         if (typed !== undefined) handle?.settle(typed);
         if (typed?.typed === true) noteTypedLine(dropDir, nowMs);

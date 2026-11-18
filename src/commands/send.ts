@@ -1,12 +1,12 @@
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
-import { bodyExposure } from '../queue/exposure.ts';
+import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
 import { appendDelivery } from '../queue/append.ts';
 import { queueLog } from '../queue/log.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
-import { exposedInline, exposurePointer, inlineWake, oversizedWake, recordDeliveredBody, typedWakeMaxFor, wakeTextFor, RUNTIME_WAKE_MAX } from '../send/readable-wake.ts';
+import { inlineWake, legBody, legText, oversizedWake, recordDeliveredBody, settleLegBody, typedWakeMaxFor, RUNTIME_WAKE_MAX, type LegBody } from '../send/readable-wake.ts';
 import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -2936,6 +2936,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
               seat: to.seat,
               now: host.now(),
             });
+        // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
+        const nativeBody = legBody(record, host.home, 'native', dropDir);
         const attempt = await deliverCodexNativeRoute(
           {
             route: 'native',
@@ -2947,7 +2949,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
             seat: to.seat,
             sender: { seat: from, team: teamIdOf(root) },
           },
-          { id: msgId, record: staged.record, sentAt: record.at, pointer: wakeTextFor(record, host.home, 'native') },
+          { id: msgId, record: staged.record, sentAt: record.at, pointer: legText(nativeBody, record) },
           {
             now: host.now,
             startedAt,
@@ -2962,9 +2964,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         );
         note(attempt.walkAttempt);
         markLeg('native', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
+        // E3: a route that did not take the payload settles its hand-over now (a timeout may have carried it).
+        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, (attempt as { timedOut?: boolean }).timedOut === true ? 'unknown' : 'no');
         if (attempt.outcome === 'enqueue') {
-          const carriedBody = exposedInline(record, host.home, 'native');
-          if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: carriedBody });
+          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
           clearEndpointBlocked(to.root, to.session, to.seat);
           report.sent = msgId;
           // The leg that took the message decides the words. The queue accepted the pointer, so
@@ -3088,6 +3091,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
             now: host.now(),
           });
       const seatCwd = declared?.cwd === undefined ? to.root : resolve(to.root, declared.cwd);
+      // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
+      const nativeBody = legBody(record, host.home, 'native', dropDir);
       const attempt = await deliverHeadlessResumeRoute(
         {
           route: 'headless-resume',
@@ -3100,7 +3105,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
           sender: { seat: from, team: teamIdOf(root) },
           cwd: seatCwd,
         },
-        { id: msgId, record: staged.record, pointer: wakeTextFor(record, host.home, 'native') },
+        { id: msgId, record: staged.record, pointer: legText(nativeBody, record) },
         {
           now: host.now,
           startedAt,
@@ -3113,9 +3118,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       );
       markLeg('headless-resume', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
       note(attempt.walkAttempt);
+      // E3: a route that did not take the payload settles its hand-over now (a timeout may have carried it).
+      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, (attempt as { timedOut?: boolean }).timedOut === true ? 'unknown' : 'no');
       if (attempt.outcome === 'enqueue') {
-        const carriedBody = exposedInline(record, host.home, 'native');
-        if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: carriedBody });
+        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
         report.sent = msgId;
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
         const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
@@ -3264,7 +3270,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     const compose = profileFor(to.cli)?.compose ?? null;
     // The receiving team's `message-display` policy decides the words the wake opens with; a team
     // file that did not read leaves the shipped template, never an unnamed wake.
-    const trigger = exposedInline(record, host.home, 'typed', typedWakeMaxFor(to.cli), 'typed') ?? readTriggerLine(to.seat, to.session, {
+    const trigger = inlineWake(record, host.home, typedWakeMaxFor(to.cli), 'typed') ?? readTriggerLine(to.seat, to.session, {
       seat: record.from,
       team: team.project,
       template: wakeTemplate,
@@ -5330,7 +5336,14 @@ async function deliverTypedWakeSeat(
     }
     const wakeHost = host.typedWake?.(session);
     if (wakeHost === undefined) return { delivered: false, typed: false, reason: 'the send host binds no pane writer; nothing was typed' };
-    const wake = await deliverTypedWake(wakeHost, pane, trigger, cli, {
+    // rfc-event-comms §3 (E6): a trigger that carries the body takes the hand-over decision here,
+    // immediately before the keys; another hand-over's body turns it into a pointer.
+    const carrying = trigger === inlineWake(payload, host.home, typedWakeMaxFor(cli), 'typed');
+    const typedBody: LegBody = carrying
+      ? legBody(payload, host.home, 'typed', dropDir, typedWakeMaxFor(cli), 'typed')
+      : { text: trigger, carriesBody: false, handle: null };
+    const line = typedBody.text ?? trigger;
+    const wake = await deliverTypedWake(wakeHost, pane, line, cli, {
       ...(host.wakeVerifyMs === undefined ? {} : { verifyMs: host.wakeVerifyMs, workingBoundMs: host.wakeVerifyMs }),
       ...(host.wakePollMs === undefined ? {} : { pollMs: host.wakePollMs }),
       ...(host.wakeReceipt === undefined ? {} : {
@@ -5338,8 +5351,11 @@ async function deliverTypedWakeSeat(
       }),
       draftFile: join(dropDir, `${payload.id}.draft`),
     });
-    if (!wake.delivered) return { delivered: false, typed: wake.typed, reason: wake.reason };
-    recordDeliveredBody({ dropDir, id: payload.id, root, session, seat: seatName, home: host.home, wake: trigger });
+    if (!wake.delivered) {
+      settleLegBody(typedBody, wake.typed ? 'unknown' : 'no');
+      return { delivered: false, typed: wake.typed, reason: wake.reason };
+    }
+    settleLegBody(typedBody, 'yes', { dropDir, id: payload.id, root, session, seat: seatName, home: host.home, wake: line });
     const ms = host.now().getTime() - startedAt;
     logLine(dir, 'send', who, `${seatName}: delivered (typed wake) (drop ${String(payload.body.length)} characters, typed; ${wake.reason})`, host.now());
     if (writeHistory) {
@@ -6197,7 +6213,7 @@ export async function walkReplyDelivery(input: {
         { seat: from, ...(input.payload.from_id === null ? {} : { id: input.payload.from_id }) },
         { ...input.naming, mode: 'nickname' },
       );
-      const trigger = exposedInline(input.payload, input.host.home, 'typed', typedWakeMaxFor(cli), 'typed') ?? readTriggerLine(seatName, input.session, {
+      const trigger = inlineWake(input.payload, input.host.home, typedWakeMaxFor(cli), 'typed') ?? readTriggerLine(seatName, input.session, {
         seat: from,
         team: input.sender.project,
         template: wakeTemplate,
@@ -6254,6 +6270,8 @@ export async function walkReplyDelivery(input: {
               seat: seatName,
               now: input.host.now(),
             });
+        // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
+        const nativeBody = legBody(input.payload, input.host.home, 'native', dropDir);
         const attempt = await deliverCodexNativeRoute(
           {
             route: 'native',
@@ -6265,7 +6283,7 @@ export async function walkReplyDelivery(input: {
             seat: seatName,
             sender: { seat: from, team: teamIdOf(input.root) },
           },
-          { id: msgId, record: staged.record, sentAt: input.payload.at, pointer: wakeTextFor(input.payload, input.host.home, 'native') },
+          { id: msgId, record: staged.record, sentAt: input.payload.at, pointer: legText(nativeBody, input.payload) },
           {
             now: input.host.now,
             startedAt,
@@ -6278,9 +6296,10 @@ export async function walkReplyDelivery(input: {
             liveProbe: true,
           },
         );
+        // E3: a route that did not take the payload settles its hand-over now (a timeout may have carried it).
+        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, (attempt as { timedOut?: boolean }).timedOut === true ? 'unknown' : 'no');
         if (attempt.outcome === 'enqueue') {
-          const carriedBody = exposedInline(input.payload, input.host.home, 'native');
-          if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: carriedBody });
+          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
           clearEndpointBlocked(input.root, input.session, seatName);
           const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
           if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
@@ -6334,6 +6353,8 @@ export async function walkReplyDelivery(input: {
             now: input.host.now(),
           });
       const seatCwd = declared.cwd === undefined ? input.root : resolve(input.root, declared.cwd);
+      // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
+      const nativeBody = legBody(input.payload, input.host.home, 'native', dropDir);
       const attempt = await deliverHeadlessResumeRoute(
         {
           route: 'headless-resume',
@@ -6346,7 +6367,7 @@ export async function walkReplyDelivery(input: {
           sender: { seat: from, team: teamIdOf(input.root) },
           cwd: seatCwd,
         },
-        { id: msgId, record: staged.record, pointer: wakeTextFor(input.payload, input.host.home, 'native') },
+        { id: msgId, record: staged.record, pointer: legText(nativeBody, input.payload) },
         {
           now: input.host.now,
           startedAt,
@@ -6357,9 +6378,10 @@ export async function walkReplyDelivery(input: {
           ...(input.host.headlessResumeSpawn === undefined ? {} : { spawn: input.host.headlessResumeSpawn }),
         },
       );
+      // E3: a route that did not take the payload settles its hand-over now (a timeout may have carried it).
+      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, (attempt as { timedOut?: boolean }).timedOut === true ? 'unknown' : 'no');
       if (attempt.outcome === 'enqueue') {
-        const carriedBody = exposedInline(input.payload, input.host.home, 'native');
-        if (carriedBody !== null) recordDeliveredBody({ dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: carriedBody });
+        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
         const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
         if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
           return ended({ via: 'headless-resume', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, headless-resume receipt)` });
@@ -6697,9 +6719,11 @@ async function deliverSocketFrame(
   if (Buffer.byteLength(content, 'utf8') > RUNTIME_WAKE_MAX) {
     content = `${content.split('\n')[0]}\n\nMessage too long for this wake. Read it with: team drops --read --id ${msgId} --seat ${to.seat}`;
     bodyIncluded = false;
-  } else if (bodyExposure({ root: to.root, session: to.session, seat: to.seat, msgId }, 'socket', host.home).kind === 'pointer') {
-    // rfc-event-comms §3 (E6): another leg already exposed this body; the frame carries a pointer.
-    content = `${content.split('\n')[0]}\n\n${exposurePointer(msgId, null)}`;
+  }
+  // rfc-event-comms §3 (E6): the frame's hand-over decision, taken once for the exact frame sent.
+  const socketExposure = bodyIncluded ? exposeBody({ dropDir, root: to.root, session: to.session, seat: to.seat, msgId }, 'socket', host.home) : null;
+  if (socketExposure?.kind === 'pointer') {
+    content = `${content.split('\n')[0]}\n\n${pointerFor(msgId, null)}`;
     bodyIncluded = false;
   }
   // The reader line rides with the body too: a seat handed the whole body still needs the id to
@@ -6816,7 +6840,11 @@ async function deliverSocketFrame(
       return { kind: 'delivered-unrecorded', reason: settled.reason };
     }
   }
-  if (bodyIncluded) recordDeliveredBody({ dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, leg: 'socket' });
+  if (bodyIncluded) {
+    const delivered = { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home };
+    if (socketExposure?.kind === 'expose') socketExposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
+    else recordDeliveredBody(delivered);
+  }
   // Under the readable-wake policy, accepted full bodies settle their durable copies.
   // An oversized-body pointer stays unread until the receiver follows its explicit read hint.
   if (!wait && writeHistory) {
