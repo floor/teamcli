@@ -21,7 +21,7 @@ export type DurableFaults = { before?: (step: DurableStep | 'mkdir' | 'parent-fs
 
 export type ExclusiveOutcome = 'created' | 'exists' | 'failed';
 
-function fsyncFolder(folder: string): void {
+export function fsyncFolder(folder: string): void {
   const fd = openSync(folder, constants.O_RDONLY);
   try {
     fsyncSync(fd);

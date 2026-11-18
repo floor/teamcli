@@ -13,7 +13,9 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { createExclusive, readFence, removeDurable, type DurableFaults } from './durable.ts';
+import { createExclusive, ensureFolder, fsyncFolder, readFence, removeDurable, type DurableFaults } from './durable.ts';
+import { renameSync } from '../host/guarded-fs.ts';
+import { randomBytes } from 'node:crypto';
 import { lstatSync } from 'node:fs';
 import { queueBaseOf, verifiedQueuePlaceOf } from './append.ts';
 
@@ -217,7 +219,7 @@ function placeAndWrite(input: PendingInput): WriteReceiptOutcome | 'unplaced' {
 }
 
 const PENDING = 'pending-receipts';
-const PENDING_NAME = /^\d{13}\.[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$/;
+const PENDING_NAME = /^\d{13}\.[0-9a-f]{12}\.[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$/;
 
 function pendingFolder(dropDir: string): string | null {
   const base = queueBaseOf(dropDir);
@@ -253,8 +255,17 @@ function writePending(input: PendingInput): boolean {
   const folder = pendingFolder(input.dropDir);
   if (folder === null || !NAME.test(input.msgId) || !NAME.test(input.session) || !NAME.test(input.seat)) return false;
   if (!actorMay(input.kind, input.actor.kind)) return false;
-  // One marker per (message, kind): a second contention for the same decision finds it standing.
-  if (listPending(folder).some(name => name.slice(14) === `${input.msgId}.${input.kind}.json`)) return true;
+  // One marker per decision: a second contention finds the same decision standing. The check reads
+  // each marker's verified signed content (record id, kind and actor, signed with this home's
+  // key), never its file name, so an unverifiable file can never stand in for a real decision.
+  const key = messageKeyState(input.home);
+  if (key.kind === 'key' && listPending(folder).some((name) => {
+    const text = readFence(join(folder, name));
+    const standing = text === null ? null : verifiedPending(text, name, key.key);
+    return standing !== null && standing.msg_id === input.msgId && standing.receipt === input.kind
+      && standing.actor.kind === input.actor.kind && standing.actor.name === input.actor.name
+      && standing.root === input.root && standing.session === input.session && standing.seat === input.seat;
+  })) return true;
   const payload: PendingPayload = {
     v: 1, kind: 'queue-pending', root: input.root, session: input.session, seat: input.seat,
     msg_id: input.msgId, receipt: input.kind, actor: input.actor,
@@ -265,8 +276,10 @@ function writePending(input: PendingInput): boolean {
   } catch {
     return false;
   }
-  const outcome = createExclusive(join(folder, `${String(Date.now()).padStart(13, '0')}.${input.msgId}.${input.kind}.json`), `${JSON.stringify({ payload, signature })}\n`);
-  return outcome === 'created' || outcome === 'exists';
+  // A fresh name (time, then a random nonce): only this call's own exclusive create counts. A name
+  // that already stood (`exists`) proves nothing about this decision, so it is not success.
+  const name = `${String(Date.now()).padStart(13, '0')}.${randomBytes(6).toString('hex')}.${input.msgId}.${input.kind}.json`;
+  return createExclusive(join(folder, name), `${JSON.stringify({ payload, signature })}\n`) === 'created';
 }
 
 function listPending(folder: string): string[] {
@@ -292,17 +305,35 @@ export function drainPendingReceipts(dropDir: string, home: string, log?: (line:
   let left = 0;
   let dropped = 0;
   for (const name of listPending(folder)) {
+    try {
+      const step = drainOne(folder, name, dropDir, home, key.key, log);
+      if (step === 'written') written += 1;
+      else if (step === 'dropped') dropped += 1;
+      else if (step === 'left') left += 1;
+    } catch (error) {
+      // One marker never stops the drain: the rest of the seat's decisions still settle this pass.
+      log?.(`queue: a pending receipt marker could not be drained (${name}: ${(error as Error).message})`);
+      left += 1;
+    }
+  }
+  return { written, left, dropped };
+}
+
+function drainOne(folder: string, name: string, dropDir: string, home: string, key: Parameters<typeof verifyDomain>[3], log?: (line: string) => void): 'written' | 'settled' | 'dropped' | 'left' {
+  {
     const path = join(folder, name);
     const text = readFence(path);
-    if (text === null) { left += 1; continue; }
-    const marker = verifiedPending(text, name, key.key);
+    if (text === null) return 'left';
+    const marker = verifiedPending(text, name, key);
     if (marker === null) {
-      // A marker that does not verify is never replayed: it proves no decision. It is removed and
-      // logged, so a forged or damaged marker can neither sign a receipt nor stay to be retried.
-      log?.(`queue: dropped a pending receipt marker that does not verify (${name})`);
-      if (removeDurable(path) === 'removed') dropped += 1;
-      else left += 1;
-      continue;
+      // A marker that does not parse or verify is never replayed. It is moved aside into the
+      // quarantine folder (kept as evidence, out of the drain's way) and the drain moves on.
+      if (quarantine(folder, name)) {
+        log?.(`queue: quarantined a pending receipt marker that does not verify (${name})`);
+        return 'dropped';
+      }
+      log?.(`queue: a pending receipt marker that does not verify could not be quarantined (${name})`);
+      return 'left';
     }
     // An unindexed marker (the record-to-index window) stays until the entry is placed.
     const outcome = placeAndWrite({
@@ -310,26 +341,44 @@ export function drainPendingReceipts(dropDir: string, home: string, log?: (line:
       kind: marker.receipt, actor: marker.actor, home,
     });
     if ((outcome === 'written' || outcome === 'exists') && removeDurable(path) === 'removed') {
-      if (outcome === 'written') written += 1;
-      continue;
+      return outcome === 'written' ? 'written' : 'settled';
     }
-    left += 1;
+    return 'left';
   }
-  return { written, left, dropped };
+}
+
+const QUARANTINE = 'quarantine';
+
+/** Moves a marker that does not verify into `pending-receipts/quarantine/`, durably (both folders
+ *  fsynced). False when it could not be moved; the marker then stays and is counted as left. */
+function quarantine(folder: string, name: string): boolean {
+  const aside = join(folder, QUARANTINE);
+  if (!ensureFolder(aside)) return false;
+  try {
+    renameSync(join(folder, name), join(aside, name));
+    fsyncFolder(aside);
+    fsyncFolder(folder);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function verifiedPending(text: string, name: string, key: Parameters<typeof verifyDomain>[3]): PendingPayload | null {
-  let record: { payload?: PendingPayload; signature?: unknown };
+  let parsed: unknown;
   try {
-    record = JSON.parse(text) as { payload?: PendingPayload; signature?: unknown };
+    parsed = JSON.parse(text);
   } catch {
     return null;
   }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const record = parsed as { payload?: PendingPayload; signature?: unknown };
   const payload = record.payload;
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null;
   if (!payload || typeof record.signature !== 'string' || payload.kind !== 'queue-pending' || payload.v !== 1) return null;
   if (typeof payload.msg_id !== 'string' || typeof payload.receipt !== 'string' || typeof payload.actor?.kind !== 'string' || typeof payload.actor?.name !== 'string') return null;
   // The file name must name the same message and kind the signed payload does.
-  if (name.slice(14) !== `${payload.msg_id}.${payload.receipt}.json`) return null;
+  if (!name.endsWith(`.${payload.msg_id}.${payload.receipt}.json`)) return null;
   if (!actorMay(payload.receipt, payload.actor.kind)) return null;
   if (!verifyDomain(QUEUE_PENDING_DOMAIN, payload as unknown as Json, record.signature, key)) return null;
   return payload;

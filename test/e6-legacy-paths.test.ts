@@ -278,14 +278,44 @@ describe('E6 body hand-over on the E5 read claim', () => {
     const folder = join(base, 'pending-receipts');
     mkdirSync(folder, { recursive: true });
     const payload = { v: 1, kind: 'queue-pending', root: at.root, session: SESSION, seat: 'lead', msg_id: M1, receipt: 'read', actor: { kind: 'recipient', name: 'lead' } };
-    writeFileSync(join(folder, `0000000000001.${M1}.read.json`), `${JSON.stringify({ payload, signature: 'AAAA' })}\n`);
-    writeFileSync(join(folder, `0000000000002.${M1}.read.json`), `${JSON.stringify({ payload })}\n`);
+    writeFileSync(join(folder, `0000000000001.aaaaaaaaaaaa.${M1}.read.json`), `${JSON.stringify({ payload, signature: 'AAAA' })}\n`);
+    writeFileSync(join(folder, `0000000000002.bbbbbbbbbbbb.${M1}.read.json`), `${JSON.stringify({ payload })}\n`);
     expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 0, dropped: 2 });
     const generation = currentGenerationName(at.dropDir)!;
     const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
     const receipts = readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!;
     expect(receipts).toEqual([]);
     expect(derivedProgress(receipts).prefix).toBe(0);
+  });
+
+  test('a non-verifying marker already standing for the same message never suppresses a genuine decision', () => {
+    const at = place();
+    message(at, M1);
+    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
+    const folder = join(base, 'pending-receipts');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, `0000000000001.cccccccccccc.${M1}.read.json`), 'damaged\n');
+    const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
+    if ('release' in holder) holder.release();
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 1 });
+    const generation = currentGenerationName(at.dropDir)!;
+    const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
+    expect(readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
+    // The damaged marker is kept as evidence in quarantine, out of the drain's way.
+    expect(readdirSync(join(folder, 'quarantine'))).toEqual([`0000000000001.cccccccccccc.${M1}.read.json`]);
+  });
+
+  test('a malformed marker sorted first (JSON null) never stops the drain: the valid one settles on the same pass', () => {
+    const at = place();
+    message(at, M1);
+    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
+    const folder = join(base, 'pending-receipts');
+    const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
+    if ('release' in holder) holder.release();
+    writeFileSync(join(folder, `0000000000000.dddddddddddd.${M1}.read.json`), 'null\n');
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 1 });
   });
 
   test('the next holder of the queue lock drains the pending dual writes when it lets go', () => {
