@@ -87,7 +87,7 @@ export type RetrySources = {
    *  through which the watch's unread pass types, and only for a seat whose profile declares
    *  `typed_wake` and whose retry is on. Absent, the pass keeps its drop-file typed leg, whose
    *  own writer refuses in every real binding. */
-  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean }): Promise<TypedWakeResult>;
+  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean; beforeEachKey?: () => boolean; reportLine?: true }): Promise<TypedWakeResult>;
 };
 
 export type RetryScene = {
@@ -126,7 +126,7 @@ export type RetryScene = {
    *  returns the leg that took it (null when none did). The walk types nothing: at its typed leg
    *  it calls `typedRequest`, and the pass's own guarded typed wake carries the pointer. Absent,
    *  the unread pass re-sends nothing. */
-  resendStamped?(seat: Seat, dropDir: string, id: string, typedRequest: () => boolean): Promise<string | null>;
+  resendStamped?(seat: Seat, dropDir: string, id: string, typedRequest: () => boolean, startAfter?: 'typed'): Promise<string | null>;
   /** The event legs the seat's own resolved order permits a re-offer on (`permittedEventLegs`):
    *  the send walk's own answer, exclusions included. Absent, the unread pass re-offers nothing. */
   eventLegs?(seat: string): { channel: boolean; socket: boolean; why?: string };

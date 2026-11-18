@@ -5978,6 +5978,9 @@ export async function walkReplyDelivery(input: {
   /** The re-send scheduler's typed leg (E7b): at the typed position the walk types nothing and
    *  asks the watch's own guarded typed wake instead; true ends the walk there. */
   typedRequest?: () => boolean;
+  /** The re-send scheduler's continuation (E7b): the legs up to and including this one are not
+   *  walked again; the walk goes on from the leg after it (a typed request refused before any key). */
+  startAfter?: WalkLeg;
 }): Promise<ReplyWalkResult> {
   const seatName = input.seat;
   const from = input.payload.from;
@@ -6125,7 +6128,12 @@ export async function walkReplyDelivery(input: {
       return ended({ via: 'drop', walked: false, unconfirmed: false, summary: blocked.line });
     }
   }
+  let skipping = input.startAfter !== undefined && chosen.includes(input.startAfter);
   for (const [at, leg] of chosen.entries()) {
+    if (skipping) {
+      if (leg === input.startAfter) skipping = false;
+      continue;
+    }
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The marker beside the record
       // is what the watch reads when no receipt follows; a marker that never appears inside the
@@ -7075,6 +7083,8 @@ export async function resendStampedRecord(input: {
   /** The typed leg's request to the watch's own guarded typed wake; absent, the typed leg is
    *  passed over (this adapter never types). */
   typedRequest?: () => boolean;
+  /** The walk goes on from the leg after this one (a typed request refused before any key). */
+  startAfter?: 'typed';
 }): Promise<string | null> {
   const { dir, root, project, session, seat, cli, dropDir, id, team } = input;
   const payload = verifiedPayloadOf(dropDir, id, input.host.home);
@@ -7109,11 +7119,14 @@ export async function resendStampedRecord(input: {
     identityHeader,
     resend: true,
     typedRequest: input.typedRequest ?? (() => false),
+    ...(input.startAfter === undefined ? {} : { startAfter: input.startAfter }),
   });
   const via = walk.walked && walk.via !== 'drop' && walk.endpointBlocked === undefined ? walk.via : null;
   // A typed request is no re-send yet: the watch's typed wake records it once the pointer was
   // typed, with its token; until then nothing is recorded and the record stays due.
   if (via === 'typed') return TYPED_REQUESTED;
+  // A continuation after a refused typed request that no later leg took is withdrawn, not a re-send.
+  if (via === null && input.startAfter !== undefined) return null;
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
     from: payload.from,

@@ -329,7 +329,7 @@ function passScene(at: World, now: Date, host: SendHost, options: SceneOptions =
     eventLegs: (one: string) => send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat: one, team, now: () => now }),
     // The build before the fix has no re-send adapter: the pass then offers nothing (the finding).
     ...(resendStampedRecord === undefined ? {} : {
-      resendStamped: (one, dropDir, id, typedRequest) => resendStampedRecord({ host: { ...rest, now: () => now }, dir: at.dir, root: at.root, project: team.project, session: SESSION, seat: one.name, cli: one.cli, dropDir, id, team, typedRequest }),
+      resendStamped: (one, dropDir, id, typedRequest, startAfter) => resendStampedRecord({ host: { ...rest, now: () => now }, dir: at.dir, root: at.root, project: team.project, session: SESSION, seat: one.name, cli: one.cli, dropDir, id, team, typedRequest, ...(startAfter === undefined ? {} : { startAfter }) }),
     }),
   };
 }
@@ -404,12 +404,17 @@ async function twoOffers(at: World, seat: string, offer: (id: string) => Promise
   return results;
 }
 
-/** A guarded typed wake that records each line and always confirms it. */
-function typedSeam(lines: string[], result: Partial<TypedWakeResult> = {}): NonNullable<RetrySources['typedWake']> {
+/** A guarded typed wake, keyed as the real one: the line is one key and Enter another, each behind
+ *  `beforeEachKey`, the first also behind `beforeFirstKey`. It records each line that was typed and
+ *  confirms a wake whose Enter went out. */
+function typedSeam(lines: string[], result: Partial<TypedWakeResult> = {}, pressed: string[] = []): NonNullable<RetrySources['typedWake']> {
   return async (_pane, line, _cli, _session, options) => {
-    if (options?.beforeFirstKey !== undefined && !options.beforeFirstKey()) return { delivered: false, typed: false, tries: 0, reason: 'the attempt could not be recorded' } as TypedWakeResult;
+    const each = (): boolean => options?.beforeEachKey === undefined || options.beforeEachKey();
+    if (!each() || (options?.beforeFirstKey !== undefined && !options.beforeFirstKey())) return { delivered: false, typed: false, tries: 0, reason: 'refused before the first key' } as TypedWakeResult;
     lines.push(line);
-    return { delivered: true, typed: true, tries: 1, reason: 'the working screen showed', ...result } as TypedWakeResult;
+    if (!each()) return { delivered: false, typed: true, tries: 0, reason: 'the pane changed before Enter; no Enter was pressed', lineWritten: true } as TypedWakeResult;
+    pressed.push('Enter');
+    return { delivered: true, typed: true, tries: 1, reason: 'the working screen showed', lineWritten: true, ...result } as TypedWakeResult;
   };
 }
 
@@ -417,17 +422,26 @@ function typedSeam(lines: string[], result: Partial<TypedWakeResult> = {}): NonN
  *  fence reads). */
 function recordPane(at: World, seat: string, pane: string): void {
   writeFileSync(join(at.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { [seat]: {
-    stage: 'ready', pane, agent_session: `session-of-${seat}`, launched: { shell: 111, cli: [222] }, pane_shell: 111, pane_shell_start: 1_700_000_000_000,
+    stage: 'ready', pane, agent_session: `session-of-${seat}`, launched: { shell: 111, cli: [222], cli_start: [1_700_000_000_500] }, pane_shell: 111, pane_shell_start: 1_700_000_000_000,
   } }, worktrees: {} } } })}\n`);
 }
 
 /** Fresh owner readings for the shared typed path's proof: by default the recorded launch. */
-function owner(seat: string, pane: string, change: { agents?: { name: string; pane: string }[] | null; processes?: { shell: number; foreground: number[] } | null; start?: number | null } = {}): NonNullable<RetrySources['keyOwner']> {
-  return {
-    agents: () => (change.agents === undefined ? [{ name: seat, pane }] : change.agents),
+function owner(seat: string, pane: string, change: { agents?: { name: string; pane: string }[] | null; processes?: { shell: number; foreground: number[] } | null; start?: number | null; cliStart?: number | null; afterKeys?: number } = {}): NonNullable<RetrySources['keyOwner']> & { asked: number } {
+  const proof = {
+    asked: 0,
+    agents: (_session: string) => {
+      // `afterKeys`: the pane is handed to another seat once that many proofs have passed.
+      proof.asked += 1;
+      if (change.afterKeys !== undefined && proof.asked > change.afterKeys) return [{ name: 'other', pane }];
+      return change.agents === undefined ? [{ name: seat, pane }] : change.agents;
+    },
     processes: () => (change.processes === undefined ? { shell: 111, foreground: [222] } : change.processes),
-    processStart: () => (change.start === undefined ? 1_700_000_000_000 : change.start),
+    processStart: (pid: number) => (pid === 111
+      ? (change.start === undefined ? 1_700_000_000_000 : change.start)
+      : (change.cliStart === undefined ? 1_700_000_000_500 : change.cliStart)),
   };
+  return proof;
 }
 
 describe('every leg type takes copies 2 and 3, numbered', () => {
@@ -511,13 +525,53 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     await pass(owner('agy', 'pane-agy', { processes: null }));
     await pass(owner('agy', 'pane-agy', { agents: null }));
     await pass(owner('agy', 'pane-agy', { start: null }));
+    // The same CLI pid under the same shell, born later: a reused pid is not the launch.
+    await pass(owner('agy', 'pane-agy', { cliStart: 1_700_000_009_999 }));
     expect(lines).toEqual([]);
+    // The pointer's number is taken only inside the proven first-key step: none was taken.
+    expect(copyHistory(dropDir, ID)).toMatchObject({ copies: 1 });
     // No re-send was recorded for any of them: every attempt was withdrawn, the record stays due.
     expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(0);
     // The recorded launch, read fresh: the pointer is typed.
     await pass(owner('agy', 'pane-agy'));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain(`message ${ID} · delivery`);
+  });
+
+  test('the owner proof is asked before every key: a pane handed over after the line is typed gets no Enter, and no re-send is credited', async () => {
+    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    activateRoot(at);
+    recordPane(at, 'agy', 'pane-agy');
+    const dropDir = stamped(at, 'agy', ID, 'short');
+    takeCopyNumber(dropDir, ID, 'typed');
+    const lines: string[] = [];
+    const pressed: string[] = [];
+    const said: string[] = [];
+    // The first proof (the line's key) passes; the pane belongs to another seat by the Enter.
+    await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines, {}, pressed), screen: AGY_IDLE, keyOwner: owner('agy', 'pane-agy', { afterKeys: 1 }), said }), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expect(pressed).toEqual([]);
+    expect(said.some((line) => line.includes('offered again on the typed'))).toBe(false);
+  });
+
+  test('two typed requests in one pass: the pointer credits only the id it names; the other is withdrawn and stays due', async () => {
+    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    activateRoot(at);
+    recordPane(at, 'agy', 'pane-agy');
+    const dropDir = stamped(at, 'agy', ID, 'first');
+    stamped(at, 'agy', ID2, 'second');
+    takeCopyNumber(dropDir, ID, 'typed');
+    takeCopyNumber(dropDir, ID2, 'typed');
+    const lines: string[] = [];
+    await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE }), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    const named = lines[0]?.includes(ID) === true ? ID : ID2;
+    const other = named === ID ? ID2 : ID;
+    expect(attemptLedger(stampedFolder(at, 'agy'), named).attempts).toBe(1);
+    expect(attemptLedger(stampedFolder(at, 'agy'), other).attempts).toBe(0);
+    const history = readHistory('acme', at.root, at.home);
+    expect(history.ok && history.entries.filter((entry) => entry.note?.includes('re-sent on the typed') === true).map((entry) => entry.id)).toEqual([named]);
+    expect(resendCandidates(seatOf(at, dropDir, 'agy'), Date.now() + 62_000)).toContain(other);
   });
 
   test('a typed request is recorded only once its pointer was typed with its token; until then the record stays due', async () => {
@@ -538,6 +592,15 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(0);
     // Still due at once: the next pass asks again.
     expect(resendCandidates(seatOf(at, dropDir, 'agy'), t + 1_000)).toEqual([ID]);
+    // Refused before any key, the walk went on past its typed leg in the same pass (here the
+    // cascade has only the mailbox after it, so nothing took it).
+    const walks: (string | undefined)[] = [];
+    const scene = passScene(at, new Date(t + 2_000), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines) });
+    const inner = scene.resendStamped!;
+    scene.resendStamped = (one, dir, id, typedRequest, startAfter) => { walks.push(startAfter); return inner(one, dir, id, typedRequest, startAfter); };
+    await wakeUnreadDrops(scene, { unreadAfter: 600 });
+    expect(walks).toEqual([undefined, 'typed']);
+    expect(lines).toEqual([]);
   });
 
   test('socket (a Claude seat that accepts cross-session frames); the frame names the sender, never the receiver\'s persona', async () => {
@@ -651,6 +714,16 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(headerOf(read())).toStartWith(`message ${ID} · delivery 3 — a re-send`);
     ack(at, dropDir, 'helper', ID);
     expect(resendCandidates(seatOf(at, dropDir, 'helper'), Date.now() + 60 * MIN)).toEqual([]);
+  });
+});
+
+describe('the launch record carries the CLI\'s start time', () => {
+  test('launchedIdentity records each CLI pid\'s start when it can read them all, and none otherwise', async () => {
+    const { launchedIdentity } = await import('../src/launch/identity.ts');
+    const pane = { shell: 111, foreground: [111, 222, 223] };
+    expect(launchedIdentity(pane, (pid) => pid * 10)).toEqual({ shell: 111, cli: [222, 223], cli_start: [2220, 2230] });
+    expect(launchedIdentity(pane, (pid) => (pid === 223 ? null : pid))).toEqual({ shell: 111, cli: [222, 223] });
+    expect(launchedIdentity(pane)).toEqual({ shell: 111, cli: [222, 223] });
   });
 });
 

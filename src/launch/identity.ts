@@ -10,7 +10,14 @@ import type { PaneProcesses } from '../herdr.ts';
 // one but whose CLI is gone was restarted in place; a pane whose shell is another process was
 // restored by something that started both again. Several CLI pids cover a CLI that shows a
 // helper process beside it: the seat is the seat while any one of them is still in front.
-export type LaunchedIdentity = { shell: number; cli: number[] };
+export type LaunchedIdentity = {
+  shell: number;
+  cli: number[];
+  /** Each CLI pid's start instant (epoch ms), in `cli`'s order, when it was read at launch: the
+   *  typed path's proof that the CLI in front is the launch's, not a pid reused under the same
+   *  shell. Absent on records written before it, or when a start could not be read. */
+  cli_start?: number[];
+};
 
 // What the recorded identity says of the pane today.
 // - `same`: the pane's shell is the recorded one and a recorded CLI pid is in front.
@@ -49,11 +56,14 @@ export function seatProcessVerdict(recorded: LaunchedIdentity | undefined, pane:
 
 /** The identity to record from a pane reading, or null when herdr can't give one: no shell pid,
  *  or no foreground process beside it. A seat with no record keeps today's behaviour. */
-export function launchedIdentity(pane: PaneProcesses | null | undefined): LaunchedIdentity | null {
+export function launchedIdentity(pane: PaneProcesses | null | undefined, startOf?: (pid: number) => number | null): LaunchedIdentity | null {
   if (!pane) return null;
   const cli = pane.foreground.filter((pid) => pid !== pane.shell);
   if (cli.length === 0) return null;
-  return { shell: pane.shell, cli };
+  const starts = startOf === undefined ? null : cli.map((pid) => startOf(pid));
+  return starts === null || starts.some((one) => one === null)
+    ? { shell: pane.shell, cli }
+    : { shell: pane.shell, cli, cli_start: starts as number[] };
 }
 
 // What a `replaced` pane is, once the pid verdict is known. The pid comparison above is unchanged.

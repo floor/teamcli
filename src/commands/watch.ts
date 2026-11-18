@@ -198,7 +198,7 @@ export type WatchSources = {
   /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the unread
    *  pass's one typing seam, reached only for a seat whose profile declares a typed wake and
    *  whose retry is on. The raw writers above stay refused. */
-  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean }): Promise<TypedWakeResult>;
+  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean; beforeEachKey?: () => boolean; reportLine?: true }): Promise<TypedWakeResult>;
   // Sleeps between the typing of the nudge and the read-back that decides the Enter — the
   // bounded draw wait the exit typing and delivery make (settleScreen). Required: a watch whose
   // delivery reads back the instant it typed, with nothing to wait on, is the fault itself.
@@ -1990,10 +1990,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               // E7b (R3.4): the re-send scheduler's adapter, the seat's own resolved walk. It binds
               // no pane writer: at its typed leg it asks for the pass's own guarded typed wake
               // (src/watch/unread.ts), which types the pointer only.
-              resendStamped: (seat: Seat, dropDir: string, id: string, typedRequest: () => boolean) => {
+              resendStamped: (seat: Seat, dropDir: string, id: string, typedRequest: () => boolean, startAfter?: 'typed') => {
                 const { typedWake: _unbound, ...rest } = realHost;
                 const host: SendHost = { ...rest, home: sources.home ?? realHost.home, now: sources.now };
-                return resendStampedRecord({ host, dir, root, project: team.project, session, seat: seat.name, cli: seat.cli, dropDir, id, team, typedRequest });
+                return resendStampedRecord({ host, dir, root, project: team.project, session, seat: seat.name, cli: seat.cli, dropDir, id, team, typedRequest, ...(startAfter === undefined ? {} : { startAfter }) });
               },
               eventLegs: (seat: string) => permittedEventLegs({ dir, root, home: sources.home ?? realHost.home, session, seat, team, now: sources.now }),
               // A hosted watch sends the unread-lead climb as the daemon's notice, like a prompt's.

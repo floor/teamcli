@@ -61,7 +61,7 @@ export function rebootRebindProof(input: RebootRebindInput): RebootRebind {
   if (input.paneShellStart >= boot - BOOT_SKEW_MS) {
     return no('the pane does not hold the recorded launched CLI process, and the record was launched in this boot');
   }
-  const next = launchedIdentity(input.processes);
+  const next = launchedIdentity(input.processes, input.startOf);
   if (next === null) return no('the pane does not hold the recorded launched CLI process, and its live process cannot be read');
   const shellStart = input.startOf(next.shell);
   if (shellStart === null || shellStart < boot - BOOT_SKEW_MS) {

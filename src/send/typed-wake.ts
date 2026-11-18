@@ -101,6 +101,9 @@ export type TypedWakeResult = {
    *  in the walk's clock's own milliseconds: the redraw the trace reports beside the bound's
    *  point, never a second bound. Absent when the working screen never showed without the line. */
   workingAt?: number;
+  /** True when this wake put its own line into the pane (typed, or handed to the agent prompt):
+   *  a navigation key alone (the return key, a survey skip) never sets it. */
+  lineWritten?: true;
 };
 
 export type TypedWakeOptions = {
@@ -108,6 +111,12 @@ export type TypedWakeOptions = {
    *  first key of any kind reaches the pane, and its durable write completes before that key. A
    *  false answer sends no key: the wake ends with nothing typed. */
   beforeFirstKey?: () => boolean;
+  /** Asked again immediately before every key of any kind, the first included (before
+   *  `beforeFirstKey`): a false answer sends no key, then or later, and the wake ends there. The
+   *  caller's proof that the pane still belongs to the seat. */
+  beforeEachKey?: () => boolean;
+  /** Set, the result says `lineWritten` when the wake put its own line into the pane. */
+  reportLine?: true;
   /** The gap between the two idle reads. Defaults to the profile's own `typed_wake_settle_ms`,
    *  clamped at `WAKE_IDLE_SETTLE_FLOOR_MS`, and to the measured `WAKE_IDLE_SETTLE_MS` when the
    *  profile names none: the native `SETTLE_MS` was never measured for this path. */
@@ -151,7 +160,7 @@ export type TypedWakeOptions = {
 };
 
 /** The two marks one walk observed, filled in as its reads show them. */
-type WakeMarks = { submittedAt?: number; workingAt?: number };
+type WakeMarks = { submittedAt?: number; workingAt?: number; lineWritten?: true };
 
 /** One word for the screen a read showed, for a reason line: the screen reading, or `unreadable`
  *  when the pane could not be read at all. */
@@ -252,6 +261,7 @@ async function submitByAgentPrompt(
   if (!(await host.prompt(pane, line))) {
     return { delivered: false, typed: keyedReturn, tries: 0, reason: 'the pane did not take the agent prompt; nothing was typed' };
   }
+  marks.lineWritten = true;
   const tries = 1;
   const observe = (read: string | null): void => {
     if (read === null) return;
@@ -355,7 +365,7 @@ export async function deliverLeadTypedWake(
 ): Promise<TypedWakeResult> {
   // Every key this wake may press, the draft-clearing keys included, waits behind the attempt's
   // `emitted` step (rfc-event-comms §5, E6).
-  if (options.beforeFirstKey !== undefined) host = keyFenced(host, options.beforeFirstKey);
+  if (options.beforeFirstKey !== undefined || options.beforeEachKey !== undefined) host = keyFenced(host, options.beforeFirstKey, options.beforeEachKey);
   const screen = await host.read(pane);
   const kind = screen === null ? 'unreadable' : readScreen(cli, screen).kind;
   const holdsLine = screen !== null && boxHoldsText(cli, line, screen);
@@ -411,16 +421,24 @@ export async function deliverTypedWake(
     return { delivered: false, typed: false, tries: 0, reason: `the wake does not fit ${String(max)} bytes; nothing was typed` };
   }
   const marks: WakeMarks = {};
-  const result = await walkTypedWake(options.beforeFirstKey === undefined ? host : keyFenced(host, options.beforeFirstKey), pane, line, cli, options, marks);
-  return { ...result, ...marks };
+  const fenced = options.beforeFirstKey === undefined && options.beforeEachKey === undefined ? host : keyFenced(host, options.beforeFirstKey, options.beforeEachKey);
+  const result = await walkTypedWake(fenced, pane, line, cli, options, marks);
+  const { lineWritten, ...rest } = marks;
+  return { ...result, ...rest, ...(options.reportLine === true && lineWritten === true ? { lineWritten } : {}) };
 }
 
-/** The host with every key path behind one gate: the first key of any kind waits for `gate`, and a
- *  false gate refuses that key and every later one (the pane takes nothing). Reads pass through. */
-function keyFenced(host: TypedWakeHost, gate: () => boolean): TypedWakeHost {
-  let state: 'closed' | 'open' | 'refused' = 'closed';
+/** The host with every key path behind two gates: `each` is asked before every key of any kind,
+ *  and the first key also waits for the one-shot `gate`. A false answer from either refuses that
+ *  key and every later one (the pane takes nothing more). Reads pass through. */
+function keyFenced(host: TypedWakeHost, gate?: () => boolean, each?: () => boolean): TypedWakeHost {
+  let state: 'closed' | 'open' | 'refused' = gate === undefined ? 'open' : 'closed';
   const pass = (): boolean => {
-    if (state === 'closed') state = gate() ? 'open' : 'refused';
+    if (state === 'refused') return false;
+    if (each !== undefined && !each()) {
+      state = 'refused';
+      return false;
+    }
+    if (state === 'closed') state = gate!() ? 'open' : 'refused';
     return state === 'open';
   };
   return {
@@ -597,6 +615,7 @@ async function walkTypedWake(
       return { delivered: false, typed: keyedReturn, tries: 0, reason: 'the pane did not take the line; nothing was typed' };
     }
     lineTyped = true;
+    marks.lineWritten = true;
     await host.wait(enterSettleMs);
     screen = await host.read(pane);
   }

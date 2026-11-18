@@ -196,6 +196,15 @@ export function noteAttemptOutcome(dropDir: string, id: string, k: number, outco
   createExclusive(join(folder, `.attempt-${String(k)}.done`), `${JSON.stringify({ v: 1, k, ...outcome })}\n`);
 }
 
+/** Takes exactly delivery number `n` for one copy, durably: true only when this call created it
+ *  (a rival that took `n` first, or a history that cannot be written, takes nothing). For a copy
+ *  whose text already names its number, such as a re-send's typed pointer. */
+export function takeExactCopyNumber(dropDir: string, id: string, leg: CopyLeg, n: number, nowMs: number = Date.now()): boolean {
+  const folder = historyFolder(dropDir, id);
+  if (!ensureFolder(join(seatFolderOf(dropDir, id), EXPOSURES)) || !ensureFolder(folder)) return false;
+  return createExclusive(join(folder, String(n)), `${JSON.stringify({ v: 1, n, leg, at: new Date(nowMs).toISOString() })}\n`) === 'created';
+}
+
 /**
  * Whether a stamped, unsettled record is due for another offer now (R3.4). The send's own
  * delivery is attempt one; each scheduler attempt adds one, and a numbered copy (whoever took it:
