@@ -20,6 +20,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { derivedProgress, readQueueReceipts } from '../src/queue/receipt-store.ts';
 import { currentGenerationName } from '../src/queue/append.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
+import { LEAD_ACK_PREFIX } from '../src/send/record.ts';
+import { publishRecordRead } from '../src/send/read-receipt.ts';
+import { acquireLockAt } from '../src/launch/seat-lock.ts';
 
 const SESSION = 'acme';
 const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 2 };
@@ -136,6 +139,51 @@ describe('E6 body hand-over on the E5 read claim', () => {
     message(at, M2);
     expect(readMessage(target(at), M2, at.home).ok).toBe(true);
     expect(exposeBody(leg(at, M2), 'native', at.home).kind).toBe('pointer');
+  });
+
+  test('a sealed receipt that later cannot be proved keeps every later carrier on a pointer', () => {
+    const at = place();
+    message(at, M1);
+    on(at);
+    const first = exposeBody(leg(at, M1), 'channel', at.home);
+    if (first.kind === 'expose') first.settle('yes', (owner) => recordDeliveredBody({ dropDir: at.dropDir, id: M1, root: at.root, session: SESSION, seat: 'lead', home: at.home, owner }));
+    expect(ownerOfClaim(at.dropDir, M1)).toBe(null);
+    // The receipt is damaged (or its key unavailable): it no longer verifies, but the name stands.
+    // The carrier does not consult the key at all: any entry at the name keeps the body back.
+    writeFileSync(receiptPath(at.dropDir, M1), 'not a receipt');
+    expect(exposeBody(leg(at, M1), 'native', at.home).kind).toBe('pointer');
+    expect(ownerOfClaim(at.dropDir, M1)).toBe(null);
+  });
+
+  test("a lead's valid clearance holds the read name: no carrier sends the body", () => {
+    const at = place();
+    message(at, M1);
+    on(at);
+    const out = publishRecordRead({ dropDir: at.dropDir, id: M1, to: 'lead', root: at.root, session: SESSION, home: at.home, key: messageKeyOf(at.home), at: '2026-11-18T00:01:00.000Z', readBy: `${LEAD_ACK_PREFIX}owner`, lead: 'lead' });
+    expect(out.kind).toBe('published');
+    expect(exposeBody(leg(at, M1), 'channel', at.home).kind).toBe('pointer');
+  });
+
+  test('a committed line followed by a torn or corrupt journal is not proved', () => {
+    for (const tail of ['{"seq":9,"state":"res', 'not json\n']) {
+      const at = place();
+      message(at, M1);
+      const generation = currentGenerationName(at.dropDir)!;
+      const journal = join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'journal.jsonl');
+      writeFileSync(journal, readFileSync(journal, 'utf8') + tail);
+      expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
+    }
+  });
+
+  test('a reader at the pre-fsync boundary (the writer holds the queue lock) proves nothing, then proves once it is released', () => {
+    const at = place();
+    message(at, M1);
+    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
+    const writer = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    expect('release' in writer).toBe(true);
+    expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
+    if ('release' in writer) writer.release();
+    expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).not.toBe(null);
   });
 
   test('a placement whose journal line is only reserved is not proved', () => {

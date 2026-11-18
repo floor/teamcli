@@ -52,6 +52,7 @@ import { updateState } from '../src/state.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import { fixtureBase, gitEnv, testIo } from './helpers.ts';
 import { fake, owner, world, type World } from './send-native-fixtures.ts';
+import { claimRead, ownerOfClaim } from '../src/send/read-claim.ts';
 
 const NOW = new Date('2026-11-05T15:00:00.000Z');
 const PANE_ORCH = 'pane-orch-cdm';
@@ -313,6 +314,40 @@ describe('3. team show <id> full-body inspection, read receipt, re-show, and mai
     const afterReplyIo = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
     expect(await runShow(['47c25f34'], afterReplyIo, { home: f.home, now: () => NOW })).toBe(0);
     expect(afterReplyIo.out).toBe(firstIo.out);
+  });
+
+  test('team show rereads a body a hand-over holds (expose owner): shown, no read receipt, claim kept', async () => {
+    const f = makeFixture();
+    const id = '47c25f34-ab42-47d2-a54c-5597aeb305fb';
+    plantRecord(f.home, f.root, 'acme', 'orchestrator', id, `from Argon — admitted by: ${TO_ORCH_RULE}\n\nHeld line`, {
+      from: 'builder-gemini',
+      from_id: f.agents.gemini,
+      rule: TO_ORCH_RULE,
+      at: NOW.toISOString(),
+    });
+    const owner = `expose:channel:${id}:a1b2c3d4e5f6`;
+    const claim = claimRead(f.dropDir, id, owner);
+    expect(claim.ok).toBe(true);
+    if (claim.ok) claim.keep();
+    const { runShow } = await import('../src/commands/show.ts');
+    const io = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
+    expect(await runShow([id], io, { home: f.home, now: () => NOW })).toBe(0);
+    expect(io.out).toContain('Held line');
+    expect(existsSync(join(f.dropDir, `${id}.read.json`))).toBe(false);
+    expect(ownerOfClaim(f.dropDir, id)).toBe(owner);
+    // A claim held by a non-expose owner (an interrupted relayed read) is not reshown.
+    const other = '47c25f34-ab42-47d2-a54c-5597aeb305fc';
+    plantRecord(f.home, f.root, 'acme', 'orchestrator', other, `from Argon — admitted by: ${TO_ORCH_RULE}\n\nRecovering line`, {
+      from: 'builder-gemini',
+      from_id: f.agents.gemini,
+      rule: TO_ORCH_RULE,
+      at: NOW.toISOString(),
+    });
+    const relayed = claimRead(f.dropDir, other, 'relay:req-1');
+    if (relayed.ok) relayed.keep();
+    const io2 = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
+    expect(await runShow([other], io2, { home: f.home, now: () => NOW })).not.toBe(0);
+    expect(io2.out).not.toContain('Recovering line');
   });
 
   test('team show works for client-origin messages in the orchestrator mailbox', async () => {

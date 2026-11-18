@@ -27,7 +27,8 @@
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { claimRead, ownerOfClaim, READ_CLAIMS, removeOwnedClaim } from '../send/read-claim.ts';
-import { receiptHeld } from '../mcp/inbox.ts';
+import { lstatSync } from 'node:fs';
+import { receiptFile } from '../send/record.ts';
 import { ensureFolder } from './durable.ts';
 import { mayCreateFence } from './floor.ts';
 
@@ -70,17 +71,14 @@ export function exposeBody(target: ExposureTarget, leg: BodyLeg, home: string): 
   if (!ensureFolder(join(target.dropDir, READ_CLAIMS))) return { kind: 'pointer', why: 'the read claim folder could not be made durable' };
   const claim = claimRead(target.dropDir, target.msgId, owner);
   if (!claim.ok) return { kind: 'pointer', why: claim.why === 'recovering' ? 'already shown by another hand-over' : `the read claim was not taken (${claim.why})` };
-  // Under the claim: a message already read (or replied to, or cleared) is never carried again.
-  // A receipt state that cannot be read is treated as held (fail closed).
-  let served: boolean;
-  try {
-    served = receiptHeld(target.dropDir, target.msgId, { to: target.seat, root: target.root, session: target.session }, home, undefined);
-  } catch {
-    served = true;
-  }
-  if (served) {
+  // Under the claim, a body is granted only on positive proof of no earlier exposure: both receipt
+  // names (`read`, which a lead's clearance also holds, and `replied`) are proven absent. Any
+  // entry there, verifying or not, readable or not, is an earlier exposure this hand-over cannot
+  // rule out (the inbox reader's occupied-name rule), and an unreadable name is never absence.
+  const prior = priorExposure(target.dropDir, target.msgId);
+  if (prior !== null) {
     claim.release();
-    return { kind: 'pointer', why: 'already read' };
+    return { kind: 'pointer', why: prior };
   }
   // The lock is let go at once; the durable owner file is the fence from here on.
   claim.keep();
@@ -99,6 +97,27 @@ export function exposeBody(target: ExposureTarget, leg: BodyLeg, home: string): 
       if (seal(owner)) removeOwnedClaim(target.dropDir, target.msgId, owner);
     },
   };
+}
+
+/** Null only when both receipt names are proven absent (`ENOENT`); otherwise why a body may not
+ *  go out. Only "no such file" counts as absent: any other lstat error, or any entry at all, keeps
+ *  the body back. */
+export function priorExposure(dropDir: string, msgId: string): string | null {
+  for (const status of ['read', 'replied'] as const) {
+    let path: string;
+    try {
+      path = receiptFile(dropDir, msgId, status);
+    } catch {
+      return `the ${status} receipt name cannot be resolved`;
+    }
+    try {
+      lstatSync(path);
+      return status === 'read' ? 'already read or cleared' : 'already replied to';
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return `the ${status} receipt name cannot be read`;
+    }
+  }
+  return null;
 }
 
 /** The pointer text an automatic leg carries instead of a body (§3). */

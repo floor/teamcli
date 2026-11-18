@@ -783,12 +783,30 @@ export function entryMsgIdAt(dropDir: string, generation: string, seq: number, b
   return id !== null && committedInJournal(join(base, generation), seq, id) ? id : null;
 }
 
-/** Whether the generation's journal's last line for `seq` commits it to `msgId` (a reserved or
- *  voided seq, or a torn journal, is not committed). */
+/** Whether the generation's journal's last line for `seq` commits it to `msgId`. A reserved or
+ *  voided seq is not committed, and neither is anything read from an uncertain journal: a torn
+ *  tail, a corrupt line or an unreadable file authorizes nothing. The read is taken under the
+ *  writer's queue lock, tried once and never waited for, so a line the writer has written but not
+ *  yet flushed is never seen: the commit boundary is the writer's fsync, which ends before it
+ *  lets the lock go. A lock not taken is "not committed" for now (fail closed, asked again later). */
 function committedInJournal(folder: string, seq: number, msgId: string): boolean {
-  const lines = readJournal(join(folder, 'journal.jsonl')).lines.filter(line => line.seq === seq);
-  const last = lines[lines.length - 1];
-  return last !== undefined && last.state === 'committed' && last.msg_id === msgId;
+  const base = dirname(folder);
+  let lock: ReturnType<typeof acquireLockAt>;
+  try {
+    lock = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+  } catch {
+    return false;
+  }
+  if (!('release' in lock)) return false;
+  try {
+    const journal = readJournal(join(folder, 'journal.jsonl'));
+    if (journal.unreadable === true || journal.corrupt || journal.tornAt !== null) return false;
+    const lines = journal.lines.filter(line => line.seq === seq);
+    const last = lines[lines.length - 1];
+    return last !== undefined && last.state === 'committed' && last.msg_id === msgId;
+  } finally {
+    lock.release();
+  }
 }
 
 /** The seat's current generation's name, read without the lock; null when there is none. A
