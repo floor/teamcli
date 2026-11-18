@@ -352,3 +352,18 @@ test('a clear that leaves the box occupied keeps the draft beside the drop and d
   expect(asking.enters).toEqual([]);
   expect(readFileSync(draftCopyPath(dialogPath), 'utf8')).toBe(DRAFT_LINE);
 });
+
+test('E6: a refused wake-attempt gate stops the draft-clearing keys too (control: an open gate clears)', async () => {
+  // Control: with the gate open, the copyable draft is cleared by the profile's clear keys.
+  const open: WakeBox = { screen: frame(DRAFT_LINE), typed: [], keys: [], enters: [] };
+  await deliverLeadTypedWake(wakeHost(open), PANE, WAKE_LINE, 'claude-code', { ...wakeOptions, beforeFirstKey: () => true });
+  expect(open.keys.length).toBeGreaterThan(0);
+  // The same draft with the gate refused: no clear key, no paste, no Enter; the draft stays.
+  const refused: WakeBox = { screen: frame(DRAFT_LINE), typed: [], keys: [], enters: [] };
+  const result = await deliverLeadTypedWake(wakeHost(refused), PANE, WAKE_LINE, 'claude-code', { ...wakeOptions, beforeFirstKey: () => false });
+  expect(refused.keys).toEqual([]);
+  expect(refused.typed).toEqual([]);
+  expect(refused.enters).toEqual([]);
+  expect(refused.screen).toBe(frame(DRAFT_LINE));
+  expect(result.delivered).toBe(false);
+});

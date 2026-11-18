@@ -104,6 +104,10 @@ export type TypedWakeResult = {
 };
 
 export type TypedWakeOptions = {
+  /** The wake attempt's `emitted` step (rfc-event-comms §5): called once, immediately before the
+   *  first key of any kind reaches the pane, and its durable write completes before that key. A
+   *  false answer sends no key: the wake ends with nothing typed. */
+  beforeFirstKey?: () => boolean;
   /** The gap between the two idle reads. Defaults to the profile's own `typed_wake_settle_ms`,
    *  clamped at `WAKE_IDLE_SETTLE_FLOOR_MS`, and to the measured `WAKE_IDLE_SETTLE_MS` when the
    *  profile names none: the native `SETTLE_MS` was never measured for this path. */
@@ -349,6 +353,9 @@ export async function deliverLeadTypedWake(
   cli: string,
   options: TypedWakeOptions = {},
 ): Promise<TypedWakeResult> {
+  // Every key this wake may press, the draft-clearing keys included, waits behind the attempt's
+  // `emitted` step (rfc-event-comms §5, E6).
+  if (options.beforeFirstKey !== undefined) host = keyFenced(host, options.beforeFirstKey);
   const screen = await host.read(pane);
   const kind = screen === null ? 'unreadable' : readScreen(cli, screen).kind;
   const holdsLine = screen !== null && boxHoldsText(cli, line, screen);
@@ -404,8 +411,26 @@ export async function deliverTypedWake(
     return { delivered: false, typed: false, tries: 0, reason: `the wake does not fit ${String(max)} bytes; nothing was typed` };
   }
   const marks: WakeMarks = {};
-  const result = await walkTypedWake(host, pane, line, cli, options, marks);
+  const result = await walkTypedWake(options.beforeFirstKey === undefined ? host : keyFenced(host, options.beforeFirstKey), pane, line, cli, options, marks);
   return { ...result, ...marks };
+}
+
+/** The host with every key path behind one gate: the first key of any kind waits for `gate`, and a
+ *  false gate refuses that key and every later one (the pane takes nothing). Reads pass through. */
+function keyFenced(host: TypedWakeHost, gate: () => boolean): TypedWakeHost {
+  let state: 'closed' | 'open' | 'refused' = 'closed';
+  const pass = (): boolean => {
+    if (state === 'closed') state = gate() ? 'open' : 'refused';
+    return state === 'open';
+  };
+  return {
+    read: (pane) => host.read(pane),
+    wait: (ms) => host.wait(ms),
+    type: (pane, text) => (pass() ? host.type(pane, text) : false),
+    enter: (pane) => (pass() ? host.enter(pane) : false),
+    ...(host.prompt === undefined ? {} : { prompt: (pane: string, text: string) => (pass() ? host.prompt!(pane, text) : false) }),
+    ...(host.key === undefined ? {} : { key: (pane: string, key: string) => (pass() ? host.key!(pane, key) : false) }),
+  };
 }
 
 async function walkTypedWake(

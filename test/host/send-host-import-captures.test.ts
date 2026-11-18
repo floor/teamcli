@@ -139,6 +139,10 @@ const MUTABLE: Record<string, string> = {
   'src/bus/refusals.ts: fallbackLogged': 'process',
   'src/bus/relative-read.ts: ffi': 'process',
   'src/process-kernel.ts: seatbelt': 'process',
+  // E6: the hosted watch's floor-pass throttle (one pass a minute per root, this process only),
+  // and the receipt store's fixed set of terminal kinds.
+  'src/queue/floor.ts: lastFloorPass': 'process',
+  'src/queue/receipt-store.ts: TERMINAL': 'constant',
   'src/bus/server.ts: SOCKET_PUBLISH_KINDS': 'constant',
   'src/bus/webhook.ts: UNSENT_CODES': 'constant',
   'src/caller.ts: cachedAncestorsSnapshotId': 'reset',

@@ -193,7 +193,7 @@ export type WatchSources = {
   /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the unread
    *  pass's one typing seam, reached only for a seat whose profile declares a typed wake and
    *  whose retry is on. The raw writers above stay refused. */
-  typedWake?(pane: string, line: string, cli: string, session: string): Promise<TypedWakeResult>;
+  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean }): Promise<TypedWakeResult>;
   // Sleeps between the typing of the nudge and the read-back that decides the Enter — the
   // bounded draw wait the exit typing and delivery make (settleScreen). Required: a watch whose
   // delivery reads back the instant it typed, with nothing to wait on, is the fault itself.
@@ -460,7 +460,7 @@ export const realWatchSources: WatchSources = {
   typeText: refuseTyping,
   pressEnter: refuseTyping,
   sendKey: refuseTyping,
-  typedWake: (pane, line, cli, session) => deliverTypedWake(herdrTypedWakeHost(session), pane, line, cli),
+  typedWake: (pane, line, cli, session, options) => deliverTypedWake(herdrTypedWakeHost(session), pane, line, cli, options ?? {}),
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   notify,
   now: () => new Date(),

@@ -56,6 +56,11 @@ function ownerOf(dropDir: string, id: string): string | null | 'unknown' {
   }
 }
 
+/** The owner a standing claim names: null when none stands, 'unknown' when it cannot be read. */
+export function ownerOfClaim(dropDir: string, id: string): string | null | 'unknown' {
+  return ownerOf(dropDir, id);
+}
+
 function fsyncPath(path: string, flags: number): void {
   const fd = openSync(path, flags);
   try {

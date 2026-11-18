@@ -12,6 +12,8 @@
 //   `↩ team reply <id> "…" · team ack <id>`
 // Re-running `team show <id>` on an already-read or already-replied record in the caller's own
 // mailbox still prints the full message idempotently.
+import { isExposeOwner } from '../queue/exposure.ts';
+import { ownerOfClaim } from '../send/read-claim.ts';
 import { claimRead } from '../send/read-claim.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -200,7 +202,10 @@ export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<n
   const at = host.now().toISOString();
   // The one read claim every body-serving reader takes (src/send/read-claim.ts).
   const claim = claimRead(dropDir, resolvedId);
-  if (!claim.ok) {
+  // rfc-event-comms §3 (E6): a body a leg's hand-over holds (exposed, or exposed-unconfirmed) is
+  // reread deliberately here: shown, with no read receipt written — the honest recovery path.
+  const reshown = !claim.ok && claim.why === 'recovering' && isExposeOwner(ownerOfClaim(dropDir, resolvedId));
+  if (!claim.ok && !reshown) {
     return refused(
       io,
       json,
@@ -211,8 +216,8 @@ export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<n
             : 'its read claim cannot be taken now'}; run team show again in a moment`,
     );
   }
-  let outcome: ReturnType<typeof publishRecordRead>;
-  try {
+  let outcome: ReturnType<typeof publishRecordRead> | { kind: 'reshown' } = { kind: 'reshown' };
+  if (claim.ok) try {
     outcome = publishRecordRead({
       dropDir,
       id: resolvedId,

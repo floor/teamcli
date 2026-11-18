@@ -81,7 +81,7 @@ export type RetrySources = {
    *  through which the watch's unread pass types, and only for a seat whose profile declares
    *  `typed_wake` and whose retry is on. Absent, the pass keeps its drop-file typed leg, whose
    *  own writer refuses in every real binding. */
-  typedWake?(pane: string, line: string, cli: string, session: string): Promise<TypedWakeResult>;
+  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean }): Promise<TypedWakeResult>;
 };
 
 export type RetryScene = {

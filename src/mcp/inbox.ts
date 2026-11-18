@@ -21,7 +21,7 @@ import type { KeyObject } from 'node:crypto';
 // path; a drop or receipt that is a link is refused, never followed.
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
-import { claimRead, READ_CLAIMS } from '../send/read-claim.ts';
+import { claimRead, ownerOfClaim, READ_CLAIMS } from '../send/read-claim.ts';
 import { join } from 'node:path';
 import {
   briefBindingOf,
@@ -61,6 +61,9 @@ import {
 import { messageKeyState } from '../store/keys.ts';
 import type { BuildIdentity } from '../version.ts';
 import { flushReceipt, publishReadReceipt } from './inbox-admission.ts';
+import { exposurePointer, isExposeOwner } from '../queue/exposure.ts';
+import { shadowQueueReceipt } from '../queue/receipt-store.ts';
+import { queuePlaceOf } from '../queue/append.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
@@ -132,6 +135,9 @@ export type InboxListener = {
    *  epoch when the launch line named none. Absent when the claim holds no launch epoch, or the
    *  server started before a claim existed. Never a replacement for the server's live guards. */
   epoch?: string;
+  /** The fence capability level this server enforces (rfc-event-comms §3): 2 from E6. A marker
+   *  without it is a build before E6, whose level is unknown, and blocks activation. */
+  level?: number;
 };
 
 /** One waiting message, as `inbox_check` names it. `from` is the sender the message's own signed
@@ -233,6 +239,7 @@ export function readListener(dropDir: string): InboxListener | null {
       ...(typeof parsed.head === 'string' ? { head: parsed.head } : {}),
       ...(parsed.channel === true ? { channel: true as const } : {}),
       ...(isBriefEpoch(parsed.epoch) ? { epoch: parsed.epoch } : {}),
+      ...(typeof parsed.level === 'number' && Number.isInteger(parsed.level) && parsed.level > 0 ? { level: parsed.level } : {}),
     };
   } catch {
     return null;
@@ -891,6 +898,11 @@ export function readMessage(
     if (!flushReceipt(readName, target.dropDir)) {
       return { ok: false, reason: 'the receipt could not be made durable, so the message is not returned' };
     }
+    // rfc-event-comms §2 (E6): the per-seat receipt store, written in shadow once this is durable.
+    shadowQueueReceipt({
+      dropDir: target.dropDir, root: target.root, session: target.session, seat: target.seat, msgId: id,
+      kind: 'read', actor: { kind: handover?.owner === undefined ? 'recipient' : 'relay', name: handover?.owner ?? target.seat }, home,
+    });
     return true;
   };
   // The exclusive read claim (rfc-event-comms E5, review round 3): one reader holds the id from
@@ -900,6 +912,11 @@ export function readMessage(
   // and a cut-off run's claim belongs to its recovery alone (src/send/read-claim.ts).
   const claim = claimRead(target.dropDir, id, handover?.receipt === 'after' ? handover.owner : undefined, handover?.adopt === true);
   if (!claim.ok) {
+    // rfc-event-comms §3 (E6): a leg's owned exposure claim means another hand-over carries or
+    // carried this body; an automatic read answers with a pointer and writes no read.
+    if (claim.why === 'recovering' && isExposeOwner(ownerOfClaim(target.dropDir, id))) {
+      return { ok: false, reason: exposurePointer(id, queuePlaceOf(target.dropDir, id)?.seq ?? null), served: 'already-served' };
+    }
     const reason = claim.why === 'recovering'
       ? `message ${JSON.stringify(id)} is being recovered from an interrupted read`
       : claim.why === 'busy'

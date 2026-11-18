@@ -1,5 +1,6 @@
 // Body-carrying wakes and their post-delivery receipt. Resolution and admission stay with
 // the caller; a receipt is published only after that caller proves transport acceptance.
+import { exposeBody, exposurePointer, type BodyLeg, type ExposureHandle } from '../queue/exposure.ts';
 import { join } from 'node:path';
 import { currentClaimIn, readMessage } from '../mcp/inbox.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -40,6 +41,9 @@ export function inlineWake(payload: RecordPayload, home: string, limit = RUNTIME
 export function recordDeliveredBody(input: {
   dropDir: string; id: string; root: string; session: string; seat: string; home: string;
   wake?: string;
+  /** The owned exposure claim the carrying leg holds (rfc-event-comms §3, E6): the read is sealed
+   *  through that claim only. Absent: the legacy read (the root is not active). */
+  owner?: string;
 }): boolean {
   try {
     const key = messageKeyState(input.home);
@@ -49,10 +53,50 @@ export function recordDeliveredBody(input: {
     // The wake must be this record's own body, in either shape a wake carries it.
     if (input.wake !== undefined && inlineWake(payload, input.home) !== input.wake
       && inlineWake(payload, input.home, RUNTIME_WAKE_MAX, 'typed') !== input.wake) return false;
-    const read = readMessage({ dropDir: input.dropDir, root: input.root, session: input.session, seat: input.seat }, input.id, input.home,
-      { claim: () => currentClaimIn(input.root, input.session, input.seat) });
+    const brief = { claim: () => currentClaimIn(input.root, input.session, input.seat) };
+    if (input.owner !== undefined) {
+      // The seal of one hand-over (E3): the same owned claim, adopted; never a new exposure.
+      const handed = readMessage({ dropDir: input.dropDir, root: input.root, session: input.session, seat: input.seat }, input.id, input.home,
+        brief, undefined, { receipt: 'after', owner: input.owner, adopt: true });
+      return handed.ok ? (handed.seal?.() ?? false) : false;
+    }
+    const read = readMessage({ dropDir: input.dropDir, root: input.root, session: input.session, seat: input.seat }, input.id, input.home, brief);
     return read.ok || read.served === 'already-served';
   } catch {
     return false;
   }
 }
+
+/** What one leg carries for one message (E6): the text, whether it is the body, and the hand-over
+ *  handle that settles it. Built once, immediately before the leg's frame; its settle is the only
+ *  way the leg's read receipt is written. */
+export type LegBody = { text: string | null; carriesBody: boolean; handle: ExposureHandle | null };
+
+export function legBody(payload: RecordPayload, home: string, leg: BodyLeg, dropDir: string, limit = RUNTIME_WAKE_MAX, shape: 'runtime' | 'typed' = 'runtime'): LegBody {
+  const text = inlineWake(payload, home, limit, shape);
+  if (text === null) return { text: null, carriesBody: false, handle: null };
+  const decision = exposeBody({ dropDir, root: payload.root, session: payload.session, seat: payload.to, msgId: payload.id }, leg, home);
+  if (decision.kind === 'pointer') return { text: exposurePointer(payload.id, null), carriesBody: false, handle: null };
+  return { text, carriesBody: true, handle: decision.kind === 'expose' ? decision : null };
+}
+
+/** The runtime pointer field: the leg's text, or the oversized pointer when no body fits. */
+export function legText(body: LegBody, payload: RecordPayload): string {
+  return body.text ?? oversizedWake(payload);
+}
+
+/** E3 for a leg: records the read only for a body that was carried and handed over. */
+export function settleLegBody(body: LegBody, handedOver: 'yes' | 'no' | 'unknown', input?: { dropDir: string; id: string; root: string; session: string; seat: string; home: string; wake?: string }): void {
+  if (!body.carriesBody) return;
+  if (input === undefined) {
+    if (handedOver !== 'yes') body.handle?.settle(handedOver, () => false);
+    return;
+  }
+  if (body.handle === null) {
+    if (handedOver === 'yes') recordDeliveredBody(input);
+    return;
+  }
+  body.handle.settle(handedOver, (owner) => recordDeliveredBody({ ...input, owner }));
+}
+
+export { exposurePointer };
