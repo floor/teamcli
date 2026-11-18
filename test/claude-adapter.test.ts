@@ -29,6 +29,7 @@ import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
 import { wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
+import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { testIo } from './helpers.ts';
 import { fake, world, type World } from './send-native-fixtures.ts';
 
@@ -362,8 +363,8 @@ describe('round 1: a protected pane (its declared order leaves typed out) takes 
 });
 
 describe('round 1: a lead\'s pointer goes through the guarded typed seam', () => {
-  test('an unproven idle lead whose order names typed gets the pointer from the seam; the raw writers stay closed', async () => {
-    const at = place([], ['typed', 'drop']);
+  test('an unproven idle lead gets the pointer from the seam; the raw writers stay closed', async () => {
+    const at = place();
     stampedTo(at, 'lead', ID, null);
     const lines: string[] = [];
     // `pass` binds raw writers that throw: the pointer can only arrive through the seam.
@@ -478,13 +479,27 @@ describe('round 1: --wait reports a clearance and waits behind a busy seat', () 
   });
 });
 
-describe('round 2: protection fails closed and is read again at every key', () => {
-  test('a lead with no declared order (the owner\'s pane unmarked) takes zero keys', async () => {
-    const at = place();
+describe('round 3: the protected panes are found by role and read again at every key', () => {
+  test('the entity\'s main orchestrator (the owner\'s pane, found by role) takes zero keys, whatever the order', async () => {
+    const at = place([], ['typed', 'drop']);
+    // The team whose project is the entity itself: its orchestrator is the entity's main one.
+    const file = join(at.dir, 'team.yaml');
+    const lobby = resolveLobby(at.home, { entity: 'acme' });
+    mkdirSync(lobby, { recursive: true });
+    writeFileSync(file, `${readFileSync(file, 'utf8').replace(lobbyDir(at.home), lobby)}entity: acme\n`);
     stampedTo(at, 'lead', ID, null);
     const lines: string[] = [];
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 31 * 60_000), lines, { seat: 'lead' }), { unreadAfter: 600 });
     expect(lines).toEqual([]);
+  });
+
+  test('another team\'s lead with no declared order gets the pointer through the seam', async () => {
+    const at = place();
+    stampedTo(at, 'lead', ID, null);
+    const lines: string[] = [];
+    await wakeUnreadDrops(pass(at, new Date(Date.now() + 1_000), lines, { seat: 'lead' }), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toStartWith(`team 1 new message from lead (copy 1) — read it with: team show ${ID.slice(0, 8)}`);
   });
 
   test('a pane protected between the reservation and the first key takes no key', async () => {

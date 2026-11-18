@@ -1,5 +1,4 @@
 import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
-import { isLeadSeat } from '../file/sections/lead.ts';
 import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
 import { withSignedIdentity } from '../comms/identity.ts';
 import { claudeAdapterRoot, TYPED_REQUESTED } from '../queue/resend.ts';
@@ -7015,11 +7014,15 @@ export function permittedEventLegs(input: {
     now: input.now,
   });
   if (plan.human) return { channel: false, socket: false, pointer: false, why: 'its pane is a human\'s' };
-  // A declared order that names no `typed` word keeps every key out of the pane: the owner's
-  // pane, and any pane its file protects, waits for its hook or a pull. A lead's pane (the
-  // orchestrator's or the operator's, where the owner may sit) takes a pointer only when its
-  // declared order names `typed`: with no order, the lead is protected (fail closed).
-  const pointer = plan.declaredOrder ? plan.ordered.includes('typed') : !isLeadSeat(input.team, input.seat);
+  // The protected panes take no key, and wait for their hook or a pull:
+  // - the entity's main orchestrator, which runs in the owner's pane by design: the orchestrator
+  //   of the team whose project is the entity itself. It is found by its role in the signed team
+  //   file, never guessed from a pane, and no order opts it in;
+  // - a person's pane (above);
+  // - any seat whose declared order leaves the `typed` word out.
+  // Every other seat, other teams' leads included, takes the pointer through the guarded seam.
+  const mainOrchestrator = input.team.entity !== null && input.team.project === input.team.entity && input.seat === input.team.orchestrator;
+  const pointer = !mainOrchestrator && (!plan.declaredOrder || plan.ordered.includes('typed'));
   return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket'), pointer };
 }
 

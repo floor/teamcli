@@ -160,11 +160,13 @@ describe('team doctor on an active root: unproven Claude seats and stale pairs',
     expect(out).not.toContain('lead: no proven channel');
   });
 
-  test('a lead with no declared order is a protected pane: named as waiting, not warned', async () => {
+  test('the entity\'s main orchestrator is a protected pane: named as waiting, not warned; another lead is not', async () => {
     activateRoot();
     const out = await doctor(teamText('claude', '', ''));
-    expect(out).toContain('lead: waiting: protected pane, no proven channel');
-    expect(out).not.toContain('lead: no proven channel');
+    expect(out).toContain('lead: no proven channel');
+    const main = await doctor(`${teamText('claude', '', '')}entity: acme\n`);
+    expect(main).toContain('lead: waiting: protected pane, no proven channel');
+    expect(main).not.toContain('lead: no proven channel');
   });
 
   test('a dark root has no such entry', async () => {
