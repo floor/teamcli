@@ -68,6 +68,7 @@ import {
   legacyDropAt,
   claimBindingIn,
   listUnread,
+  inQueueOrder,
   messageNameOk,
   receiptHeld,
   readMessage,
@@ -893,11 +894,11 @@ function callTool(params: unknown, serving: Serving): unknown {
     // A plain-text drop an earlier build wrote is not a message this inbox can ever serve: listing
     // it every turn would only invite a refused `inbox_read` and the owner event that follows. The
     // file stays where it is; `team drops --read` still counts it as unserved.
-    const unread = listUnread(
+    const unread = inQueueOrder(listUnread(
       serving.dropDir,
       { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
       serving.home,
-    ).filter((message) => !legacyDropAt(join(serving.dropDir, message.id)));
+    ).filter((message) => !legacyDropAt(join(serving.dropDir, message.id))));
     return toolText(JSON.stringify({ unread }));
   }
   if (name === 'inbox_read') {

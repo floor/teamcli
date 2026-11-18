@@ -90,6 +90,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   agents: () => import('./commands/agents.ts'),
   fallback: () => import('./commands/fallback.ts'),
   waits: () => import('./commands/waits.ts'),
+  queues: () => import('./commands/queues.ts'),
 };
 
 /** Commands an earlier line carried and this one does not, each with the one line a typed one

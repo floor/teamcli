@@ -64,6 +64,7 @@ import { flushReceipt, publishReadReceipt } from './inbox-admission.ts';
 import { exposurePointer, isExposeOwner } from '../queue/exposure.ts';
 import { shadowQueueReceipt } from '../queue/receipt-store.ts';
 import { queuePlaceOf } from '../queue/append.ts';
+import { readerOrder } from '../queue/reader.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
@@ -155,6 +156,8 @@ export type InboxMessage = {
   sender_attribution: SenderAttribution;
   /** A plain-text drop an earlier build wrote: listed only when the caller asks for them. */
   legacy?: true;
+  /** The queue seq it is offered at, when the listing is in queue order (E7 reader switch). */
+  seq?: number;
 };
 
 export function listenerPath(dropDir: string): string {
@@ -497,7 +500,7 @@ export function listUnread(
   /** `include` lists plain-text drops an earlier build wrote, marked `legacy`. By default they
    *  are left out: no reader can serve one, so they are not mail waiting, and a counter that
    *  rang for them rang forever. */
-  options: { legacy?: 'include' } = {},
+  options: { legacy?: 'include'; /** `skip`: no queue annotation (a read-only caller takes no lock). */ queue?: 'skip' } = {},
 ): InboxMessage[] {
   let names: string[];
   try {
@@ -559,8 +562,25 @@ export function listUnread(
       ...(legacy ? { legacy: true as const } : {}),
     });
   }
-  return messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
+  // E7: the same set and the same (signed-time) order for every consumer; each message carries its
+  // queue seq when the reader switch holds for this seat. Time-driven consumers (the drops batch,
+  // wake ages, the wake picker) keep their own criteria; only the model-facing inbox listing is
+  // offered in seq order (`inQueueOrder`). The set never depends on the switch.
+  messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
+  if (options.queue !== 'skip' && messages.length > 0 && !messages.some(message => message.legacy === true)) {
+    const order = readerOrder(dropDir, { root: context.root, session: context.session, seat: context.to }, messages.map(message => message.id), home);
+    if (order.kind === 'queue') return messages.map(message => ({ ...message, seq: order.seq.get(message.id) as number }));
+  }
+  return messages;
 }
+
+/** The listing offered to the model in queue order: by seq when every message carries one (the
+ *  reader switch held for the whole listing), otherwise unchanged (signed-time order). */
+export function inQueueOrder(messages: readonly InboxMessage[]): InboxMessage[] {
+  if (messages.length === 0 || messages.some(message => message.seq === undefined)) return [...messages];
+  return [...messages].sort((a, b) => (a.seq as number) - (b.seq as number));
+}
+
 
 /** The text as JSON, or undefined when it is not JSON at all. */
 function parsedJson(text: string): unknown {

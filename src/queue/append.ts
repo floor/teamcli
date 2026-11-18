@@ -26,7 +26,7 @@
 // (`appendRecovered`), so the index converges without the writer.
 import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readdirSync, readSync, realpathSync } from 'node:fs';
-import { ftruncateSync, mkdirSync, openSync, renameSync, writeSync } from '../host/guarded-fs.ts';
+import { ftruncateSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join } from 'node:path';
 import { acquireLockAt, type LockSteps } from '../launch/seat-lock.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -240,7 +240,25 @@ function journalDurable(folder: string, sync: (fd: number) => void = fsyncSync):
   } finally {
     closeSync(fd);
   }
-  return removeDurable(marker) === 'removed';
+  return clearPoison(marker);
+}
+
+/** Removes the poisoned marker after a successful flush. The folder is fsynced only when a marker
+ *  was actually removed: an absent marker leaves nothing to make durable, and a removal that a
+ *  crash undoes only brings the marker back, which makes the next holder flush again (fail closed).
+ *  This keeps the steady-state open at one journal fsync (E7 gate 5). */
+function clearPoison(marker: string): boolean {
+  try {
+    unlinkSync(marker);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+  try {
+    fsyncFolder(dirname(marker));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function plainFolder(path: string): boolean {
@@ -898,4 +916,97 @@ export function entriesOf(dropDir: string): number[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * The queue order of `ids` (a listing's set), proved in ONE locked snapshot (E7): under the
+ * writer's queue lock (tried once, never waited for) the current generation pointer is read, the
+ * journal is proved durable and whole, and every id's committed placement and its signed entry are
+ * verified, all before the lock is let go. A generation rotated before the lock is therefore never
+ * read as current. Null with the reason when anything is unknown, missing or held.
+ */
+export function lockedQueueOrder(
+  dropDir: string,
+  binding: { root: string; session: string; seat: string },
+  ids: readonly string[],
+  home: string,
+  faults: { afterLock?: () => void } = {},
+): { generation: string; seq: Map<string, number> } | { why: string } {
+  const base = queueBaseOf(dropDir);
+  if (base === null) return { why: 'the folder has no queue' };
+  let lock: ReturnType<typeof acquireLockAt>;
+  try {
+    lock = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+  } catch {
+    return { why: 'the queue lock cannot be taken' };
+  }
+  if (!('release' in lock)) return { why: 'the queue lock is held' };
+  try {
+    faults.afterLock?.();
+    const named = currentGenerationName(dropDir);
+    if (named === null) return { why: 'the queue has no current generation' };
+    const folder = join(base, named);
+    if (!journalDurable(folder)) return { why: 'the queue journal is not proved durable' };
+    const journal = readJournal(join(folder, 'journal.jsonl'));
+    if (journal.unreadable === true || journal.corrupt || journal.tornAt !== null) return { why: 'the queue journal is not whole' };
+    const folded = fold(journal.lines);
+    const seq = new Map<string, number>();
+    let highest = 0;
+    for (const id of ids) {
+      const at = folded.committedIds.get(id);
+      if (at === undefined) return { why: `message ${id} has no committed queue entry` };
+      const entry = readEntry(folder, at, { root: binding.root, session: binding.session, seat: binding.seat, generation: named }, home);
+      if (entry === null || entry.payload.msg_id !== id) return { why: `message ${id}'s queue entry does not verify` };
+      seq.set(id, at);
+      if (at > highest) highest = at;
+    }
+    for (const [at, last] of folded.last) {
+      if (last.state === 'reserved' && at <= highest) return { why: `seq ${String(at)} is still reserved` };
+    }
+    return { generation: named, seq };
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * The same order proof, OBSERVED (`team queues status`): no lock is taken, nothing is flushed,
+ * truncated, poisoned or cleared, so a public read changes no byte. A poisoned, torn, corrupt or
+ * unreadable journal answers unknown (the reason), never a repaired state. An observation is not
+ * authority: only the locked proof (`lockedQueueOrder`) orders a listing.
+ */
+export function observedQueueOrder(
+  dropDir: string,
+  binding: { root: string; session: string; seat: string },
+  ids: readonly string[],
+  home: string,
+): { generation: string; seq: Map<string, number> } | { why: string } {
+  const base = queueBaseOf(dropDir);
+  if (base === null) return { why: 'the folder has no queue' };
+  const named = currentGenerationName(dropDir);
+  if (named === null) return { why: 'the queue has no current generation' };
+  const folder = join(base, named);
+  try {
+    lstatSync(join(folder, POISONED));
+    return { why: 'the queue journal is poisoned (its last flush failed); the next lock holder repairs it' };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { why: 'the poison marker cannot be read' };
+  }
+  const journal = readJournal(join(folder, 'journal.jsonl'));
+  if (journal.unreadable === true || journal.corrupt || journal.tornAt !== null) return { why: 'the queue journal is not whole' };
+  const folded = fold(journal.lines);
+  const seq = new Map<string, number>();
+  let highest = 0;
+  for (const id of ids) {
+    const at = folded.committedIds.get(id);
+    if (at === undefined) return { why: `message ${id} has no committed queue entry` };
+    const entry = readEntry(folder, at, { root: binding.root, session: binding.session, seat: binding.seat, generation: named }, home);
+    if (entry === null || entry.payload.msg_id !== id) return { why: `message ${id}'s queue entry does not verify` };
+    seq.set(id, at);
+    if (at > highest) highest = at;
+  }
+  for (const [at, last] of folded.last) {
+    if (last.state === 'reserved' && at <= highest) return { why: `seq ${String(at)} is still reserved` };
+  }
+  return { generation: named, seq };
 }

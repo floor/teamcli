@@ -70,7 +70,7 @@ describe('activation floor', () => {
   });
 
   test('fault grid: a fault at any durable step of the marker or the record never leaves the root active', () => {
-    for (const file of ['PROTOCOL', 'ACTIVATION']) {
+    for (const file of ['PROTOCOL', 'ACTIVATION', 'PUBLISHED']) {
       for (const step of STEPS) {
         const s = scene();
         const out = activate(s.root, {
@@ -79,10 +79,15 @@ describe('activation floor', () => {
         });
         expect(out.kind).toBe('failed');
         const after = floorState(s.root, s.home).kind;
-        // Before the record's link the root is dark; once the record is visible it is never taken
-        // back (a reader may have acted on it): it stays enforcing.
-        if (file === 'ACTIVATION' && (step === 'unlink-temp' || step === 'folder-fsync')) expect(after).toBe('active');
+        // Before the record's link the root is dark. A record that is visible but not published
+        // is `unknown` (E7 gate 2): existing fences are honoured, no reader acts on `active`.
+        // Only a visible PUBLISHED, created after the record's folder fsync, reads `active`.
+        const linked = step === 'unlink-temp' || step === 'folder-fsync';
+        if (file === 'PUBLISHED') expect(after).toBe(linked ? 'active' : 'unknown');
+        else if (file === 'ACTIVATION' && linked) expect(after).toBe('unknown');
         else expect(after).toBe('dark');
+        expect(fencesEnforced(s.root, s.home)).toBe(after !== 'dark');
+        if (after !== 'active') expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(false);
         // A clean pass afterwards reaches one consistent state: active.
         expect(['activated', 'already']).toContain(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon] }).kind);
         expect(floorState(s.root, s.home).kind).toBe('active');
