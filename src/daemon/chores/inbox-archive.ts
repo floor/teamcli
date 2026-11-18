@@ -15,7 +15,7 @@
 // When the day's run ends having moved anything, the team's lead gets one line saying so.
 // The day, the totals and the line's state live in `<root>/.agents/send-drops/.drops-archive-run.json`.
 import { createHash, randomUUID } from 'node:crypto';
-import { writeRuntimeNotice } from '../../send/endpoint-notice.ts';
+import { RUNTIME_FROM, writeRuntimeNotice } from '../../send/endpoint-notice.ts';
 import { cpus, loadavg } from 'node:os';
 import { join } from 'node:path';
 import type { TeamFile } from '../../file/types.ts';
@@ -193,9 +193,18 @@ export function noticeUndelivered(input: {
   context: StatusContext; key: KeyObject; at: string;
   /** The registry, read whole, and this team's id: the sender is resolved from its signed agent id. */
   agents?: readonly Agent[]; teamId?: string;
+  /** How many archived records one call may open and verify; NOTICE_VERIFY_PER_PASS by default. */
+  limit?: number;
 }): number {
   let written = 0;
+  let verified = 0;
   for (const archived of listArchivedUnread(input.dropDir)) {
+    // An obligation already done costs one lstat; the work per pass is bounded (a large archive is
+    // worked through over several passes, and a done backlog never hides a new obligation).
+    const done = `${archived.path}.noticed`;
+    if (heldAt(done).kind === 'file') continue;
+    if (verified >= (input.limit ?? NOTICE_VERIFY_PER_PASS)) break;
+    verified += 1;
     const looked = readRecord(archived.path, archived.id);
     if (!looked.ok || looked.record === null || !verifyRecord(looked.record, input.key)) continue;
     const payload = looked.record.payload;
@@ -203,8 +212,6 @@ export function noticeUndelivered(input: {
     // The sender is resolved from its signed agent id, never from a seat name alone (a seat name
     // can be reused by a replacement): the agent's current seat in this team when it is one of this
     // team's agents; otherwise (another team, the owner, a client, an unknown id) this team's lead.
-    const done = `${archived.path}.noticed`;
-    if (heldAt(done).kind === 'file') continue;
     // The sender's current route (session and seat) and identity come from its signed agent id:
     // a seat name alone may now be another occupant's. Without a resolved route, the lead of the
     // archived seat's session is told, naming the sender.
@@ -215,9 +222,14 @@ export function noticeUndelivered(input: {
     const session = agent !== undefined ? agent.reach.session : input.session;
     if (to === undefined || to === null || to === '') continue;
     const noticeId = undeliveredNoticeId(archived.id);
-    // A notice already written and since archived from its recipient's folder is found by id.
-    if (heldAt(recordFile(join(input.root, '.agents', 'send-drops', session, to), noticeId)).kind === 'file') {
-      markNoticed(done, input.at);
+    // A notice already written and since archived from its recipient's folder is found by id, and
+    // counts only when it verifies as this obligation's notice: a runtime record to that recipient,
+    // in that session and root, naming this message. Anything else at the name leaves it pending.
+    const standing = recordFile(join(input.root, '.agents', 'send-drops', session, to), noticeId);
+    if (heldAt(standing).kind !== 'missing') {
+      const found = readRecord(standing, noticeId);
+      const notice = found.ok && found.record !== null && verifyRecord(found.record, input.key) ? found.record.payload : null;
+      if (notice !== null && notice.to === to && notice.session === session && notice.from === RUNTIME_FROM && notice.body.includes(archived.id)) markNoticed(done, input.at);
       continue;
     }
     const notice = writeRuntimeNotice({
@@ -231,6 +243,9 @@ export function noticeUndelivered(input: {
   }
   return written;
 }
+
+/** The archived records one reconcile call opens per seat, at most. */
+export const NOTICE_VERIFY_PER_PASS = 50;
 
 /** The durable mark beside an archived record that its not-delivered notice was written. */
 function markNoticed(path: string, at: string): void {
@@ -340,7 +355,8 @@ export async function inboxArchivePass(input: {
   let registrySaid = false;
   const stop = async (after: 'recovery' | 'chunk'): Promise<boolean> => deps.yieldTurn !== undefined && !(await deps.yieldTurn(after));
   seats: for (const folder of seatDropFolders(root)) {
-    const context: StatusContext = { to: folder.seat, root, session: folder.session };
+    // The lead binds a clearance's authority (E7b: the stamped planner rule asks it).
+    const context: StatusContext = { to: folder.seat, root, session: folder.session, ...(team.orchestrator ? { lead: team.orchestrator } : {}) };
     const key2 = `${folder.session}/${folder.seat}`;
     // A folder fully looked at today is not looked at again until tomorrow.
     if (run.completed.includes(key2)) continue;

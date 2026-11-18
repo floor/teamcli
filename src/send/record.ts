@@ -33,6 +33,7 @@ import { readNoFollow, type MessageStatus } from './history.ts';
 import { dropMessage } from './native.ts';
 import { floorState } from '../queue/floor.ts';
 import { EXPOSURES } from '../queue/handover.ts';
+import { ensureFolder } from '../queue/durable.ts';
 
 /** The `kind` a message record's payload carries. A receipt carries `receipt`, a thread's close
  *  `thread-close`. */
@@ -945,6 +946,11 @@ export function writeRecord(dropDir: string, record: SignedRecord): RecordWrite 
   if (!recordNameOk(id)) return { ok: false, reason: 'the record id cannot be a file name' };
   const path = recordFile(dropDir, id);
   if (heldAt(path).kind !== 'missing') return { ok: false, reason: 'a record already holds that id' };
+  // E7b: a stamped record's era evidence (its delivery-history folder) stands, durably, before the
+  // record can be seen, so no receipt can ever stand on it without the strict rule applying.
+  if (isStampedPayload(record.payload) && !ensureFolder(join(dropDir, EXPOSURES, id))) {
+    return { ok: false, reason: 'the delivery history folder could not be made durable' };
+  }
   try {
     dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
   } catch {

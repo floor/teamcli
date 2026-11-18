@@ -4,7 +4,7 @@
 // every actor at level 3 and an older actor rolls the root back to dark; the rollback is one
 // command and resumable; retention never moves an unsettled stamped record while its seat exists.
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readMessage } from '../src/mcp/inbox.ts';
@@ -490,15 +490,46 @@ describe('code round 3 fixes', () => {
     const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'worker' }, { name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
     const agents = [{ id: 'agt_000000000007', reach: { team: 't', seat: 'worker', session: 'other' }, lifecycle: 'running' }] as unknown as NonNullable<Parameters<typeof noticeUndelivered>[0]['agents']>;
     const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString(), agents, teamId: 't' };
-    // M2's notice was written earlier and has since been archived from the sender's folder.
+    // M2's notice was written earlier (a genuine signed runtime notice) and has since been archived
+    // from the sender's folder.
+    const { writeRuntimeNotice } = await import('../src/send/endpoint-notice.ts');
     const senderDir = join(at.root, '.agents', 'send-drops', 'other', 'worker');
+    const genuine = writeRuntimeNotice({ home: at.home, root: at.root, session: 'other', lead: 'worker', id: undeliveredNoticeId(M2), body: `not delivered: seat retired (lead). The message ${M2} from worker was never acknowledged.`, at: new Date().toISOString() });
+    expect(genuine.ok).toBe(true);
     mkdirSync(join(senderDir, 'archive', '2026-11'), { recursive: true });
-    writeFileSync(join(senderDir, 'archive', '2026-11', undeliveredNoticeId(M2)), '{}\n');
+    renameSync(join(senderDir, undeliveredNoticeId(M2)), join(senderDir, 'archive', '2026-11', undeliveredNoticeId(M2)));
     expect(noticeUndelivered(input)).toBe(1);
     expect(existsSync(join(senderDir, undeliveredNoticeId(M1)))).toBe(true);
     expect(existsSync(join(senderDir, undeliveredNoticeId(M2)))).toBe(false);
     expect(existsSync(join(archived, `${M1}.noticed`))).toBe(true);
     expect(existsSync(join(archived, `${M2}.noticed`))).toBe(true);
     expect(noticeUndelivered(input)).toBe(0);
+  });
+
+  test('an occupied but unverifiable notice name leaves the obligation pending', async () => {
+    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
+    mkdirSync(archived, { recursive: true, mode: 0o700 });
+    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
+    const bossDir = join(at.root, '.agents', 'send-drops', SESSION, 'boss');
+    mkdirSync(bossDir, { recursive: true });
+    writeFileSync(join(bossDir, undeliveredNoticeId(M1)), '{}\n');
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
+    expect(noticeUndelivered({ home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString() })).toBe(0);
+    expect(existsSync(join(archived, `${M1}.noticed`))).toBe(false);
+  });
+
+  test('a stamped record written through the record writer carries its era folder: a plain read never hides it from the listing', async () => {
+    const { listUnread } = await import('../src/mcp/inbox.ts');
+    const { writeRecord } = await import('../src/send/record.ts');
+    const at = place();
+    activateRoot(at);
+    expect(writeRecord(at.dropDir, signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home)).ok).toBe(true);
+    expect(existsSync(join(at.dropDir, EXPOSURES, M1))).toBe(true);
+    expect(copyHistory(at.dropDir, M1)).toMatchObject({ copies: 0 });
+    await plainRead(at, M1);
+    expect(listUnread(at.dropDir, context(at), at.home).map((m) => m.id)).toEqual([M1]);
   });
 });
