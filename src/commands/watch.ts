@@ -25,7 +25,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, evictHerdrAgentList, evictHerdrPaneProcessInfo, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Command, Io } from '../io.ts';
 import { isShellName } from '../launch/cli-scope.ts';
@@ -43,6 +43,7 @@ import { watchReadLimits, type ReadLimits } from '../watch/read-limits.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchRunning } from '../watch/pane.ts';
 import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand } from './up.ts';
+import { processStartOf } from '../launch/codex-endpoint.ts';
 import { permittedEventLegs, realHost, redeliverChannelOnSocket, resendStampedRecord, runSend, type SendHost } from './send.ts';
 import type { PendingDrop } from '../send/pending.ts';
 import { realHost as realReplyHost, runReply } from './reply.ts';
@@ -187,6 +188,8 @@ export type WatchSources = {
   /** The pane's process identity, compared with the one the state records for its seat; null
    *  when herdr can't tell. */
   processes?(pane: string, session: string): PaneProcesses | null;
+  /** The shared typed path's fresh owner readings (src/watch/retry.ts `RetrySources.keyOwner`). */
+  keyOwner?: { agents(session: string): { name: string; pane: string }[] | null; processes(pane: string, session: string): PaneProcesses | null; processStart(pid: number): number | null };
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
   /** One key, spelled as herdr spells it: a delivery that meets unsent text clears the box with
@@ -455,6 +458,18 @@ export const realWatchSources: WatchSources = {
   foreground: (pane, session) => paneForeground(pane, session),
   foregroundAsync: async (pane, session, options) => foregroundArgv0(await paneProcessInfoAsync(pane, session, options)),
   processes: (pane, session) => paneProcesses(pane, session),
+  // Fresh, never the pass's cached snapshot: the typed path's proof at its first key.
+  keyOwner: {
+    agents: (session) => {
+      evictHerdrAgentList(session);
+      return agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane })) ?? null;
+    },
+    processes: (pane, session) => {
+      evictHerdrPaneProcessInfo(pane, session);
+      return paneProcesses(pane, session);
+    },
+    processStart: (pid) => processStartOf(pid),
+  },
   processesAsync: async (pane, session, options) => paneProcessesOf(await paneProcessInfoAsync(pane, session, options)),
   // No pane messaging: the watch never types a nudge or a reminder (src/send/no-pane-messaging.ts).
   // The one exception is the profile-gated typed wake below, whose own module reads the box

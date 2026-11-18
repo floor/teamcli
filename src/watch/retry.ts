@@ -79,6 +79,10 @@ export type RetrySources = {
   /** The pane's process identity, as the send's typed leg reads it; null when herdr can't tell.
    *  A pane whose foreground is its own shell is not the seat, and no retry is typed there. */
   processes?(pane: string, session: string): PaneProcesses | null;
+  /** The fresh readings the shared typed path proves a pane's owner with, immediately before its
+   *  first key (src/watch/unread.ts `paneStillSeats`): herdr's agent list for the session, and a
+   *  process's start time. Absent (a test host), the path keeps its earlier checks. */
+  keyOwner?: { agents(session: string): { name: string; pane: string }[] | null; processes(pane: string, session: string): PaneProcesses | null; processStart(pid: number): number | null };
   /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the one seam
    *  through which the watch's unread pass types, and only for a seat whose profile declares
    *  `typed_wake` and whose retry is on. Absent, the pass keeps its drop-file typed leg, whose

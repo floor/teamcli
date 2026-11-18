@@ -1,4 +1,5 @@
 import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { TYPED_REQUESTED } from '../queue/resend.ts';
 import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
@@ -6178,7 +6179,7 @@ export async function walkReplyDelivery(input: {
       // mark, decides who posts, and a mark from an earlier post is no delivery of this attempt.
       // A stamped record's inbox-shaped body carries its numbered copy's header (E7b).
       const delivery = isStampedPayload(input.payload)
-        ? () => { const n = takeCopyNumber(dropDir, msgId, 'webhook'); return n === null ? `message ${msgId} · delivery not recorded — this may be a re-send` : deliveryHeader(msgId, n); }
+        ? () => { const n = takeCopyNumber(dropDir, msgId, 'webhook'); return n === null ? null : deliveryHeader(msgId, n); }
         : undefined;
       const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body, input.resend === true, delivery);
       const ms = input.host.now().getTime() - startedAt;
@@ -7110,6 +7111,9 @@ export async function resendStampedRecord(input: {
     typedRequest: input.typedRequest ?? (() => false),
   });
   const via = walk.walked && walk.via !== 'drop' && walk.endpointBlocked === undefined ? walk.via : null;
+  // A typed request is no re-send yet: the watch's typed wake records it once the pointer was
+  // typed, with its token; until then nothing is recorded and the record stays due.
+  if (via === 'typed') return TYPED_REQUESTED;
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
     from: payload.from,

@@ -111,7 +111,8 @@ const ATTEMPT_NAME = /^\.attempt-([1-9][0-9]{0,8})$/;
 export type AttemptLedger = { attempts: number; lastMs: number | null };
 
 /** The scheduler's attempts so far and the newest one's time. A folder that cannot be listed is
- *  no attempts; an attempt file that cannot be read counts with its file time. */
+ *  no attempts; an attempt file that cannot be read counts with its file time. A withdrawn
+ *  attempt (`withdrawAttempt`: nothing left this process for it) counts for neither. */
 export function attemptLedger(dropDir: string, id: string): AttemptLedger {
   const folder = historyFolder(dropDir, id);
   let names: string[];
@@ -122,11 +123,12 @@ export function attemptLedger(dropDir: string, id: string): AttemptLedger {
   }
   let attempts = 0;
   let lastMs: number | null = null;
+  const present = new Set(names);
   for (const name of names) {
     const match = ATTEMPT_NAME.exec(name);
     if (match === null) continue;
-    const k = Number(match[1]);
-    if (k > attempts) attempts = k;
+    if (present.has(`${name}.done`) && withdrawn(join(folder, `${name}.done`))) continue;
+    attempts += 1;
     let at = Number.NaN;
     try {
       at = Date.parse((JSON.parse(readFileSync(join(folder, name), 'utf8')) as { at?: unknown }).at as string);
@@ -153,9 +155,38 @@ export function attemptLedger(dropDir: string, id: string): AttemptLedger {
 export function reserveAttempt(dropDir: string, id: string, host: string, nowMs: number): number | null {
   const folder = historyFolder(dropDir, id);
   if (!ensureFolder(join(seatFolderOf(dropDir, id), EXPOSURES)) || !ensureFolder(folder)) return null;
-  const k = attemptLedger(dropDir, id).attempts + 1;
+  const k = highestAttempt(folder) + 1;
   const made = createExclusive(join(folder, `.attempt-${String(k)}`), `${JSON.stringify({ v: 1, k, host, at: new Date(nowMs).toISOString() })}\n`);
   return made === 'created' ? k : null;
+}
+
+function withdrawn(path: string): boolean {
+  try {
+    return (JSON.parse(readFileSync(path, 'utf8')) as { withdrawn?: unknown }).withdrawn === true;
+  } catch {
+    return false;
+  }
+}
+
+/** The highest attempt number reserved, withdrawn ones included: a number is used once. */
+function highestAttempt(folder: string): number {
+  let highest = 0;
+  try {
+    for (const name of readdirSync(folder)) {
+      const match = ATTEMPT_NAME.exec(name);
+      if (match !== null && Number(match[1]) > highest) highest = Number(match[1]);
+    }
+  } catch {
+    // An unlistable folder: the exclusive create below refuses a taken number anyway.
+  }
+  return highest;
+}
+
+/** Withdraws attempt `k`: nothing left this process for it (a typed request whose pointer was
+ *  never typed), so it neither counts nor moves the clock, and the record stays due. Exclusive:
+ *  an attempt whose outcome is already noted is not withdrawn. */
+export function withdrawAttempt(dropDir: string, id: string, k: number): void {
+  createExclusive(join(historyFolder(dropDir, id), `.attempt-${String(k)}.done`), `${JSON.stringify({ v: 1, k, withdrawn: true })}\n`);
 }
 
 /** Records what attempt `k` carried: the copy number it took (null for none) and its leg. Best

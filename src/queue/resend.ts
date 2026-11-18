@@ -104,8 +104,13 @@ export function reserveDue(seat: ResendSeat, id: string, nowMs: number, host: st
   }
 }
 
-/** What the seat's adapter did with one offer: the leg that took it, or null when none did. */
+/** What the seat's adapter did with one offer: the leg that took it, or null when none did, or
+ *  `TYPED_REQUESTED`: the walk stopped at its typed leg and asked the watch's typed wake, whose
+ *  outcome is not known yet. Its attempt is then noted by the caller once the pointer was typed
+ *  (`noteAttemptOutcome`), or withdrawn (`withdrawAttempt`) when it was not. */
 export type ResendOffer = (id: string) => Promise<string | null>;
+
+export const TYPED_REQUESTED = 'typed-requested';
 
 /** One offer's outcome: its attempt, the copy number it carried (null when none) and its leg. */
 export type ResendResult = { id: string; attempt: number; copy: number | null; via: string | null };
@@ -134,7 +139,7 @@ export async function resendPass(seat: ResendSeat, nowMs: number, offer: ResendO
     }
     const after = copyHistory(listing.folder, id);
     const copy = before !== 'unknown' && after !== 'unknown' && after.copies > before.copies ? after.copies : null;
-    noteAttemptOutcome(listing.folder, id, attempt, { copy, via });
+    if (via !== TYPED_REQUESTED) noteAttemptOutcome(listing.folder, id, attempt, { copy, via });
     results.push({ id, attempt, copy, via });
   }
   return results;

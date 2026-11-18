@@ -760,7 +760,8 @@ export type SenderPostInput = {
   /** The signed message record the send just wrote: the body an inbox-shaped row reads. */
   message: SignedRecord;
   /** E7b: the numbered copy's header for an inbox-shaped body, taken only when that shape is
-   *  posted; absent or null, the body carries none. */
+   *  posted. Absent, the body carries none; null (the number could not be recorded), nothing is
+   *  posted. */
   delivery?: () => string | null;
   /** The folder the record was staged into: the claim and the marks are written beside it. */
   dropDir: string;
@@ -809,7 +810,10 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     let shape: WebhookShape;
     let event: SignedEventRecord;
     if (route.body === 'inbox') {
-      const delivery = input.delivery?.() ?? undefined;
+      // E7b: a stamped body leaves only numbered. A number that cannot be recorded posts nothing;
+      // the record stays due.
+      const delivery = input.delivery === undefined ? undefined : input.delivery();
+      if (delivery === null) return { kind: 'failed', reason: 'the copy number could not be recorded; nothing was posted' };
       shape = { body: 'inbox', ...header, message: input.message, ...(delivery === undefined ? {} : { delivery }) };
       event = {
         payload: {

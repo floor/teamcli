@@ -300,6 +300,7 @@ type SceneOptions = {
   pane?: string;
   ownPane?: string | null;
   typedWake?: RetrySources['typedWake'];
+  keyOwner?: RetrySources['keyOwner'];
   screen?: string;
   said?: string[];
 };
@@ -323,6 +324,7 @@ function passScene(at: World, now: Date, host: SendHost, options: SceneOptions =
       pressEnter: () => { throw new Error('the pass must not submit through the raw writer'); },
       sleep: async () => {},
       ...(options.typedWake === undefined ? {} : { typedWake: options.typedWake }),
+      ...(options.keyOwner === undefined ? {} : { keyOwner: options.keyOwner }),
     },
     eventLegs: (one: string) => send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat: one, team, now: () => now }),
     // The build before the fix has no re-send adapter: the pass then offers nothing (the finding).
@@ -414,7 +416,18 @@ function typedSeam(lines: string[], result: Partial<TypedWakeResult> = {}): NonN
 /** The seat's recorded pane and session, as `team up` leaves them (the incarnation the wake
  *  fence reads). */
 function recordPane(at: World, seat: string, pane: string): void {
-  writeFileSync(join(at.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { [seat]: { stage: 'ready', pane, agent_session: `session-of-${seat}` } }, worktrees: {} } } })}\n`);
+  writeFileSync(join(at.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { [seat]: {
+    stage: 'ready', pane, agent_session: `session-of-${seat}`, launched: { shell: 111, cli: [222] }, pane_shell: 111, pane_shell_start: 1_700_000_000_000,
+  } }, worktrees: {} } } })}\n`);
+}
+
+/** Fresh owner readings for the shared typed path's proof: by default the recorded launch. */
+function owner(seat: string, pane: string, change: { agents?: { name: string; pane: string }[] | null; processes?: { shell: number; foreground: number[] } | null; start?: number | null } = {}): NonNullable<RetrySources['keyOwner']> {
+  return {
+    agents: () => (change.agents === undefined ? [{ name: seat, pane }] : change.agents),
+    processes: () => (change.processes === undefined ? { shell: 111, foreground: [222] } : change.processes),
+    processStart: () => (change.start === undefined ? 1_700_000_000_000 : change.start),
+  };
 }
 
 describe('every leg type takes copies 2 and 3, numbered', () => {
@@ -462,6 +475,54 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     if (!shown.ok) throw new Error('the read failed');
     expect(numberOf(shown.body)).toBe(4);
     expect(shown.body).toContain('the secret body');
+  });
+
+  test('the shared typed path proves the pane\'s owner at its first key: any mismatch or unreadable reading types nothing', async () => {
+    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    activateRoot(at);
+    recordPane(at, 'agy', 'pane-agy');
+    const dropDir = stamped(at, 'agy', ID, 'short');
+    takeCopyNumber(dropDir, ID, 'typed');
+    const host = fake(at, { agents: () => [] });
+    const lines: string[] = [];
+    const pass = async (keyOwner: NonNullable<RetrySources['keyOwner']>): Promise<void> => {
+      age(stampedFolder(at, 'agy'), ID, 31 * MIN);
+      await wakeUnreadDrops(passScene(at, new Date(), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE, keyOwner }), { unreadAfter: 600 });
+    };
+    // The pane id stays the recorded one each time; what lives in it does not.
+    await pass(owner('agy', 'pane-agy', { processes: { shell: 111, foreground: [333] } }));
+    await pass(owner('agy', 'pane-agy', { agents: [{ name: 'other', pane: 'pane-agy' }, { name: 'agy', pane: 'pane-9' }] }));
+    await pass(owner('agy', 'pane-agy', { start: 1_700_000_000_999 }));
+    await pass(owner('agy', 'pane-agy', { processes: null }));
+    await pass(owner('agy', 'pane-agy', { agents: null }));
+    await pass(owner('agy', 'pane-agy', { start: null }));
+    expect(lines).toEqual([]);
+    // No re-send was recorded for any of them: every attempt was withdrawn, the record stays due.
+    expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(0);
+    // The recorded launch, read fresh: the pointer is typed.
+    await pass(owner('agy', 'pane-agy'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`message ${ID} · delivery`);
+  });
+
+  test('a typed request is recorded only once its pointer was typed with its token; until then the record stays due', async () => {
+    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    activateRoot(at);
+    recordPane(at, 'agy', 'pane-agy');
+    const dropDir = stamped(at, 'agy', ID, 'short');
+    takeCopyNumber(dropDir, ID, 'typed');
+    const lines: string[] = [];
+    const said: string[] = [];
+    const t = Date.now() + 61_000;
+    // No readable screen: the pass's typed wake types nothing.
+    await wakeUnreadDrops(passScene(at, new Date(t), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), said }), { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+    expect(said.some((line) => line.includes('offered again'))).toBe(false);
+    const history = readHistory('acme', at.root, at.home);
+    expect(history.ok && history.entries.some((entry) => entry.id === ID)).toBe(false);
+    expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(0);
+    // Still due at once: the next pass asks again.
+    expect(resendCandidates(seatOf(at, dropDir, 'agy'), t + 1_000)).toEqual([ID]);
   });
 
   test('socket (a Claude seat that accepts cross-session frames); the frame names the sender, never the receiver\'s persona', async () => {
@@ -525,6 +586,34 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     age(stampedFolder(at, 'iris'), ID, 31 * MIN);
     expect(await resendPass(seatOf(at, dropDir, 'iris'), Date.now(), offer, 'watch')).toEqual([]);
     expect(hits).toHaveLength(3);
+  });
+
+  test('webhook, inbox body: a copy number that cannot be recorded posts nothing; the record stays due', async () => {
+    const hits: string[] = [];
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async (request) => { hits.push(await request.text()); return Response.json({ ok: true }); } });
+    cleanups.push(() => server.stop(true));
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'e7b-resend-hook-')));
+    cleanups.push(() => rmSync(base, { recursive: true, force: true }));
+    writeFileSync(join(base, 'url'), `http://127.0.0.1:${server.port}/routine\n`);
+    writeFileSync(join(base, 'secret'), 'synthetic-secret-value\n', { mode: 0o600 });
+    const at = made(['socket', 'drop'], [{ name: 'iris', role: 'remote', webhook: { urlFile: join(base, 'url'), secretFile: join(base, 'secret') } }]);
+    const file = join(at.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace(`      secret_file: ${JSON.stringify(join(base, 'secret'))}\n`, `      secret_file: ${JSON.stringify(join(base, 'secret'))}\n      body: inbox\n`));
+    activateRoot(at);
+    const dropDir = stamped(at, 'iris', ID);
+    const offer = adapter(at, fake(at, { agents: () => [] }), 'claude-code', 'iris', dropDir);
+    // Numbered: the inbox body names its copy.
+    expect(await offer(ID)).toBe('webhook');
+    expect(hits).toHaveLength(1);
+    expect((JSON.parse(hits[0] ?? '{}') as { delivery?: string; body?: string }).delivery).toBe(`message ${ID} · delivery 1`);
+    // The history folder stands but takes no new number: nothing is posted, the record stays due.
+    const history = join(stampedFolder(at, 'iris'), EXPOSURES, ID);
+    chmodSync(history, 0o500);
+    cleanups.unshift(() => chmodSync(history, 0o700));
+    expect(await offer(ID)).toBeNull();
+    expect(hits).toHaveLength(1);
+    expect(copyHistory(dropDir, ID)).toMatchObject({ copies: 1 });
+    expect(resendCandidates(seatOf(at, dropDir, 'iris'), Date.now() + 61_000)).toEqual([ID]);
   });
 
   test('drop-only: an offer carries nothing, and the seat\'s own reads are copies 2 and 3; the ack ends it', async () => {
