@@ -17,7 +17,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { RUNTIME_FROM, writeRuntimeNotice } from '../../send/endpoint-notice.ts';
 import { cpus, loadavg } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { TeamFile } from '../../file/types.ts';
 import { logLine } from '../../log.ts';
 import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
@@ -26,9 +26,9 @@ import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
 import { archiveSeatInbox, listArchivedUnread, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
 import { isStampedPayload, readRecord, recordFile, sameFolder, stampedSettled, verifyRecord, type RecordPayload } from '../../send/record.ts';
 import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE } from '../../send/drop-folder.ts';
-import { createExclusive, removeDurable } from '../../queue/durable.ts';
+import { createExclusive, fsyncFolder, removeDurable } from '../../queue/durable.ts';
 import { messageKeyOf, signDomain, verifyDomain, type Json } from '../../store/keys.ts';
-import { readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fsyncSync, openSync, readdirSync, readFileSync } from 'node:fs';
 import type { KeyObject } from 'node:crypto';
 import { archiveLegacySeat, legacySeatFolders } from '../../send/legacy-inbox-retention.ts';
 import { heldAt } from '../../held.ts';
@@ -199,6 +199,8 @@ export function noticeBeforeMove(input: {
   home: string; root: string; session: string; seat: string; team: TeamFile; key: KeyObject; at: string;
   item: { id: string; undelivered?: { from: string; from_id: string | null } };
   agents?: readonly Agent[]; teamId?: string;
+  /** Test seam: the fsync of a file or folder (throws on failure). */
+  fsync?: (path: string, folder: boolean) => void;
 }): boolean {
   const from = input.item.undelivered?.from ?? 'unknown';
   const fromId = input.item.undelivered?.from_id ?? null;
@@ -216,8 +218,34 @@ export function noticeBeforeMove(input: {
   });
   if (!notice.ok) return false;
   const found = notice.payload;
-  return found.id === noticeId && found.to === to && found.session === session && sameFolder(found.root, input.root)
-    && found.from === RUNTIME_FROM && found.in_reply_to === input.item.id;
+  if (!(found.id === noticeId && found.to === to && found.session === session && sameFolder(found.root, input.root)
+    && found.from === RUNTIME_FROM && found.in_reply_to === input.item.id)) return false;
+  // The notice must be durable before the source may move (written now or reused): the notice file
+  // and its folder chain (seat, session, send-drops) are fsynced, and any failure holds the move.
+  const seatDir = join(input.root, '.agents', 'send-drops', session, to);
+  const path = recordFile(seatDir, noticeId);
+  const sync = input.fsync ?? ((target: string, folder: boolean) => {
+    if (folder) {
+      fsyncFolder(target);
+      return;
+    }
+    const fd = openSync(target, constants.O_RDONLY);
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  });
+  try {
+    sync(path, false);
+    sync(dirname(path), true);
+    if (dirname(path) !== seatDir) sync(seatDir, true);
+    sync(dirname(seatDir), true);
+    sync(dirname(dirname(seatDir)), true);
+  } catch {
+    return false;
+  }
+  return true;
 }
 
 /** A stable, UUID-shaped id for one message's not-delivered notice. */

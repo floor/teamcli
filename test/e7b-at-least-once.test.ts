@@ -626,3 +626,73 @@ describe('not-delivered notice before the move (replaces the archive reconcile)'
     expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker', undeliveredNoticeId(M1)))).toBe(false);
   });
 });
+
+describe('round 8 fixes', () => {
+  const launchedState = (at: At, seat: string, cli: number[] | null) => writeFileSync(join(at.root, '.agents', 'team.state.json'), JSON.stringify({
+    format: 1, sessions: { [SESSION]: { seats: { [seat]: { stage: 'ready', ...(cli === null ? {} : { launched: { shell: process.pid, cli } }) } } } },
+  }));
+  const scan = async (at: At) => {
+    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
+    return (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
+  };
+
+  test('a live, correctly signed earlier process does not vouch for a different current CLI', async () => {
+    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
+    const { processStartOf } = await import('../src/watch/pane.ts');
+    const at = place();
+    // The signed record names the parent process (alive, right start time); the seat now runs this one.
+    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    launchProven(at.root, at.home, SESSION, 'builder', process.ppid, processStartOf(process.ppid) as number);
+    launchedState(at, 'builder', [process.pid]);
+    const actors = await scan(at);
+    expect(actors).toMatchObject([{ kind: 'other', level: null }]);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
+  });
+
+  test('activation between L1 and L2, before any CLI is recorded, is refused', async () => {
+    const { launchPending } = await import('../src/queue/launch-level.ts');
+    const at = place();
+    launchedState(at, 'builder', null);
+    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    const actors = await scan(at);
+    expect(actors[0]?.name).toContain('managed launch in flight');
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
+  });
+
+  test('a malformed (null) launch record on an active root rolls the floor back to dark on disk', async () => {
+    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
+    const { processStartOf } = await import('../src/watch/pane.ts');
+    const { queuesFolder } = await import('../src/queue/floor.ts');
+    const at = place();
+    launchedState(at, 'builder', [process.pid]);
+    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    launchProven(at.root, at.home, SESSION, 'builder', process.pid, processStartOf(process.pid) as number);
+    expect(await scan(at)).toEqual([]);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+    writeFileSync(join(queuesFolder(at.root), 'launches', `${SESSION}.builder.json`), 'null\n');
+    const actors = await scan(at);
+    expect(checkActors(at.root, at.home, [daemon, ...actors]).kind).toBe('dark');
+    expect(floorState(at.root, at.home).kind).toBe('dark');
+  });
+
+  test('the notice must be durable before the source moves; a failed fsync holds it, a later pass moves it', async () => {
+    const { noticeBeforeMove } = await import('../src/daemon/chores/inbox-archive.ts');
+    const { acquireLockAt } = await import('../src/launch/seat-lock.ts');
+    const { queueBaseOf } = await import('../src/queue/append.ts');
+    const at = place();
+    activateRoot(at);
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeBeforeMove>[0]['team'];
+    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', team, key: key(at), at: new Date().toISOString(), item: { id: M1, undelivered: { from: 'worker', from_id: null } } };
+    expect(noticeBeforeMove({ ...input, fsync: () => { throw new Error('fsync failed'); } })).toBe(false);
+    // The notice's own queue lock is held: the notice is still written whole and made durable.
+    const bossDir = join(at.root, '.agents', 'send-drops', SESSION, 'boss');
+    const base = queueBaseOf(bossDir);
+    const lock = base === null ? null : acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    try {
+      expect(noticeBeforeMove(input)).toBe(true);
+    } finally {
+      if (lock !== null && 'release' in lock) lock.release();
+    }
+    expect(existsSync(join(bossDir, undeliveredNoticeId(M1)))).toBe(true);
+  });
+});

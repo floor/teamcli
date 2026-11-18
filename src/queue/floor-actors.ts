@@ -22,7 +22,7 @@ import { pidAlive, readListener } from '../mcp/inbox.ts';
 import { readDaemonState } from '../daemon/state.ts';
 import { readState } from '../state.ts';
 import { FLOOR_LEVEL, type FloorActor } from './floor.ts';
-import { launchLevelProves } from './launch-level.ts';
+import { launchLevelProves, launchPendingStands } from './launch-level.ts';
 import { processStartOf } from '../watch/pane.ts';
 
 function markerState(dropDir: string): 'absent' | 'unknown' | 'present' {
@@ -50,7 +50,7 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
   }
   const seen = new Set<string>();
   const unknown = (name: string, pid: number): void => { actors.push({ kind: 'other', name, pid, build: null, level: null }); };
-  const consider = (session: string, seat: string, launchedLive: boolean): void => {
+  const consider = (session: string, seat: string, launchedLive: boolean, currentCli: readonly number[] = []): void => {
     const name = `${session}/${seat}`;
     if (seen.has(name)) return;
     seen.add(name);
@@ -62,9 +62,23 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
     // CLI process (pid and start instant), so any inbox server it has came from this build or
     // later. Anything else (no record, a pending one, an older launch, another process) is unknown.
     if (marker === 'absent') {
+      // A managed launch in flight (L1 written, L2 not yet) is unknown, live CLI recorded or not.
+      let pending: boolean;
+      try {
+        pending = launchPendingStands(root, session, seat);
+      } catch {
+        pending = true;
+      }
+      if (pending) return unknown(`${name} (managed launch in flight, no inbox marker)`, 0);
       if (!launchedLive) return;
-      if (launchLevelProves(root, home, session, seat, FLOOR_LEVEL, { alive: pidAlive, startOf: processStartOf })) return;
-      return unknown(`${name} (live CLI, no inbox marker, no level-${String(FLOOR_LEVEL)} launch record)`, 0);
+      let proved: boolean;
+      try {
+        proved = launchLevelProves(root, home, session, seat, FLOOR_LEVEL, { alive: pidAlive, startOf: processStartOf }, currentCli);
+      } catch {
+        proved = false;
+      }
+      if (proved) return;
+      return unknown(`${name} (live CLI, no inbox marker, no level-${String(FLOOR_LEVEL)} launch record for it)`, 0);
     }
     const listener = readListener(dropDir);
     if (listener === null) return unknown(`${name} (unreadable marker)`, 0);
@@ -78,7 +92,7 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
   for (const [session, held] of Object.entries(state.sessions ?? {})) {
     for (const [seat, record] of Object.entries(held?.seats ?? {})) {
       const pids = record?.launched?.cli ?? [];
-      consider(session, seat, pids.some(pid => pidAlive(pid)));
+      consider(session, seat, pids.some(pid => pidAlive(pid)), pids);
     }
   }
   // Markers for seats the state does not record are actors too.

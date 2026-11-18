@@ -61,6 +61,9 @@ export function launchProven(root: string, home: string, session: string, seat: 
 export function launchLevelProves(
   root: string, home: string, session: string, seat: string, floor: number,
   probe: { alive(pid: number): boolean; startOf(pid: number): number | null },
+  /** The seat state's current CLI identity (`launched.cli`): the signed pid must be one of them,
+   *  so a surviving earlier process can never vouch for a later launch. */
+  currentCli: readonly number[],
 ): boolean {
   const path = recordPath(root, session, seat);
   if (path === null) return false;
@@ -72,13 +75,33 @@ export function launchLevelProves(
   } catch {
     return false;
   }
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) return false;
   const payload = record.payload;
-  if (!payload || payload.kind !== 'launch-level' || payload.v !== 1 || typeof record.signature !== 'string') return false;
+  if (!payload || typeof payload !== 'object' || payload.kind !== 'launch-level' || payload.v !== 1 || typeof record.signature !== 'string') return false;
   const key = messageKeyState(home);
   if (key.kind !== 'key' || !verifyDomain(LAUNCH_LEVEL_DOMAIN, payload as unknown as Json, record.signature, key.key)) return false;
   if (payload.root !== root || payload.session !== session || payload.seat !== seat) return false;
   if (payload.state !== 'proven' || !(payload.level >= floor)) return false;
   if (typeof payload.cli !== 'number' || typeof payload.cli_start !== 'number') return false;
+  if (!currentCli.includes(payload.cli)) return false;
   if (!probe.alive(payload.cli)) return false;
   return probe.startOf(payload.cli) === payload.cli_start;
+}
+
+/** Whether a pending launch record stands for the seat (L1 written, L2 not yet): an in-flight
+ *  managed launch, which the actor proof counts as unknown until it resolves. An unreadable or
+ *  malformed file counts as pending (fail closed). */
+export function launchPendingStands(root: string, session: string, seat: string): boolean {
+  const path = recordPath(root, session, seat);
+  if (path === null) return false;
+  const text = readFence(path);
+  if (text === '') return false;
+  if (text === null) return true;
+  try {
+    const record = JSON.parse(text) as { payload?: { state?: unknown } } | null;
+    if (record === null || typeof record !== 'object') return true;
+    return record.payload?.state !== 'proven';
+  } catch {
+    return true;
+  }
 }
