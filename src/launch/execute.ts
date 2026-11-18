@@ -1941,7 +1941,7 @@ export async function executePlan(
           // The seat's own process, read now that its idle prompt is on the screen: the pane's
           // shell and the pids in front of it that are not the shell. Nothing is recorded when
           // herdr can't tell: a seat without the record keeps today's behaviour.
-          const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
+          const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null, host.processStartOf ?? processStartOf);
           if (identity) {
             identities.set(op.seat, identity);
             const sessionId = liveSession(op.seat, here.pane, op.cli) ?? launchSessions.get(op.seat);

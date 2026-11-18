@@ -54,7 +54,7 @@ import { wakeStep } from '../send/steps.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
-import { leadAckReceiptAt } from '../send/record.ts';
+import { leadAckReceiptAt, recordStampAt, stampedSettled } from '../send/record.ts';
 import type { TypedWakeResult } from '../send/typed-wake.ts';
 import { markTaken } from '../send/taken.ts';
 import { verifiedPayloadOf, wakeTrigger } from '../send/wake.ts';
@@ -79,11 +79,15 @@ export type RetrySources = {
   /** The pane's process identity, as the send's typed leg reads it; null when herdr can't tell.
    *  A pane whose foreground is its own shell is not the seat, and no retry is typed there. */
   processes?(pane: string, session: string): PaneProcesses | null;
+  /** The fresh readings the shared typed path proves a pane's owner with, immediately before its
+   *  first key (src/watch/unread.ts `paneStillSeats`): herdr's agent list for the session, and a
+   *  process's start time. Absent (a test host), the path keeps its earlier checks. */
+  keyOwner?: { agents(session: string): { name: string; pane: string }[] | null; processes(pane: string, session: string): PaneProcesses | null; processStart(pid: number): number | null };
   /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the one seam
    *  through which the watch's unread pass types, and only for a seat whose profile declares
    *  `typed_wake` and whose retry is on. Absent, the pass keeps its drop-file typed leg, whose
    *  own writer refuses in every real binding. */
-  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean }): Promise<TypedWakeResult>;
+  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean; beforeEachKey?: () => boolean; reportLine?: true }): Promise<TypedWakeResult>;
 };
 
 export type RetryScene = {
@@ -117,6 +121,12 @@ export type RetryScene = {
   /** The channel's one redelivery over the socket: a push no receipt confirmed is written as a
    *  frame to the receiving session. Absent, the redelivery goes straight to the typed leg. */
   socketRedeliver?(dropDir: string, drop: PendingDrop): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** E7b (R3.4): the re-send scheduler's adapter. Offers one stamped, unsettled record of the seat
+   *  once more through the seat's current resolved delivery walk, whatever adapter it names, and
+   *  returns the leg that took it (null when none did). The walk types nothing: at its typed leg
+   *  it calls `typedRequest`, and the pass's own guarded typed wake carries the pointer. Absent,
+   *  the unread pass re-sends nothing. */
+  resendStamped?(seat: Seat, dropDir: string, id: string, typedRequest: () => boolean, startAfter?: 'typed'): Promise<string | null>;
   /** The event legs the seat's own resolved order permits a re-offer on (`permittedEventLegs`):
    *  the send walk's own answer, exclusions included. Absent, the unread pass re-offers nothing. */
   eventLegs?(seat: string): { channel: boolean; socket: boolean; why?: string };
@@ -779,6 +789,17 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
           });
         }
         scene.say(`${seat.name}: ${heldWords(drop)} was cleared by ${cleared.by}`, false);
+        return false;
+      }
+      // E7b: a stamped record is never on this ladder, neither retried nor given up on: the one
+      // re-send scheduler owes it (src/queue/resend.ts). Its marker is only cleaned up once the
+      // record is settled (its recipient's ack or reply, or a clearance).
+      if (recordStampAt(dropDir, drop.id) === true) {
+        const key = scene.home === undefined ? null : messageKeyState(scene.home);
+        if (key !== null && key.kind === 'key'
+          && stampedSettled(dropDir, drop.id, { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator }, key.key)) {
+          clearPending(dropDir, drop.id);
+        }
         return false;
       }
       if (claim === null || drop.from !== GENERAL_BRIEF_FROM) return true;

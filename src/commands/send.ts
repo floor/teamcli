@@ -1,4 +1,5 @@
-import { EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { TYPED_REQUESTED } from '../queue/resend.ts';
 import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
@@ -70,7 +71,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -518,6 +519,9 @@ export type SendHost = {
   daemon?: DaemonSendPrincipal;
   /** Optional process runner override for the `headless-resume` leg (`gemini` / `cursor-agent`). */
   headlessResumeSpawn?: HeadlessResumeSpawn;
+  /** The Codex native route a reply's (and a re-send's) walk takes. Absent (the real host), the
+   *  runtime's own route; a test hands in a queue that records what it was given. */
+  nativeRoute?: typeof deliverCodexNativeRoute;
   /** The two external private lists a public-only body is scanned against. Absent (the real
    *  host), the machine's default paths are read; a test hands in its own files, so no send
    *  touches the machine's lists. */
@@ -3857,9 +3861,13 @@ async function postSeatWebhook(
   team: TeamFile | null,
   project?: string,
   body?: string,
+  again = false,
+  delivery?: () => string | null,
 ): Promise<SenderPostOutcome> {
   try {
     return await postArrivalWebhook({
+      ...(again ? { again: true } : {}),
+      ...(delivery === undefined ? {} : { delivery }),
       seat,
       webhook,
       team,
@@ -5964,6 +5972,15 @@ export async function walkReplyDelivery(input: {
    *  resolved them from a signed binding: the socket leg then makes the same record check a
    *  send's own walk makes before it dials (running, same CLI, team, session and seat). */
   recipient?: { agentId: string; teamId: string };
+  /** The re-send scheduler's walk (E7b): the webhook posts again, and only a post this walk made
+   *  counts as the leg that took it. */
+  resend?: true;
+  /** The re-send scheduler's typed leg (E7b): at the typed position the walk types nothing and
+   *  asks the watch's own guarded typed wake instead; true ends the walk there. */
+  typedRequest?: () => boolean;
+  /** The re-send scheduler's continuation (E7b): the legs up to and including this one are not
+   *  walked again; the walk goes on from the leg after it (a typed request refused before any key). */
+  startAfter?: WalkLeg;
 }): Promise<ReplyWalkResult> {
   const seatName = input.seat;
   const from = input.payload.from;
@@ -6111,7 +6128,12 @@ export async function walkReplyDelivery(input: {
       return ended({ via: 'drop', walked: false, unconfirmed: false, summary: blocked.line });
     }
   }
+  let skipping = input.startAfter !== undefined && chosen.includes(input.startAfter);
   for (const [at, leg] of chosen.entries()) {
+    if (skipping) {
+      if (leg === input.startAfter) skipping = false;
+      continue;
+    }
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The marker beside the record
       // is what the watch reads when no receipt follows; a marker that never appears inside the
@@ -6161,7 +6183,13 @@ export async function walkReplyDelivery(input: {
       }
       // The reply's own write never posts an arrival, so a record already at the id is the
       // normal state here and no reason to skip the post: the claim decides who posts.
-      const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body);
+      // A re-send (E7b) posts again whatever an earlier post left: its claim, never the posted
+      // mark, decides who posts, and a mark from an earlier post is no delivery of this attempt.
+      // A stamped record's inbox-shaped body carries its numbered copy's header (E7b).
+      const delivery = isStampedPayload(input.payload)
+        ? () => { const n = takeCopyNumber(dropDir, msgId, 'webhook'); return n === null ? null : deliveryHeader(msgId, n); }
+        : undefined;
+      const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body, input.resend === true, delivery);
       const ms = input.host.now().getTime() - startedAt;
       if (posted.kind === 'posted') {
         return ended({ via: 'webhook', walked: true, unconfirmed: false, summary: `${seatName}: delivered (webhook, ${String(posted.ms)} ms)` });
@@ -6169,7 +6197,7 @@ export async function walkReplyDelivery(input: {
       if (posted.kind === 'unknown') {
         return ended({ via: 'webhook', walked: true, unconfirmed: true, summary: `${seatName}: sent (unconfirmed) (webhook, ${String(ms)} ms)` });
       }
-      if (posted.kind === 'none' && (posted.why === 'claim-held' || posted.why === 'already-posted')) {
+      if (posted.kind === 'none' && input.resend !== true && (posted.why === 'claim-held' || posted.why === 'already-posted')) {
         const postedAlready = posted.why === 'already-posted';
         return ended({
           via: 'webhook',
@@ -6223,6 +6251,11 @@ export async function walkReplyDelivery(input: {
       // declares none keeps the no-pane rule, and the walk goes on to the mailbox behind it.
       if (!walkingTyped || typedWake === null) {
         failures.push(`typed: ${NO_PANE_MESSAGING}`);
+        continue;
+      }
+      if (input.typedRequest !== undefined) {
+        if (input.typedRequest()) return ended({ via: 'typed', walked: true, unconfirmed: true, summary: `${seatName}: a typed wake was asked of the watch` });
+        failures.push('typed: the watch takes no typed wake for this seat now');
         continue;
       }
       const found = findAgent(input.host, input.session, seatName);
@@ -6298,7 +6331,7 @@ export async function walkReplyDelivery(input: {
             });
         // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
         const nativeBody = legBody(input.payload, input.host.home, 'native', dropDir);
-        const attempt = await deliverCodexNativeRoute(
+        const attempt = await (input.host.nativeRoute ?? deliverCodexNativeRoute)(
           {
             route: 'native',
             runtime: 'codex',
@@ -7020,6 +7053,93 @@ export async function redeliverChannelOnSocket(input: {
   );
   if (attempt.kind === 'delivered') return { ok: true };
   return { ok: false, reason: attempt.reason };
+}
+
+/**
+ * The re-send scheduler's adapter (rfc-event-comms E7b, R3.4; src/queue/resend.ts): one stamped,
+ * unsettled record offered once more through the receiving seat's current resolved delivery walk
+ * — the walk a reply and a client send take (`walkReplyDelivery`), with every leg's own rules: a
+ * Codex seat's native queue, the cross-session socket, the webhook (posted again), a headless
+ * resume, and the bus inbox under them. The watch binds the walk no pane writer: a re-send's typed
+ * wake is the watch's own guarded one (src/watch/unread.ts). Each leg that carries the body takes the next
+ * numbered copy itself (`legBody`, the socket frame); the drop leg carries nothing new, so a
+ * drop-only seat's next copy is its own next inbox read. The walk writes no second record (every
+ * leg finds the stored one at its id), waits for no receipt, and prints nothing; one history
+ * line names the leg that took the offer. Returns that leg, or null when none did.
+ */
+export async function resendStampedRecord(input: {
+  host: SendHost;
+  /** The receiving team's folder and root. */
+  dir: string;
+  root: string;
+  project: string;
+  session: string;
+  seat: string;
+  cli: string;
+  dropDir: string;
+  id: string;
+  /** The receiving team's file, for the walk's order and the display naming. */
+  team: TeamFile;
+  /** The typed leg's request to the watch's own guarded typed wake; absent, the typed leg is
+   *  passed over (this adapter never types). */
+  typedRequest?: () => boolean;
+  /** The walk goes on from the leg after this one (a typed request refused before any key). */
+  startAfter?: 'typed';
+}): Promise<string | null> {
+  const { dir, root, project, session, seat, cli, dropDir, id, team } = input;
+  const payload = verifiedPayloadOf(dropDir, id, input.host.home);
+  // The record must be bound to this checkout, seat and session: the message key is the home's,
+  // so a genuine record of another checkout could otherwise verify here under the same names.
+  if (payload === null || !isStampedPayload(payload) || payload.to !== seat || payload.session !== session || !sameFolder(payload.root, root)) return null;
+  // The offer waits for nothing: no receipt grace after a queue takes it, no channel push wait.
+  const host: SendHost = { ...input.host, inboxGraceMs: 0, channelGraceMs: 0 };
+  const quiet: Io = { stdout: () => {}, stderr: () => {}, cwd: root, env: {}, stdinIsTTY: false };
+  // The sender's team only when its signed agent id resolves; an unresolved sender is named by its
+  // signed spelling, never by a local seat or persona that shares the name.
+  const boundTeam = payload.from_id === null ? null : getAgent(host.home, payload.from_id)?.reach.team ?? null;
+  const fromTeam = boundTeam ?? teamIdOf(root);
+  const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: team });
+  const senderLabel = boundTeam === teamIdOf(root) && team.seats.some((one) => one.name === payload.from) ? labelNameOf(team, payload.from) : null;
+  const identityHeader = boundTeam === null ? payload.from : frameIdentityHeader(payload, naming, boundTeam, team.project, senderLabel);
+  const walk = await walkReplyDelivery({
+    io: quiet,
+    host,
+    dir,
+    root,
+    project,
+    session,
+    seat,
+    cli,
+    payload,
+    naming,
+    file: team,
+    sender: { teamId: fromTeam, project: team.project, label: senderLabel },
+    address: null,
+    who: 'watch',
+    identityHeader,
+    resend: true,
+    typedRequest: input.typedRequest ?? (() => false),
+    ...(input.startAfter === undefined ? {} : { startAfter: input.startAfter }),
+  });
+  const via = walk.walked && walk.via !== 'drop' && walk.endpointBlocked === undefined ? walk.via : null;
+  // A typed request is no re-send yet: the watch's typed wake records it once the pointer was
+  // typed, with its token; until then nothing is recorded and the record stays due.
+  if (via === 'typed') return TYPED_REQUESTED;
+  // A continuation after a refused typed request that no later leg took is withdrawn, not a re-send.
+  if (via === null && input.startAfter !== undefined) return null;
+  appendHistory(project, root, host.home, {
+    ts: host.now().toISOString(),
+    from: payload.from,
+    to: seat,
+    body: payload.body,
+    id: payload.id,
+    thread: payload.thread,
+    outcome: 'awaiting receipt',
+    note: via === null ? 'not acknowledged; re-send offered, no leg took it' : `not acknowledged; re-sent on the ${via}`,
+    ...(via === null ? {} : { via }),
+    ...(walk.failures.length > 0 ? { failed: [...walk.failures] } : {}),
+  });
+  return via;
 }
 
 /** The address this walk tries, read by the shared choice (`socketAddressOf`): the registry's

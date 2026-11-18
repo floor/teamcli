@@ -25,7 +25,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, evictHerdrAgentList, evictHerdrPaneProcessInfo, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Command, Io } from '../io.ts';
 import { isShellName } from '../launch/cli-scope.ts';
@@ -43,7 +43,8 @@ import { watchReadLimits, type ReadLimits } from '../watch/read-limits.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchRunning } from '../watch/pane.ts';
 import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand } from './up.ts';
-import { permittedEventLegs, realHost, redeliverChannelOnSocket, runSend } from './send.ts';
+import { processStartOf } from '../launch/codex-endpoint.ts';
+import { permittedEventLegs, realHost, redeliverChannelOnSocket, resendStampedRecord, runSend, type SendHost } from './send.ts';
 import type { PendingDrop } from '../send/pending.ts';
 import { realHost as realReplyHost, runReply } from './reply.ts';
 import { relayOutboxes } from '../send/confined-outbox.ts';
@@ -187,6 +188,8 @@ export type WatchSources = {
   /** The pane's process identity, compared with the one the state records for its seat; null
    *  when herdr can't tell. */
   processes?(pane: string, session: string): PaneProcesses | null;
+  /** The shared typed path's fresh owner readings (src/watch/retry.ts `RetrySources.keyOwner`). */
+  keyOwner?: { agents(session: string): { name: string; pane: string }[] | null; processes(pane: string, session: string): PaneProcesses | null; processStart(pid: number): number | null };
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
   /** One key, spelled as herdr spells it: a delivery that meets unsent text clears the box with
@@ -195,7 +198,7 @@ export type WatchSources = {
   /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the unread
    *  pass's one typing seam, reached only for a seat whose profile declares a typed wake and
    *  whose retry is on. The raw writers above stay refused. */
-  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean }): Promise<TypedWakeResult>;
+  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean; beforeEachKey?: () => boolean; reportLine?: true }): Promise<TypedWakeResult>;
   // Sleeps between the typing of the nudge and the read-back that decides the Enter — the
   // bounded draw wait the exit typing and delivery make (settleScreen). Required: a watch whose
   // delivery reads back the instant it typed, with nothing to wait on, is the fault itself.
@@ -455,6 +458,18 @@ export const realWatchSources: WatchSources = {
   foreground: (pane, session) => paneForeground(pane, session),
   foregroundAsync: async (pane, session, options) => foregroundArgv0(await paneProcessInfoAsync(pane, session, options)),
   processes: (pane, session) => paneProcesses(pane, session),
+  // Fresh, never the pass's cached snapshot: the typed path's proof at its first key.
+  keyOwner: {
+    agents: (session) => {
+      evictHerdrAgentList(session);
+      return agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane })) ?? null;
+    },
+    processes: (pane, session) => {
+      evictHerdrPaneProcessInfo(pane, session);
+      return paneProcesses(pane, session);
+    },
+    processStart: (pid) => processStartOf(pid),
+  },
   processesAsync: async (pane, session, options) => paneProcessesOf(await paneProcessInfoAsync(pane, session, options)),
   // No pane messaging: the watch never types a nudge or a reminder (src/send/no-pane-messaging.ts).
   // The one exception is the profile-gated typed wake below, whose own module reads the box
@@ -1972,6 +1987,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, nativeWorking: new Set(workingSinceNow.keys()),
               ...(mail === undefined ? {} : { mail }),
               socketRedeliver,
+              // E7b (R3.4): the re-send scheduler's adapter, the seat's own resolved walk. It binds
+              // no pane writer: at its typed leg it asks for the pass's own guarded typed wake
+              // (src/watch/unread.ts), which types the pointer only.
+              resendStamped: (seat: Seat, dropDir: string, id: string, typedRequest: () => boolean, startAfter?: 'typed') => {
+                const { typedWake: _unbound, ...rest } = realHost;
+                const host: SendHost = { ...rest, home: sources.home ?? realHost.home, now: sources.now };
+                return resendStampedRecord({ host, dir, root, project: team.project, session, seat: seat.name, cli: seat.cli, dropDir, id, team, typedRequest, ...(startAfter === undefined ? {} : { startAfter }) });
+              },
               eventLegs: (seat: string) => permittedEventLegs({ dir, root, home: sources.home ?? realHost.home, session, seat, team, now: sources.now }),
               // A hosted watch sends the unread-lead climb as the daemon's notice, like a prompt's.
               ...(hosted === undefined ? {} : {

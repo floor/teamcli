@@ -14,12 +14,14 @@
 // written is unknown, and no copy leaves (the record stays due; R2.2 X3 defer).
 //
 // Retry (R3.4): a stamped record that is not settled is due again once `backoff(n)` has passed
-// since its newest copy: 60 s, doubling, capped at 30 minutes, with no attempt limit. The legs'
-// own ladders (src/watch/unread.ts) and the channel server's redelivery pass ask `deliveryDue`.
+// since its newest attempt: 60 s, doubling, capped at 30 minutes, with no attempt limit and no
+// last day. The send's own delivery is the first attempt; each re-send attempt is reserved
+// durably beside the history (`.exposures/<id>/.attempt-<k>`) before it is dispatched, so two
+// hosts never dispatch the same attempt. One scheduler asks `resendDue` (src/queue/resend.ts).
 //
 // This module is inside the comms boundary: only the legs and the deliberate readers call it,
 // and no other module writes under `.exposures/` (test/handover-boundary.test.ts).
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createExclusive, ensureFolder } from './durable.ts';
 import { seatFolderOf } from '../send/drop-folder.ts';
@@ -27,7 +29,7 @@ import { seatFolderOf } from '../send/drop-folder.ts';
 export const EXPOSURES = '.exposures';
 
 /** The legs and readers a copy can leave through, as history names them. */
-export type CopyLeg = 'channel' | 'typed' | 'native' | 'socket' | 'read' | 'pointer';
+export type CopyLeg = 'channel' | 'typed' | 'native' | 'socket' | 'webhook' | 'read' | 'pointer';
 
 /** One name per number, whatever the leg (the leg is in the file): two legs that read the same
  *  history race for the same name, and exactly one of them wins it. */
@@ -96,13 +98,128 @@ export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs:
   return null;
 }
 
-/** Whether a stamped, unsettled record is due for another copy now. Unknown history is due (the
- *  caller's own take then refuses until the history reads again). */
-export function deliveryDue(dropDir: string, id: string, nowMs: number): boolean {
+/**
+ * The re-send scheduler's attempts at one message, beside its history: one dot-named file per
+ * attempt, `.attempt-<k>`, created exclusively and durably (file and folder fsync) immediately
+ * BEFORE the offer is dispatched, and never rewritten. Two hosts racing for the same due attempt
+ * both try `<k>`; exactly one creates it and dispatches, the other offers nothing. The outcome,
+ * when the offer returns, is a second file `.attempt-<k>.done` naming the copy it carried, if any.
+ * A dot name is never a numbered copy (`copyHistory` skips it).
+ */
+const ATTEMPT_NAME = /^\.attempt-([1-9][0-9]{0,8})$/;
+
+export type AttemptLedger = { attempts: number; lastMs: number | null };
+
+/** The scheduler's attempts so far and the newest one's time. A folder that cannot be listed is
+ *  no attempts; an attempt file that cannot be read counts with its file time. A withdrawn
+ *  attempt (`withdrawAttempt`: nothing left this process for it) counts for neither. */
+export function attemptLedger(dropDir: string, id: string): AttemptLedger {
+  const folder = historyFolder(dropDir, id);
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return { attempts: 0, lastMs: null };
+  }
+  let attempts = 0;
+  let lastMs: number | null = null;
+  const present = new Set(names);
+  for (const name of names) {
+    const match = ATTEMPT_NAME.exec(name);
+    if (match === null) continue;
+    if (present.has(`${name}.done`) && withdrawn(join(folder, `${name}.done`))) continue;
+    attempts += 1;
+    let at = Number.NaN;
+    try {
+      at = Date.parse((JSON.parse(readFileSync(join(folder, name), 'utf8')) as { at?: unknown }).at as string);
+    } catch {
+      // Read by its file time below.
+    }
+    if (!Number.isFinite(at)) {
+      try {
+        at = statSync(join(folder, name)).mtimeMs;
+      } catch {
+        continue;
+      }
+    }
+    if (lastMs === null || at > lastMs) lastMs = at;
+  }
+  return { attempts, lastMs };
+}
+
+/**
+ * Reserves the next attempt, durably, before its offer is dispatched. Null when a rival host took
+ * that attempt first, or when the history cannot be written: the caller offers nothing now (the
+ * record stays due, and a crash after this reservation still counts and spaces the attempt).
+ */
+export function reserveAttempt(dropDir: string, id: string, host: string, nowMs: number): number | null {
+  const folder = historyFolder(dropDir, id);
+  if (!ensureFolder(join(seatFolderOf(dropDir, id), EXPOSURES)) || !ensureFolder(folder)) return null;
+  const k = highestAttempt(folder) + 1;
+  const made = createExclusive(join(folder, `.attempt-${String(k)}`), `${JSON.stringify({ v: 1, k, host, at: new Date(nowMs).toISOString() })}\n`);
+  return made === 'created' ? k : null;
+}
+
+function withdrawn(path: string): boolean {
+  try {
+    return (JSON.parse(readFileSync(path, 'utf8')) as { withdrawn?: unknown }).withdrawn === true;
+  } catch {
+    return false;
+  }
+}
+
+/** The highest attempt number reserved, withdrawn ones included: a number is used once. */
+function highestAttempt(folder: string): number {
+  let highest = 0;
+  try {
+    for (const name of readdirSync(folder)) {
+      const match = ATTEMPT_NAME.exec(name);
+      if (match !== null && Number(match[1]) > highest) highest = Number(match[1]);
+    }
+  } catch {
+    // An unlistable folder: the exclusive create below refuses a taken number anyway.
+  }
+  return highest;
+}
+
+/** Withdraws attempt `k`: nothing left this process for it (a typed request whose pointer was
+ *  never typed), so it neither counts nor moves the clock, and the record stays due. Exclusive:
+ *  an attempt whose outcome is already noted is not withdrawn. */
+export function withdrawAttempt(dropDir: string, id: string, k: number): void {
+  createExclusive(join(historyFolder(dropDir, id), `.attempt-${String(k)}.done`), `${JSON.stringify({ v: 1, k, withdrawn: true })}\n`);
+}
+
+/** Records what attempt `k` carried: the copy number it took (null for none) and its leg. Best
+ *  effort and exclusive: the reservation alone already counts and spaces the attempt. */
+export function noteAttemptOutcome(dropDir: string, id: string, k: number, outcome: { copy: number | null; via: string | null; settled?: true }): void {
+  const folder = historyFolder(dropDir, id);
+  createExclusive(join(folder, `.attempt-${String(k)}.done`), `${JSON.stringify({ v: 1, k, ...outcome })}\n`);
+}
+
+/** Takes exactly delivery number `n` for one copy, durably: true only when this call created it
+ *  (a rival that took `n` first, or a history that cannot be written, takes nothing). For a copy
+ *  whose text already names its number, such as a re-send's typed pointer. */
+export function takeExactCopyNumber(dropDir: string, id: string, leg: CopyLeg, n: number, nowMs: number = Date.now()): boolean {
+  const folder = historyFolder(dropDir, id);
+  if (!ensureFolder(join(seatFolderOf(dropDir, id), EXPOSURES)) || !ensureFolder(folder)) return false;
+  return createExclusive(join(folder, String(n)), `${JSON.stringify({ v: 1, n, leg, at: new Date(nowMs).toISOString() })}\n`) === 'created';
+}
+
+/**
+ * Whether a stamped, unsettled record is due for another offer now (R3.4). The send's own
+ * delivery is attempt one; each scheduler attempt adds one, and a numbered copy (whoever took it:
+ * a leg of an attempt, or the seat's own read) only moves the clock, never the count. The wait is
+ * `backoffMs(1 + attempts)` from the newest of: the newest copy, the newest attempt, the record's
+ * arrival (`arrivedMs`). So copy 1 then an offer that carried nothing waits 120 s, and a crash
+ * after a reservation still spaces the next one.
+ */
+export function resendDue(dropDir: string, id: string, nowMs: number, arrivedMs: number | null): boolean {
   const seen = copyHistory(dropDir, id);
-  if (seen === 'unknown') return true;
-  if (seen.copies === 0 || seen.lastMs === null) return true;
-  return nowMs - seen.lastMs >= backoffMs(seen.copies);
+  const lastCopy = seen === 'unknown' ? null : seen.lastMs;
+  const ledger = attemptLedger(dropDir, id);
+  const times = [lastCopy, ledger.lastMs, arrivedMs].filter((one): one is number => one !== null);
+  if (times.length === 0) return true;
+  return nowMs - Math.max(...times) >= backoffMs(1 + ledger.attempts);
 }
 
 /** The header line every copy of a stamped record carries (R4.1). */

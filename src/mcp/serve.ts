@@ -33,7 +33,7 @@ import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { namingFor, senderDisplayName } from '../send/names.ts';
-import { alreadyReadSentence, isRecordSidecarName, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
+import { alreadyReadSentence, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -82,7 +82,8 @@ import {
 import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
-import { copyHistory, deliveryDue, FIRST_BACKOFF_MS, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { channelOwnsSeat, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { heldAt } from '../held.ts';
@@ -112,6 +113,8 @@ export type ServeOptions = {
   /** The no-bus inbox pass interval. The command leaves it unset. A scene sets it longer than
    *  its own stretch, so only the folder watch can deliver inside that stretch. */
   fallbackMs?: number;
+  /** The re-send scheduler's pass interval (E7b). The command leaves it unset (30 s). */
+  redeliverMs?: number;
 };
 
 /** Where the server reads the message key, and the build it stamps on its listener marker. The
@@ -428,13 +431,6 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   };
 }
 
-/**
- * rfc-event-comms E7b (R3.4): the records of one seat the channel offers again now. Every
- * verified, unsettled stamped record is a candidate, whether or not a push marker stands (a first
- * push that failed before its marker, an abort, a record primed by a restart). It is due when its
- * history says so (60 s doubling to 30 minutes after its newest copy); a record with no copy yet
- * waits one first backoff from its arrival, so the arrival's own push is not doubled.
- */
 /** The team's lead, for a clearance's authority (E7b); none when the team cannot be read. */
 function leadOf(serving: { loadTeam?: () => { orchestrator?: string | null } | null }): { lead?: string } {
   try {
@@ -443,39 +439,6 @@ function leadOf(serving: { loadTeam?: () => { orchestrator?: string | null } | n
   } catch {
     return {};
   }
-}
-
-export function channelRedeliveryDue(serving: Pick<Serving, 'dropDir' | 'seat' | 'root' | 'session' | 'home'> & { loadTeam?: Serving['loadTeam'] }, nowMs: number): string[] {
-  // E7b revision 3: stamped records sit in the seat's stamped folder; both folders are read.
-  const entries: { folder: string; name: string }[] = [];
-  for (const folder of seatListingDirs(serving.dropDir)) {
-    try {
-      for (const name of readdirSync(folder)) entries.push({ folder, name });
-    } catch {
-      // A folder that cannot be listed offers nothing this pass.
-    }
-  }
-  const state = messageKeyState(serving.home);
-  const key = state.kind === 'key' ? state.key : null;
-  const due: string[] = [];
-  for (const { folder: dropDir, name } of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
-    if (name.startsWith('.') || isRecordSidecarName(name) || !MESSAGE_ID.test(name)) continue;
-    if (recordStampAt(dropDir, name) !== true) continue;
-    if (key === null || stampedSettled(dropDir, name, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key)) continue;
-    if (!deliveryDue(dropDir, name, nowMs)) continue;
-    const history = copyHistory(dropDir, name);
-    if (history !== 'unknown' && history.copies === 0) {
-      let arrived: number;
-      try {
-        arrived = lstatSync(join(dropDir, name)).mtimeMs;
-      } catch {
-        continue;
-      }
-      if (nowMs - arrived < FIRST_BACKOFF_MS) continue;
-    }
-    due.push(name);
-  }
-  return due;
 }
 
 /**
@@ -889,26 +852,40 @@ function watchChannel(
   // the inbox is read whole only on the slow safety pass, for a sender that could not reach the bus.
   namesEvery();
   every(options.fallbackMs ?? CHANNEL_IDLE_MS);
-  // rfc-event-comms E7b (R3.4): every verified, unsettled stamped record of this seat stays due
-  // until its recipient acknowledges it, whether or not a push marker stands (a first push that
-  // failed before its marker, an abort, a record primed by a restart are all due). Each pass
-  // retires a due record's channel attempt (any markers move into its history) and pushes the next
-  // numbered copy. A record with no copy yet waits one first backoff from its arrival, so the
-  // arrival's own push is not doubled.
+  // rfc-event-comms E7b (R3.4): the one re-send scheduler (src/queue/resend.ts), run here for this
+  // server's one seat, because only this process can write to the seat's session. It offers only
+  // while the shared ownership rule gives the seat to this server (`channelOwnsSeat`: the seat's
+  // resolved walk takes the channel, and this listener is the live level-3 channel server); the
+  // watch offers otherwise. Each attempt is reserved durably and exclusively before it is
+  // dispatched, so the watch and this server never dispatch one attempt twice. An offer retires
+  // the record's channel attempt (any markers move into its history) and pushes the next numbered
+  // copy.
+  let resending = false;
+  const ownsSeat = async (): Promise<boolean> => {
+    const team = serving.loadTeam();
+    if (team === null) return false;
+    const { permittedEventLegs } = await import('../commands/send.ts');
+    const legs = permittedEventLegs({ dir: join(serving.root, '.agents'), root: serving.root, home: serving.home, session: serving.session, seat: serving.seat, team, now: () => new Date() });
+    return channelOwnsSeat({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, walkTakesChannel: legs.channel });
+  };
   const redeliverPass = (): void => {
-    if (halted()) return;
-    const nowMs = Date.now();
-    for (const name of channelRedeliveryDue(serving, nowMs)) {
-      // One record's failure (a frame write that throws) never stops the pass: the record stays
-      // due and the next pass offers it again.
-      try {
-        if (!retireChannelAttempt(seatFolderOf(serving.dropDir, name), name, nowMs)) continue;
+    if (halted() || resending) return;
+    const keyNow = messageKeyState(serving.home);
+    if (keyNow.kind !== 'key') return;
+    resending = true;
+    const seat = { dropDir: serving.dropDir, context: { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key: keyNow.key, agentsDir: join(serving.root, '.agents') };
+    void (async () => {
+      if (resendCandidates(seat, Date.now()).length === 0 || !(await ownsSeat())) return;
+      await resendPass(seat, Date.now(), async (name) => {
+        const folder = seatFolderOf(serving.dropDir, name);
+        if (!retireChannelAttempt(folder, name, Date.now())) return null;
         seen.delete(name);
         pushOne(name);
-      } catch {
-        seen.delete(name);
-      }
-    }
+        return channelNotified(folder, name) ? 'channel' : null;
+      }, 'channel');
+    })().catch(() => undefined).finally(() => {
+      resending = false;
+    });
   };
   redeliverTimer = setInterval(redeliverPass, options.redeliverMs ?? CHANNEL_REDELIVER_MS);
   // A dropped or absent bus is dialled again with a doubling wait, so a seat that fell back to
@@ -1918,6 +1895,7 @@ export async function runMcpServe(
   const stopChannel = channel
     ? watchChannel(serving, streams.write, notice, {
       ...(options.fallbackMs === undefined ? {} : { fallbackMs: options.fallbackMs }),
+      ...(options.redeliverMs === undefined ? {} : { redeliverMs: options.redeliverMs }),
     })
     : null;
   // The listener is published after the folder watch is armed, so a drop written when the

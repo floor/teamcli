@@ -9,9 +9,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readMessage } from '../src/mcp/inbox.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
-import { ackedFile, isRead, isStampedPayload, recordAuthOf, recordStampAt, signRecord, stampedPayload, type RecordPayload } from '../src/send/record.ts';
+import { ackedFile, isRead, isStampedPayload, recordAuthOf, recordStampAt, signRecord, stampedPayload, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { activate, checkActors, deactivate, floorState, queuesFolder, type FloorActor } from '../src/queue/floor.ts';
-import { backoffMs, copyHistory, deliveryDue, deliveryHeader, takeCopyNumber, unwrapCopy, wrapCopy, EXPOSURES } from '../src/queue/handover.ts';
+import { backoffMs, copyHistory, deliveryHeader, resendDue, takeCopyNumber, unwrapCopy, wrapCopy, EXPOSURES } from '../src/queue/handover.ts';
+import { seatMailDirIn } from '../src/queue/mail-tree.ts';
 import { exposeBody } from '../src/queue/exposure.ts';
 import { planSeatArchive } from '../src/send/inbox-retention.ts';
 import { seatRetired, undeliveredNoticeId } from '../src/daemon/chores/inbox-archive.ts';
@@ -44,6 +45,14 @@ function payloadOf(at: At, id: string): RecordPayload {
 function write(at: At, id: string): void {
   writeFileSync(join(at.dropDir, id), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, id), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
 }
+
+/** A stamped record through the record writer: it lands in the seat's stamped folder (revision 3). */
+function writeStamped(at: At, id: string): void {
+  const written = writeRecord(at.dropDir, signRecord(stampedPayload(payloadOf(at, id), at.home), at.home));
+  if (!written.ok) throw new Error(written.reason);
+}
+
+const stampedDir = (at: At): string => seatMailDirIn(join(at.root, '.agents'), SESSION, 'lead', 'stamped');
 
 const activateRoot = (at: At, actors: FloorActor[] = [daemon]) => activate(at.root, { home: at.home, build: 'b', actors: () => actors });
 const context = (at: At) => ({ to: 'lead', root: at.root, session: SESSION });
@@ -198,7 +207,7 @@ describe('numbered copies (R4.1)', () => {
     writeFileSync(join(at.dropDir, EXPOSURES, M1), 'not a folder\n');
     expect(copyHistory(at.dropDir, M1)).toBe('unknown');
     expect(takeCopyNumber(at.dropDir, M1, 'channel')).toBeNull();
-    expect(deliveryDue(at.dropDir, M1, Date.now())).toBe(true);
+    expect(resendDue(at.dropDir, M1, Date.now(), null)).toBe(true);
   });
 
   test('the header and ack line come off again for a body comparison', () => {
@@ -218,10 +227,10 @@ describe('retry: due from history, no attempt cap (R3.4)', () => {
 
   test('a record with no copy is due; one just sent is not; one past its backoff is again', () => {
     const at = place();
-    expect(deliveryDue(at.dropDir, M1, Date.now())).toBe(true);
+    expect(resendDue(at.dropDir, M1, Date.now(), null)).toBe(true);
     takeCopyNumber(at.dropDir, M1, 'channel');
-    expect(deliveryDue(at.dropDir, M1, Date.now())).toBe(false);
-    expect(deliveryDue(at.dropDir, M1, Date.now() + 61_000)).toBe(true);
+    expect(resendDue(at.dropDir, M1, Date.now(), null)).toBe(false);
+    expect(resendDue(at.dropDir, M1, Date.now() + 61_000, null)).toBe(true);
   });
 });
 
@@ -361,40 +370,38 @@ describe('code round 1 fixes', () => {
     expect(stampedPayload(brief, at.home).lvl).toBeUndefined();
   });
 
-  test('the channel offers again every due unsettled stamped record, marker or not', async () => {
-    const { channelRedeliveryDue } = await import('../src/mcp/serve.ts');
+  test('the re-send scheduler offers again every due unsettled stamped record, marker or not', async () => {
+    const { resendCandidates } = await import('../src/queue/resend.ts');
     const { channelAbortPath } = await import('../src/mcp/channel.ts');
     const at = place();
     activateRoot(at);
-    write(at, M1);
-    write(at, M2);
-    writeFileSync(channelAbortPath(at.dropDir, M2), `{"id":"${M2}"}\n`);
-    const serving = { dropDir: at.dropDir, seat: 'lead', root: at.root, session: SESSION, home: at.home };
-    // Just arrived, no copy yet: the arrival's own push is not doubled.
-    expect(channelRedeliveryDue(serving, Date.now())).toEqual([]);
-    // A minute on, both are due: M1 never pushed (its first history write failed, say), M2 aborted.
+    writeStamped(at, M1);
+    writeStamped(at, M2);
+    writeFileSync(channelAbortPath(stampedDir(at), M2), `{"id":"${M2}"}\n`);
+    const seat = { dropDir: at.dropDir, context: { ...context(at), lead: 'lead' }, key: key(at), agentsDir: join(at.root, '.agents') };
+    // Just arrived, no copy yet: the arrival's own delivery is not doubled.
+    expect(resendCandidates(seat, Date.now())).toEqual([]);
+    // A minute on, both are due: M1 never delivered (its first history write failed, say), M2 aborted.
     const later = Date.now() + 61_000;
-    expect(channelRedeliveryDue(serving, later).sort()).toEqual([M1, M2].sort());
+    expect(resendCandidates(seat, later).sort()).toEqual([M1, M2].sort());
     // A copy just taken is not due until its backoff; an acknowledged record is never due.
     takeCopyNumber(at.dropDir, M1, 'channel');
     read(at, M2, 'ack');
-    expect(channelRedeliveryDue(serving, Date.now() + 1_000)).toEqual([]);
-    expect(channelRedeliveryDue(serving, Date.now() + 61_000)).toEqual([M1]);
+    expect(resendCandidates(seat, Date.now() + 1_000)).toEqual([]);
+    expect(resendCandidates(seat, Date.now() + 61_000)).toEqual([M1]);
   });
 
-
-
   test('a stamped record with a plain (no reader word) read stays unsettled for the scheduler and retention', async () => {
-    const { channelRedeliveryDue } = await import('../src/mcp/serve.ts');
+    const { resendCandidates } = await import('../src/queue/resend.ts');
     const { signReceiptPayload, receiptFile, stampedSettled } = await import('../src/send/record.ts');
     const at = place();
     activateRoot(at);
-    write(at, M1);
+    writeStamped(at, M1);
     const plain = signReceiptPayload({ kind: 'receipt', status: 'read', id: M1, to: 'lead', root: at.root, session: SESSION, at: new Date().toISOString() }, at.home);
     writeFileSync(receiptFile(at.dropDir, M1, 'read'), `${JSON.stringify(plain, null, 2)}\n`, { mode: 0o600 });
     expect(stampedSettled(at.dropDir, M1, context(at), key(at))).toBe(false);
-    const serving = { dropDir: at.dropDir, seat: 'lead', root: at.root, session: SESSION, home: at.home };
-    expect(channelRedeliveryDue(serving, Date.now() + 61_000)).toEqual([M1]);
+    const seat = { dropDir: at.dropDir, context: context(at), key: key(at), agentsDir: join(at.root, '.agents') };
+    expect(resendCandidates(seat, Date.now() + 61_000)).toEqual([M1]);
     const planned = planSeatArchive(at.dropDir, 'lead', context(at), key(at), Date.parse('2026-12-30T00:00:00.000Z'), null, { unreadKeepMs: 14 * 86_400_000 });
     expect('move' in planned ? planned.move : null).toEqual([]);
     // The recipient's ack settles it.
