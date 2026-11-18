@@ -858,12 +858,12 @@ function paneStillSeats(scene: RetryScene, seatName: string, pane: string): bool
     const recorded = held.launched.cli;
     for (const pid of processes.foreground) {
       if (pid === processes.shell) continue;
-      const at = recorded.indexOf(pid);
-      if (at < 0 || owner.processStart(pid) !== starts[at]) return false;
+      if (!recorded.includes(pid)) return false;
     }
-    // The recorded CLI itself (the launch's first process beside the shell) must be in front:
-    // a recorded helper never counts on its own.
-    return processes.foreground.includes(recorded[0]!);
+    // The whole recorded set, each born when recorded: the record does not say which pid is the
+    // CLI (herdr's order is the process group's), so any missing member fails closed (`team
+    // doctor` names such a seat: "typed proof incomplete: relaunch").
+    return recorded.every((pid, at) => processes.foreground.includes(pid) && owner.processStart(pid) === starts[at]);
   } catch {
     return false;
   }
