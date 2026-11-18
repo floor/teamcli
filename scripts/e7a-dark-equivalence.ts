@@ -3,6 +3,7 @@
 import { cpSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const [src, work, homeTemplate] = process.argv.slice(2);
+if (src === undefined || work === undefined || homeTemplate === undefined) throw new Error('usage: bun scripts/e7a-dark-equivalence.ts <src dir> <work dir> <home template>');
 const root = join(work, 'project'); const home = join(work, 'home');
 mkdirSync(join(root, '.agents'), { recursive: true }); cpSync(homeTemplate, home, { recursive: true });
 const { signRecord } = await import(`${src}/send/record.ts`);
