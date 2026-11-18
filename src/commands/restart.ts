@@ -2280,7 +2280,6 @@ function hostOf(input: {
     seatStates: () => readState(dir).sessions[session]?.seats ?? null,
     ...(launch.codexThreadWait === undefined ? {} : {
       codexThreadFree: codexThreadFreeFor({ home: input.home, dir, wait: launch.codexThreadWait }),
-      launchLevelAt: { root: input.root, home: input.home },
     }),
     closeWorkspace: launch.closeWorkspace,
     stopSession: () => false,

@@ -1944,7 +1944,6 @@ function hostOf(input: {
       if (name !== seat.name) return null;
       return ceilingProblem(input.ceilings, running, seat, Boolean(temporary));
     },
-    launchLevelAt: { root: input.root, home: input.home },
     record(name, patch) {
       let replaced: string | undefined;
       updateState(dir, (file) => {

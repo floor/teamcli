@@ -385,22 +385,13 @@ describe('E6 body hand-over on the E5 read claim', () => {
 });
 
 describe('E6 activation against a pre-E6 inbox server', () => {
-  test('a live listener marker with no level (as 85f8d5351 writes it) refuses activation', () => {
-    const at = place();
-    writeFileSync(join(at.dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), version: '0.5.22', build: 'old' })}\n`);
-    const actors = liveFloorActors(at.root, at.home)!;
-    expect(actors.find(a => a.kind === 'inbox-server')).toMatchObject({ level: null });
-    const out = activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] });
-    expect(out.kind).toBe('refused');
-    expect(floorState(at.root, at.home).kind).toBe('dark');
-  });
-
-  test('E7b: the same marker at level 2 (an E7a listener) refuses activation; at level 3 the root activates', () => {
-    const at = place();
-    const marker = (level: number) => writeFileSync(join(at.dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), level })}\n`);
-    marker(2);
-    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...liveFloorActors(at.root, at.home)!] }).kind).toBe('refused');
-    marker(3);
-    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...liveFloorActors(at.root, at.home)!] }).kind).toBe('activated');
+  test('E7b revision 3: a live listener marker with no level (as 85f8d5351 writes it) or at level 2 is no actor; the daemon alone decides', () => {
+    for (const fields of [{ version: '0.5.22', build: 'old' }, { level: 2 }]) {
+      const at = place();
+      writeFileSync(join(at.dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), ...fields })}\n`);
+      const actors = liveFloorActors(at.root, at.home)!;
+      expect(actors.filter(a => a.kind !== 'daemon')).toEqual([]);
+      expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors.filter(a => a.kind !== 'daemon')] }).kind).toBe('activated');
+    }
   });
 });
