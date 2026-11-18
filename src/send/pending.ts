@@ -484,7 +484,7 @@ export function takePending(
   root: string,
   home: string,
   id: string,
-): { ok: true; taken: string } | { ok: false; reason: string } {
+): { ok: true; taken: string; stamped: boolean } | { ok: false; reason: string } {
   const path = pendingPath(project, root, home, id);
   const held = heldAt(path);
   if (held.kind === 'missing') return { ok: false, reason: 'no pending record holds that id; nothing was recorded' };
@@ -494,7 +494,9 @@ export function takePending(
   const taken = join(dirname(path), `.${id}.${String(process.pid)}.taken`);
   try {
     renameSync(path, taken);
-    return { ok: true, taken };
+    // E7b revision 3: the era of a handoff is the folder it was taken from, carried explicitly to
+    // every history line and record its completion writes; never looked up afterwards.
+    return { ok: true, taken, stamped: dirname(path) === nativePendingDir(root) };
   } catch {
     return { ok: false, reason: 'the pending record could not be taken; nothing was recorded' };
   }

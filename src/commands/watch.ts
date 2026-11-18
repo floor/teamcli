@@ -132,6 +132,7 @@ import {
   type StatusClimb,
 } from '../watch/status-events.ts';
 import { mailTreeIn, seatMailDirIn } from '../queue/mail-tree.ts';
+import { floorState } from '../queue/floor.ts';
 
 export {
   classifyPromptKind,
@@ -2900,7 +2901,7 @@ const relayRunning = new Set<string>();
 /** How often a hosted watch runs its seats' outbox requests, whatever its pass pace. */
 const RELAY_EVERY_MS = 3_000;
 
-async function relayConfinedOutboxes(
+export async function relayConfinedOutboxes(
   dir: string,
   root: string,
   home: string,
@@ -2942,6 +2943,12 @@ async function relayConfinedOutboxes(
         handoverOwner: owner,
         ...(protocol === 1 ? { legacyRelay: true as const } : {}),
       };
+      // E7b revision 3 (carrier 4): an older requester (outbox protocol 1) never settles mail on a
+      // root that is not proven dark: every ack and reply it relays is refused, whatever it names,
+      // with the one pointer to the installed command. A proven-dark root serves it as before.
+      if (protocol === 1 && (command === 'ack' || command === 'reply') && floorState(root, home).kind !== 'dark') {
+        return { code: 1, out: '', err: `team ${command}: ${protocol1Refusal(command)}\n` };
+      }
       let code: number;
       try {
         code = command === 'send'
@@ -2958,6 +2965,11 @@ async function relayConfinedOutboxes(
       return { code, out, err };
     },
   });
+}
+
+/** The one line an older requester's relayed ack or reply gets on a root not proven dark. */
+export function protocol1Refusal(command: 'ack' | 'reply'): string {
+  return `run the installed team ${command}: an older team ${command} is not relayed while this team's messages are stamped; nothing was written`;
 }
 
 /** Where a taken climb waits until it is sent or left in the runtime mailbox: one file per climb,

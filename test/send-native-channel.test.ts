@@ -6,8 +6,8 @@ import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // confirm line — and `team send --confirm <id>` writes the one history line. A sender that cannot
 // make the leg walks on to the inbox and the typed trigger. `--wait` to a Claude Code seat is
 // refused while the socket is not the channel. No live pane.
-import { afterEach, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
@@ -30,6 +30,9 @@ import type { RetryScene } from '../src/watch/retry.ts';
 import { dropNames, recordBody, testIo, wrapperPane, type TestIo } from './helpers.ts';
 import { NOW, dropDir, fake, filed, owner, scripted, world, type Fake, type World } from './send-native-fixtures.ts';
 import { withoutSendId } from './helpers/output.ts';
+import { activate, deactivate } from '../src/queue/floor.ts';
+import { forgetStampedIds, nativePendingDir, seatMailDirs } from '../src/queue/mail-tree.ts';
+import { level2Tree } from './e7a-fixture.ts';
 
 let cleanup: () => void = () => {};
 
@@ -1572,4 +1575,60 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
       ],
     },
   ]);
+});
+
+// E7b revision 3, code round 2: a handoff taken from the stamped tree is stamped by that origin
+// alone. Its completion (confirm, or expiry's fallback) writes a body-free history line after a
+// rollback to dark, in a process that remembers no stamp and with the canonical record moved out
+// of reach, and the real level-2 reader (E7a) reads no body.
+describe('revision 3: a stamped native handoff completed after a rollback', () => {
+  const daemonActor = { kind: 'daemon' as const, name: 'daemon', pid: 1, build: 'b', level: 3 };
+  async function handedThenRolledBack(made: World, host: Fake): Promise<void> {
+    expect(activate(made.root, { home: made.home, build: 'b', actors: () => [daemonActor] }).kind).toBe('activated');
+    expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+    expect(existsSync(join(nativePendingDir(made.root), `${ID}.json`))).toBe(true);
+    expect(deactivate(made.root, made.home).kind).toBe('dark');
+    // A fresh process: no stamp remembered, and the canonical stamped record out of reach.
+    forgetStampedIds();
+    const canonical = join(seatMailDirs(made.root, 'acme', 'lead').stamped, ID);
+    if (existsSync(canonical)) renameSync(canonical, join(made.root, `moved-${ID}`));
+  }
+  async function bodyFree(made: World): Promise<void> {
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    const line = history.entries.find((entry) => entry.id === ID);
+    expect(line).toMatchObject({ id: ID, body: '', stamped: true });
+    const e7a = level2Tree();
+    if (e7a !== null) {
+      const old = (await import(`${e7a}/send/history.ts`)).readHistory('acme', made.root, made.home);
+      expect(old.ok && old.entries.filter((entry: { id: string }) => entry.id === ID).map((entry: { body: string }) => entry.body)).toEqual(['']);
+    }
+  }
+
+  test('the real confirm writes a body-free line', async () => {
+    const made = nativeWorld();
+    cleanup = made.cleanup;
+    placeHelper(made);
+    writeFileSync(join(made.sockets, '222.sock'), '');
+    const host = fake(made, { native: scripted(['idle', 'working'], `Cross-session message [${NONCE}]: hello`), newId: () => ID });
+    await handedThenRolledBack(made, host);
+    expect(await runSend(['--confirm', ID], helperCaller(made.root), host)).toBe(0);
+    await bodyFree(made);
+  });
+
+  test('the real expiry and its fallback write body-free lines', async () => {
+    const made = nativeWorld();
+    cleanup = made.cleanup;
+    placeHelper(made);
+    writeFileSync(join(made.sockets, '222.sock'), '');
+    const host = fake(made, { native: scripted(['idle', 'working']), newId: () => ID, delivery: { seat: ['native', 'drop'] } });
+    await handedThenRolledBack(made, host);
+    const { scene } = watchScene(made, new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1));
+    await expirePendingNative(scene);
+    expect(existsSync(join(nativePendingDir(made.root), `${ID}.json`))).toBe(false);
+    await bodyFree(made);
+    // The fallback rebuilt the record with its stamp: it sits in the stamped tree, never the legacy one.
+    expect(existsSync(join(seatMailDirs(made.root, 'acme', 'lead').legacy, ID))).toBe(false);
+  });
 });

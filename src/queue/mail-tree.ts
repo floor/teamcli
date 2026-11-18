@@ -147,3 +147,8 @@ export function noteStampedId(id: string): void {
 export function stampedHereId(id: string): boolean {
   return stampedHere.has(id);
 }
+
+/** Test seam: forgets the ids this process stamped, as a freshly started process would. */
+export function forgetStampedIds(): void {
+  stampedHere.clear();
+}

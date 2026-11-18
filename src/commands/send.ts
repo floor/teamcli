@@ -4464,6 +4464,7 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
     ? { spec: record.spec, resolved: record.resolved }
     : {};
   const written = appendHistory(record.project, record.root, host.home, {
+    ...(taken.stamped ? { stamped: true as const } : {}),
     ts: host.now().toISOString(),
     from: record.from,
     to: record.to,

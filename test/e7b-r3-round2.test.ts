@@ -1,7 +1,7 @@
 // E7b revision 3, code round 1 findings:
 //   1. a stamped send never dials the daemon (the carrier is deleted, not guarded);
 //   2. a history line for a stamped message stays body-free after a rollback to dark;
-//   3. an older requester's (protocol 1) relayed ack or reply never settles a stamped message.
+//   3. an older requester's (protocol 1) relayed ack or reply is refused on a root not proven dark.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -18,6 +18,9 @@ import { writePending, type PendingNative } from '../src/send/pending.ts';
 import { signRecord, stampedPayload, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import { level2Tree } from './e7a-fixture.ts';
+import { world as nativeFixtureWorld } from './send-native-fixtures.ts';
+import { protocol1Refusal, relayConfinedOutboxes } from '../src/commands/watch.ts';
+import { updateState } from '../src/state.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase, gitEnv, shortSocketBase, testIo } from './helpers.ts';
 
@@ -219,51 +222,61 @@ describe('finding 2: the era rides with the message into history, not the floor 
   });
 });
 
-describe('finding 3: a protocol-1 relayed ack or reply never settles a stamped message', () => {
-  test('legacy mail is run; a stamped id is refused before anything runs, and no sidecar appears', async () => {
-    const base = fixtureBase('e7b-r3r2r-');
-    bases.push(base);
-    const root = join(base, 'project');
-    const home = join(base, 'home');
-    const dir = join(root, '.agents');
-    mkdirSync(join(dir, 'seat-state', SESSION, 'lead'), { recursive: true });
-    mkdirSync(home, { mode: 0o700 });
-    messageKeyOf(home);
-    const dirs = seatMailDirs(root, SESSION, 'lead');
+// Round 3 (coordinator's rule): a level-3 watch refuses every protocol-1 ack and reply on a root
+// not proven dark, with no id resolution; on a proven-dark root protocol 1 works as before.
+// Driven through the watch's real relay run (relayConfinedOutboxes, the real handlers behind it).
+describe('round 3: protocol-1 ack and reply through the real relay run', () => {
+  async function relayed(active: boolean, command: 'ack' | 'reply' = 'ack'): Promise<{ result: { code: number; err: string }; dirs: { legacy: string; stamped: string }; id: string; cleanup: () => void }> {
+    const made = nativeFixtureWorld(['typed']);
+    updateState(made.dir, (state) => {
+      state.sessions.acme = { seats: { helper: { stage: 'ready', pane: 'w1:p1' } }, worktrees: {} };
+    });
+    const loaded = loadTeamFile(made.root, { home: made.home });
+    if (!loaded.ok) throw new Error('the fixture team did not load');
+    if (active) expect(activate(made.root, { home: made.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+    const dirs = seatMailDirs(made.root, 'acme', 'helper');
     mkdirSync(dirs.legacy, { recursive: true, mode: 0o700 });
-    const plain = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e71';
-    const stampedId = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e72';
-    const message = (id: string, lvl?: 3): RecordPayload => ({ kind: 'message', id, to: 'lead', to_id: null, root, session: SESSION, at: new Date().toISOString(), body: SECRET, from: 'worker', from_id: null, rule: 'the owner', thread: id, ...(lvl === undefined ? {} : { lvl }) });
-    expect(writeRecord(dirs.legacy, signRecord(message(plain), home)).ok).toBe(true);
-    expect(writeRecord(dirs.legacy, signRecord(message(stampedId, 3), home)).ok).toBe(true);
-    const folder = outboxFolder(dir, SESSION, 'lead', 1)!;
+    const id = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e91';
+    const payload: RecordPayload = { kind: 'message', id, to: 'helper', to_id: null, root: made.root, session: 'acme', at: new Date().toISOString(), body: SECRET, from: 'lead', from_id: null, rule: 'the owner', thread: id };
+    expect(writeRecord(dirs.legacy, signRecord(active ? stampedPayload(payload, made.home) : payload, made.home)).ok).toBe(true);
+    const folder = outboxFolder(made.dir, 'acme', 'helper', 1)!;
     mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const ids: Record<string, [string, string[]]> = {
-      '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e81': ['ack', [plain]],
-      '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e82': ['ack', [stampedId]],
-      '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e83': ['reply', [stampedId, 'an answer']],
-      '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e84': ['reply', [plain, 'an answer']],
-    };
-    for (const [request, [command, argv]] of Object.entries(ids)) {
-      writeFileSync(join(folder, `${request}.request.json`), `${JSON.stringify({ v: 1, id: request, command, argv, cwd: root, seat: 'lead', session: SESSION, pane: 'pane-l', at: new Date().toISOString() })}\n`, { mode: 0o600 });
+    const request = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e92';
+    writeFileSync(join(folder, `${request}.request.json`), `${JSON.stringify({ v: 1, id: request, command, argv: command === 'ack' ? [id] : [id, 'an answer'], cwd: made.root, seat: 'helper', session: 'acme', pane: 'w1:p1', at: new Date().toISOString() })}\n`, { mode: 0o600 });
+    await relayConfinedOutboxes(made.dir, made.root, made.home, 'acme', loaded.team, [{ name: 'helper', pane: 'w1:p1' }], () => new Date());
+    const result = JSON.parse(readFileSync(join(folder, `${request}.result.json`), 'utf8')) as { code: number; err: string };
+    return { result, dirs, id, cleanup: made.cleanup };
+  }
+
+  test('on an active root a protocol-1 ack is refused with the pointer, and nothing is written', async () => {
+    const run = await relayed(true);
+    try {
+      expect(run.result.code).not.toBe(0);
+      expect(run.result.err).toContain(protocol1Refusal('ack'));
+      expect(readdirSync(run.dirs.stamped).filter((name) => name.startsWith(`${run.id}.`))).toEqual([]);
+      expect(existsSync(run.dirs.legacy) ? readdirSync(run.dirs.legacy).filter((name) => name.startsWith(run.id)) : []).toEqual([]);
+    } finally {
+      run.cleanup();
     }
-    const ran: { command: string; argv: string[]; protocol: OutboxProtocol }[] = [];
-    const sources: RelaySources = {
-      recordedPane: () => 'pane-l',
-      agents: () => [{ name: 'lead', pane: 'pane-l' }],
-      seal: () => true,
-      run: async (command, argv, _cwd, _caller, _persist, _owner, protocol) => { ran.push({ command, argv, protocol }); return { code: 0, out: '', err: '' }; },
-      now: () => new Date(),
-      log: () => {},
-    };
-    for (let pass = 0; pass < 3; pass += 1) await relayOutboxes(dir, SESSION, ['lead'], sources);
-    expect(ran.map((one) => `${one.command} ${one.argv[0]}`).sort()).toEqual([`ack ${plain}`, `reply ${plain}`]);
-    for (const request of ['7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e82', '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e83']) {
-      const result = JSON.parse(readFileSync(join(folder, `${request}.result.json`), 'utf8')) as { code: number; err: string };
-      expect(result.code).not.toBe(0);
-      expect(result.err).toContain('a stamped message: run the installed team');
+  });
+
+  test('on a proven-dark root a protocol-1 ack runs the real handler as before', async () => {
+    const run = await relayed(false);
+    try {
+      expect(run.result.err).not.toContain(protocol1Refusal('ack'));
+    } finally {
+      run.cleanup();
     }
-    // The stamped record stays due: nothing settles it.
-    expect(readdirSync(dirs.stamped).filter((name) => name.startsWith(`${stampedId}.`))).toEqual([]);
+  });
+
+  test('on an active root a protocol-1 reply is refused with the pointer, and nothing is written', async () => {
+    const run = await relayed(true, 'reply');
+    try {
+      expect(run.result.code).not.toBe(0);
+      expect(run.result.err).toContain(protocol1Refusal('reply'));
+      expect(readdirSync(run.dirs.stamped).filter((name) => name.startsWith(`${run.id}.`))).toEqual([]);
+    } finally {
+      run.cleanup();
+    }
   });
 });
