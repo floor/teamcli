@@ -846,9 +846,12 @@ function paneStillSeats(scene: RetryScene, seatName: string, pane: string): bool
     if (seatProcessVerdict(held.launched, processes) !== 'same') return false;
     if (owner.processStart(processes.shell) !== held.pane_shell_start) return false;
     // The CLI in front is the recorded one by its birth too, not only its pid: a pid reused under
-    // the same shell is not the launch. A launch record without CLI start times proves nothing.
+    // the same shell is not the launch. A seat launched before the CLI's start time was recorded
+    // keeps the older proof (the pane, the seats on it, the shell pid and its start, a recorded
+    // CLI pid in front) until it is relaunched; `team doctor` names it.
     const starts = held.launched.cli_start;
-    if (starts === undefined || starts.length !== held.launched.cli.length) return false;
+    if (starts === undefined) return true;
+    if (starts.length !== held.launched.cli.length) return false;
     const front = held.launched.cli.findIndex((pid) => processes.foreground.includes(pid));
     if (front < 0) return false;
     return owner.processStart(held.launched.cli[front]!) === starts[front];

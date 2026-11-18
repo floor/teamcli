@@ -590,6 +590,15 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
       });
       continue;
     }
+    // The launch recorded the process but not its CLI's start time (a launch before E7b's re-send
+    // fix): the watch's typed wake proves the pane by the older check (pane, shell pid and start,
+    // a recorded CLI pid in front) until the seat is relaunched, which records the CLI's start.
+    if (held.launched.cli_start === undefined) {
+      findings.push({
+        level: 'note',
+        text: `${seat.name}: launched before team recorded its CLI's start time; typed wakes use the older pane proof until it is relaunched`,
+      });
+    }
     // The launch recorded the process and not the seat's id, so the registry row shows `-` where
     // the id goes. `team register` writes the id from the same reads, with nothing relaunched.
     if (held.id === undefined) {
