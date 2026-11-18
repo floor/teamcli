@@ -1,4 +1,5 @@
-import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
@@ -3917,7 +3918,7 @@ async function postArrivalNow(
  * The event is a record, never a delivery fact: an append that cannot be written is logged and
  * changes nothing about the send.
  */
-async function stageSendRecord(
+export async function stageSendRecord(
   dropDir: string,
   payload: RecordPayload,
   home: string,
@@ -3943,6 +3944,12 @@ async function stageSendRecord(
   const { value: staged } = await appendDelivery(
     { dropDir, record: signed },
     async () => {
+      // E7b: a stamped record's era evidence (its delivery-history folder) stands, durably, before
+      // the record is published, on the queued path and the queue-skip fallback alike (this is the
+      // one writer both run), so no receipt can ever stand on it without the strict rule.
+      if (isStampedPayload(signed.payload) && !ensureFolder(join(dropDir, EXPOSURES, payload.id))) {
+        return { ok: false, value: { outcome: 'refused' as const, reason: 'the delivery history folder could not be made durable' } };
+      }
       const result = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
       return { ok: result.outcome !== 'refused', value: result };
     },

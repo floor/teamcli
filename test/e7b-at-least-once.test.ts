@@ -616,3 +616,56 @@ describe('the actor proof counts long-lived readers and carriers only (coordinat
     expect(await actorsOf(at)).toMatchObject([{ kind: 'inbox-server', level: 3 }]);
   });
 });
+
+describe('round 5 and 6 fixes', () => {
+  const plain = async (at: At, id: string) => {
+    const { signReceiptPayload, receiptFile } = await import('../src/send/record.ts');
+    writeFileSync(receiptFile(at.dropDir, id, 'read'), `${JSON.stringify(signReceiptPayload({ kind: 'receipt', status: 'read', id, to: 'lead', root: at.root, session: SESSION, at: new Date().toISOString() }, at.home), null, 2)}\n`, { mode: 0o600 });
+  };
+
+  test('the ordinary staged send writes the era folder before the record: a plain read never hides it', async () => {
+    const { stageSendRecord } = await import('../src/commands/send.ts');
+    const { listUnread } = await import('../src/mcp/inbox.ts');
+    const at = place();
+    activateRoot(at);
+    const staged = await stageSendRecord(at.dropDir, stampedPayload(payloadOf(at, M1), at.home), at.home, () => new Date(), 'acme');
+    expect(staged.ok).toBe(true);
+    expect(existsSync(join(at.dropDir, EXPOSURES, M1))).toBe(true);
+    await plain(at, M1);
+    expect(listUnread(at.dropDir, context(at), at.home).map((m) => m.id)).toEqual([M1]);
+  });
+
+  test('a verifying notice for another checkout at the notice id does not retire the obligation', async () => {
+    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
+    mkdirSync(archived, { recursive: true, mode: 0o700 });
+    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
+    const bossDir = join(at.root, '.agents', 'send-drops', SESSION, 'boss');
+    mkdirSync(bossDir, { recursive: true });
+    const elsewhere = signRecord({ kind: 'message', id: undeliveredNoticeId(M1), to: 'boss', to_id: null, root: '/another/checkout', session: SESSION, at: new Date().toISOString(), body: `not delivered: ${M1}`, from: 'runtime', from_id: null, rule: "the team's unread-message report", thread: undeliveredNoticeId(M1) }, at.home);
+    writeFileSync(join(bossDir, undeliveredNoticeId(M1)), `${JSON.stringify(elsewhere, null, 2)}\n`, { mode: 0o600 });
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
+    noticeUndelivered({ home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString() });
+    expect(existsSync(join(archived, `${M1}.noticed`))).toBe(false);
+  });
+
+  test('a genuine mark copied beside another archived record does not hold for it', async () => {
+    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
+    mkdirSync(archived, { recursive: true, mode: 0o700 });
+    for (const id of [M1, M2]) writeFileSync(join(archived, id), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, id), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
+    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString(), limit: 1 };
+    const { noticeUndeliveredFrom } = await import('../src/daemon/chores/inbox-archive.ts');
+    noticeUndeliveredFrom(input); // M1 (first in order) gets its notice and its mark
+    const first = [M1, M2].sort()[0] as string;
+    const second = [M1, M2].sort()[1] as string;
+    writeFileSync(join(archived, `${second}.noticed`), readFileSync(join(archived, `${first}.noticed`)));
+    expect(noticeUndelivered({ ...input, limit: 200 })).toBe(1);
+    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(second)))).toBe(true);
+  });
+});
