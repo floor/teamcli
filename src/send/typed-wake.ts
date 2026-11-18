@@ -395,7 +395,10 @@ export async function deliverLeadTypedWake(
       return { delivered: false, typed: false, tries: 0, reason: `the box did not empty; ${note}; the wake line was not typed` };
     }
   }
-  const result = await deliverTypedWake(host, pane, line, cli, options);
+  // The host is fenced once above, for the draft keys and the wake alike: the inner wake gets no
+  // second fence, so the one-shot step runs once and the per-key proof once per key.
+  const { beforeFirstKey: _first, beforeEachKey: _each, ...inner } = options;
+  const result = await deliverTypedWake(host, pane, line, cli, inner);
   if (draft !== null) {
     const restored = await restoreDraft(host, pane, cli, line, draft, options);
     if (restored.note !== null) {
