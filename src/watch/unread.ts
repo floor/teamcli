@@ -47,6 +47,7 @@ import { recordStampAt } from '../send/record.ts';
 // over and never reported over. A delivery the seam itself says took nothing (`held`,
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
+import { readTeamConfig } from '../file/team-config.ts';
 import { existingRecordIdsIn, shortIdPrefix } from '../send/frame.ts';
 import { typedWakeMaxFor } from '../send/readable-wake.ts';
 import { floorState, socketSuppressed } from '../queue/floor.ts';
@@ -107,7 +108,7 @@ import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus,
 import { climbUnreadLead } from './status-events.ts';
 import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutcome } from '../queue/wake-attempt.ts';
 import { floorPass } from '../queue/floor.ts';
-import { channelOwnsSeat, channelUnproven, claudeAdapterRoot, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
+import { channelOwnsSeat, channelUnproven, claudeAdapterRoot, overdueChannelRecords, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
 import { copyHistory, noteAttemptOutcome, takeExactCopyNumber, withdrawAttempt } from '../queue/handover.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
@@ -809,12 +810,19 @@ async function resendStampedDrops(scene: RetryScene, seat: Seat, key: KeyObject,
   // pointer, which this pass's guarded typed wake types. No walk is asked.
   if (scene.home !== undefined && claudeAdapterRoot(seat.cli, scene.root, scene.home, seat.webhook !== undefined)) {
     const unproven = (): boolean => channelUnproven({ dropDir, root: scene.root, session: scene.session, seat: seat.name, context, key, nowMs }) !== null;
-    if (!unproven()) return requested;
-    // No pointer is reserved for a protected pane (its declared order leaves `typed` out; a
-    // person's pane), nor on a floor that does not read active now: the record waits for its
-    // hook or a pull, and `team doctor` names the seat as waiting.
+    // No pointer is reserved for a protected pane (a person's pane, a lead whose declared order
+    // does not name `typed`, any seat whose order leaves it out), nor on a floor that does not
+    // read active now: the record waits for its hook or a pull, and `team doctor` names it.
     if (legs?.pointer !== true || !floorActive(scene.root, scene.home)) return requested;
-    const results = await resendPass({ dropDir, context, key, agentsDir: scene.dir, unproven }, nowMs, async (id) => {
+    // A proven seat's new traffic is its channel server's; a record whose channel offer went
+    // overdue is still owed a pointer until it settles, whatever proves the channel since.
+    let only: ReadonlySet<string> | undefined;
+    if (!unproven()) {
+      const overdue = overdueChannelRecords({ dropDir, context, key, nowMs });
+      if (overdue === 'unreadable' || overdue.size === 0) return requested;
+      only = new Set(overdue.keys());
+    }
+    const results = await resendPass({ dropDir, context, key, agentsDir: scene.dir, unproven, ...(only === undefined ? {} : { only }) }, nowMs, async (id) => {
       release(wakePath(dropDir, id));
       return TYPED_REQUESTED;
     }, 'watch');
@@ -1421,10 +1429,25 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           continue;
         }
         const typedLine = handle !== null && gate.create === 'enforce' ? `${line} ${tokenText(handle.attempt.token)}` : line;
+        // An adapter pointer reads the seat's protection again before every key, from the team
+        // file as it stands now (never the pass's copy): a pane protected since the reservation
+        // takes no key.
+        const legsNow = adapterPointer ? (await import('../commands/send.ts')).permittedEventLegs : null;
+        const pointerPermittedNow = (): boolean => {
+          if (legsNow === null) return true;
+          try {
+            const loaded = readTeamConfig(scene.root, { home });
+            if (!loaded.ok) return false;
+            return legsNow({ dir: scene.dir, root: scene.root, home, session: scene.session, seat: seat.name, team: loaded.team, now: () => new Date() }).pointer === true;
+          } catch {
+            return false;
+          }
+        };
         // The shared typed path's proof before every key; the pointer's number and the attempt's
-        // `emitted` before the first. An adapter pointer also asks the floor again at every key.
+        // `emitted` before the first. An adapter pointer also asks the floor and its protection
+        // again at every key, under the seat lock this pass holds.
         const typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, {
-          beforeEachKey: () => paneStillSeats(scene, seat.name, pane) && (!adapterPointer || floorActive(scene.root, home)),
+          beforeEachKey: () => paneStillSeats(scene, seat.name, pane) && (!adapterPointer || (floorActive(scene.root, home) && pointerPermittedNow())),
           beforeFirstKey: () => (handle === null || handle.emit()) && takePointer(),
           reportLine: true,
         });

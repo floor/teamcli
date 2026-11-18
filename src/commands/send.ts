@@ -1,4 +1,5 @@
 import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { isLeadSeat } from '../file/sections/lead.ts';
 import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
 import { withSignedIdentity } from '../comms/identity.ts';
 import { claudeAdapterRoot, TYPED_REQUESTED } from '../queue/resend.ts';
@@ -7015,8 +7016,10 @@ export function permittedEventLegs(input: {
   });
   if (plan.human) return { channel: false, socket: false, pointer: false, why: 'its pane is a human\'s' };
   // A declared order that names no `typed` word keeps every key out of the pane: the owner's
-  // pane, and any pane its file protects, waits for its hook or a pull.
-  const pointer = !plan.declaredOrder || plan.ordered.includes('typed');
+  // pane, and any pane its file protects, waits for its hook or a pull. A lead's pane (the
+  // orchestrator's or the operator's, where the owner may sit) takes a pointer only when its
+  // declared order names `typed`: with no order, the lead is protected (fail closed).
+  const pointer = plan.declaredOrder ? plan.ordered.includes('typed') : !isLeadSeat(input.team, input.seat);
   return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket'), pointer };
 }
 

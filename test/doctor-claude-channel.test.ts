@@ -34,8 +34,8 @@ let base: string;
 let root: string;
 let home: string;
 
-function teamText(leadLaunch = 'claude', workerLabel = ''): string {
-  return `format: 1
+function teamText(leadLaunch = 'claude', workerLabel = '', order = 'delivery_order: [typed, drop]\n'): string {
+  return `${order}format: 1
 project: acme
 coordinator: lead
 operator: lead
@@ -157,6 +157,13 @@ describe('team doctor on an active root: unproven Claude seats and stale pairs',
     pair(['/opt/team/dist/cli.js', 'mcp', 'serve', '--seat', 'lead', '--session', SESSION]);
     prove('lead', listen('lead'));
     const out = await doctor();
+    expect(out).not.toContain('lead: no proven channel');
+  });
+
+  test('a lead with no declared order is a protected pane: named as waiting, not warned', async () => {
+    activateRoot();
+    const out = await doctor(teamText('claude', '', ''));
+    expect(out).toContain('lead: waiting: protected pane, no proven channel');
     expect(out).not.toContain('lead: no proven channel');
   });
 

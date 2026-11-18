@@ -14,11 +14,10 @@
 import { randomBytes } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
 import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createExclusive } from '../queue/durable.ts';
-import { offeredCopies } from '../queue/handover.ts';
+import { offeredCopies, readRegularNoFollow, realFolder } from '../queue/handover.ts';
 import { twinsOf } from '../queue/mail-tree.ts';
-import { readNoFollow } from '../send/history.ts';
 import { sameFolder } from '../send/record.ts';
 import { signDomain, verifyDomain } from '../store/keys.ts';
 import type { Json } from '../store/keys.ts';
@@ -89,6 +88,8 @@ export function proveOffer(dropDir: string, id: string, token: unknown, listener
 export function offerAcks(dropDir: string, listenerKey: string, binding: OfferBinding): OfferAck[] {
   const folder = offerAckFolder(dropDir, listenerKey);
   if (folder === null) return [];
+  // Confined to the seat's stamped folder: the log and its parent are real folders, not links.
+  if (!realFolder(dirname(folder)) || !realFolder(folder)) return [];
   let names: string[];
   try {
     names = readdirSync(folder);
@@ -98,7 +99,7 @@ export function offerAcks(dropDir: string, listenerKey: string, binding: OfferBi
   const out: OfferAck[] = [];
   for (const name of names) {
     if (name.startsWith('.')) continue;
-    const text = readNoFollow(join(folder, name));
+    const text = readRegularNoFollow(join(folder, name));
     if (text === null) continue;
     try {
       const parsed = JSON.parse(text) as { payload?: ProofPayload; signature?: unknown };

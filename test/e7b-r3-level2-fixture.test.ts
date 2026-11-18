@@ -12,13 +12,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { activate, type FloorActor } from '../src/queue/floor.ts';
 import { listUnread, readMessage } from '../src/mcp/inbox.ts';
-import { signRecord, stampedPayload, writeRecord, type RecordPayload } from '../src/send/record.ts';
+import { leadAckReceiptAt, signRecord, stampedPayload, stampedSettlement, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { messageKeyOf, messageKeyState } from '../src/store/keys.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { recordChannelAbort } from '../src/mcp/channel.ts';
 import { markPending } from '../src/send/pending.ts';
 import { seatMailDirs } from '../src/queue/mail-tree.ts';
 import { signedIdentityOf, SIGN_FROM_IDENTITY, withSignedIdentity } from '../src/comms/identity.ts';
+import { clearedAt } from '../src/watch/retry.ts';
 
 const SESSION = 'acme';
 const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
@@ -182,4 +183,26 @@ describe.skipIf(installed === null)('round 1: the installed level-3 build (68286
     expect(floor.deactivate(at.root, at.home).kind).toBe('dark');
     expect(inbox.listUnread(at.legacy, context(at), at.home, undefined, undefined, { legacy: 'include' }).map((message: { id: string }) => message.id)).toContain(ID);
   });
+});
+
+describe.skipIf(installed === null)('round 2: a clearance after a copy, read by this build and by the installed one', () => {
+  for (const actor of ['owner', 'lead']) {
+    test(`${actor}: this build reports cleared by ${actor}; the installed level-3 reader reads it settled`, async () => {
+      const at = place();
+      expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+      expect(writeRecord(at.legacy, signRecord(stampedPayload(payloadOf(at, ID), at.home), at.home)).ok).toBe(true);
+      // A copy first: the seat read it.
+      expect(readMessage(target(at), ID, at.home).ok).toBe(true);
+      const state = messageKeyState(at.home);
+      if (state.kind !== 'key') throw new Error('no key');
+      const ctx = { ...context(at), lead: 'lead' };
+      expect(publishRecordRead({ dropDir: at.legacy, id: ID, to: 'lead', root: at.root, session: SESSION, home: at.home, key: state.key, at: new Date().toISOString(), readBy: `lead-ack:${actor}`, lead: 'lead' }).kind).toBe('published');
+      expect(stampedSettlement(at.stamped, ID, ctx, state.key)).toEqual({ kind: 'cleared', by: actor });
+      expect(leadAckReceiptAt(at.stamped, ID, ctx, state.key)?.by).toBe(actor);
+      // The watch's promotion asks the same lookup before any generic read.
+      expect(clearedAt({ home: at.home, root: at.root, session: SESSION, team: { orchestrator: 'lead' } as never }, at.legacy, ID, 'lead')?.by).toBe(actor);
+      const old = await import(`${installed}/send/record.ts`);
+      expect(old.stampedSettled(at.stamped, ID, ctx, state.key)).toBe(true);
+    });
+  }
 });

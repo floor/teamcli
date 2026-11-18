@@ -362,8 +362,8 @@ describe('round 1: a protected pane (its declared order leaves typed out) takes 
 });
 
 describe('round 1: a lead\'s pointer goes through the guarded typed seam', () => {
-  test('an unproven idle lead gets the pointer from the seam; the raw writers stay closed', async () => {
-    const at = place();
+  test('an unproven idle lead whose order names typed gets the pointer from the seam; the raw writers stay closed', async () => {
+    const at = place([], ['typed', 'drop']);
     stampedTo(at, 'lead', ID, null);
     const lines: string[] = [];
     // `pass` binds raw writers that throw: the pointer can only arrive through the seam.
@@ -475,5 +475,51 @@ describe('round 1: --wait reports a clearance and waits behind a busy seat', () 
     } finally {
       lock.release();
     }
+  });
+});
+
+describe('round 2: protection fails closed and is read again at every key', () => {
+  test('a lead with no declared order (the owner\'s pane unmarked) takes zero keys', async () => {
+    const at = place();
+    stampedTo(at, 'lead', ID, null);
+    const lines: string[] = [];
+    await wakeUnreadDrops(pass(at, new Date(Date.now() + 31 * 60_000), lines, { seat: 'lead' }), { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+  });
+
+  test('a pane protected between the reservation and the first key takes no key', async () => {
+    const at = place();
+    stamped(at, ID);
+    const lines: string[] = [];
+    const scene = pass(at, new Date(Date.now() + 1_000), lines);
+    const seamNow = scene.sources.typedWake!;
+    scene.sources.typedWake = async (pane, line, cli, session, options) => {
+      const file = join(at.dir, 'team.yaml');
+      writeFileSync(file, `${readFileSync(file, 'utf8')}delivery_order: [drop]\n`);
+      return seamNow(pane, line, cli, session, options);
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+  });
+});
+
+describe('round 2: an overdue record stays owed a pointer when another message proves the channel', () => {
+  test('the first notification is lost, the second is token-acked before the first deadline; the first still gets its pointer', async () => {
+    const at = place();
+    // The first arrived 91 s ago and was pushed; nothing acked it.
+    stamped(at, ID);
+    pushed(at, ID, 'f'.repeat(32));
+    age(at, ID, CHANNEL_OVERDUE_MS + 1_000);
+    // The second arrived since and was acked with its token: the channel works for new traffic.
+    stamped(at, OTHER);
+    pushed(at, OTHER, 'a'.repeat(32));
+    ack(at, OTHER, 'channel');
+    const binding = { root: at.root, session: SESSION, seat: SEAT, key: keyOf(at.home) };
+    expect(proveOffer(dropOf(at), OTHER, 'a'.repeat(32), listenerKeyOf(at.listener), binding)).not.toBeNull();
+    expect(unproven(at)).toBeNull();
+    const lines: string[] = [];
+    await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expectPointer(lines[0], ID, 2);
   });
 });

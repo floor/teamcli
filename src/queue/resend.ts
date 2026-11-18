@@ -46,6 +46,8 @@ export type ResendSeat = {
   /** The Claude adapter (§2.3), for a claude-code seat on an active root: whether the seat is
    *  unproven now. A record whose newest offer went by the channel is then due at once. */
   unproven?: () => boolean;
+  /** Only these records are offered (the Claude adapter: a proven seat's overdue records). */
+  only?: ReadonlySet<string>;
 };
 
 /** How long a channel offer may stay unsettled before the seat is unproven (§2.3). */
@@ -68,9 +70,26 @@ export function channelUnproven(input: { dropDir: string; root: string; session:
   const listenerKey = listenerKeyOf(live.listener);
   const acks = offerAcks(input.dropDir, listenerKey, { root: input.root, session: input.session, seat: input.seat, key: input.key });
   if (acks.length === 0) return 'unproven since launch';
+  const overdue = overdueChannelRecords(input);
+  if (overdue === 'unreadable') return 'overdue offer';
+  // A proving ack from this listener taken after an overdue offer's start: the channel works for
+  // new traffic again. The overdue record itself stays owed a pointer (`overdueChannelRecords`).
+  for (const start of overdue.values()) if (!acks.some((ack) => ack.atMs >= start)) return 'overdue offer';
+  return null;
+}
+
+/**
+ * The seat's stamped records whose first outstanding channel offer is overdue (§2.3): unsettled
+ * 90 s after that offer started (the record's arrival, or the earliest channel attempt). A pointer
+ * or a later push never moves the deadline, and a proving ack for another message never excuses
+ * it: each stays owed a pointer until it settles. Maps id to that start; `unreadable` for a
+ * stamped folder that cannot be listed.
+ */
+export function overdueChannelRecords(input: { dropDir: string; context: StatusContext; key: KeyObject; nowMs: number }): Map<string, number> | 'unreadable' {
+  const out = new Map<string, number>();
   const listing = stampedListing(input.dropDir);
-  if (listing === 'unreadable') return 'overdue offer';
-  if (listing === null) return null;
+  if (listing === 'unreadable') return 'unreadable';
+  if (listing === null) return out;
   for (const name of listing.names) {
     if (name.startsWith('.') || isRecordSidecarName(name) || !RECORD_NAME.test(name)) continue;
     let arrived: number;
@@ -82,15 +101,12 @@ export function channelUnproven(input: { dropDir: string; root: string; session:
       continue;
     }
     if (recordStampAt(listing.folder, name) !== true) continue;
-    // The first outstanding channel offer's deadline: a pointer or a later push never moves it,
-    // so a silent channel stays unproven until this record settles or the listener proves again.
     const start = firstChannelOffer(listing.folder, name, arrived);
     if (start === null || input.nowMs - start < CHANNEL_OVERDUE_MS) continue;
     if (stampedSettled(listing.folder, name, input.context, input.key)) continue;
-    // A proving ack from this listener taken after the start: the channel works again.
-    if (!acks.some((ack) => ack.atMs >= start)) return 'overdue offer';
+    out.set(name, start);
   }
-  return null;
+  return out;
 }
 
 /** The seat's stamped records that are unsettled and due now, oldest arrival first. */
@@ -152,6 +168,7 @@ export function claudeAdapterRoot(cli: string, root: string, home: string, webho
 }
 
 function dueNow(folder: string, id: string, seat: ResendSeat, nowMs: number, arrived: number): boolean {
+  if (seat.only !== undefined && !seat.only.has(id)) return false;
   if (recordStampAt(folder, id) !== true || stampedSettled(folder, id, seat.context, seat.key)) return false;
   // The adapter change (§2.3): the newest offer went by the channel and the seat is unproven now.
   const changed = seat.unproven !== undefined && newestOffer(folder, id, arrived).channel && seat.unproven();

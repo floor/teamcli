@@ -223,6 +223,13 @@ export function ackedFile(dropDir: string, id: string): string {
   return join(folderOfDrop(dropDir, id), `${id}.ack.json`);
 }
 
+/** The clearance note beside a stamped record whose copy receipt already stood (the Claude adapter
+ *  §3): the lead's or the owner's clearance, kept with its actor, while the ack note keeps the
+ *  `ack` word every level-3 reader settles by. A `.json` sidecar: no listing reads it as mail. */
+export function clearedFile(dropDir: string, id: string): string {
+  return join(folderOfDrop(dropDir, id), `${id}.cleared.json`);
+}
+
 /** The `read_by` words that confirm: the recipient's own ack, its channel ack tool, a reply (the
  *  reply op and answered-by-send), and a lead's clearance. */
 export function isConfirmedReadBy(readBy: string | undefined): boolean {
@@ -290,6 +297,8 @@ export function stampedSettlement(dropDir: string, id: string, context: StatusCo
   }
   const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
   if (note === null) return null;
+  const cleared = leadAckReceiptAt(dropDir, id, context, key);
+  if (cleared !== null) return { kind: 'cleared', by: cleared.by };
   if (note.payload.read_by === 'ack') return { kind: 'acked' };
   const by = clearedBy(note.payload.read_by, context);
   return by === null ? null : { kind: 'cleared', by };
@@ -1576,12 +1585,17 @@ export function leadAckReceiptAt(
   context: StatusContext,
   key: KeyObject,
 ): { by: string; at: string; payload: ReceiptPayload } | null {
-  const verified = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
-  if (verified === null) return null;
-  const by = leadAckActorOf(verified.payload.read_by);
-  if (by === null) return null;
-  if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) return null;
-  return { by, at: verified.payload.at, payload: verified.payload };
+  // The one clearance lookup, in both places a clearance is kept: the read receipt itself, and
+  // the clearance note written when a copy's receipt already held the read name.
+  for (const path of [receiptFile(dropDir, id, 'read'), clearedFile(dropDir, id)]) {
+    const verified = readVerifiedReceipt(path, id, 'read', context, key);
+    if (verified === null) continue;
+    const by = leadAckActorOf(verified.payload.read_by);
+    if (by === null) continue;
+    if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) continue;
+    return { by, at: verified.payload.at, payload: verified.payload };
+  }
+  return null;
 }
 
 /**

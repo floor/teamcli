@@ -7,7 +7,8 @@
 // or with another copy's or another incarnation's token, settles the message and proves nothing.
 // A dark root's push carries no offer. Fixtures only: synthetic folders, home and launch line.
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listenerKeyOf, offerAckFolder, offerAcks, proveOffer } from '../src/comms/offer.ts';
@@ -322,6 +323,43 @@ describe('a proof entry is signed and bound (round 1)', () => {
       expect(offerAcks(at.dropDir, two, bindingOf(at))).toEqual([]);
       // And under another seat's binding the genuine one proves nothing.
       expect(offerAcks(at.dropDir, one, { ...bindingOf(at), seat: 'worker' })).toEqual([]);
+    } finally {
+      at.cleanup();
+    }
+  });
+});
+
+describe('round 2: proofs and copy history are read only inside the seat tree', () => {
+  test('a linked proof folder, a linked numbered copy and a fifo copy prove nothing', () => {
+    const at = place();
+    try {
+      expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+      stamped(at, FIRST);
+      const token = 'c'.repeat(32);
+      const key = '111@2026-11-18T00:00:00.000Z';
+      // A genuine copy and proof, moved out of the tree and linked back in.
+      expect(takeCopyNumber(stampedDir(at), FIRST, 'channel', Date.now(), { token, listener: key })).toBe(1);
+      expect(proveOffer(at.dropDir, FIRST, token, key, bindingOf(at))).not.toBeNull();
+      expect(offerAcks(at.dropDir, key, bindingOf(at))).toHaveLength(1);
+      const folder = offerAckFolder(at.dropDir, key)!;
+      const outside = join(at.root, 'outside-proofs');
+      renameSync(folder, outside);
+      symlinkSync(outside, folder);
+      expect(offerAcks(at.dropDir, key, bindingOf(at))).toEqual([]);
+      unlinkSync(folder);
+      renameSync(outside, folder);
+      expect(offerAcks(at.dropDir, key, bindingOf(at))).toHaveLength(1);
+      // The numbered copy linked from outside: the copy match is gone, so the proof is too.
+      const copy = join(stampedDir(at), '.exposures', FIRST, '1');
+      const away = join(at.root, 'outside-copy');
+      renameSync(copy, away);
+      symlinkSync(away, copy);
+      expect(offeredCopies(stampedDir(at), FIRST)).toEqual([]);
+      expect(offerAcks(at.dropDir, key, bindingOf(at))).toEqual([]);
+      // A fifo in its place is never opened for a read that could block.
+      unlinkSync(copy);
+      execFileSync('mkfifo', [copy]);
+      expect(offeredCopies(stampedDir(at), FIRST)).toEqual([]);
     } finally {
       at.cleanup();
     }

@@ -21,7 +21,7 @@
 //
 // This module is inside the comms boundary: only the legs and the deliberate readers call it,
 // and no other module writes under `.exposures/` (test/handover-boundary.test.ts).
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createExclusive, ensureFolder } from './durable.ts';
 import { seatFolderOf } from '../send/drop-folder.ts';
@@ -101,6 +101,37 @@ export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs:
   return null;
 }
 
+/** Whether `path` is a real folder: present, a directory, and not a link. */
+export function realFolder(path: string): boolean {
+  try {
+    const held = lstatSync(path);
+    return held.isDirectory() && !held.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** The largest proof or history entry read: these are a few hundred bytes. */
+const ENTRY_MAX = 16_384;
+
+/** A regular file's text, opened without following a final link and bounded in size; null for
+ *  a link, a folder, a device, a fifo, an oversized file or any read failure. */
+export function readRegularNoFollow(path: string): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const held = fstatSync(fd);
+    if (!held.isFile() || held.size > ENTRY_MAX) return null;
+    const buffer = Buffer.alloc(held.size);
+    const read = readSync(fd, buffer, 0, buffer.length, 0);
+    return read === buffer.length ? buffer.toString('utf8') : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
 /** The offer a channel copy carries (the Claude adapter §2.2): a fresh random token, and the
  *  listener incarnation that pushed it (`<pid>@<listener ts>`). */
 export type ChannelOffer = { token: string; listener: string };
@@ -112,6 +143,9 @@ export type OfferedCopy = { n: number; token: string; listener: string; atMs: nu
  *  cannot be read, and an entry that cannot be parsed, offer nothing. */
 export function offeredCopies(dropDir: string, id: string): OfferedCopy[] {
   const folder = historyFolder(dropDir, id);
+  // Confined to the seat's own tree: the history folder and its parent are real folders, never
+  // links, and each entry is a bounded regular file opened without following a link.
+  if (!realFolder(join(seatFolderOf(dropDir, id), EXPOSURES)) || !realFolder(folder)) return [];
   let names: string[];
   try {
     names = readdirSync(folder);
@@ -123,7 +157,9 @@ export function offeredCopies(dropDir: string, id: string): OfferedCopy[] {
     const match = COPY_NAME.exec(name);
     if (match === null) continue;
     try {
-      const entry = JSON.parse(readFileSync(join(folder, name), 'utf8')) as { leg?: unknown; offer?: unknown; listener?: unknown; at?: unknown };
+      const text = readRegularNoFollow(join(folder, name));
+      if (text === null) continue;
+      const entry = JSON.parse(text) as { leg?: unknown; offer?: unknown; listener?: unknown; at?: unknown };
       if (entry.leg !== 'channel' || typeof entry.offer !== 'string' || typeof entry.listener !== 'string') continue;
       const atMs = Date.parse(typeof entry.at === 'string' ? entry.at : '');
       out.push({ n: Number(match[1]), token: entry.offer, listener: entry.listener, atMs: Number.isFinite(atMs) ? atMs : 0 });
