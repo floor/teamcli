@@ -5,8 +5,8 @@
 // host) and each seat's MCP inbox server. A `team` command a seat runs (ack, reply, drops) executes
 // the installed package, so after an install it is at the installed level by construction and is
 // not an actor (E7b, the coordinator's decision). For each seat, the answer is one of:
-//   - not an actor: no inbox-listener marker at all (a seat whose CLI runs no inbox server, a
-//     Codex seat for one), or a marker whose process is gone while no launched CLI is live;
+//   - not an actor: no live CLI and no live marker; or a live CLI with no marker whose current
+//     managed launch signed level >= the floor and names that CLI process (src/queue/launch-level.ts);
 //   - live and reporting a level: the marker is readable, bound to this root, session and seat,
 //     and its process is alive;
 //   - unknown: an unreadable or malformed marker, a marker bound elsewhere, a marker that stands
@@ -21,7 +21,9 @@ import { join } from 'node:path';
 import { pidAlive, readListener } from '../mcp/inbox.ts';
 import { readDaemonState } from '../daemon/state.ts';
 import { readState } from '../state.ts';
-import type { FloorActor } from './floor.ts';
+import { FLOOR_LEVEL, type FloorActor } from './floor.ts';
+import { launchLevelProves } from './launch-level.ts';
+import { processStartOf } from '../watch/pane.ts';
 
 function markerState(dropDir: string): 'absent' | 'unknown' | 'present' {
   try {
@@ -55,9 +57,15 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
     const dropDir = join(root, '.agents', 'send-drops', session, seat);
     const marker = markerState(dropDir);
     if (marker === 'unknown') return unknown(name, 0);
-    // No marker: the seat runs no inbox server, so it reads and delivers only through `team`
-    // commands (the installed build) and the daemon's legs. Not an actor.
-    if (marker === 'absent') return;
+    // No marker. A seat whose CLI is not live is not an actor. A live one is not an actor only on
+    // positive evidence: its current managed launch signed level >= the floor and names this live
+    // CLI process (pid and start instant), so any inbox server it has came from this build or
+    // later. Anything else (no record, a pending one, an older launch, another process) is unknown.
+    if (marker === 'absent') {
+      if (!launchedLive) return;
+      if (launchLevelProves(root, home, session, seat, FLOOR_LEVEL, { alive: pidAlive, startOf: processStartOf })) return;
+      return unknown(`${name} (live CLI, no inbox marker, no level-${String(FLOOR_LEVEL)} launch record)`, 0);
+    }
     const listener = readListener(dropDir);
     if (listener === null) return unknown(`${name} (unreadable marker)`, 0);
     if (listener.root !== root || listener.session !== session || listener.seat !== seat) return unknown(`${name} (marker bound elsewhere)`, listener.pid);

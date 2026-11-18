@@ -4755,6 +4755,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       // team's, and does not block the seat that now stands there (`seatOfFile`).
       ...(launch.codexThreadWait === undefined ? {} : {
         codexThreadFree: codexThreadFreeFor({ home: sources.home, dir, wait: launch.codexThreadWait }),
+        launchLevelAt: { root, home: sources.home },
       }),
       seatStates: () => {
         const seats = readState(dir).sessions[session]?.seats ?? null;

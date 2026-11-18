@@ -73,9 +73,6 @@ export type InboxArchiveRun = {
   completed: string[];
   /** The lead's line: its one id, whether it went, and how often it was tried. */
   notice?: { id: string; sent: boolean; tries: number };
-  /** E7b: where each seat folder's not-delivered reconcile stopped, `<session>/<seat>` to the last
-   *  archived id looked at; it resumes there and wraps once the archive is walked. */
-  noticeCursor?: Record<string, string>;
 };
 
 export type InboxArchiveDeps = {
@@ -136,7 +133,6 @@ function readRun(root: string): InboxArchiveRun | null {
         recoverCursor: value.recoverCursor !== null && typeof value.recoverCursor === 'object' ? value.recoverCursor : {},
         recovered: Array.isArray(value.recovered) ? value.recovered.filter((entry): entry is string => typeof entry === 'string') : [],
         ...(value.notice !== undefined ? { notice: value.notice } : {}),
-        ...(value.noticeCursor !== null && typeof value.noticeCursor === 'object' ? { noticeCursor: value.noticeCursor } : {}),
       };
     });
   } catch {
@@ -189,170 +185,39 @@ export function seatRetired(agents: readonly Agent[], teamId: string, team: Team
     && (agent.lifecycle === 'running' || agent.lifecycle === 'registered' || agent.lifecycle === 'stopped'));
 }
 
-export type NoticeInput = {
-  home: string; root: string; session: string; seat: string; dropDir: string; team: TeamFile;
-  context: StatusContext; key: KeyObject; at: string;
-  /** The registry, read whole, and this team's id: the sender is resolved from its signed agent id. */
-  agents?: readonly Agent[]; teamId?: string;
-  /** How many archived records one step looks at; NOTICE_LOOK_PER_PASS by default. */
-  limit?: number;
-  /** Resume after this archived entry (`<month>/<id>`, the per-seat cursor). */
-  after?: string;
-};
-
-/** One whole reconcile of a seat's archive, step after step (tests; a caller with no cursor). */
-export function noticeUndelivered(input: NoticeInput): number {
-  let written = 0;
-  let after: string | undefined = input.after;
-  for (;;) {
-    const walked = noticeUndeliveredFrom({ ...input, ...(after === undefined ? {} : { after }) });
-    written += walked.written;
-    if (!walked.more || walked.last === null) return written;
-    after = walked.last;
-  }
-}
-
 /**
- * The not-delivered notices of one seat, reconciled from its unread archive, one bounded step (E7b
- * decision 4). For each archived record that is stamped, verifies, and was never acknowledged: one
- * runtime notice with a stable id, unless a verifying "notice sent" mark stands beside it. A mark
- * that does not verify counts as absent: the notice is looked for again and, unless this
- * obligation's own verifying notice is found, written again (a repeat is harmless under
- * at-least-once). The notice goes to the sender's current route, resolved by its signed agent id,
- * and otherwise to the team's lead, naming the sender. Returns how many were written, the last
- * entry looked at, and whether more remain after it.
+ * The sender's not-delivered notice for one unacknowledged stamped record about to leave a retired
+ * seat's live folder (E7b decision 4), written before the move. The notice goes to the sender's
+ * current route, resolved from its signed agent id (a seat name alone may now be another
+ * occupant's); otherwise to the lead of the archived seat's session, naming the sender. It names
+ * the message exactly (`in_reply_to`) and carries a stable id, so a notice already standing is
+ * found and accepted only when it verifies as this obligation's own: the checkout's runtime record
+ * to that recipient, in that session and root, answering this message. True when such a notice
+ * stands; false leaves the record in place for the next pass.
  */
-export function noticeUndeliveredFrom(input: NoticeInput): { written: number; last: string | null; more: boolean; looked: number } {
-  let written = 0;
-  let last: string | null = null;
-  // One page of the archive from the cursor: names before it are never stat'ed, and the walk stops
-  // at the budget (the enumeration itself is bounded, not only the processing).
-  const page = archivedUnreadPage(input.dropDir, input.after, input.limit ?? NOTICE_LOOK_PER_PASS);
-  for (const archived of page.entries) {
-    last = `${archived.month}/${archived.id}`;
-    const done = `${archived.path}.noticed`;
-    if (noticeMarkHolds(done, { archived: archived.id, notice: undeliveredNoticeId(archived.id), root: input.root }, input.key)) continue;
-    const read = readRecord(archived.path, archived.id);
-    if (!read.ok || read.record === null || !verifyRecord(read.record, input.key)) continue;
-    const payload = read.record.payload;
-    if (!isStampedPayload(payload) || stampedSettled(input.dropDir, archived.id, input.context, input.key)) continue;
-    // The sender's current route (session and seat) and identity come from its signed agent id:
-    // a seat name alone may now be another occupant's. Without a resolved route, the lead of the
-    // archived seat's session is told, naming the sender.
-    const agent = payload.from_id === null || input.agents === undefined
-      ? undefined
-      : input.agents.find((one) => one.id === payload.from_id && one.reach.team === input.teamId && one.lifecycle !== 'retired');
-    const to = agent !== undefined ? agent.reach.seat : input.team.orchestrator;
-    const session = agent !== undefined ? agent.reach.session : input.session;
-    if (to === undefined || to === null || to === '') continue;
-    const noticeId = undeliveredNoticeId(archived.id);
-    // A notice already written, and possibly since archived from its recipient's folder, is found
-    // by id and counts only when it verifies as this obligation's notice: a runtime record to that
-    // recipient, in that session, naming this message. Anything else at the name leaves it pending.
-    const standing = recordFile(join(input.root, '.agents', 'send-drops', session, to), noticeId);
-    const obligation: Obligation = { archived: archived.id, notice: noticeId, to, session, root: input.root };
-    const mark = (): void => markNoticed(done, obligation, input.home, input.at);
-    if (heldAt(standing).kind !== 'missing') {
-      const found = readRecord(standing, noticeId);
-      if (found.ok && found.record !== null && verifyRecord(found.record, input.key) && noticeIsObligation(found.record.payload, obligation)) mark();
-      continue;
-    }
-    const notice = writeRuntimeNotice({
-      home: input.home, root: input.root, session, lead: to, id: noticeId,
-      body: `not delivered: seat retired (${input.seat}). The message ${archived.id} from ${payload.from} was never acknowledged and is archived; list it with \`team drops archive --unread\`.`,
-      at: input.at,
-    });
-    if (!notice.ok) continue;
-    // A notice that was already there (a rival wrote it between the look and the write) counts
-    // only under the same bound check as the standing-name path.
-    if (notice.existing && !noticeIsObligation(notice.payload, obligation)) continue;
-    if (!notice.existing) written += 1;
-    mark();
-  }
-  return { written, last, more: page.more, looked: page.entries.length };
-}
-
-/** One not-delivered notice obligation: the archived message, its notice id, and the route. */
-type Obligation = { archived: string; notice: string; to: string; session: string; root: string };
-
-/** Whether a verified runtime record is exactly this obligation's notice: its id, its recipient,
- *  session and checkout (the signed root, resolved), the runtime sender, and the archived id. */
-function noticeIsObligation(notice: RecordPayload, obligation: Obligation): boolean {
-  return notice.id === obligation.notice && notice.to === obligation.to && notice.session === obligation.session
-    && sameFolder(notice.root, obligation.root) && notice.from === RUNTIME_FROM && notice.body.includes(obligation.archived);
-}
-
-/** One page of a seat's unread archive, from just after `after` (`<month>/<id>`), at most `limit`
- *  entries. Months and names are listed in order; nothing at or before the cursor is stat'ed. */
-function archivedUnreadPage(dropDir: string, after: string | undefined, limit: number): { entries: { id: string; month: string; path: string }[]; more: boolean } {
-  const root = join(dropDir, DROP_MONTH_ARCHIVE);
-  let months: string[];
-  try {
-    months = readdirSync(root).filter((name) => /^\d{4}-\d{2}$/.test(name)).sort();
-  } catch {
-    return { entries: [], more: false };
-  }
-  const [afterMonth, afterId] = after === undefined ? ['', ''] : [after.slice(0, 7), after.slice(8)];
-  const entries: { id: string; month: string; path: string }[] = [];
-  for (const month of months) {
-    if (month < afterMonth) continue;
-    const dir = join(root, month, DROP_ARCHIVE_UNREAD);
-    let names: string[];
-    try {
-      names = readdirSync(dir).sort();
-    } catch {
-      continue;
-    }
-    for (const name of names) {
-      if (month === afterMonth && name <= afterId) continue;
-      if (name.startsWith('.') || name.includes('.') || !UUID_NAME.test(name)) continue;
-      if (entries.length >= limit) return { entries, more: true };
-      if (heldAt(join(dir, name)).kind !== 'file') continue;
-      entries.push({ id: name, month, path: join(dir, name) });
-    }
-  }
-  return { entries, more: false };
-}
-
-const UUID_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-/** The archived records one reconcile step looks at per seat, at most. */
-export const NOTICE_LOOK_PER_PASS = 200;
-/** The archived records one whole pass looks at, across every seat. */
-export const NOTICE_LOOK_PER_PASS_TOTAL = 1_000;
-
-const NOTICE_MARK_DOMAIN = 'team-notice-mark-v1\n';
-
-/** Whether a verifying "notice sent" mark stands for this archived record. An unreadable,
- *  unsigned or foreign mark is no mark: the obligation is looked at again. */
-function noticeMarkHolds(path: string, expect: { archived: string; notice: string; root: string }, key: KeyObject): boolean {
-  if (heldAt(path).kind !== 'file') return false;
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { payload?: { kind?: unknown; archived?: unknown; notice?: unknown; to?: unknown; session?: unknown; root?: unknown }; signature?: unknown };
-    const payload = parsed.payload;
-    // The mark is bound to the whole obligation: the archived message, its notice id, the checkout,
-    // and the route the notice went to (a later route change does not reopen a done obligation).
-    if (!payload || payload.kind !== 'notice-mark' || payload.archived !== expect.archived || payload.notice !== expect.notice) return false;
-    if (typeof payload.to !== 'string' || typeof payload.session !== 'string' || typeof payload.root !== 'string' || !sameFolder(payload.root, expect.root)) return false;
-    if (typeof parsed.signature !== 'string') return false;
-    return verifyDomain(NOTICE_MARK_DOMAIN, payload as unknown as Json, parsed.signature, key);
-  } catch {
-    return false;
-  }
-}
-
-/** The signed, durable "notice sent" mark beside an archived record. A stray file at the name was
- *  no mark and is replaced. */
-function markNoticed(path: string, obligation: Obligation, home: string, at: string): void {
-  const payload = { v: 1, kind: 'notice-mark', ...obligation, at };
-  let signature: string;
-  try {
-    signature = signDomain(NOTICE_MARK_DOMAIN, payload as unknown as Json, messageKeyOf(home));
-  } catch {
-    return;
-  }
-  if (heldAt(path).kind !== 'missing') removeDurable(path);
-  createExclusive(path, `${JSON.stringify({ payload, signature })}\n`);
+export function noticeBeforeMove(input: {
+  home: string; root: string; session: string; seat: string; team: TeamFile; key: KeyObject; at: string;
+  item: { id: string; undelivered?: { from: string; from_id: string | null } };
+  agents?: readonly Agent[]; teamId?: string;
+}): boolean {
+  const from = input.item.undelivered?.from ?? 'unknown';
+  const fromId = input.item.undelivered?.from_id ?? null;
+  const agent = fromId === null || input.agents === undefined
+    ? undefined
+    : input.agents.find((one) => one.id === fromId && one.reach.team === input.teamId && one.lifecycle !== 'retired');
+  const to = agent !== undefined ? agent.reach.seat : input.team.orchestrator;
+  const session = agent !== undefined ? agent.reach.session : input.session;
+  if (to === undefined || to === null || to === '') return false;
+  const noticeId = undeliveredNoticeId(input.item.id);
+  const notice = writeRuntimeNotice({
+    home: input.home, root: input.root, session, lead: to, id: noticeId, inReplyTo: input.item.id,
+    body: `not delivered: seat retired (${input.seat}). The message ${input.item.id} from ${from} was never acknowledged and is archived; list it with \`team drops archive --unread\`.`,
+    at: input.at,
+  });
+  if (!notice.ok) return false;
+  const found = notice.payload;
+  return found.id === noticeId && found.to === to && found.session === session && sameFolder(found.root, input.root)
+    && found.from === RUNTIME_FROM && found.in_reply_to === input.item.id;
 }
 
 /** A stable, UUID-shaped id for one message's not-delivered notice. */
@@ -406,45 +271,8 @@ export async function inboxArchivePass(input: {
   let run: InboxArchiveRun = held !== null && held.day === day
     ? held
     : { format: 1, day, done: false, moved: 0, unread: {}, loadSkips: 0, cursor: {}, recovered: [], recoverCursor: {}, completed: [] };
-  // E7b (decision 4): the not-delivered notices are reconciled from every seat's unread archive on
-  // every pass that clears the load check, whatever the day's archive state (done or still
-  // running), and again after this pass's moves. Each seat's walk is bounded per pass and resumes
-  // from a cursor kept in the run file, so a large archive never holds the daemon, and a done
-  // backlog never hides a new obligation. A completed folder, a seat recreated since, a move in the
-  // final chunk, or a notice that failed last time is answered.
-  const reconcile = (): void => {
-    const keyNow = messageKeyState(home);
-    if (keyNow.kind !== 'key') return;
-    const agents = readAgentsComplete(home);
-    const teamIdNow = teamIdOf(root);
-    const cursors = { ...(run.noticeCursor ?? {}) };
-    // One budget for the whole pass, across every seat; a seat past it waits for the next pass.
-    let remaining = NOTICE_LOOK_PER_PASS_TOTAL;
-    for (const folder of seatDropFolders(root)) {
-      if (remaining <= 0) break;
-      const at = `${folder.session}/${folder.seat}`;
-      try {
-        const walked = noticeUndeliveredFrom({
-          home, root, session: folder.session, seat: folder.seat, dropDir: folder.dropDir, team,
-          context: { to: folder.seat, root, session: folder.session, ...(team.orchestrator ? { lead: team.orchestrator } : {}) },
-          key: keyNow.key, at: now.toISOString(),
-          ...(agents === null ? {} : { agents, teamId: teamIdNow }),
-          ...(cursors[at] === undefined ? {} : { after: cursors[at] }),
-          limit: Math.min(NOTICE_LOOK_PER_PASS, remaining),
-        });
-        remaining -= Math.max(1, walked.looked);
-        if (walked.more && walked.last !== null) cursors[at] = walked.last;
-        else delete cursors[at];
-      } catch {
-        // One seat's failure leaves its notices due for the next pass.
-      }
-    }
-    run.noticeCursor = cursors;
-    writeRun(root, run);
-  };
   if (run.done) {
-    // The day's work is over. The not-delivered reconcile still runs, after the load check.
-    if ((deps.loadPerCore ?? defaultLoadPerCore)() <= INBOX_ARCHIVE_MAX_LOAD_PER_CORE) reconcile();
+    // The day's work is over.
     // A line that did not go is tried again, a bounded number of times.
     const notice = run.notice;
     if (notice !== undefined && !notice.sent && notice.tries < NOTICE_TRIES) {
@@ -460,7 +288,6 @@ export async function inboxArchivePass(input: {
     writeRun(root, run);
     return { kind: 'load', perCore, first: run.loadSkips === 1 };
   }
-  reconcile();
   const key = messageKeyState(home);
   if (key.kind !== 'key') return { kind: 'no-key' };
   const teamId = teamIdOf(root);
@@ -558,6 +385,12 @@ export async function inboxArchivePass(input: {
       const retired = agents !== null && seatRetired(agents, teamId, team, folder.seat);
       const after = run.cursor[key2];
       const report = archiveSeatInbox({
+        // E7b (decision 4): a retired seat's unacknowledged stamped record moves only once its
+        // sender's not-delivered notice stands (written now, or found as this obligation's own).
+        beforeUndelivered: (item) => noticeBeforeMove({
+          home, root, session: folder.session, seat: folder.seat, team, key: key.key, at: now.toISOString(), item,
+          ...(agents === null ? {} : { agents, teamId }),
+        }),
         dropDir: folder.dropDir,
         seat: folder.seat,
         context,
@@ -707,7 +540,6 @@ export async function inboxArchivePass(input: {
   let notice: 'sent' | 'failed' | 'none' = 'none';
   const anyMoved = run.moved > 0 || Object.values(run.unread).some((count) => count > 0);
   if (saved && run.done && anyMoved) notice = await sendNotice(run, root, team, deps);
-  reconcile();
   return { kind: 'ran', moved, unread, done: run.done, refused, notice };
 }
 

@@ -290,7 +290,7 @@ describe('retention (decision 4)', () => {
     const moved = plan(at, { unreadKeepMs: 14 * 86_400_000, retired: true }).move;
     expect(moved.length).toBe(1);
     expect(moved[0]?.unread).toBe(true);
-    expect(moved[0]?.undelivered).toEqual({ from: 'worker' });
+    expect(moved[0]?.undelivered).toEqual({ from: 'worker', from_id: null });
   });
 
   test('an acknowledged stamped record moves as settled mail', () => {
@@ -382,40 +382,7 @@ describe('code round 1 fixes', () => {
     expect(channelRedeliveryDue(serving, Date.now() + 61_000)).toEqual([M1]);
   });
 
-  test('a retired seat\'s not-delivered notices are reconciled from its archive, once each', async () => {
-    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
-    const at = place();
-    activateRoot(at);
-    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
-    mkdirSync(archived, { recursive: true, mode: 0o700 });
-    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
-    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'worker' }, { name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
-    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString() };
-    // No registry: the sender cannot be resolved by its agent id, so the team's lead is told.
-    expect(noticeUndelivered(input)).toBe(1);
-    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M1)))).toBe(true);
-    // A second pass (after a crash, or a failed first write) finds the notice and writes no other.
-    expect(noticeUndelivered(input)).toBe(0);
-  });
 
-  test('the not-delivered notice goes to the sender resolved by its signed agent id, not by a reused seat name', async () => {
-    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
-    const at = place();
-    activateRoot(at);
-    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
-    mkdirSync(archived, { recursive: true, mode: 0o700 });
-    const payload = stampedPayload({ ...payloadOf(at, M1), from_id: 'agt_000000000007' }, at.home);
-    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(payload, at.home), null, 2)}\n`, { mode: 0o600 });
-    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'worker' }, { name: 'boss' }, { name: 'worker-2' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
-    // The agent that sent it now sits at worker-2; a replacement holds the name `worker`.
-    const agents = [
-      { id: 'agt_000000000007', reach: { team: 't', seat: 'worker-2', session: SESSION }, lifecycle: 'running' },
-      { id: 'agt_000000000008', reach: { team: 't', seat: 'worker', session: SESSION }, lifecycle: 'running' },
-    ] as unknown as NonNullable<Parameters<typeof noticeUndelivered>[0]['agents']>;
-    expect(noticeUndelivered({ home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString(), agents, teamId: 't' })).toBe(1);
-    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker-2', undeliveredNoticeId(M1)))).toBe(true);
-    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker', undeliveredNoticeId(M1)))).toBe(false);
-  });
 
   test('a stamped record with a plain (no reader word) read stays unsettled for the scheduler and retention', async () => {
     const { channelRedeliveryDue } = await import('../src/mcp/serve.ts');
@@ -479,47 +446,7 @@ describe('code round 3 fixes', () => {
     expect(stampedSettled(at.dropDir, M1, context(at), key(at))).toBe(true);
   });
 
-  test('the notice follows the sender\'s current session, and an archived notice is never written again', async () => {
-    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
-    const at = place();
-    activateRoot(at);
-    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
-    mkdirSync(archived, { recursive: true, mode: 0o700 });
-    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(stampedPayload({ ...payloadOf(at, M1), from_id: 'agt_000000000007' }, at.home), at.home), null, 2)}\n`, { mode: 0o600 });
-    writeFileSync(join(archived, M2), `${JSON.stringify(signRecord(stampedPayload({ ...payloadOf(at, M2), from_id: 'agt_000000000007' }, at.home), at.home), null, 2)}\n`, { mode: 0o600 });
-    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'worker' }, { name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
-    const agents = [{ id: 'agt_000000000007', reach: { team: 't', seat: 'worker', session: 'other' }, lifecycle: 'running' }] as unknown as NonNullable<Parameters<typeof noticeUndelivered>[0]['agents']>;
-    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString(), agents, teamId: 't' };
-    // M2's notice was written earlier (a genuine signed runtime notice) and has since been archived
-    // from the sender's folder.
-    const { writeRuntimeNotice } = await import('../src/send/endpoint-notice.ts');
-    const senderDir = join(at.root, '.agents', 'send-drops', 'other', 'worker');
-    const genuine = writeRuntimeNotice({ home: at.home, root: at.root, session: 'other', lead: 'worker', id: undeliveredNoticeId(M2), body: `not delivered: seat retired (lead). The message ${M2} from worker was never acknowledged.`, at: new Date().toISOString() });
-    expect(genuine.ok).toBe(true);
-    mkdirSync(join(senderDir, 'archive', '2026-11'), { recursive: true });
-    renameSync(join(senderDir, undeliveredNoticeId(M2)), join(senderDir, 'archive', '2026-11', undeliveredNoticeId(M2)));
-    expect(noticeUndelivered(input)).toBe(1);
-    expect(existsSync(join(senderDir, undeliveredNoticeId(M1)))).toBe(true);
-    expect(existsSync(join(senderDir, undeliveredNoticeId(M2)))).toBe(false);
-    expect(existsSync(join(archived, `${M1}.noticed`))).toBe(true);
-    expect(existsSync(join(archived, `${M2}.noticed`))).toBe(true);
-    expect(noticeUndelivered(input)).toBe(0);
-  });
 
-  test('an occupied but unverifiable notice name leaves the obligation pending', async () => {
-    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
-    const at = place();
-    activateRoot(at);
-    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
-    mkdirSync(archived, { recursive: true, mode: 0o700 });
-    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
-    const bossDir = join(at.root, '.agents', 'send-drops', SESSION, 'boss');
-    mkdirSync(bossDir, { recursive: true });
-    writeFileSync(join(bossDir, undeliveredNoticeId(M1)), '{}\n');
-    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
-    expect(noticeUndelivered({ home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString() })).toBe(0);
-    expect(existsSync(join(archived, `${M1}.noticed`))).toBe(false);
-  });
 
   test('a stamped record written through the record writer carries its era folder: a plain read never hides it from the listing', async () => {
     const { listUnread } = await import('../src/mcp/inbox.ts');
@@ -534,41 +461,6 @@ describe('code round 3 fixes', () => {
   });
 });
 
-describe('closing items after round 4', () => {
-  const archive = (at: At, ids: string[]) => {
-    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
-    mkdirSync(archived, { recursive: true, mode: 0o700 });
-    for (const id of ids) writeFileSync(join(archived, id), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, id), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
-    return archived;
-  };
-  const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof import('../src/daemon/chores/inbox-archive.ts').noticeUndelivered>[0]['team'];
-
-  test('a stray, unsigned "notice sent" mark counts as absent: the notice is written and the mark replaced', async () => {
-    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
-    const at = place();
-    activateRoot(at);
-    const archived = archive(at, [M1]);
-    writeFileSync(join(archived, `${M1}.noticed`), '{}\n');
-    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString() };
-    expect(noticeUndelivered(input)).toBe(1);
-    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M1)))).toBe(true);
-    expect(readFileSync(join(archived, `${M1}.noticed`), 'utf8')).toContain('notice-mark');
-    expect(noticeUndelivered(input)).toBe(0);
-  });
-
-  test('the reconcile walks a bounded step and resumes from its cursor', async () => {
-    const { noticeUndeliveredFrom } = await import('../src/daemon/chores/inbox-archive.ts');
-    const at = place();
-    activateRoot(at);
-    archive(at, [M1, M2]);
-    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString(), limit: 1 };
-    const first = noticeUndeliveredFrom(input);
-    expect(first).toMatchObject({ written: 1, more: true });
-    const second = noticeUndeliveredFrom({ ...input, after: first.last as string });
-    expect(second).toMatchObject({ written: 1 });
-    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M2)))).toBe(true);
-  });
-});
 
 describe('the actor proof counts long-lived readers and carriers only (coordinator decision)', () => {
   const launched = (at: At, seat: string) => writeFileSync(join(at.root, '.agents', 'team.state.json'), JSON.stringify({
@@ -584,11 +476,55 @@ describe('the actor proof counts long-lived readers and carriers only (coordinat
     return (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
   };
 
-  test('a live seat with no inbox server and no marker (a Codex seat) is not an actor: activation is allowed', async () => {
+  const scanActivate = async (at: At) => {
+    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
+    const scanned = liveFloorActors(at.root, at.home) ?? [];
+    return { scanned: scanned.filter((a) => a.kind !== 'daemon'), outcome: activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...scanned.filter((a) => a.kind !== 'daemon')] }).kind };
+  };
+
+  test('a live seat with no marker whose launch signed level 3 and names its live CLI is not an actor: activation allowed', async () => {
+    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
+    const { processStartOf } = await import('../src/watch/pane.ts');
     const at = place();
     launched(at, 'builder');
-    expect(await actorsOf(at)).toEqual([]);
-    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...[]] }).kind).toBe('activated');
+    expect(launchPending(at.root, at.home, SESSION, 'builder', process.pid)).toBe(true);
+    expect(launchProven(at.root, at.home, SESSION, 'builder', process.pid, processStartOf(process.pid) as number)).toBe(true);
+    const run = await scanActivate(at);
+    expect(run.scanned).toEqual([]);
+    expect(run.outcome).toBe('activated');
+  });
+
+  test('a pre-install launch (no launch-level record) with no marker is unknown: activation refused', async () => {
+    const at = place();
+    launched(at, 'builder');
+    const run = await scanActivate(at);
+    expect(run.scanned).toMatchObject([{ kind: 'other', level: null }]);
+    expect(run.outcome).toBe('refused');
+  });
+
+  test('a launch record still pending, or naming another process, is unknown: activation refused', async () => {
+    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
+    const at = place();
+    launched(at, 'builder');
+    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    expect((await scanActivate(at)).outcome).toBe('refused');
+    // Proven, but for a process whose start instant is not the live one (a reused pid, an older relaunch).
+    launchProven(at.root, at.home, SESSION, 'builder', process.pid, 1);
+    expect((await scanActivate(at)).outcome).toBe('refused');
+  });
+
+  test('on an active root, the same scan rolls back when a launch record names another process', async () => {
+    const { launchPending, launchProven } = await import('../src/queue/launch-level.ts');
+    const { processStartOf } = await import('../src/watch/pane.ts');
+    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
+    const at = place();
+    launched(at, 'builder');
+    launchPending(at.root, at.home, SESSION, 'builder', process.pid);
+    launchProven(at.root, at.home, SESSION, 'builder', process.pid, processStartOf(process.pid) as number);
+    expect((await scanActivate(at)).outcome).toBe('activated');
+    launchProven(at.root, at.home, SESSION, 'builder', process.pid, 1);
+    const actors = (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
+    expect(checkActors(at.root, at.home, [daemon, ...actors]).kind).toBe('dark');
   });
 
   test('a marker standing while its process is gone and the seat\'s CLI is live is unknown: activation refused', async () => {
@@ -635,37 +571,58 @@ describe('round 5 and 6 fixes', () => {
     expect(listUnread(at.dropDir, context(at), at.home).map((m) => m.id)).toEqual([M1]);
   });
 
-  test('a verifying notice for another checkout at the notice id does not retire the obligation', async () => {
-    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
+
+});
+
+describe('not-delivered notice before the move (replaces the archive reconcile)', () => {
+  test('a retired seat\'s unacknowledged stamped record moves only once its notice stands; the notice names it exactly', async () => {
+    const { noticeBeforeMove } = await import('../src/daemon/chores/inbox-archive.ts');
+    const { archiveSeatInbox } = await import('../src/send/inbox-retention.ts');
+    const { readRecord } = await import('../src/send/record.ts');
     const at = place();
     activateRoot(at);
-    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
-    mkdirSync(archived, { recursive: true, mode: 0o700 });
-    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
-    const bossDir = join(at.root, '.agents', 'send-drops', SESSION, 'boss');
-    mkdirSync(bossDir, { recursive: true });
-    const elsewhere = signRecord({ kind: 'message', id: undeliveredNoticeId(M1), to: 'boss', to_id: null, root: '/another/checkout', session: SESSION, at: new Date().toISOString(), body: `not delivered: ${M1}`, from: 'runtime', from_id: null, rule: "the team's unread-message report", thread: undeliveredNoticeId(M1) }, at.home);
-    writeFileSync(join(bossDir, undeliveredNoticeId(M1)), `${JSON.stringify(elsewhere, null, 2)}\n`, { mode: 0o600 });
-    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
-    noticeUndelivered({ home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString() });
-    expect(existsSync(join(archived, `${M1}.noticed`))).toBe(false);
+    write(at, M1);
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeBeforeMove>[0]['team'];
+    const run = (gate: (item: { id: string }) => boolean) => archiveSeatInbox({
+      dropDir: at.dropDir, seat: 'lead', context: context(at), key: key(at), home: at.home, now: new Date('2026-12-30T00:00:00.000Z'), dryRun: false,
+      options: { unreadKeepMs: 14 * 86_400_000, retired: true, orphans: false }, beforeUndelivered: gate,
+    });
+    // A notice that cannot be written: nothing moves, the record stays live.
+    expect(run(() => false).move.filter((m) => m.id === M1)).toEqual([]);
+    expect(existsSync(join(at.dropDir, M1))).toBe(true);
+    // The real gate: the notice is written first, then the record moves.
+    const gate = (item: { id: string }) => noticeBeforeMove({ home: at.home, root: at.root, session: SESSION, seat: 'lead', team, key: key(at), at: new Date().toISOString(), item: { id: item.id, undelivered: { from: 'worker', from_id: null } } });
+    expect(run(gate).move.map((m) => m.id)).toEqual([M1]);
+    const noticePath = join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M1));
+    const notice = readRecord(noticePath, undeliveredNoticeId(M1));
+    expect(notice.ok && notice.record?.payload.in_reply_to).toBe(M1);
   });
 
-  test('a genuine mark copied beside another archived record does not hold for it', async () => {
-    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
+  test('an occupied notice name that is not this obligation\'s own notice holds the move back', async () => {
+    const { noticeBeforeMove } = await import('../src/daemon/chores/inbox-archive.ts');
     const at = place();
     activateRoot(at);
-    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
-    mkdirSync(archived, { recursive: true, mode: 0o700 });
-    for (const id of [M1, M2]) writeFileSync(join(archived, id), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, id), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
-    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
-    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString(), limit: 1 };
-    const { noticeUndeliveredFrom } = await import('../src/daemon/chores/inbox-archive.ts');
-    noticeUndeliveredFrom(input); // M1 (first in order) gets its notice and its mark
-    const first = [M1, M2].sort()[0] as string;
-    const second = [M1, M2].sort()[1] as string;
-    writeFileSync(join(archived, `${second}.noticed`), readFileSync(join(archived, `${first}.noticed`)));
-    expect(noticeUndelivered({ ...input, limit: 200 })).toBe(1);
-    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(second)))).toBe(true);
+    const bossDir = join(at.root, '.agents', 'send-drops', SESSION, 'boss');
+    mkdirSync(bossDir, { recursive: true });
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof noticeBeforeMove>[0]['team'];
+    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', team, key: key(at), at: new Date().toISOString(), item: { id: M1, undelivered: { from: 'worker', from_id: null } } };
+    // A runtime record at the id that only mentions the message (no in_reply_to binding).
+    const other = signRecord({ kind: 'message', id: undeliveredNoticeId(M1), to: 'boss', to_id: null, root: at.root, session: SESSION, at: new Date().toISOString(), body: `mentions ${M1}`, from: 'runtime', from_id: null, rule: "the team's unread-message report", thread: undeliveredNoticeId(M1) }, at.home);
+    writeFileSync(join(bossDir, undeliveredNoticeId(M1)), `${JSON.stringify(other, null, 2)}\n`, { mode: 0o600 });
+    expect(noticeBeforeMove(input)).toBe(false);
+  });
+
+  test('the notice follows the sender resolved by its signed agent id, in its current session', async () => {
+    const { noticeBeforeMove } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }, { name: 'worker' }] } as unknown as Parameters<typeof noticeBeforeMove>[0]['team'];
+    const agents = [
+      { id: 'agt_000000000007', reach: { team: 't', seat: 'worker-2', session: 'other' }, lifecycle: 'running' },
+      { id: 'agt_000000000008', reach: { team: 't', seat: 'worker', session: SESSION }, lifecycle: 'running' },
+    ] as unknown as NonNullable<Parameters<typeof noticeBeforeMove>[0]['agents']>;
+    expect(noticeBeforeMove({ home: at.home, root: at.root, session: SESSION, seat: 'lead', team, key: key(at), at: new Date().toISOString(), item: { id: M1, undelivered: { from: 'worker', from_id: 'agt_000000000007' } }, agents, teamId: 't' })).toBe(true);
+    expect(existsSync(join(at.root, '.agents', 'send-drops', 'other', 'worker-2', undeliveredNoticeId(M1)))).toBe(true);
+    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker', undeliveredNoticeId(M1)))).toBe(false);
   });
 });

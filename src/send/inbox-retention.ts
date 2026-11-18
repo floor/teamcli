@@ -68,7 +68,7 @@ export type InboxArchiveMove = {
   seat: string; id: string; month: string; files: string[]; unread?: true;
   /** E7b: a stamped record moved unacknowledged because its seat is retired; its sender is told
    *  "not delivered: seat retired". */
-  undelivered?: { from: string };
+  undelivered?: { from: string; from_id: string | null };
 };
 
 /** What a plan may take beyond the settled mail. */
@@ -265,7 +265,7 @@ export function planSeatArchive(
       }
       if (options.retired === true) {
         const month = archiveMonth(payload.at);
-        if (month !== null) move.push({ seat, id: family.id, month, files: family.files, unread: true, undelivered: { from: payload.from } });
+        if (month !== null) move.push({ seat, id: family.id, month, files: family.files, unread: true, undelivered: { from: payload.from, from_id: payload.from_id } });
       }
       continue;
     }
@@ -627,6 +627,11 @@ export function archiveSeatInbox(input: {
   now: Date;
   dryRun: boolean;
   options?: InboxArchivePlanOptions;
+  /** E7b (decision 4): called before an unacknowledged stamped record of a retired seat moves; it
+   *  writes (or verifies) the sender's not-delivered notice and answers whether it stands. A move
+   *  whose notice does not stand is not made: the record stays in the live folder and the next
+   *  pass tries again, so the obligation is carried by the record itself until it is answered. */
+  beforeUndelivered?: (item: InboxArchiveMove) => boolean;
 }): InboxArchiveReport {
   const nowMs = input.now.getTime();
   const options = input.options ?? {};
@@ -653,6 +658,7 @@ export function archiveSeatInbox(input: {
   const moved: InboxArchiveMove[] = orphans;
   const partial: string[] = [];
   for (const family of planned.move) {
+    if (family.undelivered !== undefined && (input.beforeUndelivered === undefined || !input.beforeUndelivered(family))) continue;
     const problem = moveFamily(input.dropDir, family);
     if (problem !== null) {
       partial.push(family.id);
