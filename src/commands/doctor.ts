@@ -631,7 +631,7 @@ function identityFindings(team: TeamFile, dir: string, session: string, sources?
 // The Claude adapter §5: on an E7b-active root, each Claude seat whose channel is not proven,
 // with the reason, and each stale piece a relaunch would repair — a checkout pair that names a
 // retained daemon runtime copy or pins an `--epoch`, a lead with no pair in its folder, a launch
-// line that pins `--resume`. A lead or Atlas restarts the listed seats. A person's pane takes no
+// line that pins `--resume`. A lead restarts the listed seats. A person's pane takes no
 // keys: it is named as waiting. A dark root has nothing here.
 function claudeChannelFindings(team: TeamFile, dir: string, root: string, session: string, home: string, now: Date): Finding[] {
   const findings: Finding[] = [];
