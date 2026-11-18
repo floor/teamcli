@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readMessage } from '../src/mcp/inbox.ts';
-import { signRecord } from '../src/send/record.ts';
+import { signRecord, stampedPayload } from '../src/send/record.ts';
 import { appendDeliverySync } from '../src/queue/append.ts';
 import { activate, floorState, type FloorActor } from '../src/queue/floor.ts';
 import { liveFloorActors } from '../src/queue/floor-actors.ts';
@@ -63,10 +63,11 @@ seats:
 }
 
 function message(at: { root: string; home: string; dropDir: string }, id: string): void {
-  const record = signRecord({
+  // The sender decides the era when it builds the payload (E7b), as `team send` does.
+  const record = signRecord(stampedPayload({
     kind: 'message', id, to: 'lead', to_id: null, root: at.root, session: SESSION,
     at: '2026-11-18T00:00:00.000Z', body: `body of ${id}`, from: 'worker', from_id: null, rule: 'the owner', thread: id,
-  }, at.home);
+  }, at.home), at.home);
   appendDeliverySync({ dropDir: at.dropDir, record }, () => {
     writeFileSync(join(at.dropDir, id), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     return { ok: true, value: true };

@@ -30,8 +30,8 @@ import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE, folderOfDrop } from './drop-fo
 import { publishRecordRead } from './read-receipt.ts';
 import {
   isLeadAckReadBy,
-  isRead,
   isStampedPayload,
+  stampedSettled,
   readRecord,
   readVerifiedReceipt,
   sameFolder,
@@ -258,7 +258,7 @@ export function planSeatArchive(
       // acknowledged mail; unsettled, it never moves while its seat is in the registry, running or
       // stopped (a writer-side read is not settlement, and the pre-channel mark is not written). A
       // retired seat's unacknowledged record moves to the unread archive, and its sender is told.
-      if (isRead(dropDir, family.id, context, key)) {
+      if (stampedSettled(dropDir, family.id, context, key)) {
         const month = archiveMonth(payload.at);
         if (month !== null) move.push({ seat, id: family.id, month, files: family.files });
         continue;

@@ -42,7 +42,7 @@ function payloadOf(at: At, id: string): RecordPayload {
 }
 
 function write(at: At, id: string): void {
-  writeFileSync(join(at.dropDir, id), `${JSON.stringify(signRecord(payloadOf(at, id), at.home), null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(join(at.dropDir, id), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, id), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
 }
 
 const activateRoot = (at: At, actors: FloorActor[] = [daemon]) => activate(at.root, { home: at.home, build: 'b', actors: () => actors });
@@ -79,7 +79,7 @@ describe('the stamp, decided at signing (decision 3: stamp unless proven dark)',
   test('the stamp is inside the signed bytes: stripping it breaks the signature', () => {
     const at = place();
     activateRoot(at);
-    const signed = signRecord(payloadOf(at, M1), at.home);
+    const signed = signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home);
     const raw = JSON.parse(JSON.stringify(signed)) as { payload: Record<string, unknown>; signature: string };
     expect(recordAuthOf(raw, key(at)).kind).toBe('ok');
     delete raw.payload.lvl;
@@ -388,12 +388,60 @@ describe('code round 1 fixes', () => {
     activateRoot(at);
     const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
     mkdirSync(archived, { recursive: true, mode: 0o700 });
-    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(payloadOf(at, M1), at.home), null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, M1), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
     const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'worker' }, { name: 'boss' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
     const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString() };
+    // No registry: the sender cannot be resolved by its agent id, so the team's lead is told.
     expect(noticeUndelivered(input)).toBe(1);
-    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker', undeliveredNoticeId(M1)))).toBe(true);
+    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M1)))).toBe(true);
     // A second pass (after a crash, or a failed first write) finds the notice and writes no other.
     expect(noticeUndelivered(input)).toBe(0);
+  });
+
+  test('the not-delivered notice goes to the sender resolved by its signed agent id, not by a reused seat name', async () => {
+    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
+    mkdirSync(archived, { recursive: true, mode: 0o700 });
+    const payload = stampedPayload({ ...payloadOf(at, M1), from_id: 'agt_000000000007' }, at.home);
+    writeFileSync(join(archived, M1), `${JSON.stringify(signRecord(payload, at.home), null, 2)}\n`, { mode: 0o600 });
+    const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'worker' }, { name: 'boss' }, { name: 'worker-2' }] } as unknown as Parameters<typeof noticeUndelivered>[0]['team'];
+    // The agent that sent it now sits at worker-2; a replacement holds the name `worker`.
+    const agents = [
+      { id: 'agt_000000000007', reach: { team: 't', seat: 'worker-2', session: SESSION }, lifecycle: 'running' },
+      { id: 'agt_000000000008', reach: { team: 't', seat: 'worker', session: SESSION }, lifecycle: 'running' },
+    ] as unknown as NonNullable<Parameters<typeof noticeUndelivered>[0]['agents']>;
+    expect(noticeUndelivered({ home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString(), agents, teamId: 't' })).toBe(1);
+    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker-2', undeliveredNoticeId(M1)))).toBe(true);
+    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker', undeliveredNoticeId(M1)))).toBe(false);
+  });
+
+  test('a stamped record with a plain (no reader word) read stays unsettled for the scheduler and retention', async () => {
+    const { channelRedeliveryDue } = await import('../src/mcp/serve.ts');
+    const { signReceiptPayload, receiptFile, stampedSettled } = await import('../src/send/record.ts');
+    const at = place();
+    activateRoot(at);
+    write(at, M1);
+    const plain = signReceiptPayload({ kind: 'receipt', status: 'read', id: M1, to: 'lead', root: at.root, session: SESSION, at: new Date().toISOString() }, at.home);
+    writeFileSync(receiptFile(at.dropDir, M1, 'read'), `${JSON.stringify(plain, null, 2)}\n`, { mode: 0o600 });
+    expect(stampedSettled(at.dropDir, M1, context(at), key(at))).toBe(false);
+    const serving = { dropDir: at.dropDir, seat: 'lead', root: at.root, session: SESSION, home: at.home };
+    expect(channelRedeliveryDue(serving, Date.now() + 61_000)).toEqual([M1]);
+    const planned = planSeatArchive(at.dropDir, 'lead', context(at), key(at), Date.parse('2026-12-30T00:00:00.000Z'), null, { unreadKeepMs: 14 * 86_400_000 });
+    expect('move' in planned ? planned.move : null).toEqual([]);
+    // The recipient's ack settles it.
+    expect(read(at, M1, 'ack').kind).toBe('published');
+    expect(stampedSettled(at.dropDir, M1, context(at), key(at))).toBe(true);
+  });
+
+  test('an unrelated outbound send (answered-by-send) does not settle a stamped record; a reply does', () => {
+    const at = place();
+    activateRoot(at);
+    write(at, M1);
+    expect(read(at, M1, 'answered-by-send').kind).toBe('published');
+    expect(isRead(at.dropDir, M1, context(at), key(at))).toBe(false);
+    expect(read(at, M1, 'reply').kind).toBe('published');
+    expect(isRead(at.dropDir, M1, context(at), key(at))).toBe(true);
   });
 });

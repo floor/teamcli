@@ -31,7 +31,7 @@ import { isBareShellPane } from '../send/daemon.ts';
 import { deliverTrigger, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
-import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
+import { ensureRecord, signRecord, stampedPayload, type RecordPayload } from '../send/record.ts';
 import { wakeTrigger } from '../send/wake.ts';
 import {
   dropTaken,
@@ -113,7 +113,8 @@ function writeRecordFile(record: PendingNative, home: string): string {
   chmodSync(dropsRoot, 0o700);
   chmodSync(sessionDir, 0o700);
   chmodSync(dropDir, 0o700);
-  const payload: RecordPayload = {
+  // E7b: the delivery era is decided once, here; this exact payload is signed and carried.
+  const payload: RecordPayload = stampedPayload({
     kind: 'message',
     id: record.id,
     to: record.to,
@@ -126,7 +127,7 @@ function writeRecordFile(record: PendingNative, home: string): string {
     from_id: record.from_id,
     rule: record.rule,
     thread: record.thread ?? record.id,
-  };
+  }, home);
   const signed = signRecord(payload, home);
   const { value: written } = appendDeliverySync({ dropDir, record: signed }, () => {
     const result = ensureRecord(dropDir, signed);

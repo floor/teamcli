@@ -210,7 +210,26 @@ export function ackedFile(dropDir: string, id: string): string {
 /** The `read_by` words that confirm: the recipient's own ack, its channel ack tool, a reply (the
  *  reply op and answered-by-send), and a lead's clearance. */
 export function isConfirmedReadBy(readBy: string | undefined): boolean {
-  return readBy === 'ack' || readBy === 'channel' || readBy === 'reply' || readBy === 'answered-by-send' || isLeadAckReadBy(readBy);
+  // `answered-by-send` (an unrelated outbound send to the same sender) is not record-bound, so it
+  // never settles a stamped record; it stays a settlement for legacy mail only.
+  return readBy === 'ack' || readBy === 'channel' || readBy === 'reply' || isLeadAckReadBy(readBy);
+}
+
+/**
+ * The strict settlement of a record already known to be stamped (E7b R4.3), for the paths that
+ * have the record in hand: the retry scheduler, retention and the retirement notices. Only a
+ * positively confirming receipt counts: a verifying `replied`, a verifying `read` whose `read_by`
+ * confirms, or the acknowledgement note. A read with no reader word, any other word, or one that
+ * cannot be read, settles nothing. (`isRead`, the hot listing predicate, reads no record body; it
+ * trusts a read with no reader word because only an older build writes one, and an older build
+ * cannot read a stamped record.)
+ */
+export function stampedSettled(dropDir: string, id: string, context: StatusContext, key: KeyObject): boolean {
+  if (receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key)) return true;
+  const read = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
+  if (read !== null && isConfirmedReadBy(read.payload.read_by)) return true;
+  const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
+  return note !== null && note.payload.read_by === 'ack';
 }
 
 const copyCache = new Map<string, { stamp: string; copy: boolean }>();
@@ -737,10 +756,13 @@ export function closeFile(dropDir: string, id: string): string {
 
 /** Signs a payload with the checkout's message key. The key is created on the first sign. */
 export function signRecord(payload: RecordPayload, home: string, options: { stamp?: false } = {}): SignedRecord {
+  // E7b: signing never decides the delivery era. The sender decides it once, when it builds the
+  // payload (`stampedPayload`), and this signs exactly that payload, so the canonical record and
+  // every leg that carries it agree. `stamp: false` is kept for the no-store path's clarity.
+  void options;
   const key = messageKeyOf(home);
-  const stamped = options.stamp === false ? payload : stampedPayload(payload, home);
-  const raw = stamped as unknown as RawPayload;
-  return withRaw({ payload: stamped, signature: signDomain(MESSAGE_DOMAIN, raw as unknown as Json, key) }, raw, []);
+  const raw = payload as unknown as RawPayload;
+  return withRaw({ payload, signature: signDomain(MESSAGE_DOMAIN, raw as unknown as Json, key) }, raw, []);
 }
 
 /** The exact text a staged record holds: pretty-printed JSON and one newline. This is what

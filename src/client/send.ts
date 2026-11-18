@@ -23,7 +23,7 @@ import { logLine } from '../log.ts';
 import type { Args } from '../args.ts';
 import type { Io } from '../io.ts';
 import type { SendHost } from '../commands/send.ts';
-import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
+import { ensureRecord, signRecord, stampedPayload, type RecordPayload } from '../send/record.ts';
 import { claimClientRequest } from './replay.ts';
 import { sendWithBundle } from './bundles.ts';
 import { clientPaneGuard } from './pane-guard.ts';
@@ -135,7 +135,8 @@ export function writeClientDrop(input: {
   rule?: string;
 }): { ok: true; path: string; id: string; recipientId: string; record: RecordPayload } | { ok: false; why: string } {
   const id = input.id ?? randomUUID();
-  const payload: RecordPayload = {
+  // E7b: the delivery era is decided once, here; this exact payload is signed and carried.
+  const payload: RecordPayload = stampedPayload({
     kind: 'message',
     id,
     to: input.target.recipientSeat,
@@ -149,7 +150,7 @@ export function writeClientDrop(input: {
     rule: input.rule ?? CLIENT_RULE,
     thread: id,
     from_client: { client_id: input.grant.clientId, grant_id: input.grant.grantId },
-  };
+  }, input.home);
   let signed;
   try {
     signed = signRecord(payload, input.home);

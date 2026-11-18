@@ -24,7 +24,7 @@ import { readAgentsComplete, type Agent } from '../../registry/agents.ts';
 import { teamIdOf } from '../../registry/teams.ts';
 import { INBOX_ARCHIVE_RUN_FILE } from '../../send/drop-retention.ts';
 import { archiveSeatInbox, listArchivedUnread, listRecoveryWork, listSeatFamilies, recoverItems, seatDropFolders } from '../../send/inbox-retention.ts';
-import { isRead, isStampedPayload, readRecord, verifyRecord } from '../../send/record.ts';
+import { isStampedPayload, readRecord, stampedSettled, verifyRecord } from '../../send/record.ts';
 import type { KeyObject } from 'node:crypto';
 import { archiveLegacySeat, legacySeatFolders } from '../../send/legacy-inbox-retention.ts';
 import { heldAt } from '../../held.ts';
@@ -190,15 +190,22 @@ export function seatRetired(agents: readonly Agent[], teamId: string, team: Team
 export function noticeUndelivered(input: {
   home: string; root: string; session: string; seat: string; dropDir: string; team: TeamFile;
   context: StatusContext; key: KeyObject; at: string;
+  /** The registry, read whole, and this team's id: the sender is resolved from its signed agent id. */
+  agents?: readonly Agent[]; teamId?: string;
 }): number {
   let written = 0;
   for (const archived of listArchivedUnread(input.dropDir)) {
     const looked = readRecord(archived.path, archived.id);
     if (!looked.ok || looked.record === null || !verifyRecord(looked.record, input.key)) continue;
     const payload = looked.record.payload;
-    if (!isStampedPayload(payload) || isRead(input.dropDir, archived.id, input.context, input.key)) continue;
-    const local = payload.from_client === undefined && input.team.seats.some((entry) => entry.name === payload.from);
-    const to = local ? payload.from : input.team.orchestrator;
+    if (!isStampedPayload(payload) || stampedSettled(input.dropDir, archived.id, input.context, input.key)) continue;
+    // The sender is resolved from its signed agent id, never from a seat name alone (a seat name
+    // can be reused by a replacement): the agent's current seat in this team when it is one of this
+    // team's agents; otherwise (another team, the owner, a client, an unknown id) this team's lead.
+    const agent = payload.from_id === null || input.agents === undefined
+      ? undefined
+      : input.agents.find((one) => one.id === payload.from_id && one.reach.team === input.teamId && one.lifecycle !== 'retired');
+    const to = agent !== undefined ? agent.reach.seat : input.team.orchestrator;
     if (to === undefined || to === null || to === '') continue;
     const notice = writeRuntimeNotice({
       home: input.home, root: input.root, session: input.session, lead: to, id: undeliveredNoticeId(archived.id),
@@ -288,7 +295,21 @@ export async function inboxArchivePass(input: {
   const refused: string[] = [];
   let registrySaid = false;
   const stop = async (after: 'recovery' | 'chunk'): Promise<boolean> => deps.yieldTurn !== undefined && !(await deps.yieldTurn(after));
-  const noticed = new Set<string>();
+  // E7b (decision 4): the not-delivered notices are reconciled from every seat's unread archive on
+  // every pass, before and independently of the archive work below: a completed folder, a seat
+  // recreated since, or a notice that failed last time is answered here. A stable id per message
+  // means a notice already written is found and not repeated. Only stamped, unacknowledged records
+  // are in scope, and only a retired seat's are ever moved there.
+  {
+    const agents = readAgentsComplete(home);
+    for (const folder of seatDropFolders(root)) {
+      noticeUndelivered({
+        home, root, session: folder.session, seat: folder.seat, dropDir: folder.dropDir, team,
+        context: { to: folder.seat, root, session: folder.session }, key: key.key, at: now.toISOString(),
+        ...(agents === null ? {} : { agents, teamId }),
+      });
+    }
+  }
   seats: for (const folder of seatDropFolders(root)) {
     const context: StatusContext = { to: folder.seat, root, session: folder.session };
     const key2 = `${folder.session}/${folder.seat}`;
@@ -393,14 +414,6 @@ export async function inboxArchivePass(input: {
         },
       });
       const unreadHere = report.move.filter((item) => item.unread === true).length;
-      // E7b (decision 4): every unacknowledged stamped record in a retired seat's unread archive is
-      // answered to its sender, reconciled from the archive itself on every pass (a stable id per
-      // message, so a notice already written is found and not repeated). A move whose notice was
-      // cut off, or failed, is therefore answered on the next pass.
-      if (retired && !noticed.has(folder.dropDir)) {
-        noticed.add(folder.dropDir);
-        noticeUndelivered({ home, root, session: folder.session, seat: folder.seat, dropDir: folder.dropDir, team, context, key: key.key, at: now.toISOString() });
-      }
       moved += report.move.length - unreadHere;
       unread += unreadHere;
       if (unreadHere > 0) run.unread[folder.seat] = (run.unread[folder.seat] ?? 0) + unreadHere;

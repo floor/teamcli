@@ -33,7 +33,7 @@ import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { namingFor, senderDisplayName } from '../send/names.ts';
-import { alreadyReadSentence, isRecordSidecarName, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf } from '../send/record.ts';
+import { alreadyReadSentence, isRecordSidecarName, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -438,12 +438,13 @@ export function channelRedeliveryDue(serving: Pick<Serving, 'dropDir' | 'seat' |
   } catch {
     return [];
   }
+  const state = messageKeyState(serving.home);
+  const key = state.kind === 'key' ? state.key : null;
   const due: string[] = [];
   for (const name of names.sort()) {
     if (name.startsWith('.') || isRecordSidecarName(name) || !MESSAGE_ID.test(name)) continue;
     if (recordStampAt(serving.dropDir, name) !== true) continue;
-    if (receiptHeld(serving.dropDir, name, { to: serving.seat, root: serving.root, session: serving.session }, serving.home,
-      claimBindingIn(serving.root, serving.session, serving.seat, name))) continue;
+    if (key === null || stampedSettled(serving.dropDir, name, { to: serving.seat, root: serving.root, session: serving.session }, key)) continue;
     if (!deliveryDue(serving.dropDir, name, nowMs)) continue;
     const history = copyHistory(serving.dropDir, name);
     if (history !== 'unknown' && history.copies === 0) {
@@ -862,9 +863,15 @@ function watchChannel(
     if (halted()) return;
     const nowMs = Date.now();
     for (const name of channelRedeliveryDue(serving, nowMs)) {
-      if (!retireChannelAttempt(serving.dropDir, name, nowMs)) continue;
-      seen.delete(name);
-      pushOne(name);
+      // One record's failure (a frame write that throws) never stops the pass: the record stays
+      // due and the next pass offers it again.
+      try {
+        if (!retireChannelAttempt(serving.dropDir, name, nowMs)) continue;
+        seen.delete(name);
+        pushOne(name);
+      } catch {
+        seen.delete(name);
+      }
     }
   };
   redeliverTimer = setInterval(redeliverPass, options.redeliverMs ?? CHANNEL_REDELIVER_MS);

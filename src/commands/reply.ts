@@ -81,6 +81,7 @@ import {
   writeClose,
   writeReceipt,
   writeRecord,
+  stampedPayload,
   type ClosePayload,
   type RecordPayload,
   type SignedRecord,
@@ -1049,7 +1050,8 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     ...(namingFile === null ? {} : { file: namingFile }),
   });
   const body = `${senderHeader(admission.sender, admission.rule, naming)}\n${text}`;
-  const payload: RecordPayload = {
+  // E7b: the delivery era is decided once, here; this exact payload is signed and carried.
+  const payload: RecordPayload = stampedPayload({
     kind: 'message',
     id: replyId,
     to: targetSeat,
@@ -1063,7 +1065,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     rule: admission.rule,
     thread,
     in_reply_to: answered.id,
-  };
+  }, host.home);
 
   let landed = false;
   // A held seat is a queue, not a refusal, exactly as a send's own drop and typed legs say it:
