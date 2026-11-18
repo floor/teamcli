@@ -404,3 +404,40 @@ describe('the grant lock guards mutations, never a read', () => {
     expect(existsSync(join(clientInboxFolder(w.root, 'acme', 'grok-bot'), `${reply.json.record}.read.json`))).toBe(true);
   });
 });
+
+describe('the shuttle: a launchd job outside the terminal host reads and acks the client inbox', () => {
+  // A launchd job's walk reads to the top outside herdr and its stdin is no terminal: it is placed
+  // `owner-no-tty`, never a seat or a pane, so the client pane guard lets it through, and it may
+  // write the grants folder and the team.
+  const shuttle = { kind: 'owner-no-tty' } as const;
+
+  test('--follow prints the reply, --ack writes its receipt, and a later read finds nothing waiting', async () => {
+    const w = world(true);
+    const sent = await clientSend(w, 'shuttle ping');
+    let id = '';
+    const follow = testIo(w.root, shuttle);
+    const followed = await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--follow'], follow, {
+      home: w.home,
+      now: () => new Date(NOW.getTime() + 120_000),
+      followReads: 2,
+      followWait: async () => {
+        if (id === '') id = (await seatReply(w, 'orchestrator', sent.id, 'shuttle pong')).json.record;
+      },
+    });
+    expect(followed).toBe(0);
+    expect(follow.out).toContain(`reply ${id} from orchestrator:`);
+    expect(follow.out).toContain('shuttle pong');
+
+    const ackIo = testIo(w.root, shuttle);
+    const acked = await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--ack', id, '--json'], ackIo, { home: w.home, now: () => new Date(NOW.getTime() + 180_000) });
+    expect(ackIo.err).not.toContain('refused');
+    expect(acked).toBe(0);
+    expect(JSON.parse(ackIo.out).ack).toMatchObject({ id, status: 'acknowledged', written: true });
+    expect(existsSync(join(clientInboxFolder(w.root, 'acme', 'grok-bot'), `${id}.read.json`))).toBe(true);
+    expect(existsSync(join(clientGrantsFolder(w.home), '.client.lock'))).toBe(false);
+
+    const afterIo = testIo(w.root, shuttle);
+    expect(await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--json'], afterIo, { home: w.home, now: () => new Date(NOW.getTime() + 240_000) })).toBe(0);
+    expect(JSON.parse(afterIo.out).rows).toHaveLength(0);
+  });
+});
