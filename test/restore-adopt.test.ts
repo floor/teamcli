@@ -166,6 +166,13 @@ describe('the restart rebind writes every CLI the proof covers', () => {
     });
   }
 
+  test('the proved CLI start times ride into the state with the pids (E7b: the typed wake\'s full proof)', () => {
+    const { agent, held } = standing('codex', 'seat-codex');
+    const live = { launched: { shell: 700, cli: [800], cli_start: [9_000] }, paneShell: 700, paneShellStart: 5, address: null };
+    expect(recordRebootRebind(home, agent, dir, held, live)).toBe(true);
+    expect(readState(dir).sessions[SESSION]!.seats['seat-codex']!.launched).toEqual({ shell: 700, cli: [800], cli_start: [9_000] });
+  });
+
   test('a socket address for a non-Claude CLI is refused and nothing is written', () => {
     const { agent, held } = standing('codex', 'seat-codex');
     const live = { launched: { shell: 700, cli: [800] }, paneShell: 700, paneShellStart: 5, address: '/fixture/800.sock' };

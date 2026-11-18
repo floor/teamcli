@@ -538,6 +538,105 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(lines[0]).toContain(`message ${ID} · delivery`);
   });
 
+  test('a recorded helper that survives a replaced CLI does not pass the proof', async () => {
+    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    activateRoot(at);
+    // The launch recorded the CLI (222) and a helper beside it (223), with both start times.
+    writeFileSync(join(at.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { agy: {
+      stage: 'ready', pane: 'pane-agy', agent_session: 'session-of-agy', launched: { shell: 111, cli: [222, 223], cli_start: [500, 600] }, pane_shell: 111, pane_shell_start: 1_700_000_000_000,
+    } }, worktrees: {} } } })}\n`);
+    const dropDir = stamped(at, 'agy', ID, 'short');
+    takeCopyNumber(dropDir, ID, 'typed');
+    const lines: string[] = [];
+    const starts: Record<number, number> = { 111: 1_700_000_000_000, 222: 500, 223: 600, 999: 700 };
+    const keyOwner = (foreground: number[]): NonNullable<RetrySources['keyOwner']> => ({
+      agents: () => [{ name: 'agy', pane: 'pane-agy' }],
+      processes: () => ({ shell: 111, foreground }),
+      processStart: (pid) => starts[pid] ?? null,
+    });
+    const pass = async (foreground: number[]): Promise<void> => {
+      age(stampedFolder(at, 'agy'), ID, 31 * MIN);
+      await wakeUnreadDrops(passScene(at, new Date(), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE, keyOwner: keyOwner(foreground) }), { unreadAfter: 600 });
+    };
+    // The CLI is gone and a new one (999) runs beside the surviving helper: refused.
+    await pass([999, 223]);
+    expect(lines).toEqual([]);
+    // The recorded CLI and helper, both born when recorded: the wake goes out.
+    await pass([222, 223]);
+    expect(lines).toHaveLength(1);
+  });
+
+  test('a continuation whose walk no longer holds the typed leg walks nothing', async () => {
+    const at = made(['native']);
+    activateRoot(at);
+    const dropDir = stamped(at, 'native', ID);
+    const queue = nativeQueue();
+    const team = teamOf(at);
+    const { typedWake: _unbound, ...rest } = fake(at, { nativeRoute: queue.route });
+    // The walk this seat resolves now has no typed leg (the order changed after the request).
+    const via = await send.resendStampedRecord({ host: rest, dir: at.dir, root: at.root, project: team.project, session: SESSION, seat: 'native', cli: 'codex', dropDir, id: ID, team, startAfter: 'typed' });
+    expect(via).toBeNull();
+    expect(queue.copies).toEqual([]);
+  });
+
+  test('a failed emitted record takes no pointer number: the copy clock does not move', async () => {
+    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    activateRoot(at);
+    recordPane(at, 'agy', 'pane-agy');
+    const dropDir = stamped(at, 'agy', ID, 'short');
+    takeCopyNumber(dropDir, ID, 'typed');
+    const lines: string[] = [];
+    const preparedFolder = (dir: string): string | null => {
+      for (const name of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, name.name);
+        if (name.isFile() && /^\d+\.prepared$/.test(name.name)) return dir;
+        if (name.isDirectory()) {
+          const found = preparedFolder(path);
+          if (found !== null) return found;
+        }
+      }
+      return null;
+    };
+    // The wake-attempt folder turns unwritable between the attempt's prepare and its first key.
+    const seam: NonNullable<RetrySources['typedWake']> = async (pane, line, cli, session, options) => {
+      const folder = preparedFolder(at.dir);
+      if (folder !== null) chmodSync(folder, 0o500);
+      try {
+        return await typedSeam(lines)(pane, line, cli, session, options);
+      } finally {
+        if (folder !== null) chmodSync(folder, 0o700);
+      }
+    };
+    await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: seam, screen: AGY_IDLE }), { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+    expect(copyHistory(dropDir, ID)).toMatchObject({ copies: 1 });
+  });
+
+  test('the lead\'s typed fallback runs its one-shot step once: the pointer\'s exact number is taken once and the line goes out', async () => {
+    const { deliverLeadTypedWake } = await import('../src/send/typed-wake.ts');
+    const working = readFileSync(join(import.meta.dir, 'fixtures', 'antigravity', '1.4.12', 'working-synthetic.txt'), 'utf8');
+    let firsts = 0;
+    let each = 0;
+    const prompted: string[] = [];
+    const host = {
+      read: () => (prompted.length > 0 ? working : AGY_IDLE),
+      type: () => false,
+      enter: () => false,
+      prompt: (_pane: string, line: string) => { prompted.push(line); return true; },
+      wait: async () => {},
+    };
+    const out = await deliverLeadTypedWake(host, 'pane-lead', 'lead — message x · delivery 2: run team drops', 'antigravity', {
+      // Exclusive, as the pointer's exact number is: a second call is refused.
+      beforeFirstKey: () => { firsts += 1; return firsts === 1; },
+      beforeEachKey: () => { each += 1; return true; },
+      verifyMs: 50, pollMs: 1,
+    });
+    expect(firsts).toBe(1);
+    expect(each).toBe(1);
+    expect(prompted).toHaveLength(1);
+    expect(out.typed).toBe(true);
+  });
+
   test('a seat launched before the CLI start was recorded keeps the older proof: its typed wake still goes out', async () => {
     const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
     activateRoot(at);

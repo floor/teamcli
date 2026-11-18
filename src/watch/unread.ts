@@ -852,9 +852,16 @@ function paneStillSeats(scene: RetryScene, seatName: string, pane: string): bool
     const starts = held.launched.cli_start;
     if (starts === undefined) return true;
     if (starts.length !== held.launched.cli.length) return false;
-    const front = held.launched.cli.findIndex((pid) => processes.foreground.includes(pid));
-    if (front < 0) return false;
-    return owner.processStart(held.launched.cli[front]!) === starts[front];
+    // Every process in front beside the shell is a recorded one, born when it was recorded: a
+    // surviving helper cannot stand in for a replaced CLI, and a process the record does not name
+    // refuses.
+    const recorded = held.launched.cli;
+    for (const pid of processes.foreground) {
+      if (pid === processes.shell) continue;
+      const at = recorded.indexOf(pid);
+      if (at < 0 || owner.processStart(pid) !== starts[at]) return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -1270,7 +1277,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
               // The shared typed path's proof before every key; the pointer's number and the
               // attempt's `emitted` before the first.
               beforeEachKey: () => paneStillSeats(scene, seat.name, pane),
-              beforeFirstKey: () => takePointer() && (leadHandle === null || leadHandle.emit()),
+              beforeFirstKey: () => (leadHandle === null || leadHandle.emit()) && takePointer(),
               reportLine: true,
             });
         if (typed !== null) leadHandle?.settle(typed);
@@ -1355,7 +1362,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         // `emitted` before the first.
         const typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, {
           beforeEachKey: () => paneStillSeats(scene, seat.name, pane),
-          beforeFirstKey: () => takePointer() && (handle === null || handle.emit()),
+          beforeFirstKey: () => (handle === null || handle.emit()) && takePointer(),
           reportLine: true,
         });
         if (typed !== undefined) handle?.settle(typed);

@@ -6128,7 +6128,13 @@ export async function walkReplyDelivery(input: {
       return ended({ via: 'drop', walked: false, unconfirmed: false, summary: blocked.line });
     }
   }
-  let skipping = input.startAfter !== undefined && chosen.includes(input.startAfter);
+  // A continuation whose walk no longer holds its continuation point walks nothing: the legs it
+  // would start from were already offered in this attempt.
+  if (input.startAfter !== undefined && !chosen.includes(input.startAfter)) {
+    failures.push(`${input.startAfter}: the walk no longer holds the continuation point; nothing was walked`);
+    return ended({ via: 'drop', walked: false, unconfirmed: false, summary: null });
+  }
+  let skipping = input.startAfter !== undefined;
   for (const [at, leg] of chosen.entries()) {
     if (skipping) {
       if (leg === input.startAfter) skipping = false;

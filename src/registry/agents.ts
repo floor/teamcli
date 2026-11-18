@@ -504,7 +504,12 @@ export function recordRebootRebind(
     const written = updateState(dir, (state) => {
       const seat = state.sessions[current.reach.session]?.seats[current.reach.seat];
       if (seat === undefined || JSON.stringify(seat) !== snapshot) return false;
-      seat.launched = { shell: live.launched.shell, cli: [...live.launched.cli] };
+      seat.launched = {
+        shell: live.launched.shell,
+        cli: [...live.launched.cli],
+        // The CLI's proved start times ride with the pids (E7b: the typed wake's full proof).
+        ...(live.launched.cli_start === undefined ? {} : { cli_start: [...live.launched.cli_start] }),
+      };
       seat.pane_shell = live.paneShell;
       seat.pane_shell_start = live.paneShellStart;
       return true;
