@@ -9,10 +9,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import * as send from '../src/commands/send.ts';
 import type { SendHost } from '../src/commands/send.ts';
-import { listenerKeyOf, proveOffer } from '../src/comms/offer.ts';
+import { listenerKeyOf, offerAcks, proveOffer } from '../src/comms/offer.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { readMessage, writeListener, type InboxListener } from '../src/mcp/inbox.ts';
 import { activate, deactivate, queuesFolder, type FloorActor } from '../src/queue/floor.ts';
@@ -613,5 +613,65 @@ describe('round 3: the overdue sweep reads history only inside the seat tree', (
     renameSync(real, moved);
     symlinkSync(moved, real);
     expect(offeredCopies(real, ID)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Review round 4.
+
+describe('round 4: an unproven seat\'s pointers keep the pointer clock', () => {
+  test('a first pointer, then an unconfirmed read just before the next retry: the second pointer is still typed', async () => {
+    const at = place();
+    stamped(at, ID);
+    const lines: string[] = [];
+    await wakeUnreadDrops(pass(at, new Date(Date.now() + 1_000), lines), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    // The next pointer waits backoffMs(2) = 120 s from the first pointer's reservation.
+    age(at, ID, 121_000);
+    // A read just now takes a fresh copy: it must not move the pointer clock.
+    expect(readMessage({ dropDir: dropOf(at), root: at.root, session: SESSION, seat: SEAT }, ID, at.home).ok).toBe(true);
+    await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain(`team show ${ID.slice(0, 8)}`);
+  });
+});
+
+describe('round 4: the clearance intent comes before its ack, and a retry finishes the same pair', () => {
+  const ctx = (at: Place) => ({ to: SEAT, root: at.root, session: SESSION, lead: 'lead' });
+  test('between the writes no one sees an ack; the retry after a lost ack write reports cleared by lead', () => {
+    const at = place();
+    stamped(at, ID);
+    expect(readMessage({ dropDir: dropOf(at), root: at.root, session: SESSION, seat: SEAT }, ID, at.home).ok).toBe(true);
+    // The intent alone, as a clearance whose ack write was lost: a waiter sees nothing settled.
+    const intentAt = new Date(Date.now() - 5_000).toISOString();
+    const intent = signReceiptPayload({ kind: 'receipt', status: 'read', id: ID, to: SEAT, root: at.root, session: SESSION, at: intentAt, read_by: 'lead-ack:lead' }, at.home);
+    writeFileSync(clearedFile(stampedOf(at), ID), `${JSON.stringify(intent, null, 2)}\n`);
+    expect(stampedSettlement(stampedOf(at), ID, ctx(at), keyOf(at.home))).toBeNull();
+    expect(settled(at, ID)).toBe(false);
+    // The retry finishes that pair at the intent's time.
+    expect(publishRecordRead({ dropDir: dropOf(at), id: ID, to: SEAT, root: at.root, session: SESSION, home: at.home, key: keyOf(at.home), at: new Date().toISOString(), readBy: 'lead-ack:lead', lead: 'lead' }).kind).toBe('published');
+    expect(stampedSettlement(stampedOf(at), ID, ctx(at), keyOf(at.home))).toEqual({ kind: 'cleared', by: 'lead' });
+  });
+});
+
+describe('round 4: an unproven seat\'s pass never opens a fifo; the proof reader checks the whole chain', () => {
+  test('a fifo attempt entry: the unproven pass returns and types nothing; a linked session folder proves nothing', async () => {
+    const at = place();
+    stamped(at, ID);
+    execFileSync('mkfifo', [join(stampedOf(at), EXPOSURES, ID, '.attempt-1')]);
+    const lines: string[] = [];
+    await wakeUnreadDrops(pass(at, new Date(Date.now() + 1_000), lines), { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+    // A genuine proof, then the seat's session folder in the stamped tree moved and linked back.
+    const binding = { root: at.root, session: SESSION, seat: SEAT, key: keyOf(at.home) };
+    stamped(at, OTHER);
+    pushed(at, OTHER, 'a'.repeat(32));
+    expect(proveOffer(dropOf(at), OTHER, 'a'.repeat(32), listenerKeyOf(at.listener), binding)).not.toBeNull();
+    expect(offerAcks(dropOf(at), listenerKeyOf(at.listener), binding)).toHaveLength(1);
+    const sessionDir = dirname(stampedOf(at));
+    const moved = join(at.root, 'moved-session');
+    renameSync(sessionDir, moved);
+    symlinkSync(moved, sessionDir);
+    expect(offerAcks(dropOf(at), listenerKeyOf(at.listener), binding)).toEqual([]);
   });
 });

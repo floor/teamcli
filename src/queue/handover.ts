@@ -21,7 +21,7 @@
 //
 // This module is inside the comms boundary: only the legs and the deliberate readers call it,
 // and no other module writes under `.exposures/` (test/handover-boundary.test.ts).
-import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createExclusive, ensureFolder } from './durable.ts';
 import { seatFolderOf } from '../send/drop-folder.ts';
@@ -327,13 +327,15 @@ export function attemptLedger(dropDir: string, id: string): AttemptLedger {
     attempts += 1;
     let at = Number.NaN;
     try {
-      at = Date.parse((JSON.parse(readFileSync(join(folder, name), 'utf8')) as { at?: unknown }).at as string);
+      // Bounded and without following a link: a fifo or a device is never opened for a read.
+      const text = readRegularNoFollow(join(folder, name));
+      if (text !== null) at = Date.parse((JSON.parse(text) as { at?: unknown }).at as string);
     } catch {
       // Read by its file time below.
     }
     if (!Number.isFinite(at)) {
       try {
-        at = statSync(join(folder, name)).mtimeMs;
+        at = lstatSync(join(folder, name)).mtimeMs;
       } catch {
         continue;
       }
@@ -358,7 +360,8 @@ export function reserveAttempt(dropDir: string, id: string, host: string, nowMs:
 
 function withdrawn(path: string): boolean {
   try {
-    return (JSON.parse(readFileSync(path, 'utf8')) as { withdrawn?: unknown }).withdrawn === true;
+    const text = readRegularNoFollow(path);
+    return text !== null && (JSON.parse(text) as { withdrawn?: unknown }).withdrawn === true;
   } catch {
     return false;
   }

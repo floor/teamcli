@@ -88,8 +88,10 @@ export function proveOffer(dropDir: string, id: string, token: unknown, listener
 export function offerAcks(dropDir: string, listenerKey: string, binding: OfferBinding): OfferAck[] {
   const folder = offerAckFolder(dropDir, listenerKey);
   if (folder === null) return [];
-  // Confined to the seat's stamped folder: the log and its parent are real folders, not links.
-  if (!realFolder(dirname(folder)) || !realFolder(folder)) return [];
+  // Confined to the seat's stamped folder: every folder from the mail tree down to the log is a
+  // real folder, never a link, checked before the log is listed.
+  const seat = dirname(dirname(folder));
+  if (![dirname(dirname(seat)), dirname(seat), seat, dirname(folder), folder].every(realFolder)) return [];
   let names: string[];
   try {
     names = readdirSync(folder);

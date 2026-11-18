@@ -171,21 +171,24 @@ export function claudeAdapterRoot(cli: string, root: string, home: string, webho
 function dueNow(folder: string, id: string, seat: ResendSeat, nowMs: number, arrived: number): boolean {
   if (seat.only !== undefined && !seat.only.has(id)) return false;
   if (recordStampAt(folder, id) !== true || stampedSettled(folder, id, seat.context, seat.key)) return false;
-  // An overdue record's pointers (a proven seat's `only` set) keep their own clock: the first is
-  // due at the first channel offer's deadline, whatever copy a read took since, and each later one
-  // waits `backoffMs(1 + attempts)` from the newest attempt made since that offer, never a copy.
-  if (seat.only !== undefined) {
+  // The Claude adapter's seats (the watch binds `unproven`, or the proven seat's `only` set) keep
+  // the pointer clock alone (§2.3): an unreadable history declines the attempt before any other
+  // history read; the first pointer since the first channel offer is due at once while the seat is
+  // unproven, or at that offer's 90 s deadline once it is proven; each later one waits
+  // `backoffMs(1 + pointers)` from the newest pointer attempt. A copy never moves this clock.
+  if (seat.only !== undefined || seat.unproven !== undefined) {
     const start = firstChannelOffer(folder, id, arrived);
     const attempts = attemptTimes(folder, id);
-    if (start === null || start === 'unknown' || attempts === 'unknown') return false;
-    const since = attempts.filter((one) => !one.channel && one.atMs >= start);
-    if (since.length === 0) return nowMs - start >= CHANNEL_OVERDUE_MS;
-    const newest = Math.max(...since.map((one) => one.atMs));
-    return nowMs - newest >= backoffMs(1 + since.length);
+    if (start === 'unknown' || attempts === 'unknown') return false;
+    const pointers = attempts.filter((one) => !one.channel && (start === null || one.atMs >= start));
+    if (pointers.length === 0) {
+      if (seat.only !== undefined) return start !== null && nowMs - start >= CHANNEL_OVERDUE_MS;
+      return seat.unproven !== undefined && seat.unproven();
+    }
+    const newest = Math.max(...pointers.map((one) => one.atMs));
+    return nowMs - newest >= backoffMs(1 + pointers.length);
   }
-  // The adapter change (§2.3): the newest offer went by the channel and the seat is unproven now.
-  const changed = seat.unproven !== undefined && newestOffer(folder, id, arrived).channel && seat.unproven();
-  return resendDue(folder, id, nowMs, arrived, changed);
+  return resendDue(folder, id, nowMs, arrived);
 }
 
 /**
