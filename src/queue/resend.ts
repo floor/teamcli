@@ -12,12 +12,15 @@
 // delivery walk, whatever adapter it names; the seat's own channel server offers by its push,
 // because only it can write to its session. Which host owns a seat is one rule both ask
 // (`channelOwnsSeat`): the seat's resolved walk takes the channel, and the live listener is a
-// channel server of this level, which runs this scheduler. Whatever either host believes, an
-// attempt is reserved durably and exclusively before it is dispatched (`reserveAttempt`), so two
-// hosts at one due boundary dispatch it once. A dark root has no stamped folder, so neither host
-// finds anything to offer there.
+// channel server of this level, which runs this scheduler. A candidate list is only a hint: the
+// due decision and the attempt reservation are one critical section under the seat lock
+// (`reserveDue`): the history and the attempts are read again there, the attempt k = 1 + attempts
+// is created exclusively and durably, and the lock is let go before the offer is dispatched. So a
+// stale decision, in either host, reserves nothing. A dark root has no stamped folder, so neither
+// host finds anything to offer there.
 import type { KeyObject } from 'node:crypto';
 import { lstatSync } from 'node:fs';
+import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { join } from 'node:path';
 import { stampedListing } from './mail-tree.ts';
 import { ACTOR_LEVEL } from './floor.ts';
@@ -31,8 +34,9 @@ export const RESEND_PER_PASS = 3;
 const RECORD_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** One seat as the scheduler reads it: its legacy seat folder (the stamped one is found from it),
- *  the context its settlement is read under, and the message key. */
-export type ResendSeat = { dropDir: string; context: StatusContext; key: KeyObject };
+ *  the context its settlement is read under (`to` and `session` name the seat), the message key,
+ *  and the team's `.agents` folder, where the seat lock lives. */
+export type ResendSeat = { dropDir: string; context: StatusContext; key: KeyObject; agentsDir: string };
 
 /** The seat's stamped records that are unsettled and due now, oldest arrival first. */
 export function resendCandidates(seat: ResendSeat, nowMs: number): string[] {
@@ -49,9 +53,7 @@ export function resendCandidates(seat: ResendSeat, nowMs: number): string[] {
     } catch {
       continue;
     }
-    if (recordStampAt(listing.folder, name) !== true) continue;
-    if (stampedSettled(listing.folder, name, seat.context, seat.key)) continue;
-    if (!resendDue(listing.folder, name, nowMs, arrived)) continue;
+    if (!dueNow(listing.folder, name, seat, nowMs, arrived)) continue;
     due.push({ id: name, arrived });
   }
   return due.sort((a, b) => a.arrived - b.arrived || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map((one) => one.id);
@@ -70,6 +72,38 @@ export function channelOwnsSeat(input: { dropDir: string; root: string; session:
   return live.live && live.listener.channel === true && (live.listener.level ?? 0) >= ACTOR_LEVEL;
 }
 
+function dueNow(folder: string, id: string, seat: ResendSeat, nowMs: number, arrived: number): boolean {
+  return recordStampAt(folder, id) === true && !stampedSettled(folder, id, seat.context, seat.key) && resendDue(folder, id, nowMs, arrived);
+}
+
+/**
+ * The due decision and the reservation, as one critical section under the seat lock: the record,
+ * its settlement, its history and its attempts are read again under the lock, and only if it is
+ * due now is attempt k = 1 + attempts created, exclusively and durably. The lock is let go before
+ * the caller dispatches. Null when the lock is not taken, the record is no longer due (a stale
+ * decision), or the reservation cannot be made: nothing is offered.
+ */
+export function reserveDue(seat: ResendSeat, id: string, nowMs: number, host: string): number | null {
+  const listing = stampedListing(seat.dropDir);
+  if (listing === null || listing === 'unreadable') return null;
+  const lock = acquireSeatLock(seat.agentsDir, seat.context.session, seat.context.to);
+  if (!('release' in lock)) return null;
+  try {
+    let arrived: number;
+    try {
+      const stat = lstatSync(join(listing.folder, id));
+      if (!stat.isFile()) return null;
+      arrived = stat.mtimeMs;
+    } catch {
+      return null;
+    }
+    if (!dueNow(listing.folder, id, seat, nowMs, arrived)) return null;
+    return reserveAttempt(listing.folder, id, host, nowMs);
+  } finally {
+    lock.release();
+  }
+}
+
 /** What the seat's adapter did with one offer: the leg that took it, or null when none did. */
 export type ResendOffer = (id: string) => Promise<string | null>;
 
@@ -77,10 +111,10 @@ export type ResendOffer = (id: string) => Promise<string | null>;
 export type ResendResult = { id: string; attempt: number; copy: number | null; via: string | null };
 
 /**
- * One pass for one seat (`host` names it in the attempt record): each due record (up to `limit`)
- * has its attempt reserved durably and exclusively, its settlement read once more, and only then
- * is the offer dispatched; the attempt's outcome is noted after. A record whose attempt a rival
- * host reserved first is skipped. One record's failure never stops the pass: it stays due.
+ * One pass for one seat (`host` names it in the attempt record): each candidate (up to `limit`) is
+ * decided and reserved under the seat lock (`reserveDue`), and only a reserved attempt is
+ * dispatched, outside the lock; its outcome is noted after. One record's failure never stops the
+ * pass: it stays due.
  */
 export async function resendPass(seat: ResendSeat, nowMs: number, offer: ResendOffer, host: string, limit = RESEND_PER_PASS): Promise<ResendResult[]> {
   const listing = stampedListing(seat.dropDir);
@@ -89,12 +123,8 @@ export async function resendPass(seat: ResendSeat, nowMs: number, offer: ResendO
   const results: ResendResult[] = [];
   for (const id of resendCandidates(seat, nowMs).slice(0, Math.max(0, limit))) {
     const at = nowMs + (Date.now() - started);
-    const attempt = reserveAttempt(listing.folder, id, host, at);
+    const attempt = reserveDue(seat, id, at, host);
     if (attempt === null) continue;
-    if (stampedSettled(listing.folder, id, seat.context, seat.key)) {
-      noteAttemptOutcome(listing.folder, id, attempt, { copy: null, via: null, settled: true });
-      continue;
-    }
     const before = copyHistory(listing.folder, id);
     let via: string | null = null;
     try {

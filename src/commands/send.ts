@@ -1,4 +1,4 @@
-import { EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
@@ -3861,10 +3861,12 @@ async function postSeatWebhook(
   project?: string,
   body?: string,
   again = false,
+  delivery?: () => string | null,
 ): Promise<SenderPostOutcome> {
   try {
     return await postArrivalWebhook({
       ...(again ? { again: true } : {}),
+      ...(delivery === undefined ? {} : { delivery }),
       seat,
       webhook,
       team,
@@ -5972,6 +5974,9 @@ export async function walkReplyDelivery(input: {
   /** The re-send scheduler's walk (E7b): the webhook posts again, and only a post this walk made
    *  counts as the leg that took it. */
   resend?: true;
+  /** The re-send scheduler's typed leg (E7b): at the typed position the walk types nothing and
+   *  asks the watch's own guarded typed wake instead; true ends the walk there. */
+  typedRequest?: () => boolean;
 }): Promise<ReplyWalkResult> {
   const seatName = input.seat;
   const from = input.payload.from;
@@ -6171,7 +6176,11 @@ export async function walkReplyDelivery(input: {
       // normal state here and no reason to skip the post: the claim decides who posts.
       // A re-send (E7b) posts again whatever an earlier post left: its claim, never the posted
       // mark, decides who posts, and a mark from an earlier post is no delivery of this attempt.
-      const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body, input.resend === true);
+      // A stamped record's inbox-shaped body carries its numbered copy's header (E7b).
+      const delivery = isStampedPayload(input.payload)
+        ? () => { const n = takeCopyNumber(dropDir, msgId, 'webhook'); return n === null ? `message ${msgId} · delivery not recorded — this may be a re-send` : deliveryHeader(msgId, n); }
+        : undefined;
+      const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body, input.resend === true, delivery);
       const ms = input.host.now().getTime() - startedAt;
       if (posted.kind === 'posted') {
         return ended({ via: 'webhook', walked: true, unconfirmed: false, summary: `${seatName}: delivered (webhook, ${String(posted.ms)} ms)` });
@@ -6233,6 +6242,11 @@ export async function walkReplyDelivery(input: {
       // declares none keeps the no-pane rule, and the walk goes on to the mailbox behind it.
       if (!walkingTyped || typedWake === null) {
         failures.push(`typed: ${NO_PANE_MESSAGING}`);
+        continue;
+      }
+      if (input.typedRequest !== undefined) {
+        if (input.typedRequest()) return ended({ via: 'typed', walked: true, unconfirmed: true, summary: `${seatName}: a typed wake was asked of the watch` });
+        failures.push('typed: the watch takes no typed wake for this seat now');
         continue;
       }
       const found = findAgent(input.host, input.session, seatName);
@@ -6899,14 +6913,7 @@ async function deliverSocketFrame(
 }
 
 /** The event legs a seat's own resolved order lets a watch re-offer a stored message on. */
-export type PermittedEventLegs = {
-  channel: boolean;
-  socket: boolean;
-  /** Whether the walk would type the seat's profile wake (E7b: the re-send scheduler then types it
-   *  through the watch's own guarded wake, never through the walk). */
-  typed?: boolean;
-  why?: string;
-};
+export type PermittedEventLegs = { channel: boolean; socket: boolean; why?: string };
 
 /**
  * The event legs a send to this seat would walk right now, read by the send's own order
@@ -6958,7 +6965,7 @@ export function permittedEventLegs(input: {
     now: input.now,
   });
   if (plan.human) return { channel: false, socket: false, why: 'its pane is a human\'s' };
-  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket'), typed: plan.walkingTyped && plan.chosen.includes('typed') };
+  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket') };
 }
 
 /** The result of the watch's one socket redelivery for a channel push no receipt confirmed. */
@@ -7064,6 +7071,9 @@ export async function resendStampedRecord(input: {
   id: string;
   /** The receiving team's file, for the walk's order and the display naming. */
   team: TeamFile;
+  /** The typed leg's request to the watch's own guarded typed wake; absent, the typed leg is
+   *  passed over (this adapter never types). */
+  typedRequest?: () => boolean;
 }): Promise<string | null> {
   const { dir, root, project, session, seat, cli, dropDir, id, team } = input;
   const payload = verifiedPayloadOf(dropDir, id, input.host.home);
@@ -7073,13 +7083,13 @@ export async function resendStampedRecord(input: {
   // The offer waits for nothing: no receipt grace after a queue takes it, no channel push wait.
   const host: SendHost = { ...input.host, inboxGraceMs: 0, channelGraceMs: 0 };
   const quiet: Io = { stdout: () => {}, stderr: () => {}, cwd: root, env: {}, stdinIsTTY: false };
-  const fromTeam = payload.from_id === null
-    ? teamIdOf(root)
-    : getAgent(host.home, payload.from_id)?.reach.team ?? teamIdOf(root);
+  // The sender's team only when its signed agent id resolves; an unresolved sender is named by its
+  // signed spelling, never by a local seat or persona that shares the name.
+  const boundTeam = payload.from_id === null ? null : getAgent(host.home, payload.from_id)?.reach.team ?? null;
+  const fromTeam = boundTeam ?? teamIdOf(root);
   const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: team });
-  // The frame names the sender: its own label in this team's file when it is a seat of this team,
-  // never the receiving seat's.
-  const senderLabel = fromTeam === teamIdOf(root) && team.seats.some((one) => one.name === payload.from) ? labelNameOf(team, payload.from) : null;
+  const senderLabel = boundTeam === teamIdOf(root) && team.seats.some((one) => one.name === payload.from) ? labelNameOf(team, payload.from) : null;
+  const identityHeader = boundTeam === null ? payload.from : frameIdentityHeader(payload, naming, boundTeam, team.project, senderLabel);
   const walk = await walkReplyDelivery({
     io: quiet,
     host,
@@ -7095,8 +7105,9 @@ export async function resendStampedRecord(input: {
     sender: { teamId: fromTeam, project: team.project, label: senderLabel },
     address: null,
     who: 'watch',
-    identityHeader: frameIdentityHeader(payload, naming, fromTeam, team.project, senderLabel),
+    identityHeader,
     resend: true,
+    typedRequest: input.typedRequest ?? (() => false),
   });
   const via = walk.walked && walk.via !== 'drop' && walk.endpointBlocked === undefined ? walk.via : null;
   appendHistory(project, root, host.home, {

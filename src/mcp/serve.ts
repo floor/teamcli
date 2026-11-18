@@ -873,7 +873,7 @@ function watchChannel(
     const keyNow = messageKeyState(serving.home);
     if (keyNow.kind !== 'key') return;
     resending = true;
-    const seat = { dropDir: serving.dropDir, context: { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key: keyNow.key };
+    const seat = { dropDir: serving.dropDir, context: { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key: keyNow.key, agentsDir: join(serving.root, '.agents') };
     void (async () => {
       if (resendCandidates(seat, Date.now()).length === 0 || !(await ownsSeat())) return;
       await resendPass(seat, Date.now(), async (name) => {

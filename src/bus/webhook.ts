@@ -87,7 +87,7 @@ export type WebhookFacts = {
  *  neither header nor body posts the form every earlier row had. */
 export type WebhookShape =
   | { header?: string; body: 'event' }
-  | { header?: string; body: 'inbox'; message: SignedRecord };
+  | { header?: string; body: 'inbox'; message: SignedRecord; delivery?: string };
 
 /**
  * The one place the routine's contract lives: the body it is sent and the way the secret
@@ -118,7 +118,7 @@ export function webhookRequest(
     init: {
       method: 'POST',
       headers,
-      body: shape.body === 'inbox' ? JSON.stringify(inboxBody(shape.message)) : JSON.stringify({ v: 1, event: record }),
+      body: shape.body === 'inbox' ? JSON.stringify(inboxBody(shape.message, shape.delivery)) : JSON.stringify({ v: 1, event: record }),
     },
   };
 }
@@ -129,7 +129,7 @@ export function webhookRequest(
  * per-record nonce — have no TeamCLI counterpart and are absent rather than invented; `signature`
  * is the record's own hex message signature, not a bridge signature.
  */
-function inboxBody(message: SignedRecord): Record<string, unknown> {
+function inboxBody(message: SignedRecord, delivery?: string): Record<string, unknown> {
   const payload = message.payload;
   return {
     id: payload.id,
@@ -138,6 +138,9 @@ function inboxBody(message: SignedRecord): Record<string, unknown> {
     created_at: payload.at,
     body: payload.body,
     signature: message.signature,
+    // E7b: a stamped record's copy names its message and delivery number on the carrier; the
+    // signed record itself is unchanged.
+    ...(delivery === undefined ? {} : { delivery }),
   };
 }
 
@@ -756,6 +759,9 @@ export type SenderPostInput = {
   thread?: string;
   /** The signed message record the send just wrote: the body an inbox-shaped row reads. */
   message: SignedRecord;
+  /** E7b: the numbered copy's header for an inbox-shaped body, taken only when that shape is
+   *  posted; absent or null, the body carries none. */
+  delivery?: () => string | null;
   /** The folder the record was staged into: the claim and the marks are written beside it. */
   dropDir: string;
   home: string;
@@ -803,7 +809,8 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     let shape: WebhookShape;
     let event: SignedEventRecord;
     if (route.body === 'inbox') {
-      shape = { body: 'inbox', ...header, message: input.message };
+      const delivery = input.delivery?.() ?? undefined;
+      shape = { body: 'inbox', ...header, message: input.message, ...(delivery === undefined ? {} : { delivery }) };
       event = {
         payload: {
           v: 1,

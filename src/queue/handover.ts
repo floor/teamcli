@@ -29,7 +29,7 @@ import { seatFolderOf } from '../send/drop-folder.ts';
 export const EXPOSURES = '.exposures';
 
 /** The legs and readers a copy can leave through, as history names them. */
-export type CopyLeg = 'channel' | 'typed' | 'native' | 'socket' | 'read' | 'pointer';
+export type CopyLeg = 'channel' | 'typed' | 'native' | 'socket' | 'webhook' | 'read' | 'pointer';
 
 /** One name per number, whatever the leg (the leg is in the file): two legs that read the same
  *  history race for the same name, and exactly one of them wins it. */

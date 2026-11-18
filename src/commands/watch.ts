@@ -1973,12 +1973,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               ...(mail === undefined ? {} : { mail }),
               socketRedeliver,
               // E7b (R3.4): the re-send scheduler's adapter, the seat's own resolved walk. It binds
-              // no pane writer: a re-send's typed wake is the watch's own guarded one
-              // (src/watch/unread.ts `resendTyped`), never the walk's.
-              resendStamped: (seat: Seat, dropDir: string, id: string) => {
+              // no pane writer: at its typed leg it asks for the pass's own guarded typed wake
+              // (src/watch/unread.ts), which types the pointer only.
+              resendStamped: (seat: Seat, dropDir: string, id: string, typedRequest: () => boolean) => {
                 const { typedWake: _unbound, ...rest } = realHost;
                 const host: SendHost = { ...rest, home: sources.home ?? realHost.home, now: sources.now };
-                return resendStampedRecord({ host, dir, root, project: team.project, session, seat: seat.name, cli: seat.cli, dropDir, id, team });
+                return resendStampedRecord({ host, dir, root, project: team.project, session, seat: seat.name, cli: seat.cli, dropDir, id, team, typedRequest });
               },
               eventLegs: (seat: string) => permittedEventLegs({ dir, root, home: sources.home ?? realHost.home, session, seat, team, now: sources.now }),
               // A hosted watch sends the unread-lead climb as the daemon's notice, like a prompt's.

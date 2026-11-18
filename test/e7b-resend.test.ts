@@ -22,7 +22,7 @@ import { runMcpServe } from '../src/mcp/serve.ts';
 import { activate, type FloorActor } from '../src/queue/floor.ts';
 import { attemptLedger, backoffMs, copyHistory, EXPOSURES, reserveAttempt, resendDue, takeCopyNumber } from '../src/queue/handover.ts';
 import { seatMailDirIn } from '../src/queue/mail-tree.ts';
-import { channelOwnsSeat, resendCandidates, resendPass, type ResendSeat } from '../src/queue/resend.ts';
+import { channelOwnsSeat, resendCandidates, resendPass, reserveDue, type ResendSeat } from '../src/queue/resend.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readHistory } from '../src/send/history.ts';
@@ -68,10 +68,10 @@ function keyOf(home: string) {
 /** A stamped record from `lead` to `seat`, through the record writer (it lands in the stamped
  *  folder). `root` is the checkout the record is bound to (this one unless a scene says).
  *  Returns the seat's legacy folder, the one every reader starts from. */
-function stamped(at: { root: string; dir: string; home: string }, seat: string, id: string, body = `body of ${id}`, root = at.root): string {
+function stamped(at: { root: string; dir: string; home: string }, seat: string, id: string, body = `body of ${id}`, root = at.root, sender: { from: string; from_id: string | null } = { from: 'lead', from_id: null }): string {
   const payload: RecordPayload = {
     kind: 'message', id, to: seat, to_id: null, root, session: SESSION, at: new Date().toISOString(),
-    body, from: 'lead', from_id: null, rule: 'the owner', thread: id,
+    body, from: sender.from, from_id: sender.from_id, rule: 'the owner', thread: id,
   };
   const signed = signRecord(stampedPayload(payload, at.home), at.home);
   expect(signed.payload.lvl).toBe(3);
@@ -93,7 +93,7 @@ function ack(at: { root: string; home: string }, dropDir: string, seat: string, 
 }
 
 function seatOf(at: { root: string; home: string }, dropDir: string, seat: string): ResendSeat {
-  return { dropDir, context: { to: seat, root: at.root, session: SESSION, lead: 'lead' }, key: keyOf(at.home) };
+  return { dropDir, context: { to: seat, root: at.root, session: SESSION, lead: 'lead' }, key: keyOf(at.home), agentsDir: join(at.root, '.agents') };
 }
 
 /** Moves the record's whole delivery history (its copies, its attempts and the record's own
@@ -126,6 +126,8 @@ function nativeQueue(): { route: NonNullable<SendHost['nativeRoute']>; copies: s
   }) as unknown as NonNullable<SendHost['nativeRoute']>;
   return { route, copies };
 }
+
+const AGY_IDLE = readFileSync(join(import.meta.dir, 'fixtures', 'antigravity', '1.4.12', 'idle.txt'), 'utf8');
 
 const headerOf = (text: string | undefined): string => (text ?? '').split('\n')[0] ?? '';
 const numberOf = (text: string | undefined): number | null => {
@@ -226,6 +228,29 @@ describe('the schedule: from the delivery history, 60 s doubling to 30 minutes, 
     expect(attemptLedger(stampedFolder(at, 'native'), ID).attempts).toBe(1);
   });
 
+  test('a stale due decision reserves nothing: the decision is re-made under the seat lock', async () => {
+    const at = made(['native']);
+    activateRoot(at);
+    const dropDir = stamped(at, 'native', ID);
+    takeCopyNumber(dropDir, ID, 'native');
+    const seat = seatOf(at, dropDir, 'native');
+    const t = Date.now() + 61_000;
+    // Both hosts decided the record is due before either reserved.
+    expect(resendCandidates(seat, t)).toEqual([ID]);
+    expect(resendCandidates(seat, t)).toEqual([ID]);
+    // The first reserves attempt 1 and dispatches; the second, on its stale decision, reserves
+    // nothing: under the lock attempt 1 is seen and the record is not due again for 120 s.
+    expect(reserveDue(seat, ID, t, 'watch')).toBe(1);
+    expect(reserveDue(seat, ID, t, 'channel')).toBeNull();
+    expect(reserveDue(seat, ID, t + 1_000, 'channel')).toBeNull();
+    expect(attemptLedger(stampedFolder(at, 'native'), ID).attempts).toBe(1);
+    // A whole pass delayed after its selection behaves the same: one dispatch in all.
+    const offers: string[] = [];
+    const late = await resendPass(seat, t, async (id) => { offers.push(id); return 'native'; }, 'channel');
+    expect(late).toEqual([]);
+    expect(offers).toEqual([]);
+  });
+
   test('no last day: a record weeks old is still due; an ack ends it', async () => {
     const at = made(['native']);
     activateRoot(at);
@@ -275,6 +300,7 @@ type SceneOptions = {
   pane?: string;
   ownPane?: string | null;
   typedWake?: RetrySources['typedWake'];
+  screen?: string;
   said?: string[];
 };
 
@@ -291,7 +317,7 @@ function passScene(at: World, now: Date, host: SendHost, options: SceneOptions =
     dir: at.dir, session: SESSION, root: at.root, home: at.home, team, live, ownPane: options.ownPane ?? null, now,
     say: (text) => { options.said?.push(text); },
     sources: {
-      screen: () => null,
+      screen: () => options.screen ?? null,
       status: () => 'idle',
       typeText: () => { throw new Error('the pass must not type through the raw writer'); },
       pressEnter: () => { throw new Error('the pass must not submit through the raw writer'); },
@@ -301,7 +327,7 @@ function passScene(at: World, now: Date, host: SendHost, options: SceneOptions =
     eventLegs: (one: string) => send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat: one, team, now: () => now }),
     // The build before the fix has no re-send adapter: the pass then offers nothing (the finding).
     ...(resendStampedRecord === undefined ? {} : {
-      resendStamped: (one, dropDir, id) => resendStampedRecord({ host: { ...rest, now: () => now }, dir: at.dir, root: at.root, project: team.project, session: SESSION, seat: one.name, cli: one.cli, dropDir, id, team }),
+      resendStamped: (one, dropDir, id, typedRequest) => resendStampedRecord({ host: { ...rest, now: () => now }, dir: at.dir, root: at.root, project: team.project, session: SESSION, seat: one.name, cli: one.cli, dropDir, id, team, typedRequest }),
     }),
   };
 }
@@ -403,64 +429,39 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(queue.copies.map(numberOf)).toEqual([2, 3]);
   });
 
-  test('typed: the watch\'s own guarded wake (Antigravity), numbered copies with the attempt token', async () => {
-    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+  test('typed: the walk stops at its typed leg and the pass\'s own typed wake carries the pointer only; the read is the numbered body', async () => {
+    const at = made(['typed', 'socket'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
     activateRoot(at);
     recordPane(at, 'agy', 'pane-agy');
-    const dropDir = stamped(at, 'agy', ID, 'short');
+    const dropDir = stamped(at, 'agy', ID, 'the secret body');
     takeCopyNumber(dropDir, ID, 'typed');
     const lines: string[] = [];
-    const host = fake(at, { agents: () => [{ name: 'agy', pane: 'pane-agy', cli: 'agy' }] });
+    // The walk's own pane writer would throw: a re-send never types through the walk.
+    const host = fake(at, {
+      agents: () => [{ name: 'agy', pane: 'pane-agy', cli: 'agy' }],
+      typedWake: () => { throw new Error('the walk must not type'); },
+    });
     const t0 = Date.now();
-    for (const offset of [61_000, 61_000 + 121_000]) {
-      await wakeUnreadDrops(passScene(at, new Date(t0 + offset), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines) }), { unreadAfter: 600 });
-    }
-    expect(lines.map(numberOf)).toEqual([2, 3]);
-    expect(lines[0]).toContain(`team ack ${ID}`);
-    expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(2);
-  });
-
-  test('typed, guarded: a replaced pane, the watch\'s own pane and an unconfirmed earlier attempt type nothing', async () => {
-    const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
-    activateRoot(at);
-    const dropDir = stamped(at, 'agy', ID, 'short');
-    takeCopyNumber(dropDir, ID, 'typed');
-    const host = fake(at, { agents: () => [] });
-    const lines: string[] = [];
-    // The seat's recorded pane is another one now: the pane the pass saw is no longer the seat's.
-    recordPane(at, 'agy', 'pane-other');
-    await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines) }), { unreadAfter: 600 });
-    expect(lines).toEqual([]);
-    // The pane is the watch's own.
-    recordPane(at, 'agy', 'pane-agy');
-    age(stampedFolder(at, 'agy'), ID, 31 * MIN);
-    await wakeUnreadDrops(passScene(at, new Date(), host, { seat: 'agy', cli: 'agy', ownPane: 'pane-agy', typedWake: typedSeam(lines) }), { unreadAfter: 600 });
-    expect(lines).toEqual([]);
-    // An attempt whose keys landed and that nothing confirmed: it is not retyped inside its backoff
-    // (the wake fence, E6/E7b).
-    age(stampedFolder(at, 'agy'), ID, 31 * MIN);
-    await wakeUnreadDrops(passScene(at, new Date(), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines, { delivered: false, typed: true, reason: 'no working screen' }) }), { unreadAfter: 600 });
-    expect(lines).toHaveLength(1);
-    age(stampedFolder(at, 'agy'), ID, 31 * MIN);
     const said: string[] = [];
-    await wakeUnreadDrops(passScene(at, new Date(), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), said }), { unreadAfter: 600 });
-    expect(lines).toHaveLength(1);
-  });
-
-  test('typed, a numbered copy too long for the wake (Muse, 200 bytes): the pointer is typed, no number taken, the read is the copy', async () => {
-    const at = made(['typed'], [{ name: 'typist', role: 'implementer', cli: 'muse', launch: 'muse' }]);
-    activateRoot(at);
-    recordPane(at, 'typist', 'pane-typist');
-    const dropDir = stamped(at, 'typist', ID, 'short');
-    const lines: string[] = [];
-    await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), fake(at, { agents: () => [] }), { seat: 'typist', cli: 'muse', typedWake: typedSeam(lines) }), { unreadAfter: 600 });
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain(`--id ${ID}`);
-    expect(lines[0]).not.toContain('short');
-    expect(copyHistory(dropDir, ID)).toMatchObject({ copies: 0 });
-    const shown = readMessage({ dropDir, root: at.root, session: SESSION, seat: 'typist' }, ID, at.home);
+    for (const offset of [61_000, 61_000 + 121_000]) {
+      await wakeUnreadDrops(passScene(at, new Date(t0 + offset), host, { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE, said }), { unreadAfter: 600 });
+    }
+    // The walk ended at its typed leg (the channel-class legs before it were walked first, as the
+    // cascade orders them).
+    expect(said.filter((line) => line.includes(`message ${ID} is not acknowledged; offered again on the typed`))).toHaveLength(2);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain(`message ${ID} · delivery 2: run team drops`);
+    expect(lines[1]).toContain(`message ${ID} · delivery 3: run team drops`);
+    for (const line of lines) {
+      expect(line).not.toContain('the secret body');
+      // The wake-attempt fence's token rides on the line (the screen proof).
+      expect(line).toMatch(/\[w:[^\]]+\]/);
+    }
+    expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(2);
+    const shown = readMessage({ dropDir, root: at.root, session: SESSION, seat: 'agy' }, ID, at.home);
     if (!shown.ok) throw new Error('the read failed');
-    expect(headerOf(shown.body)).toBe(`message ${ID} · delivery 1`);
+    expect(numberOf(shown.body)).toBe(4);
+    expect(shown.body).toContain('the secret body');
   });
 
   test('socket (a Claude seat that accepts cross-session frames); the frame names the sender, never the receiver\'s persona', async () => {
@@ -484,6 +485,15 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(host.frames[0]).toContain(`message ${ID} · delivery 2 — a re-send`);
     expect(host.frames[1]).toContain(`message ${ID} · delivery 3 — a re-send`);
     for (const frame of host.frames) expect(frame).not.toContain('Persona Zed');
+    // A sender whose signed agent id no longer resolves, spelled like the labelled local seat:
+    // the frame names its signed spelling, never that seat's persona.
+    const unresolved = stamped(at, 'helper', ID2, 'from afar', at.root, { from: 'helper', from_id: 'agt_0123456789ab' });
+    takeCopyNumber(unresolved, ID2, 'socket');
+    age(stampedFolder(at, 'helper'), ID2, 31 * MIN);
+    await resendPass(seatOf(at, unresolved, 'helper'), Date.now(), adapter(at, host, 'claude-code', 'helper', unresolved), 'watch');
+    const last = host.frames.at(-1) ?? '';
+    expect(last).toContain(`message ${ID2} · delivery 2`);
+    expect(last).not.toContain('Persona Zed');
   });
 
   test('webhook: an earlier 2xx does not stand for a re-send; every attempt is a new request', async () => {
@@ -504,6 +514,12 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     const results = await twoOffers(at, 'iris', offer, dropDir);
     expect(results.map((one) => one.map((r) => r.via))).toEqual([['webhook'], ['webhook']]);
     expect(hits).toHaveLength(3);
+    // An inbox-shaped body names its copy on the carrier; the event shape carries no body at all.
+    for (const hit of hits) {
+      const sent = JSON.parse(hit) as { delivery?: string; event?: unknown; body?: string };
+      if (sent.event === undefined) expect(sent.delivery).toMatch(new RegExp(`^message ${ID} · delivery \\d+`));
+      else expect(hit).not.toContain(`body of ${ID}`);
+    }
     // The ack ends it.
     ack(at, dropDir, 'iris', ID);
     age(stampedFolder(at, 'iris'), ID, 31 * MIN);

@@ -378,7 +378,7 @@ describe('code round 1 fixes', () => {
     writeStamped(at, M1);
     writeStamped(at, M2);
     writeFileSync(channelAbortPath(stampedDir(at), M2), `{"id":"${M2}"}\n`);
-    const seat = { dropDir: at.dropDir, context: { ...context(at), lead: 'lead' }, key: key(at) };
+    const seat = { dropDir: at.dropDir, context: { ...context(at), lead: 'lead' }, key: key(at), agentsDir: join(at.root, '.agents') };
     // Just arrived, no copy yet: the arrival's own delivery is not doubled.
     expect(resendCandidates(seat, Date.now())).toEqual([]);
     // A minute on, both are due: M1 never delivered (its first history write failed, say), M2 aborted.
@@ -400,7 +400,7 @@ describe('code round 1 fixes', () => {
     const plain = signReceiptPayload({ kind: 'receipt', status: 'read', id: M1, to: 'lead', root: at.root, session: SESSION, at: new Date().toISOString() }, at.home);
     writeFileSync(receiptFile(at.dropDir, M1, 'read'), `${JSON.stringify(plain, null, 2)}\n`, { mode: 0o600 });
     expect(stampedSettled(at.dropDir, M1, context(at), key(at))).toBe(false);
-    const seat = { dropDir: at.dropDir, context: context(at), key: key(at) };
+    const seat = { dropDir: at.dropDir, context: context(at), key: key(at), agentsDir: join(at.root, '.agents') };
     expect(resendCandidates(seat, Date.now() + 61_000)).toEqual([M1]);
     const planned = planSeatArchive(at.dropDir, 'lead', context(at), key(at), Date.parse('2026-12-30T00:00:00.000Z'), null, { unreadKeepMs: 14 * 86_400_000 });
     expect('move' in planned ? planned.move : null).toEqual([]);
