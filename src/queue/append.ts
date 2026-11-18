@@ -771,14 +771,24 @@ export function verifiedQueuePlaceOf(dropDir: string, msgId: string, binding: { 
   const base = queueBaseOf(dropDir);
   if (base === null) return null;
   const entry = readEntry(join(base, place.generation), place.seq, { root: binding.root, session: binding.session, seat: binding.seat, generation: place.generation }, home);
-  return entry !== null && entry.payload.msg_id === msgId ? place : null;
+  if (entry === null || entry.payload.msg_id !== msgId) return null;
+  return committedInJournal(join(base, place.generation), place.seq, msgId) ? place : null;
 }
 
 /** The msg_id a committed, verifying entry holds at `seq` of `generation`; null otherwise. */
 export function entryMsgIdAt(dropDir: string, generation: string, seq: number, binding: { root: string; session: string; seat: string }, home: string): string | null {
   const base = queueBaseOf(dropDir);
   if (base === null || !GENERATION.test(generation)) return null;
-  return readEntry(join(base, generation), seq, { ...binding, generation }, home)?.payload.msg_id ?? null;
+  const id = readEntry(join(base, generation), seq, { ...binding, generation }, home)?.payload.msg_id ?? null;
+  return id !== null && committedInJournal(join(base, generation), seq, id) ? id : null;
+}
+
+/** Whether the generation's journal's last line for `seq` commits it to `msgId` (a reserved or
+ *  voided seq, or a torn journal, is not committed). */
+function committedInJournal(folder: string, seq: number, msgId: string): boolean {
+  const lines = readJournal(join(folder, 'journal.jsonl')).lines.filter(line => line.seq === seq);
+  const last = lines[lines.length - 1];
+  return last !== undefined && last.state === 'committed' && last.msg_id === msgId;
 }
 
 /** The seat's current generation's name, read without the lock; null when there is none. A

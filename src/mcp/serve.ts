@@ -530,6 +530,7 @@ function watchChannel(
     // before the line. If the completion flag cannot be published, the sender sees that marker
     // and does not start another leg. The record stays unread until ack, inbox read, or reply.
     // A stream write still does not prove the client processed the line.
+    let heldExposure: ReturnType<typeof exposeBody> | null = null;
     const committed = withChannelCommit(serving.dropDir, id, () => {
       if (channelAborted(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelPushHeld(serving.dropDir, id)) {
         return 'skip' as const;
@@ -541,6 +542,7 @@ function watchChannel(
       // The exposure claim (rfc-event-comms §3, E6), immediately before the frame can carry the
       // body: on an active root only its creator pushes the body; any other push carries a pointer.
       const exposure = exposeBody({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
+      heldExposure = exposure;
       if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(serving.dropDir, id)?.seq ?? null);
       const reserved = recordChannelPush(serving.dropDir, {
         v: 1,
@@ -567,6 +569,10 @@ function watchChannel(
       else if (exposure.kind === 'legacy') recordDeliveredBody(delivered);
       return 'pushed' as const;
     });
+    // A commit that returned before the frame was written exposed nothing: give the claim back.
+    if (committed === 'skip' && heldExposure !== null && (heldExposure as { kind: string }).kind === 'expose') {
+      (heldExposure as Extract<ReturnType<typeof exposeBody>, { kind: 'expose' }>).settle('no', () => false);
+    }
     if (committed === 'busy') {
       seen.delete(id);
       scheduleRetry(id);

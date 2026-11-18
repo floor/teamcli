@@ -66,6 +66,18 @@ export function ensureFolder(folder: string, faults: { before?: (step: 'mkdir' |
       faults.before?.('parent-fsync', path);
       fsyncFolder(dirname(path));
     }
+    // A retry after a parent fsync failed finds the folder standing: every level from the team's
+    // `.agents` folder down is flushed in its parent on every call, so no earlier, unsynced mkdir
+    // is taken for durable.
+    const anchor = folder.lastIndexOf('/.agents/');
+    if (anchor >= 0) {
+      for (let at = folder; at.length > anchor + '/.agents'.length; at = dirname(at)) {
+        if (!missing.includes(at)) {
+          faults.before?.('parent-fsync', at);
+          fsyncFolder(dirname(at));
+        }
+      }
+    }
     return true;
   } catch {
     return false;

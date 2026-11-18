@@ -2964,8 +2964,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         );
         note(attempt.walkAttempt);
         markLeg('native', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
-        // E3: a route that did not take the payload settles its hand-over now (a timeout may have carried it).
-        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, (attempt as { timedOut?: boolean }).timedOut === true ? 'unknown' : 'no');
+        // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
+        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
           settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
           clearEndpointBlocked(to.root, to.session, to.seat);
@@ -3118,8 +3118,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       );
       markLeg('headless-resume', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
       note(attempt.walkAttempt);
-      // E3: a route that did not take the payload settles its hand-over now (a timeout may have carried it).
-      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, (attempt as { timedOut?: boolean }).timedOut === true ? 'unknown' : 'no');
+      // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
+      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
         settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
         report.sent = msgId;
@@ -6296,8 +6296,8 @@ export async function walkReplyDelivery(input: {
             liveProbe: true,
           },
         );
-        // E3: a route that did not take the payload settles its hand-over now (a timeout may have carried it).
-        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, (attempt as { timedOut?: boolean }).timedOut === true ? 'unknown' : 'no');
+        // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
+        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
           settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
           clearEndpointBlocked(input.root, input.session, seatName);
@@ -6378,8 +6378,8 @@ export async function walkReplyDelivery(input: {
           ...(input.host.headlessResumeSpawn === undefined ? {} : { spawn: input.host.headlessResumeSpawn }),
         },
       );
-      // E3: a route that did not take the payload settles its hand-over now (a timeout may have carried it).
-      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, (attempt as { timedOut?: boolean }).timedOut === true ? 'unknown' : 'no');
+      // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
+      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
         settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
         const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;

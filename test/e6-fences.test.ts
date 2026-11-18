@@ -309,6 +309,15 @@ describe('wake-attempt states', () => {
 });
 
 describe('durable create', () => {
+  test('a retry after a failed parent fsync flushes that standing level again', () => {
+    const s = scene();
+    const folder = join(s.root, '.agents', 'x', 'y');
+    expect(createExclusive(join(folder, 'f'), 'a', { before: (at) => { if (at === 'parent-fsync') throw new Error('fault'); } })).toBe('failed');
+    const steps: string[] = [];
+    expect(createExclusive(join(folder, 'f'), 'a', { before: (at, path) => { steps.push(`${at}:${path.slice(s.root.length)}`); } })).toBe('created');
+    expect(steps.filter(x => x.startsWith('parent-fsync'))).toEqual(expect.arrayContaining(['parent-fsync:/.agents/x/y', 'parent-fsync:/.agents/x']));
+  });
+
   test('first-write trace: every new folder level is made durable in its parent before the file', () => {
     const s = scene();
     const steps: string[] = [];

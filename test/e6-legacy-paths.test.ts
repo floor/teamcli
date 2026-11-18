@@ -126,6 +126,28 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(readMessage(target(at), M1, at.home).ok).toBe(false);
   });
 
+  test('after a sealed hand-over (or a sealed inbox read), a later carrier gets a pointer, never the body', () => {
+    const at = place();
+    message(at, M1);
+    on(at);
+    const first = exposeBody(leg(at, M1), 'channel', at.home);
+    if (first.kind === 'expose') first.settle('yes', (owner) => recordDeliveredBody({ dropDir: at.dropDir, id: M1, root: at.root, session: SESSION, seat: 'lead', home: at.home, owner }));
+    expect(exposeBody(leg(at, M1), 'socket', at.home).kind).toBe('pointer');
+    message(at, M2);
+    expect(readMessage(target(at), M2, at.home).ok).toBe(true);
+    expect(exposeBody(leg(at, M2), 'native', at.home).kind).toBe('pointer');
+  });
+
+  test('a placement whose journal line is only reserved is not proved', () => {
+    const at = place();
+    message(at, M1);
+    const generation = currentGenerationName(at.dropDir)!;
+    const journal = join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'journal.jsonl');
+    const lines = readFileSync(journal, 'utf8').trim().split('\n').filter(l => !l.includes('"committed"'));
+    writeFileSync(journal, `${lines.join('\n')}\n`);
+    expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
+  });
+
   test('a pointer enqueue never writes a read receipt (the first claim faulted, the leg carried a pointer)', () => {
     const at = place();
     message(at, M2);

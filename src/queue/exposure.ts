@@ -25,7 +25,10 @@
 // root takes none and the legs behave as before E6; an owned claim that already stands is still
 // honoured by every reader, whatever the floor.
 import { randomBytes } from 'node:crypto';
-import { claimRead, ownerOfClaim, removeOwnedClaim } from '../send/read-claim.ts';
+import { join } from 'node:path';
+import { claimRead, ownerOfClaim, READ_CLAIMS, removeOwnedClaim } from '../send/read-claim.ts';
+import { receiptHeld } from '../mcp/inbox.ts';
+import { ensureFolder } from './durable.ts';
 import { mayCreateFence } from './floor.ts';
 
 export type BodyLeg = 'channel' | 'typed' | 'native' | 'socket';
@@ -63,8 +66,22 @@ export function exposeBody(target: ExposureTarget, leg: BodyLeg, home: string): 
   if (isExposeOwner(standing)) return { kind: 'pointer', why: 'already shown by another hand-over' };
   if (!mayCreateFence(target.root, home, 'exposure')) return { kind: 'legacy' };
   const owner = `${EXPOSE_PREFIX}${leg}:${target.msgId}:${randomBytes(6).toString('hex')}`;
+  // The claim folder chain is made durable before the owner file can be (§3 first write).
+  if (!ensureFolder(join(target.dropDir, READ_CLAIMS))) return { kind: 'pointer', why: 'the read claim folder could not be made durable' };
   const claim = claimRead(target.dropDir, target.msgId, owner);
   if (!claim.ok) return { kind: 'pointer', why: claim.why === 'recovering' ? 'already shown by another hand-over' : `the read claim was not taken (${claim.why})` };
+  // Under the claim: a message already read (or replied to, or cleared) is never carried again.
+  // A receipt state that cannot be read is treated as held (fail closed).
+  let served: boolean;
+  try {
+    served = receiptHeld(target.dropDir, target.msgId, { to: target.seat, root: target.root, session: target.session }, home, undefined);
+  } catch {
+    served = true;
+  }
+  if (served) {
+    claim.release();
+    return { kind: 'pointer', why: 'already read' };
+  }
   // The lock is let go at once; the durable owner file is the fence from here on.
   claim.keep();
   let settled = false;
