@@ -259,7 +259,17 @@ export function stampedSettled(dropDir: string, id: string, context: StatusConte
   if (read !== null && (word === 'ack' || word === 'channel' || word === 'reply')) return true;
   if (read !== null && isLeadAckReadBy(word) && leadAckReceiptAt(dropDir, id, context, key) !== null) return true;
   const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
-  return note !== null && note.payload.read_by === 'ack';
+  if (note === null) return false;
+  if (note.payload.read_by === 'ack') return true;
+  return clearedBy(note.payload.read_by, context) !== null;
+}
+
+/** The clearing actor a lead-ack word names, when its authority holds for this context: the owner,
+ *  or the lead the caller bound. Null otherwise. */
+function clearedBy(readBy: string | undefined, context: StatusContext): string | null {
+  const by = leadAckActorOf(readBy);
+  if (by === null) return null;
+  return by === 'owner' || (context.lead !== undefined && by === context.lead) ? by : null;
 }
 
 /**
@@ -279,7 +289,10 @@ export function stampedSettlement(dropDir: string, id: string, context: StatusCo
     if (cleared !== null) return { kind: 'cleared', by: cleared.by };
   }
   const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
-  return note !== null && note.payload.read_by === 'ack' ? { kind: 'acked' } : null;
+  if (note === null) return null;
+  if (note.payload.read_by === 'ack') return { kind: 'acked' };
+  const by = clearedBy(note.payload.read_by, context);
+  return by === null ? null : { kind: 'cleared', by };
 }
 
 const copyCache = new Map<string, { stamp: string; copy: boolean }>();

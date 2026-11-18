@@ -47,7 +47,18 @@ import { recordStampAt } from '../send/record.ts';
 // over and never reported over. A delivery the seam itself says took nothing (`held`,
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
-import { socketSuppressed } from '../queue/floor.ts';
+import { existingRecordIdsIn, shortIdPrefix } from '../send/frame.ts';
+import { typedWakeMaxFor } from '../send/readable-wake.ts';
+import { floorState, socketSuppressed } from '../queue/floor.ts';
+
+/** Whether the root's floor reads active now: positive, never unknown or fenced. */
+function floorActive(root: string, home: string): boolean {
+  try {
+    return floorState(root, home).kind === 'active';
+  } catch {
+    return false;
+  }
+}
 import { appendDeliverySync } from '../queue/append.ts';
 import { queueLog } from '../queue/log.ts';
 import { createHash, type KeyObject } from 'node:crypto';
@@ -799,6 +810,10 @@ async function resendStampedDrops(scene: RetryScene, seat: Seat, key: KeyObject,
   if (scene.home !== undefined && claudeAdapterRoot(seat.cli, scene.root, scene.home, seat.webhook !== undefined)) {
     const unproven = (): boolean => channelUnproven({ dropDir, root: scene.root, session: scene.session, seat: seat.name, context, key, nowMs }) !== null;
     if (!unproven()) return requested;
+    // No pointer is reserved for a protected pane (its declared order leaves `typed` out; a
+    // person's pane), nor on a floor that does not read active now: the record waits for its
+    // hook or a pull, and `team doctor` names the seat as waiting.
+    if (legs?.pointer !== true || !floorActive(scene.root, scene.home)) return requested;
     const results = await resendPass({ dropDir, context, key, agentsDir: scene.dir, unproven }, nowMs, async (id) => {
       release(wakePath(dropDir, id));
       return TYPED_REQUESTED;
@@ -1217,10 +1232,6 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // The wake's header names the sender the signed record carries, resolved through this
       // home's registries. A sender that cannot be pinned is not typed nameless: the message
       // stays unread, its reservations are never taken, and the report pass says why.
-      const sender = wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now, wordsNow());
-      if (sender === null) continue;
-      // A socket delivery's re-wake names the message the frame carried: answer it or ack it
-      // (ADR `message-path`, D3). Any other message keeps the profile's read sentence.
       // A re-send's wake (E7b) is the pointer only: the message, its delivery number, `team drops`.
       const pointerFor = requested.has(audited.message.id) ? audited.message.id : null;
       const pointer = pointerFor === null ? null : resendPointerHint(dropDir, pointerFor);
@@ -1229,24 +1240,39 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       /** The pointer's number, taken exactly as the line names it, inside the proven first-key
        *  step: a rival that took it first refuses the key. */
       const takePointer = (): boolean => pointerFor === null || pointer === null || takeExactCopyNumber(dropDir, pointerFor, 'pointer', pointer.copy);
+      // The Claude adapter's pointer (§2.4) is built from the verified record alone: its one
+      // identity (the signed spelling when the registry cannot name the sender) and the copy.
+      const adapterPointer = adapterSeat && pointerFor !== null && pointer !== null;
+      // The wake's header names the sender the signed record carries, resolved through this
+      // home's registries. A sender that cannot be pinned is not typed nameless: the message
+      // stays unread, its reservations are never taken, and the report pass says why.
+      const sender = adapterPointer ? null : wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now, wordsNow());
+      if (!adapterPointer && sender === null) continue;
+      // A socket delivery's re-wake names the message the frame carried: answer it or ack it
+      // (ADR `message-path`, D3). Any other message keeps the profile's read sentence.
       const wakeHint = pointer !== null
         ? pointer.hint
         : linesNow().get(audited.message.id)?.via === 'socket' ? socketWakeHint(audited.message.id) : undefined;
       // A re-send's pointer never renders a wake template (no subject, no summary): only the
       // sender as the registry names it, then the message, its delivery number and `team drops`.
-      // The Claude adapter's pointer (§2.4) names the sender by its one identity and the copy.
-      const adapterPointer = adapterSeat && pointerFor !== null && pointer !== null;
       const line = adapterPointer && pointer !== null
-        ? adapterPointerLine(renderedIdentity(audited.payload.from, { record: audited.payload, home }), audited.message.id, pointer.copy)
-        : pointer !== null
-          ? composeMessageLine(`${sender.name ?? sender.seat} —`, pointer.hint)
-          : readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
+        ? adapterPointerLine(
+          renderedIdentity(audited.payload.from, { record: audited.payload, home }),
+          shortIdPrefix(audited.message.id, existingRecordIdsIn(dropDir)),
+          pointer.copy,
+          typedWakeMaxFor(seat.cli),
+        )
+        : sender === null
+          ? null
+          : pointer !== null
+            ? composeMessageLine(`${sender.name ?? sender.seat} —`, pointer.hint)
+            : readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
       if (line === null) continue;
       // The typed retry submits a box that already holds exactly its line, and leaves every
       // other draft. A lead's draft is the exception the delivery below can keep: it copies
       // the text and puts it back, and types nothing when it cannot. The typed-wake seam has
       // no restore, so it is not used while that draft is there.
-      const preserveDraft = leadSeat && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen);
+      const preserveDraft = leadSeat && !adapterPointer && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen);
       if (!preserveDraft && (retry !== null || adapterPointer) && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen)) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an
@@ -1272,7 +1298,9 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // A lead is woken by a socket nudge first (the bus fans `message.arrived` to the seat and
       // to a channel server). No bus, and the typed wake: a box that holds other text is cleared
       // and that text is put back, or the wake line is not typed.
-      if (leadSeat) {
+      // The Claude adapter's pointer, a lead's included, takes the guarded typed seam below (its
+      // gate, attempt record and hourly cap), never the lead's legacy fallback.
+      if (leadSeat && !adapterPointer) {
         let pushed = false;
         // The Claude adapter §1: no lead socket nudge on an E7b-active root.
         if (!adapterPointer && !socketSuppressed(scene.root, home)) try {
@@ -1386,11 +1414,17 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           scene.say(`${seat.name}: the wake attempt could not be recorded; no wake line was typed`, false);
           continue;
         }
+        // The Claude adapter's pointer is typed only under an enforcing wake attempt on a root
+        // that reads active now: an unknown or fenced floor, or no durable attempt, types nothing.
+        if (adapterPointer && (handle === null || gate.create !== 'enforce' || !floorActive(scene.root, home))) {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          continue;
+        }
         const typedLine = handle !== null && gate.create === 'enforce' ? `${line} ${tokenText(handle.attempt.token)}` : line;
         // The shared typed path's proof before every key; the pointer's number and the attempt's
-        // `emitted` before the first.
+        // `emitted` before the first. An adapter pointer also asks the floor again at every key.
         const typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, {
-          beforeEachKey: () => paneStillSeats(scene, seat.name, pane),
+          beforeEachKey: () => paneStillSeats(scene, seat.name, pane) && (!adapterPointer || floorActive(scene.root, home)),
           beforeFirstKey: () => (handle === null || handle.emit()) && takePointer(),
           reportLine: true,
         });

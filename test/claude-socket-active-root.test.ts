@@ -97,6 +97,37 @@ describe('F11: an active root beside a dark root', () => {
   });
 });
 
+describe('round 1: an activation that lands during the send stops the dial', () => {
+  test('dark when the walk starts, active before the frame: no frame is written', async () => {
+    // A dark send's reads of the pane, counted: the last one is the placement proof read just
+    // before the dial, after the leg and the frame were admitted.
+    const counting = socketWorld();
+    let reads = 0;
+    const counted = fake(counting);
+    const probe = fake(counting, { processInfo: (session: string, pane: string) => { reads += 1; return counted.processInfo(session, pane); } });
+    expect(await runSend(['lead', 'counted'], owner(counting.root), probe)).toBe(0);
+    expect(probe.frames).toHaveLength(1);
+    const made = socketWorld();
+    let seen = 0;
+    let activated = false;
+    const base = fake(made);
+    const host = fake(made, {
+      processInfo: (session: string, pane: string) => {
+        seen += 1;
+        if (seen === reads && !activated) {
+          activated = true;
+          activateRoot(made);
+        }
+        return base.processInfo(session, pane);
+      },
+    });
+    await runSend(['lead', 'raced'], owner(made.root), host);
+    expect(activated).toBe(true);
+    expect(socketSuppressed(made.root, made.home)).toBe(true);
+    expect(host.frames).toEqual([]);
+  });
+});
+
 describe('F12: deactivation with pending stamped mail', () => {
   test('the dark root gets its socket eligibility back unchanged; the stamped mail stays readable by level-3 readers', async () => {
     const made = socketWorld();

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { permittedEventLegs } from './send.ts';
 import { channelUnproven } from '../queue/resend.ts';
 import { socketSuppressed } from '../queue/floor.ts';
 import { seatMailDirIn } from '../queue/mail-tree.ts';
@@ -657,7 +658,10 @@ function claudeChannelFindings(team: TeamFile, dir: string, root: string, sessio
     // The file's own launch line: a resume a restart adds to the running line is not a pin.
     if (/(^|\s)--resume(\s|=|$)/.test(seat.launch)) reasons.push('a pinned --resume on the launch line');
     if (reasons.length === 0) continue;
-    if (seat.human === true) {
+    // A protected pane takes no pointer: a person's pane, or one whose declared order leaves the
+    // `typed` word out (the same answer the watch asks, src/commands/send.ts permittedEventLegs).
+    const legs = permittedEventLegs({ dir, root, home, session, seat: seat.name, team, now: () => now });
+    if (seat.human === true || legs.pointer !== true) {
       if (unproven !== null) findings.push({ level: 'note', text: plainLine(`${seat.name}: waiting: protected pane, no proven channel`) });
       continue;
     }

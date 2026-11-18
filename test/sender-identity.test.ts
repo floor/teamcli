@@ -13,6 +13,7 @@ import {
   personaCollision,
   registryIdentityView,
   senderIdentity,
+  signedIdentityOf,
   withSignedIdentity,
   type IdentitySeat,
   type IdentityView,
@@ -194,7 +195,10 @@ describe('F16: the model signed at send time', () => {
     upsertTeam(made.home, teamId, { project: 'acme', session: 'acme', root, roster: [{ agent: agent.id, seat: 'helper', role: 'implementer' }], at: AT });
     const id = '0d8c1f7e-3f7b-4a5c-9f0e-5e2d0000a016';
     const base: RecordPayload = { kind: 'message', id, to: 'lead', to_id: null, root, session: 'acme', at: AT, body: 'copy', from: 'helper', from_id: agent.id, rule: 'the owner', thread: id };
-    const stamped = withSignedIdentity({ ...base, lvl: 3 as const }, made.home);
+    // The writer is staged off: a stamped payload is returned unchanged by this build.
+    expect(withSignedIdentity({ ...base, lvl: 3 as const }, made.home)).toEqual({ ...base, lvl: 3 });
+    // A record a later build signs carries the identity at send time, and this build renders it.
+    const stamped = { ...base, lvl: 3 as const, from_identity: signedIdentityOf(base, made.home) };
     expect(stamped.from_identity).toEqual({ name: 'helper', address: 'helper@acme', model: 'Model S 6.1' });
     updateAgent(made.home, agent.id, { signing: { version: '6.2' } });
     const copy1 = attributedBody(stamped.body, stamped.from, { record: stamped, home: made.home });

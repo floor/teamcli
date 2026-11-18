@@ -778,17 +778,42 @@ async function walkTypedWake(
   }
 }
 
+/** The bytes a pointer line leaves for the wake-attempt token the watch appends (` [w:<hex>]`). */
+export const POINTER_TOKEN_RESERVE = 16;
+
 /**
  * The Claude adapter's typed pointer (§2.4): one line with no body, no subject and no
  * sender-written text — the sender's identity (each field one line, src/comms/identity.ts), the
- * copy it stands for, and the two commands that read and settle it. A copy after the first says
- * it is a re-send.
+ * copy it stands for, and the two commands that read the body and settle it, by the id's short
+ * prefix (`ref`, which `team show` and `team ack` take). A copy after the first says it is a
+ * re-send.
  *
- *   team 1 new message from <name> · <address> · <model> (copy <n>[, a re-send]) — read it with: team drops, then team ack <id>
+ *   team 1 new message from <name> · <address> · <model> (copy <n>[, a re-send]) — read it with: team show <ref>, then team ack <ref>
+ *
+ * The line fits `max` UTF-8 bytes with room for the attempt token: the model is dropped first,
+ * then the address, then the name is cut at a character boundary. Null when not even that fits.
  */
-export function adapterPointerLine(identity: { name: string; address?: string; model?: string }, id: string, copy: number): string {
+export function adapterPointerLine(
+  identity: { name: string; address?: string; model?: string },
+  ref: string,
+  copy: number,
+  max: number,
+): string | null {
   const shown = encodeIdentity(identity);
-  const who = [shown.name, ...(shown.address === undefined ? [] : [shown.address]), ...(shown.model === undefined ? [] : [shown.model])].join(' · ');
   const which = copy <= 1 ? `copy ${String(copy)}` : `copy ${String(copy)}, a re-send`;
-  return `team 1 new message from ${who} (${which}) — read it with: team drops, then team ack ${id}`;
+  const line = (who: string): string => `team 1 new message from ${who} (${which}) — read it with: team show ${ref}, then team ack ${ref}`;
+  const room = max - POINTER_TOKEN_RESERVE;
+  const fits = (text: string): boolean => Buffer.byteLength(text, 'utf8') <= room;
+  const candidates = [
+    [shown.name, shown.address, shown.model],
+    [shown.name, shown.address],
+    [shown.name],
+  ].map((parts) => parts.filter((part): part is string => part !== undefined).join(' · '));
+  for (const who of candidates) if (fits(line(who))) return line(who);
+  const chars = Array.from(shown.name);
+  for (let n = chars.length - 1; n >= 1; n -= 1) {
+    const cut = `${chars.slice(0, n).join('')}…`;
+    if (fits(line(cut))) return line(cut);
+  }
+  return null;
 }

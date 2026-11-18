@@ -84,7 +84,7 @@ import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
-import { channelOwnsSeat, resendCandidates, resendPass } from '../queue/resend.ts';
+import { channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { heldAt } from '../held.ts';
@@ -876,15 +876,13 @@ function watchChannel(
     if (team === null) return false;
     const { permittedEventLegs } = await import('../commands/send.ts');
     const legs = permittedEventLegs({ dir: join(serving.root, '.agents'), root: serving.root, home: serving.home, session: serving.session, seat: serving.seat, team, now: () => new Date() });
-    const keyNow = messageKeyState(serving.home);
     const declared = team.seats.find((one) => one.name === serving.seat);
-    const cli = declared?.cli ?? 'claude-code';
-    // The Claude adapter (§2.1): on an active root this server owns the seat's offers exactly while
-    // its channel is proven, read live; otherwise the watch offers the typed pointer.
-    const adapter = keyNow.kind === 'key'
-      ? { cli, webhook: declared?.webhook !== undefined, home: serving.home, context: { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key: keyNow.key, nowMs: Date.now() }
-      : undefined;
-    return channelOwnsSeat({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, walkTakesChannel: legs.channel, ...(adapter === undefined ? {} : { adapter }) });
+    // The Claude adapter (§2.3): on an active root this server re-sends nothing. Its push of each
+    // new arrival is the channel offer; an offer that stays unsettled for 90 s makes the seat
+    // unproven, and the next attempt is the watch's pointer. A channel re-push would move no
+    // deadline and prove nothing.
+    if (claudeAdapterRoot(declared?.cli ?? 'claude-code', serving.root, serving.home, declared?.webhook !== undefined)) return false;
+    return channelOwnsSeat({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, walkTakesChannel: legs.channel });
   };
   const redeliverPass = (): void => {
     if (halted() || resending) return;
@@ -981,7 +979,7 @@ function ackTool(args: unknown, serving: Serving): unknown {
   // The Claude adapter §2.2: an ack carrying the offer of a channel copy this listener pushed
   // proves the channel reaches the session; any other ack settles and proves nothing.
   const offer = typeof args === 'object' && args !== null ? (args as Record<string, unknown>).offer : undefined;
-  if (serving.listenerKey !== undefined && offer !== undefined) proveOffer(dropDir, id, offer, serving.listenerKey);
+  if (serving.listenerKey !== undefined && offer !== undefined) proveOffer(dropDir, id, offer, serving.listenerKey, { root: serving.root, session: serving.session, seat: serving.seat, key: key.key });
   return toolText(JSON.stringify({ acknowledged: id, written: outcome.kind === 'published' }));
 }
 

@@ -319,16 +319,27 @@ export function signedIdentityOf(
 }
 
 /**
- * The payload with its sender identity signed in, when it is stamped: `team send`, `team reply`
- * and client ingress all call this after the era is decided (`stampedPayload`). An unstamped
- * payload is returned unchanged, so a record an older build may read carries no new field. A
- * registry that cannot answer still yields an identity (the signed spelling alone).
+ * Whether this build writes `from_identity` (staged, review round 1). This build READS the field:
+ * a stamped record that carries it renders its signed identity. It does not write it yet, because
+ * the installed level-3 build (682867020) lists the stamped tree and refuses a signed field it
+ * does not know, so a rollback to it, or a listener of it surviving the upgrade, would find every
+ * new stamped record unsupported. The writer is enabled in a later release, once every build that
+ * may still run or be rolled back to reads the field. Until then each copy names its sender from
+ * the registry by id, as an unstamped record does.
+ */
+export const SIGN_FROM_IDENTITY = false;
+
+/**
+ * The payload with its sender identity signed in, when it is stamped and the writer is enabled
+ * (`SIGN_FROM_IDENTITY`): `team send`, `team reply` and client ingress all call this after the
+ * era is decided (`stampedPayload`). Any other payload is returned unchanged. A registry that
+ * cannot answer still yields an identity (the signed spelling alone).
  */
 export function withSignedIdentity<T extends { lvl?: 3; from: string; from_id: string | null; from_client?: { client_id: string; grant_id: string }; from_identity?: FromIdentity }>(
   payload: T,
   home: string,
 ): T {
-  if (payload.lvl !== 3 || payload.from_identity !== undefined) return payload;
+  if (!SIGN_FROM_IDENTITY || payload.lvl !== 3 || payload.from_identity !== undefined) return payload;
   let identity: FromIdentity;
   try {
     identity = signedIdentityOf(payload, home);

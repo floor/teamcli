@@ -989,7 +989,8 @@ seats:
     const loaded = loadTeamFile(at.root, { home: at.home });
     if (!loaded.ok) throw new Error('fixture team failed to load');
     const context = { to: 'lead', root: at.root, session: SESSION, lead: 'lead' };
-    const owns = (): boolean => channelOwnsSeat({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', walkTakesChannel: false, adapter: { cli: 'claude-code', home: at.home, context, key: keyOf(at.home), nowMs: Date.now() } });
+    let later = 0;
+    const owns = (): boolean => channelOwnsSeat({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', walkTakesChannel: false, adapter: { cli: 'claude-code', home: at.home, context, key: keyOf(at.home), nowMs: Date.now() + later } });
     expect(owns()).toBe(true);
     // The second is pushed once and not acked.
     write(ID2);
@@ -1000,12 +1001,12 @@ seats:
     expect(owns()).toBe(true);
     // 91 s after its arrival: overdue. The seat is unproven, the server owns nothing, and the
     // record is due at once for the watch's pointer (the adapter change), not after a backoff.
-    const folder = seatMailDirIn(at.dir, SESSION, 'lead', 'stamped');
-    age(folder, ID2, 91_000);
+    // (The clock moves forward rather than the record back: the proving ack stays older than it.)
+    later = 91_000;
     expect(owns()).toBe(false);
     const seat: ResendSeat = { ...seatOf(at, at.dropDir, 'lead'), unproven: () => !owns() };
-    expect(resendCandidates(seat, Date.now())).toEqual([ID2]);
-    expect(resendCandidates(seatOf(at, at.dropDir, 'lead'), Date.now())).toEqual([ID2]);
+    expect(resendCandidates(seat, Date.now() + later)).toEqual([ID2]);
+    expect(resendCandidates(seatOf(at, at.dropDir, 'lead'), Date.now() + later)).toEqual([ID2]);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(notices(stream.replies)).toHaveLength(2);
     stream.end();

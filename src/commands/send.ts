@@ -2635,6 +2635,11 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
             via: 'drop',
             failed: [...failures],
           });
+          // A stamped record's wait still ends on its settlement (the Claude adapter §3): the
+          // durable copy is the recipient's, and no second leg starts.
+          if (wait && isStampedPayload(record)) {
+            return finishThreadWait(io, dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'drop', timeoutS, host, report, startedAt, failures, to.sentAs, why, callerRoot);
+          }
           return sentUnconfirmed(io, label, report, ms, 'drop');
         }
       }
@@ -5175,6 +5180,11 @@ async function deliverDropped(
     ...failed,
   });
   report.sent = msgId;
+  // A stamped record queued behind a busy seat is durable: its wait ends on its settlement (the
+  // Claude adapter §3), and no second leg starts.
+  if (wait && isStampedPayload(payload)) {
+    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, 'queued behind a busy seat', extraRoot);
+  }
   return human ? queuedBusy(io, dir, who, seatName, 'drop', msgId, { held: stored.busy, startedAt: stored.startedAt }, host, report, startedAt)
     : notDelivered(io, dir, who, label, 'no live route', host, report);
 }
@@ -6877,6 +6887,8 @@ async function deliverSocketFrame(
   if (dialProof?.kind !== 'path' || dialProof.path !== first.path || inboundStaleReason(inbound, first.path) !== null) {
     return { kind: 'fallback', reason: 'the socket placement changed before delivery', socketUnusable: true };
   }
+  // The Claude adapter §1, at the dial itself: the staging and placement reads above were awaited.
+  if (socketSuppressed(to.root, host.home)) return { kind: 'fallback', reason: SOCKET_OFF_ON_ACTIVE };
   let usedAddress = first.path;
   let taken = await relayDeliver(
     { route: 'socket', socket: first.path, runtime: to.cli, copy },
@@ -6889,7 +6901,7 @@ async function deliverSocketFrame(
     (host as SnapshotSendHost).evictAgents?.(to.session);
     const retried = socketPathFor(host, { ...to, address: null }, found.pane);
     const live = retried?.kind === 'path' ? retried.path : null;
-    if (live !== null && live !== first.path && inboundStaleReason(inbound, live) === null) {
+    if (live !== null && live !== first.path && inboundStaleReason(inbound, live) === null && !socketSuppressed(to.root, host.home)) {
       usedAddress = live;
       taken = await relayDeliver({ route: 'socket', socket: live, runtime: to.cli, copy }, message, { now: host.now, dial: host.deliver });
     }
@@ -6942,7 +6954,15 @@ async function deliverSocketFrame(
 }
 
 /** The event legs a seat's own resolved order lets a watch re-offer a stored message on. */
-export type PermittedEventLegs = { channel: boolean; socket: boolean; why?: string };
+export type PermittedEventLegs = {
+  channel: boolean;
+  socket: boolean;
+  /** The Claude adapter's typed pointer (§2.4): permitted unless the pane is a person's or the
+   *  seat's declared order leaves the `typed` word out (the protected pane's binding, signed in
+   *  its team file or settings). Absent reads as not permitted. */
+  pointer?: boolean;
+  why?: string;
+};
 
 /**
  * The event legs a send to this seat would walk right now, read by the send's own order
@@ -6993,8 +7013,11 @@ export function permittedEventLegs(input: {
     overrides: read.overrides,
     now: input.now,
   });
-  if (plan.human) return { channel: false, socket: false, why: 'its pane is a human\'s' };
-  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket') };
+  if (plan.human) return { channel: false, socket: false, pointer: false, why: 'its pane is a human\'s' };
+  // A declared order that names no `typed` word keeps every key out of the pane: the owner's
+  // pane, and any pane its file protects, waits for its hook or a pull.
+  const pointer = !plan.declaredOrder || plan.ordered.includes('typed');
+  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket'), pointer };
 }
 
 /** The result of the watch's one socket redelivery for a channel push no receipt confirmed. */

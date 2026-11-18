@@ -1981,6 +1981,11 @@ async function executeSocketSend(
     }
     const listener = opened.listener;
     try {
+      // The Claude adapter §1, at the dial itself: the floor may have been activated while this
+      // send waited for the seat lock or set up its reply listener.
+      if (socketSuppressed(root, host.home)) {
+        return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'refused', detail: `${seatName}: the socket is ${SOCKET_OFF_ON_ACTIVE}; nothing was sent` };
+      }
       const taken = await host.deliver(socketPath, frame);
       if (!taken.ok) {
         appendHistory(team.project, root, host.home, {

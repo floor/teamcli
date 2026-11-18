@@ -121,7 +121,7 @@ function prove(seat: string, listener: InboxListener): void {
   const key = messageKeyState(home);
   if (key.kind !== 'key') throw new Error('no key');
   expect(publishRecordRead({ dropDir: dirs.legacy, id, to: seat, root, session: SESSION, home, key: key.key, at: new Date().toISOString(), readBy: 'channel' }).kind).toBe('published');
-  expect(proveOffer(dirs.legacy, id, token, listenerKeyOf(listener))).not.toBeNull();
+  expect(proveOffer(dirs.legacy, id, token, listenerKeyOf(listener), { root, session: SESSION, seat, key: key.key })).not.toBeNull();
 }
 
 describe('team doctor on an active root: unproven Claude seats and stale pairs', () => {

@@ -12,11 +12,16 @@
 // the log. A new incarnation (a restart, a reboot, a resume without the flag) has a new listener
 // key and an empty log, so it starts unproven.
 import { randomBytes } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import type { KeyObject } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createExclusive } from '../queue/durable.ts';
 import { offeredCopies } from '../queue/handover.ts';
 import { twinsOf } from '../queue/mail-tree.ts';
+import { readNoFollow } from '../send/history.ts';
+import { sameFolder } from '../send/record.ts';
+import { signDomain, verifyDomain } from '../store/keys.ts';
+import type { Json } from '../store/keys.ts';
 
 /** The log folder, beside the stamped seat folder's own records (a dot name is never a record). */
 export const OFFER_ACKS = '.offer-acks';
@@ -48,24 +53,40 @@ export function offerAckFolder(dropDir: string, listenerKey: string): string | n
 /** One proving ack, as the log keeps it. */
 export type OfferAck = { id: string; n: number; atMs: number };
 
+/** What a proof is bound to: the seat's checkout, session and name, and the message key. */
+export type OfferBinding = { root: string; session: string; seat: string; key: KeyObject };
+
+/** The signing domain of a proof entry: never a message, a receipt or an approval. */
+const PROOF_DOMAIN = 'team-offer-proof-v1\n';
+
+type ProofPayload = { v: 1; kind: 'offer-proof'; root: string; session: string; seat: string; listener: string; id: string; n: number; at: string };
+
 /**
  * Records a proving ack: the token matches a channel copy of `id` that the listener `listenerKey`
- * pushed. Returns the entry written, or null when the token proves nothing (no match, another
- * incarnation's copy, a malformed token) or the log cannot be written. Exclusive per copy.
+ * pushed. The entry is signed with the message key and bound to the seat, the listener and the
+ * copy, so only a matching token-bearing ack can stand as proof. Returns the entry, or null when
+ * the token proves nothing (no match, another incarnation's copy, a malformed token) or the log
+ * cannot be written. Exclusive per copy.
  */
-export function proveOffer(dropDir: string, id: string, token: unknown, listenerKey: string, nowMs: number = Date.now()): OfferAck | null {
+export function proveOffer(dropDir: string, id: string, token: unknown, listenerKey: string, binding: OfferBinding, nowMs: number = Date.now()): OfferAck | null {
   if (typeof token !== 'string' || !TOKEN.test(token)) return null;
   const match = offeredCopies(dropDir, id).find((copy) => copy.token === token && copy.listener === listenerKey);
   if (match === undefined) return null;
   const folder = offerAckFolder(dropDir, listenerKey);
   if (folder === null) return null;
-  const entry: OfferAck = { id, n: match.n, atMs: nowMs };
-  const made = createExclusive(join(folder, `${id}.${String(match.n)}`), `${JSON.stringify({ v: 1, id, n: match.n, at: new Date(nowMs).toISOString() })}\n`);
-  return made === 'failed' ? null : entry;
+  const payload: ProofPayload = { v: 1, kind: 'offer-proof', root: binding.root, session: binding.session, seat: binding.seat, listener: listenerKey, id, n: match.n, at: new Date(nowMs).toISOString() };
+  const signature = signDomain(PROOF_DOMAIN, payload as unknown as Json, binding.key);
+  const made = createExclusive(join(folder, `${id}.${String(match.n)}`), `${JSON.stringify({ payload, signature })}\n`);
+  return made === 'failed' ? null : { id, n: match.n, atMs: nowMs };
 }
 
-/** The listener's proving acks, oldest first. A log that cannot be listed is empty. */
-export function offerAcks(dropDir: string, listenerKey: string): OfferAck[] {
+/**
+ * The listener's proving acks, oldest first. Each entry is read without following a link, its
+ * signature verified under the proof domain, its binding checked against this seat and listener,
+ * and its copy matched to a channel copy this listener pushed. Anything else proves nothing. A
+ * log that cannot be listed is empty.
+ */
+export function offerAcks(dropDir: string, listenerKey: string, binding: OfferBinding): OfferAck[] {
   const folder = offerAckFolder(dropDir, listenerKey);
   if (folder === null) return [];
   let names: string[];
@@ -77,12 +98,20 @@ export function offerAcks(dropDir: string, listenerKey: string): OfferAck[] {
   const out: OfferAck[] = [];
   for (const name of names) {
     if (name.startsWith('.')) continue;
+    const text = readNoFollow(join(folder, name));
+    if (text === null) continue;
     try {
-      const parsed = JSON.parse(readFileSync(join(folder, name), 'utf8')) as { id?: unknown; n?: unknown; at?: unknown };
-      if (typeof parsed.id !== 'string' || typeof parsed.n !== 'number' || typeof parsed.at !== 'string') continue;
-      const atMs = Date.parse(parsed.at);
+      const parsed = JSON.parse(text) as { payload?: ProofPayload; signature?: unknown };
+      const payload = parsed.payload;
+      if (payload === undefined || typeof parsed.signature !== 'string') continue;
+      if (payload.v !== 1 || payload.kind !== 'offer-proof' || typeof payload.id !== 'string' || typeof payload.n !== 'number' || typeof payload.at !== 'string') continue;
+      if (!verifyDomain(PROOF_DOMAIN, payload as unknown as Json, parsed.signature, binding.key)) continue;
+      if (!sameFolder(payload.root, binding.root) || payload.session !== binding.session || payload.seat !== binding.seat || payload.listener !== listenerKey) continue;
+      if (name !== `${payload.id}.${String(payload.n)}`) continue;
+      if (!offeredCopies(dropDir, payload.id).some((copy) => copy.n === payload.n && copy.listener === listenerKey)) continue;
+      const atMs = Date.parse(payload.at);
       if (!Number.isFinite(atMs)) continue;
-      out.push({ id: parsed.id, n: parsed.n, atMs });
+      out.push({ id: payload.id, n: payload.n, atMs });
     } catch {
       continue;
     }

@@ -13,7 +13,7 @@ import { queuePlaceOf } from '../queue/append.ts';
 import { type KeyObject } from 'node:crypto';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
-import { ackedFile, COPY_READ_BY, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
+import { ackedFile, COPY_READ_BY, isLeadAckReadBy, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
 import { clearUnread } from './unread-hint.ts';
 
 /** The message whose read is being recorded: its folder, its id, the seat it was addressed to,
@@ -84,7 +84,9 @@ function publish(input: RecordReadInput): RecordReadOutcome {
     if (standing !== null && !confirming) return { kind: 'published' };
     if (standing !== null) {
       const acked = ackedFile(dropDir, id);
-      const receipt: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at, read_by: 'ack' };
+      // The confirming act keeps its own word when it is a lead's or the owner's clearance, so the
+      // sender is told who cleared it (the Claude adapter §3); every other confirmation is `ack`.
+      const receipt: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at, read_by: isLeadAckReadBy(readBy) ? readBy as string : 'ack' };
       const made = publishReadReceipt(acked, `${JSON.stringify(signReceiptPayload(receipt, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
       if (made === 'failed') return { kind: 'unwritten', reason: 'write' };
       if (made === 'exists') return stampedSettled(dropDir, id, context, key) ? { kind: 'served' } : { kind: 'held', status: 'read', entry: 'file' };

@@ -24,7 +24,7 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { join } from 'node:path';
 import { stampedListing } from './mail-tree.ts';
 import { ACTOR_LEVEL } from './floor.ts';
-import { copyHistory, newestOffer, noteAttemptOutcome, offeredCopies, reserveAttempt, resendDue } from './handover.ts';
+import { copyHistory, firstChannelOffer, newestOffer, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
 import { floorState } from './floor.ts';
 import { inboxLive } from '../mcp/inbox.ts';
 import { listenerKeyOf, offerAcks } from '../comms/offer.ts';
@@ -66,7 +66,7 @@ export function channelUnproven(input: { dropDir: string; root: string; session:
   const live = inboxLive(input.dropDir, input.root, input.session, input.seat);
   if (!live.live || live.listener.channel !== true || (live.listener.level ?? 0) < ACTOR_LEVEL) return 'no listener';
   const listenerKey = listenerKeyOf(live.listener);
-  const acks = offerAcks(input.dropDir, listenerKey);
+  const acks = offerAcks(input.dropDir, listenerKey, { root: input.root, session: input.session, seat: input.seat, key: input.key });
   if (acks.length === 0) return 'unproven since launch';
   const listing = stampedListing(input.dropDir);
   if (listing === 'unreadable') return 'overdue offer';
@@ -82,13 +82,13 @@ export function channelUnproven(input: { dropDir: string; root: string; session:
       continue;
     }
     if (recordStampAt(listing.folder, name) !== true) continue;
-    const offer = newestOffer(listing.folder, name, arrived);
-    if (!offer.channel || input.nowMs - offer.startMs < CHANNEL_OVERDUE_MS) continue;
+    // The first outstanding channel offer's deadline: a pointer or a later push never moves it,
+    // so a silent channel stays unproven until this record settles or the listener proves again.
+    const start = firstChannelOffer(listing.folder, name, arrived);
+    if (start === null || input.nowMs - start < CHANNEL_OVERDUE_MS) continue;
     if (stampedSettled(listing.folder, name, input.context, input.key)) continue;
-    // A proving ack from this listener for a copy of this record taken after the start.
-    const copies = offeredCopies(listing.folder, name);
-    const proved = acks.some((ack) => ack.id === name && copies.some((copy) => copy.n === ack.n && copy.listener === listenerKey && copy.atMs >= offer.startMs));
-    if (!proved) return 'overdue offer';
+    // A proving ack from this listener taken after the start: the channel works again.
+    if (!acks.some((ack) => ack.atMs >= start)) return 'overdue offer';
   }
   return null;
 }

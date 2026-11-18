@@ -7,7 +7,7 @@
 // history is not at hand (a packed copy, a shallow clone).
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync } from 'node:fs';
-import { level2Tree } from './e7a-fixture.ts';
+import { installedLevel3Tree, level2Tree } from './e7a-fixture.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { activate, type FloorActor } from '../src/queue/floor.ts';
@@ -18,7 +18,7 @@ import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { recordChannelAbort } from '../src/mcp/channel.ts';
 import { markPending } from '../src/send/pending.ts';
 import { seatMailDirs } from '../src/queue/mail-tree.ts';
-import { withSignedIdentity } from '../src/comms/identity.ts';
+import { signedIdentityOf, SIGN_FROM_IDENTITY, withSignedIdentity } from '../src/comms/identity.ts';
 
 const SESSION = 'acme';
 const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
@@ -138,8 +138,9 @@ describe.skipIf(e7a === null)('the Claude adapter (F18): an E7a reader never mee
   test('an identity-signed stamped record sits in the stamped tree, which E7a never lists or reads', async () => {
     const at = place();
     expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
-    const payload = withSignedIdentity(stampedPayload(payloadOf(at, ID), at.home), at.home);
-    expect(payload.from_identity).toBeDefined();
+    // As a later build that enables the writer would sign it.
+    const stampedOne = stampedPayload(payloadOf(at, ID), at.home);
+    const payload = { ...stampedOne, from_identity: signedIdentityOf(stampedOne, at.home) };
     expect(writeRecord(at.legacy, signRecord(payload, at.home)).ok).toBe(true);
     expect(existsSync(join(at.stamped, ID))).toBe(true);
     expect(readdirSync(at.legacy).filter((name) => name.startsWith(ID))).toEqual([]);
@@ -158,5 +159,27 @@ describe.skipIf(e7a === null)('the Claude adapter (F18): an E7a reader never mee
     expect(writeRecord(at.legacy, signRecord(payload, at.home)).ok).toBe(true);
     const inbox = await import(`${e7a}/mcp/inbox.ts`);
     expect(inbox.listUnread(at.legacy, context(at), at.home).map((message: { id: string }) => message.id)).toEqual([ID]);
+  });
+});
+
+const installed = installedLevel3Tree();
+
+describe.skipIf(installed === null)('round 1: the installed level-3 build (682867020) reads what this build writes', () => {
+  test('the writer is staged off: a new stamped record carries no from_identity, and the installed reader lists and reads it', async () => {
+    expect(SIGN_FROM_IDENTITY).toBe(false);
+    const at = place();
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+    const payload = withSignedIdentity(stampedPayload(payloadOf(at, ID), at.home), at.home);
+    expect(payload.lvl).toBe(3);
+    expect('from_identity' in payload).toBe(false);
+    expect(writeRecord(at.legacy, signRecord(payload, at.home)).ok).toBe(true);
+    const inbox = await import(`${installed}/mcp/inbox.ts`);
+    expect(inbox.listUnread(at.legacy, context(at), at.home).map((message: { id: string }) => message.id)).toEqual([ID]);
+    const got = inbox.readMessage(target(at), ID, at.home);
+    expect(got.ok).toBe(true);
+    // And after a rollback to dark, the installed build still reads the pending stamped record.
+    const floor = await import('../src/queue/floor.ts');
+    expect(floor.deactivate(at.root, at.home).kind).toBe('dark');
+    expect(inbox.listUnread(at.legacy, context(at), at.home, undefined, undefined, { legacy: 'include' }).map((message: { id: string }) => message.id)).toContain(ID);
   });
 });

@@ -1,8 +1,9 @@
 // The Claude adapter §4.2 (F19): a client is named from its grant, never from a seat label.
 //
 // Client ingress writes its drop through `writeClientDrop`, the real writer `team send --client`
-// uses. On an active root the record is stamped and signs `from_identity` from the grant: the
-// client's display name and its grant binding. On a dark root nothing new is signed, and the
+// uses. On an active root the record is stamped; its identity is read from `from_client` (the
+// `from_identity` writer is staged off in this build): the client's display name and its grant
+// binding. On a dark root nothing new is signed, and the
 // render reads the same identity from the record's `from_client`. The receiving seat's own label
 // persona never names the client. Fixtures only: a temporary root and home.
 import { describe, expect, test } from 'bun:test';
@@ -45,10 +46,10 @@ function drop(at: { root: string; home: string; dropDir: string }) {
 }
 
 describe('F19: client ingress through the real writer', () => {
-  test('an active root signs the client name and grant binding, and every leg prints them', () => {
+  test('an active root names the client by its grant binding, never a seat label', () => {
     const record = drop(place(true));
     expect(record.lvl).toBe(3);
-    expect(record.from_identity).toEqual({ name: 'Grok Bot', address: 'client:grok-bot (grant grant_0a1b2c3d)' });
+    expect('from_identity' in record).toBe(false);
     const line = attributedBody(record.body, record.from, { record }).split('\n')[0];
     expect(line).toBe('Grok Bot · client:grok-bot (grant grant_0a1b2c3d) · 2026-11-18 11:00Z · admitted: owner relay');
   });

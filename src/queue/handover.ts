@@ -202,23 +202,45 @@ export function copyLegs(dropDir: string, id: string): CopyLeg[] | 'unknown' {
   return legs.sort((a, b) => a.n - b.n).map((one) => one.leg);
 }
 
-/** The legs that are offers to a seat (a read is the seat's own, never an offer). */
-const OFFER_LEGS: readonly CopyLeg[] = ['channel', 'typed', 'native', 'socket', 'webhook', 'pointer'];
+/** The legs a send's own first offer takes when it is not the adapter's channel push. */
+const OTHER_FIRST_LEGS: readonly CopyLeg[] = ['typed', 'native', 'socket', 'webhook'];
+
+/**
+ * Whether the send's own first offer went by the channel: its first offering copy is not one of
+ * another adapter's legs. A seat's own reads and the scheduler's pointers come after the first
+ * offer and never stand for it, and a push that stalled before its number left no copy at all. A
+ * history that cannot be read reads as the channel, so the seat is held unproven, not trusted.
+ */
+function firstOfferByChannel(dropDir: string, id: string): boolean {
+  const legs = copyLegs(dropDir, id);
+  if (legs === 'unknown') return true;
+  const first = legs.find((leg) => leg !== 'read' && leg !== 'pointer');
+  return first === undefined || !OTHER_FIRST_LEGS.includes(first);
+}
 
 /**
  * The message's newest offer (the Claude adapter §2.3, the one clock): its start and whether it
  * went by the channel. With scheduler attempts, it is the newest attempt: its reservation time,
  * and channel when the channel server reserved it or noted it taken. Without any, it is the
- * send's own first offer: the record's arrival, and channel unless a copy left on another
- * offering leg (a seat whose first offer was a pointer or a native queue).
+ * send's own first offer at the record's arrival.
  */
 export function newestOffer(dropDir: string, id: string, arrivedMs: number): { startMs: number; channel: boolean } {
   const attempts = attemptTimes(dropDir, id);
   const newest = attempts.reduce<{ k: number; atMs: number; channel: boolean } | null>((best, one) => (best === null || one.k > best.k ? one : best), null);
   if (newest !== null) return { startMs: newest.atMs, channel: newest.channel };
-  const legs = copyLegs(dropDir, id);
-  const other = legs === 'unknown' ? false : legs.some((leg) => leg !== 'channel' && OFFER_LEGS.includes(leg));
-  return { startMs: arrivedMs, channel: !other };
+  return { startMs: arrivedMs, channel: firstOfferByChannel(dropDir, id) };
+}
+
+/**
+ * The start of the message's first channel offer that is still outstanding (§2.3): the send's own
+ * first offer at arrival when it went by the channel, else the earliest channel attempt. A later
+ * offer — a pointer, or another channel push — never moves this deadline. Null when no offer of
+ * the message went by the channel.
+ */
+export function firstChannelOffer(dropDir: string, id: string, arrivedMs: number): number | null {
+  if (firstOfferByChannel(dropDir, id)) return arrivedMs;
+  const channel = attemptTimes(dropDir, id).filter((one) => one.channel).map((one) => one.atMs);
+  return channel.length === 0 ? null : Math.min(...channel);
 }
 
 /**

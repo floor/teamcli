@@ -10,7 +10,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listenerKeyOf, offerAcks, proveOffer } from '../src/comms/offer.ts';
+import { listenerKeyOf, offerAckFolder, offerAcks, proveOffer } from '../src/comms/offer.ts';
 import { runDrops } from '../src/commands/drops.ts';
 import { listenerPath, readListener } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
@@ -184,6 +184,12 @@ function settled(at: Place, id: string): boolean {
   return isRead(stampedDir(at), id, { to: 'lead', root: realpathSync(at.root), session: SESSION }, key.key);
 }
 
+function bindingOf(at: Place) {
+  const key = messageKeyState(at.home);
+  if (key.kind !== 'key') throw new Error('no key');
+  return { root: realpathSync(at.root), session: SESSION, seat: 'lead', key: key.key };
+}
+
 async function served(active: boolean) {
   const at = place();
   if (active) expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
@@ -209,7 +215,7 @@ describe('the offer token (active root)', () => {
       // The push marker keeps no token.
       const markers = readdirSync(stampedDir(at)).filter((name) => name.startsWith(FIRST) && name.endsWith('.json'));
       for (const name of markers) expect(readFileSync(join(stampedDir(at), name), 'utf8')).not.toContain(meta.offer!);
-      expect(offerAcks(at.dropDir, key)).toEqual([]);
+      expect(offerAcks(at.dropDir, key, bindingOf(at))).toEqual([]);
       // No reader prints the token: inbox_check, inbox_read and team drops --read.
       const checked = await tool(feed, 'c', 'inbox_check');
       const read = await tool(feed, 'r', 'inbox_read', { id: FIRST });
@@ -223,7 +229,7 @@ describe('the offer token (active root)', () => {
       const answer = await tool(feed, '1', 'ack', { id: FIRST, offer: meta.offer });
       expect(answer.isError).toBeUndefined();
       expect(settled(at, FIRST)).toBe(true);
-      expect(offerAcks(at.dropDir, key)).toEqual([expect.objectContaining({ id: FIRST, n: 1 })]);
+      expect(offerAcks(at.dropDir, key, bindingOf(at))).toEqual([expect.objectContaining({ id: FIRST, n: 1 })]);
     } finally {
       feed.end();
       await running;
@@ -239,7 +245,7 @@ describe('the offer token (active root)', () => {
       const answer = await tool(feed, '1', 'ack', { id: FIRST });
       expect(answer.isError).toBeUndefined();
       expect(settled(at, FIRST)).toBe(true);
-      expect(offerAcks(at.dropDir, key)).toEqual([]);
+      expect(offerAcks(at.dropDir, key, bindingOf(at))).toEqual([]);
     } finally {
       feed.end();
       await running;
@@ -262,10 +268,10 @@ describe('the offer token (active root)', () => {
       const answer = await tool(feed, '1', 'ack', { id: SECOND, offer: firstOffer });
       expect(answer.isError).toBeUndefined();
       expect(settled(at, SECOND)).toBe(true);
-      expect(offerAcks(at.dropDir, key)).toEqual([]);
+      expect(offerAcks(at.dropDir, key, bindingOf(at))).toEqual([]);
       // A malformed token proves nothing either.
       await tool(feed, '2', 'ack', { id: FIRST, offer: 'not-a-token' });
-      expect(offerAcks(at.dropDir, key)).toEqual([]);
+      expect(offerAcks(at.dropDir, key, bindingOf(at))).toEqual([]);
     } finally {
       feed.end();
       await running;
@@ -280,11 +286,42 @@ describe('the offer token (active root)', () => {
       stamped(at, FIRST);
       const token = 'c'.repeat(32);
       expect(takeCopyNumber(stampedDir(at), FIRST, 'channel', Date.now(), { token, listener: '111@2026-11-18T00:00:00.000Z' })).toBe(1);
-      expect(proveOffer(at.dropDir, FIRST, token, '222@2026-11-18T00:05:00.000Z')).toBeNull();
-      expect(offerAcks(at.dropDir, '222@2026-11-18T00:05:00.000Z')).toEqual([]);
+      expect(proveOffer(at.dropDir, FIRST, token, '222@2026-11-18T00:05:00.000Z', bindingOf(at))).toBeNull();
+      expect(offerAcks(at.dropDir, '222@2026-11-18T00:05:00.000Z', bindingOf(at))).toEqual([]);
       // The incarnation that pushed it is proven by the same token.
-      expect(proveOffer(at.dropDir, FIRST, token, '111@2026-11-18T00:00:00.000Z')).toEqual(expect.objectContaining({ id: FIRST, n: 1 }));
-      expect(offerAcks(at.dropDir, '111@2026-11-18T00:00:00.000Z')).toHaveLength(1);
+      expect(proveOffer(at.dropDir, FIRST, token, '111@2026-11-18T00:00:00.000Z', bindingOf(at))).toEqual(expect.objectContaining({ id: FIRST, n: 1 }));
+      expect(offerAcks(at.dropDir, '111@2026-11-18T00:00:00.000Z', bindingOf(at))).toHaveLength(1);
+    } finally {
+      at.cleanup();
+    }
+  });
+});
+
+describe('a proof entry is signed and bound (round 1)', () => {
+  test('a fabricated log entry, and a genuine entry replayed under another listener, prove nothing', () => {
+    const at = place();
+    try {
+      expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+      stamped(at, FIRST);
+      const token = 'e'.repeat(32);
+      const one = '111@2026-11-18T00:00:00.000Z';
+      const two = '222@2026-11-18T00:05:00.000Z';
+      expect(takeCopyNumber(stampedDir(at), FIRST, 'channel', Date.now(), { token, listener: one })).toBe(1);
+      // A fabricated entry under the listener's folder: no signature over the proof domain.
+      const folder = offerAckFolder(at.dropDir, one)!;
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, `${FIRST}.1`), JSON.stringify({ id: FIRST, n: 1, at: new Date().toISOString() }));
+      expect(offerAcks(at.dropDir, one, bindingOf(at))).toEqual([]);
+      rmSync(join(folder, `${FIRST}.1`));
+      // A genuine proof, copied into another listener's folder: its binding names the first.
+      expect(proveOffer(at.dropDir, FIRST, token, one, bindingOf(at))).not.toBeNull();
+      expect(offerAcks(at.dropDir, one, bindingOf(at))).toHaveLength(1);
+      const other = offerAckFolder(at.dropDir, two)!;
+      mkdirSync(other, { recursive: true });
+      writeFileSync(join(other, `${FIRST}.1`), readFileSync(join(folder, `${FIRST}.1`), 'utf8'));
+      expect(offerAcks(at.dropDir, two, bindingOf(at))).toEqual([]);
+      // And under another seat's binding the genuine one proves nothing.
+      expect(offerAcks(at.dropDir, one, { ...bindingOf(at), seat: 'worker' })).toEqual([]);
     } finally {
       at.cleanup();
     }
