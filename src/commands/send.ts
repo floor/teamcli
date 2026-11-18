@@ -2965,7 +2965,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         note(attempt.walkAttempt);
         markLeg('native', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
         // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
-        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
+        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'beforeHandover' in attempt && attempt.beforeHandover === true ? 'no' : 'unknown'); // E7a: only a proved pre-submit refusal gives the claim back; anything else stays exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
           settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
           clearEndpointBlocked(to.root, to.session, to.seat);
@@ -3119,7 +3119,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       markLeg('headless-resume', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
       note(attempt.walkAttempt);
       // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
-      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
+      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'beforeHandover' in attempt && attempt.beforeHandover === true ? 'no' : 'unknown'); // E7a: only a proved pre-submit refusal gives the claim back; anything else stays exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
         settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
         report.sent = msgId;
@@ -6297,7 +6297,7 @@ export async function walkReplyDelivery(input: {
           },
         );
         // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
-        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
+        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'beforeHandover' in attempt && attempt.beforeHandover === true ? 'no' : 'unknown'); // E7a: only a proved pre-submit refusal gives the claim back; anything else stays exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
           settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
           clearEndpointBlocked(input.root, input.session, seatName);
@@ -6379,7 +6379,7 @@ export async function walkReplyDelivery(input: {
         },
       );
       // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
-      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
+      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'beforeHandover' in attempt && attempt.beforeHandover === true ? 'no' : 'unknown'); // E7a: only a proved pre-submit refusal gives the claim back; anything else stays exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
         settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
         const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;

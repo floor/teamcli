@@ -31,6 +31,17 @@ import { claimRead, ownerOfClaim, READ_CLAIMS, removeOwnedClaim } from '../send/
 import { lstatSync } from 'node:fs';
 import { receiptFile } from '../send/record.ts';
 import { ensureFolder } from './durable.ts';
+import { liveFloorActors } from './floor-actors.ts';
+
+/** The level whose carriers take the exposure claim on every root (E7a). */
+export const CLAIM_LEVEL = 3;
+
+/** The live carriers of the root (the daemon and the inbox servers), with their levels. */
+function carrierLevels(root: string, home: string): { name: string; level: number | null }[] | null {
+  const actors = liveFloorActors(root, home);
+  if (actors === null) return null;
+  return actors.filter(actor => actor.kind === 'daemon' || actor.kind === 'inbox-server');
+}
 
 export type BodyLeg = 'channel' | 'typed' | 'native' | 'socket';
 
@@ -68,7 +79,16 @@ export function exposeBody(target: ExposureTarget, leg: BodyLeg, home: string): 
   // E7a: every first-body admission takes the durable exclusion (the read claim), whatever the
   // root's floor state. Dark, unknown, fenced and active roots alike: no body leaves without a
   // fresh owned claim and a proof that no earlier receipt stands; every refusal is a pointer.
-  void home;
+  //
+  // Coexistence with older builds: an E6 carrier on a dark root decides `legacy` and hands a body
+  // over without any claim, so a claim taken here cannot exclude it. While any live carrier (the
+  // daemon or an inbox server) reports a level below CLAIM_LEVEL, or none, or the inventory cannot
+  // be read, this carrier sends a pointer: the body is left to the older path alone, and E7a never
+  // adds a second one. Once every carrier is claim-aware, bodies go only through the claim.
+  const carriers = carrierLevels(target.root, home);
+  if (carriers === null) return { kind: 'pointer', why: 'the live carriers cannot be read' };
+  const older = carriers.find(actor => actor.level === null || actor.level < CLAIM_LEVEL);
+  if (older !== undefined) return { kind: 'pointer', why: `an older carrier is live (${older.name}, level ${older.level === null ? 'unknown' : String(older.level)})` };
   const owner = `${EXPOSE_PREFIX}${leg}:${target.msgId}:${randomBytes(6).toString('hex')}`;
   // The claim folder chain is made durable before the owner file can be (§3 first write).
   if (!ensureFolder(join(target.dropDir, READ_CLAIMS))) return { kind: 'pointer', why: 'the read claim folder could not be made durable' };

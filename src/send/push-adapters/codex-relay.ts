@@ -1133,6 +1133,8 @@ export type CodexNativeAttempt =
       reason: string;
       timedOut?: boolean;
       wouldHold?: boolean;
+      /** The adapter returned before submitting anything: the body never left (E7a). */
+      beforeHandover?: true;
       receipt?: PackageRelayReceipt;
       walkAttempt: WalkAttempt;
     };
@@ -1200,6 +1202,8 @@ export async function deliverCodexNativeRoute(
         : null;
   if (routeStartProblem !== null) {
     return {
+      // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+      beforeHandover: true,
       route: CODEX_NATIVE_ROUTE,
       outcome: 'unsupported',
       reason: routeStartProblem,
@@ -1218,6 +1222,8 @@ export async function deliverCodexNativeRoute(
   if (!budget.ok) {
     const at = nowFn();
     return {
+      // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+      beforeHandover: true,
       route: CODEX_NATIVE_ROUTE,
       outcome: 'unsupported',
       reason: budget.why,
@@ -1242,6 +1248,8 @@ export async function deliverCodexNativeRoute(
     if (staged.outcome === 'refused') {
       const at = nowFn();
       return {
+        // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+        beforeHandover: true,
         route: CODEX_NATIVE_ROUTE,
         outcome: 'refused',
         reason: staged.reason,
@@ -1272,6 +1280,8 @@ export async function deliverCodexNativeRoute(
     const at = nowFn();
     const outcome = precheck.status === 'refused' ? 'unsupported' : 'unreachable';
     return {
+      // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+      beforeHandover: true,
       route: CODEX_NATIVE_ROUTE,
       outcome,
       reason: precheck.reason,
@@ -1299,6 +1309,8 @@ export async function deliverCodexNativeRoute(
     const at = nowFn();
     const reason = `the seat state could not be read, so its recorded Codex endpoint cannot be checked (${seatState.why})`;
     return {
+      // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+      beforeHandover: true,
       route: CODEX_NATIVE_ROUTE,
       outcome: 'unreachable',
       reason,
@@ -1316,6 +1328,8 @@ export async function deliverCodexNativeRoute(
     const at = nowFn();
     const reason = `the seat's recorded Codex endpoint cannot be used (${recorded.why}); refusing the shared app-server path`;
     return {
+      // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+      beforeHandover: true,
       route: CODEX_NATIVE_ROUTE,
       outcome: 'unreachable',
       reason,
@@ -1335,6 +1349,8 @@ export async function deliverCodexNativeRoute(
         const at = nowFn();
         const reason = `the explicit remote ${target.remote} names another endpoint than the seat's recorded ${recorded.record.url}; refusing to probe one and enqueue to another`;
         return {
+          // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+          beforeHandover: true,
           route: CODEX_NATIVE_ROUTE,
           outcome: 'unsupported',
           reason,
@@ -1350,6 +1366,8 @@ export async function deliverCodexNativeRoute(
     const at = nowFn();
     const reason = 'the managed seat records no Codex endpoint its launch wrote; refusing the shared app-server path';
     return {
+      // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+      beforeHandover: true,
       route: CODEX_NATIVE_ROUTE,
       outcome: 'unreachable',
       reason,
@@ -1370,6 +1388,8 @@ export async function deliverCodexNativeRoute(
   if (!endpoint.ok) {
     const at = nowFn();
     return {
+      // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+      beforeHandover: true,
       route: CODEX_NATIVE_ROUTE,
       outcome: 'unsupported',
       reason: endpoint.why,
@@ -1387,6 +1407,8 @@ export async function deliverCodexNativeRoute(
       const at = nowFn();
       const reason = `codex queue timed out before live probe (${String(budget.timeoutMs)}ms attempt budget exhausted during preparation)`;
       return {
+        // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+        beforeHandover: true,
         route: CODEX_NATIVE_ROUTE,
         outcome: 'unreachable',
         reason,
@@ -1433,6 +1455,8 @@ export async function deliverCodexNativeRoute(
       const wouldHold = live.status === 'would-hold';
       const outcome = live.status === 'refused' ? 'unsupported' : 'unreachable';
       return {
+        // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+        beforeHandover: true,
         route: CODEX_NATIVE_ROUTE,
         outcome,
         reason: live.reason,
@@ -1457,6 +1481,8 @@ export async function deliverCodexNativeRoute(
     const at = nowFn();
     const reason = `codex queue timed out before spawn (${String(budget.timeoutMs)}ms attempt budget exhausted during preparation)`;
     return {
+      // Nothing was submitted yet: a definite refusal before any hand-over (E7a).
+      beforeHandover: true,
       route: CODEX_NATIVE_ROUTE,
       outcome: 'unreachable',
       reason,

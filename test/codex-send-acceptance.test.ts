@@ -490,6 +490,8 @@ function recordedEndpointState(
 /** The hold the route reports when the recorded endpoint cannot stand, as its whole attempt. */
 function heldEndpoint(scene: Scene, why: string) {
   return {
+    // E7a: refused before any `codex queue` process, so the body never left.
+    beforeHandover: true as const,
     route: 'native' as const,
     outcome: 'unreachable' as const,
     reason: why,
@@ -509,6 +511,8 @@ function heldEndpoint(scene: Scene, why: string) {
 /** The refusal the route reports for a contradictory pair, as its whole attempt. */
 function refusedPair(scene: Scene, why: string) {
   return {
+    // E7a: refused before any `codex queue` process, so the body never left.
+    beforeHandover: true as const,
     route: 'native' as const,
     outcome: 'unsupported' as const,
     reason: why,

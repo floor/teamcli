@@ -410,3 +410,45 @@ seats:
     expect(floorState(at.root, at.home).kind).toBe('dark');
   });
 });
+
+describe('E7a round 5', () => {
+  const carrier = (at: At) => ({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: M1 });
+  const listener = (at: At, seat: string, level: number | null) => {
+    const dir = join(at.root, '.agents', 'send-drops', SESSION, seat);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat, session: SESSION, root: at.root, cli: 'codex', pid: process.pid, ts: new Date().toISOString(), ...(level === null ? {} : { level }) })}\n`);
+  };
+
+  test('coexistence: a live older carrier (an E6 inbox server, level 2, or one with no level) means a pointer and no claim; claim-aware carriers only means a body', () => {
+    for (const level of [2, null]) {
+      const at = place();
+      message(at, M1, LATER);
+      listener(at, 'old-seat', level);
+      expect(exposeBody(carrier(at), 'channel', at.home)).toMatchObject({ kind: 'pointer', why: expect.stringContaining('older carrier') });
+      expect(existsSync(join(at.dropDir, '.read-claims'))).toBe(false);
+    }
+    const at = place();
+    message(at, M1, LATER);
+    listener(at, 'new-seat', 3);
+    expect(exposeBody(carrier(at), 'channel', at.home).kind).toBe('expose');
+  });
+
+  test('a native route that refuses before submitting says so (beforeHandover), so its claim is given back', async () => {
+    const at = place();
+    message(at, M1, LATER);
+    const { deliverCodexNativeRoute } = await import('../src/send/push-adapters/codex-relay.ts');
+    const refused = await deliverCodexNativeRoute(
+      { route: 'native', runtime: 'codex', copy: { dir: at.dropDir, name: M1 }, root: at.root, home: at.home, session: SESSION, seat: 'lead', sender: { seat: 'worker', team: 'fixture' } },
+      { id: M1, record: '{}' },
+      { now: () => new Date('2026-11-18T00:00:00.000Z'), routeStartedAt: new Date('2026-11-18T01:00:00.000Z'), deliveryTimeout: 5_000, liveProbe: false, skipStage: true } as never,
+    );
+    expect(refused.outcome).not.toBe('enqueue');
+    expect('beforeHandover' in refused && refused.beforeHandover).toBe(true);
+    // The leg's settle maps that proof to 'no': the claim goes and the first ordinary read gets the body.
+    const first = exposeBody(carrier(at), 'native', at.home);
+    expect(first.kind).toBe('expose');
+    if (first.kind === 'expose') first.settle('no', () => true);
+    const { readMessage } = await import('../src/mcp/inbox.ts');
+    expect(readMessage({ dropDir: at.dropDir, root: at.root, seat: 'lead', session: SESSION }, M1, at.home).ok).toBe(true);
+  });
+});
