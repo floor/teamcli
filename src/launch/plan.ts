@@ -1391,7 +1391,7 @@ export function upPlan(input: UpInput): Step[] {
     const declinesChannel = declaredChannelSeat?.channelOff === true;
     const asChannel = { ...seat, ...(declinesChannel ? { channelOff: true as const } : {}) };
     const channelFallback = input.team === undefined ? undefined : channelLaunchFallback(
-      input.team, { ...asChannel, cwd: declaredChannelSeat?.cwd ?? seat.cwd }, input.root,
+      input.team, { ...asChannel, cwd: declaredChannelSeat?.cwd ?? seat.cwd }, input.root, input.home,
     );
     const channelPlace = channelFallback === undefined && claudeChannelSeat(asChannel) && input.home !== undefined && input.team !== undefined
       ? channelStart(asChannel, input.root, lobbyOf(input.home, input.root, input.team), isLeadSeat(input.team, seat.name))

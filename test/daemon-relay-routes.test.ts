@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { activate } from '../src/queue/floor.ts';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -902,6 +903,34 @@ describe('daemon relay send handler and fallback walk (handleDaemonRelaySend)', 
       reason: `message ${JSON.stringify(msgId)} was already served in this inbox`,
       served: 'already-served',
     });
+  });
+
+  test('the Claude adapter (F11): an E7b-active receiving root walks no socket route; the next route takes it with no dial', async () => {
+    const scene = createScene({ claudeInbound: 'accept' });
+    expect(activate(scene.root, { home: scene.home, build: 'b', actors: () => [{ kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 }] }).kind).toBe('activated');
+    const msgId = '55555555-6666-4777-8888-99999999aaaa';
+    const signed = makeSignedMessage(scene, msgId, 'worker-cursor', 'From lead@acme\n\nActive root relay test.');
+    const sockPath = createFreshSocketFile(scene, 'cursor-active.sock', NOW.getTime());
+    let dialCalls = 0;
+    const answer = await handleDaemonRelaySend(
+      {
+        route: scene.route, team: scene.team, home: scene.home, record: signed,
+        routes: ['socket', 'headless-resume', 'durable-copy'], socketPath: sockPath, socketRuntime: 'claude-code',
+        agentSession: CURSOR_SESSION, caller: { kind: 'seat', name: 'lead', pane: '%1' }, now: () => NOW,
+      },
+      {
+        dial: async () => {
+          dialCalls += 1;
+          return { ok: true } as never;
+        },
+        headlessSpawn: async () => ({ status: 0, stdout: '{"result":"ok"}\n', stderr: '' }),
+      },
+    );
+    expect(dialCalls).toBe(0);
+    expect(answer.ok).toBe(true);
+    if (!answer.ok) return;
+    expect(answer.attempts.map((a) => a.route)).not.toContain('socket');
+    expect(answer.deliveredRoute).toBe('headless-resume');
   });
 
   test('skips would-hold Codex native route without spawning, falls through to durable-copy as held, and fires delayed escalation via sweepFallbackEscalations', async () => {

@@ -1,4 +1,5 @@
 import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
 import { withSignedIdentity } from '../comms/identity.ts';
 import { claudeAdapterRoot, TYPED_REQUESTED } from '../queue/resend.ts';
 import { ensureFolder } from '../queue/durable.ts';
@@ -1168,7 +1169,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // frame keeps the socket out until its declaration is re-confirmed.
   const socketWord = input.declared?.inbound;
   const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(input.dir, input.session, input.seat)), inbound);
-  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
+  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null && !socketSuppressed(input.root, input.home);
   const declaredOrder = Object.values(input.rawChain).some((word) => word !== undefined && word.length > 0);
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
   // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
@@ -2818,6 +2819,14 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         failures.push(`socket: ${to.cli} sessions have no cross-session socket`);
         markLeg('socket', 'skipped', `${to.cli} sessions have no cross-session socket`);
         note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: `${to.cli} sessions have no cross-session socket` }));
+        continue;
+      }
+      // The Claude adapter §1: no new delivery dials a socket on an E7b-active root, read from the
+      // receiving root's floor state at this delivery. A dark root keeps the leg as before.
+      if (socketSuppressed(to.root, host.home)) {
+        failures.push(`socket: ${SOCKET_OFF_ON_ACTIVE}`);
+        markLeg('socket', 'skipped', SOCKET_OFF_ON_ACTIVE);
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: SOCKET_OFF_ON_ACTIVE }));
         continue;
       }
       if (!SOCKET_SEND) {
@@ -6269,6 +6278,10 @@ export async function walkReplyDelivery(input: {
         failures.push(`socket: ${cli} sessions have no cross-session socket`);
         continue;
       }
+      if (socketSuppressed(input.root, input.host.home)) {
+        failures.push(`socket: ${SOCKET_OFF_ON_ACTIVE}`);
+        continue;
+      }
       if (!SOCKET_SEND) {
         failures.push('socket: this build does not carry the cross-session socket');
         continue;
@@ -6739,6 +6752,8 @@ async function deliverSocketFrame(
     staged?: StagedForWalk | null;
   },
 ): Promise<SocketAttempt> {
+  // The Claude adapter §1, at the frame itself: an active root is never dialed.
+  if (socketSuppressed(to.root, host.home)) return { kind: 'fallback', reason: SOCKET_OFF_ON_ACTIVE };
   const msgId = payload.id;
   const body = payload.body;
   report.sent = msgId;
@@ -7012,6 +7027,7 @@ export async function redeliverChannelOnSocket(input: {
 }): Promise<ChannelRedelivery> {
   const { host, dir, root, project, session, seat, cli, dropDir, drop } = input;
   if (cli !== 'claude-code') return { ok: false, reason: `${cli} sessions have no cross-session socket` };
+  if (socketSuppressed(root, host.home)) return { ok: false, reason: SOCKET_OFF_ON_ACTIVE };
   if (!SOCKET_SEND) return { ok: false, reason: 'this build does not carry the cross-session socket' };
   const payload = verifiedPayloadOf(dropDir, drop.id, host.home);
   if (payload === null) return { ok: false, reason: "its signed record does not verify with this home's key" };

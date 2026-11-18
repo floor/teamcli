@@ -1,4 +1,5 @@
 import { copyFor } from '../queue/handover.ts';
+import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
 import { isStampedPayload } from '../send/record.ts';
 // Machine-daemon route-selection and runtime-adapter integration.
 //
@@ -932,14 +933,19 @@ export async function deliverDaemonRelayRoute(
     ...options,
   };
 
-  if (target.route === 'socket' && target.socket.trim() === '') {
+  // The Claude adapter §1: an E7b-active root's socket route is refused, read from the receiving
+  // root's floor state at this delivery; a dark root keeps the route as before.
+  const suppressed = target.route === 'socket' && socketSuppressed(plan.route.root, plan.home);
+  if (target.route === 'socket' && (suppressed || target.socket.trim() === '')) {
     const nowFn = mergedOptions.now ?? (() => new Date());
     const startedAt = mergedOptions.startedAt ?? nowFn().getTime();
     const liveRoutesRemain = mergedOptions.liveRoutesRemain ?? true;
-    const probe = await probeDaemonRelayTarget(target, {
-      crossSessionInbound: mergedOptions.crossSessionInbound ?? plan.inbound,
-      id: message.id,
-    });
+    const probe = suppressed
+      ? { status: 'unavailable' as const, route: 'socket' as const, reason: `the cross-session socket is ${SOCKET_OFF_ON_ACTIVE}` }
+      : await probeDaemonRelayTarget(target, {
+        crossSessionInbound: mergedOptions.crossSessionInbound ?? plan.inbound,
+        id: message.id,
+      });
     const at = nowFn();
     const reason =
       probe.status === 'ready'
@@ -1122,8 +1128,13 @@ export async function handleDaemonRelaySend(
     return refuseSend(selection.code, selection.message, { id, seat });
   }
 
-  const { plan } = selection;
-  const routesToWalk = input.routes ?? plan.selectedRoutes;
+  // The Claude adapter §1: on an E7b-active receiving root no socket route is walked, read from
+  // its floor state at this delivery; a dark root walks its routes as before.
+  const socketOff = socketSuppressed(selection.plan.route.root, selection.plan.home);
+  const plan = socketOff && (input.routes ?? selection.plan.selectedRoutes).includes('socket')
+    ? { ...selection.plan, skippedLegs: [...selection.plan.skippedLegs, { leg: 'socket', reason: SOCKET_OFF_ON_ACTIVE } as DaemonRelaySkippedLeg] }
+    : selection.plan;
+  const routesToWalk = (input.routes ?? plan.selectedRoutes).filter((route) => !(socketOff && route === 'socket'));
   if (routesToWalk.length === 0) {
     const skipSummary =
       plan.skippedLegs.length > 0

@@ -1,4 +1,5 @@
 import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
 import { recordStampAt } from './record.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
@@ -1800,6 +1801,18 @@ async function executeSocketSend(
     seat: seatName,
     ...(receiver?.launch !== undefined ? { launch: receiver.launch } : {}),
   });
+  // The Claude adapter §1: a waited send on an E7b-active root rides no socket; a stamped send
+  // waits on its settlement in the caller instead (it never dials the daemon).
+  if (socketSuppressed(root, host.home)) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: the socket is ${SOCKET_OFF_ON_ACTIVE}; nothing was sent`,
+    };
+  }
   if (!SOCKET_SEND || !socketEligible(receiver?.inbound, inbound)) {
     const why = SOCKET_SEND ? socketSkipReason(receiver?.inbound, inbound) : 'this build does not carry it';
     return {

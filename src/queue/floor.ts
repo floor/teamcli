@@ -435,3 +435,20 @@ export function seatDropFoldersStrict(root: string): string[] | null {
   }
   return out;
 }
+
+/** Why a socket leg is skipped on an E7b-active root (the Claude adapter §1). */
+export const SOCKET_OFF_ON_ACTIVE = 'not used on an active root';
+
+/**
+ * Whether no new delivery may dial a cross-session socket at `root` (the Claude adapter §1): the
+ * root is not proven dark. Read at each delivery, from the receiving root's own floor state; an
+ * unreadable floor reads as active (no dial), as the stamp does. A dark root keeps its socket leg
+ * and its eligibility exactly as before, so a deactivation restores the old route unchanged.
+ */
+export function socketSuppressed(root: string, home: string): boolean {
+  try {
+    return floorState(root, home).kind !== 'dark';
+  } catch {
+    return true;
+  }
+}

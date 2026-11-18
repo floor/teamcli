@@ -47,6 +47,7 @@ import { recordStampAt } from '../send/record.ts';
 // over and never reported over. A delivery the seam itself says took nothing (`held`,
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
+import { socketSuppressed } from '../queue/floor.ts';
 import { appendDeliverySync } from '../queue/append.ts';
 import { queueLog } from '../queue/log.ts';
 import { createHash, type KeyObject } from 'node:crypto';
@@ -320,7 +321,7 @@ async function reofferOnEventLegs(
     if (channelUnpushed) {
       markPending(dropDir, { ts: at, from: payload.from, to: seat.name, body: payload.body, id: message.id, thread: payload.thread, leg: 'channel' });
       route = 'channel';
-    } else if (legs.socket && scene.socketRedeliver !== undefined) {
+    } else if (legs.socket && scene.socketRedeliver !== undefined && !socketSuppressed(scene.root, home)) {
       const socket = await scene.socketRedeliver(dropDir, { id: message.id, from: payload.from, to: seat.name, body: payload.body, ts: at, tries: 0 });
       if (socket.ok) route = 'socket';
       else reason = socket.reason;
@@ -1273,7 +1274,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // and that text is put back, or the wake line is not typed.
       if (leadSeat) {
         let pushed = false;
-        if (!adapterPointer) try {
+        // The Claude adapter §1: no lead socket nudge on an E7b-active root.
+        if (!adapterPointer && !socketSuppressed(scene.root, home)) try {
           pushed = (await nudgeBus(scene.root, {
             session: scene.session,
             seat: seat.name,

@@ -1,5 +1,6 @@
 // A Claude channel's project config belongs to one seat and one claimed launch. No CLI home,
 // shared lobby config or trust store is read or written here.
+import { socketSuppressed } from '../queue/floor.ts';
 import { randomBytes } from 'node:crypto';
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { mkdirSync, openSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
@@ -99,13 +100,19 @@ export function channelLaunchFallback(
   team: Pick<TeamFile, 'trust' | 'orchestrator' | 'operator'>,
   seat: ChannelSeat & { name: string; cwd: string },
   root: string,
+  /** The home the root's floor state is read under: on an E7b-active root no socket is dialed
+   *  (the Claude adapter §1), so the warning names the pointer instead. Absent, the dark words. */
+  home?: string,
 ): string | undefined {
   if (!claudeChannelSeat(seat)) return undefined;
+  const fallback = home !== undefined && socketSuppressed(root, home)
+    ? 'no proven channel: pointer wakes until the next `team restart`'
+    : 'socket delivery remains available';
   if (isLegacyTrust(team.trust)) {
-    return 'its channel needs the current trust form. Launching without the channel; socket delivery remains available. Move trust to the current absolute-path form, or set channel: off to silence this warning.';
+    return `its channel needs the current trust form. Launching without the channel; ${fallback}. Move trust to the current absolute-path form, or set channel: off to silence this warning.`;
   }
   if (isLeadSeat(team, seat.name) && samePlace(resolve(root, seat.cwd), root) && !channelPairPresent(root, seat.name)) {
-    return "its project folder has no channel pair for this seat. Launching without the channel; socket delivery remains available. Add the seat's channel pair in this folder, or move the lead's cwd to opt in.";
+    return `its project folder has no channel pair for this seat. Launching without the channel; ${fallback}. Add the seat's channel pair in this folder, or move the lead's cwd to opt in.`;
   }
   return undefined;
 }
