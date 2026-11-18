@@ -263,7 +263,8 @@ export function verifyClientRequest(input: {
  * rules and is the grant's own key; the request built from the invocation signs and verifies with
  * that key; every field that steers the read (`since`, `ack`, `limit`) is inside the signature;
  * and the grant is canonical, unexpired and unrevoked. The caller repeats the canonical, expiry
- * and revocation reads under the grant lock immediately before scanning or writing.
+ * and revocation reads before scanning, and again before printing; an ack repeats them under the
+ * grant lock immediately before writing.
  */
 export function verifyClientRead(input: {
   home: string;

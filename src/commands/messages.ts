@@ -1234,7 +1234,8 @@ function renderMailbox(
 }
 
 /**
- * `team messages --client … --follow`: the same signed, replay-checked client read, repeated,
+ * `team messages --client … --follow`: the same signed, verified client read, repeated (a plain
+ * read takes no lock and claims no request id),
  * printing each reply on the client's thread once, as soon as a read finds it. Every read is an
  * ordinary `runClientMessages` call with its own request id and `--since` the last reply printed,
  * so the follow mode admits nothing a single read would not. A refused read ends the follow with

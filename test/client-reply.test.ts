@@ -5,10 +5,11 @@
 // send-only grant opens no conversation, and a revoked grant stops new replies.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
+import { symlinkSync } from 'node:fs';
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clientInboxFolder } from '../src/client/inbox.ts';
+import { checkClientInbox, clientInboxFolder } from '../src/client/inbox.ts';
 import { clientGrantsFolder, clientKeyDir, newClientKeyPair, appendClientRevocation, withClientGrantLock, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
 import { clientReplayFolder } from '../src/client/replay.ts';
 import { runMessages } from '../src/commands/messages.ts';
@@ -439,5 +440,59 @@ describe('the shuttle: a launchd job outside the terminal host reads and acks th
     const afterIo = testIo(w.root, shuttle);
     expect(await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--json'], afterIo, { home: w.home, now: () => new Date(NOW.getTime() + 240_000) })).toBe(0);
     expect(JSON.parse(afterIo.out).rows).toHaveLength(0);
+  });
+});
+
+describe('a lock-free read is authorized for the page it prints', () => {
+  test('a revocation that lands after admission, before printing, refuses the read with nothing shown', async () => {
+    const w = world(true);
+    const sent = await clientSend(w, 'late revocation');
+    expect((await seatReply(w, 'orchestrator', sent.id, 'should not print')).code).toBe(0);
+    const io = testIo(w.root, { kind: 'owner' });
+    let calls = 0;
+    // The first clock read is the admission's; the next is the check before printing. The owner
+    // revokes in between, while the page is gathered.
+    const now = () => {
+      calls += 1;
+      if (calls === 2) {
+        const revoked = appendClientRevocation(w.home, w.grantId, { now: new Date(NOW.getTime() + 119_000), key: keyOf(w.home) });
+        if (!revoked.ok) throw new Error(revoked.why);
+      }
+      return new Date(NOW.getTime() + 120_000);
+    };
+    const code = await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--json'], io, { home: w.home, now });
+    expect(calls).toBe(2);
+    expect(code).toBe(1);
+    const doc = JSON.parse(io.out);
+    expect(doc.error.code).toBe('messages.client-refused');
+    expect(doc.error.message).toContain('revoked or expired while the read ran; nothing was shown');
+    expect(io.out).not.toContain('should not print');
+    expect(doc.rows).toBeUndefined();
+    expect(doc.sent).toBeUndefined();
+  });
+
+  test('an inbox found absent is empty for that read; a link put there is refused by the next check', () => {
+    const w = world(true);
+    const absent = checkClientInbox(w.root, 'acme', 'grok-bot');
+    expect(absent).toMatchObject({ ok: true, absent: true });
+    const elsewhere = join(w.base, 'elsewhere');
+    mkdirSync(elsewhere, { mode: 0o700 });
+    mkdirSync(join(clientInboxFolder(w.root, 'acme', 'grok-bot'), '..'), { recursive: true, mode: 0o700 });
+    symlinkSync(elsewhere, clientInboxFolder(w.root, 'acme', 'grok-bot'));
+    const linked = checkClientInbox(w.root, 'acme', 'grok-bot');
+    expect(linked.ok).toBe(false);
+    if (!linked.ok) expect(linked.why).toContain('symbolic link');
+  });
+
+  test('a plain read claims no request id: the same --request-id reads twice', async () => {
+    const w = world(true);
+    const sent = await clientSend(w, 'twice');
+    expect((await seatReply(w, 'orchestrator', sent.id, 'again')).code).toBe(0);
+    const first = await clientRead(w, ['--request-id', 'read-once-or-twice']);
+    const second = await clientRead(w, ['--request-id', 'read-once-or-twice']);
+    expect(first.code).toBe(0);
+    expect(second.code).toBe(0);
+    expect(second.json.rows).toHaveLength(1);
+    expect(existsSync(join(clientReplayFolder(w.root), 'grok-bot', 'read-once-or-twice.json'))).toBe(false);
   });
 });

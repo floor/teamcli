@@ -253,7 +253,11 @@ A read is a signed request, and the command verifies it before it scans anything
    writes to the grants folder and the team's `.agents` can still read its replies;
 6. the inbox folder is checked as above (an ack creates it; a plain read creates none, and an
    absent one is an empty inbox), and the message key is read;
-7. only then is the folder scanned.
+7. only then is the folder scanned (a folder found absent in step 6 is read as empty and not
+   listed);
+8. before anything is printed, the presented grant is checked active again with a fresh clock and
+   the coordinator binding is resolved a third time: a revocation, expiry or rebinding that landed
+   while the page was gathered refuses the read with nothing shown.
 
 Every failure before step 7 leaves no row scanned and no receipt written.
 

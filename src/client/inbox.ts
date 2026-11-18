@@ -171,7 +171,7 @@ export function ensureClientInbox(root: string, session: string, clientId: strin
  * none. An absent `.clients` or `.clients/<clientId>` is an empty inbox, not a refusal, so a read
  * from a caller that may not write the team's `.agents` (a sandboxed seat) still answers.
  */
-export function checkClientInbox(root: string, session: string, clientId: string): { ok: true; dir: string } | { ok: false; why: string } {
+export function checkClientInbox(root: string, session: string, clientId: string): { ok: true; dir: string; absent: boolean } | { ok: false; why: string } {
   if (!CLIENT_WORD_PATTERN.test(clientId)) return { ok: false, why: `"${clientId}" is not a client id` };
   const clients = seatDropDir(root, session, '.clients');
   const dir = join(clients, clientId);
@@ -179,13 +179,13 @@ export function checkClientInbox(root: string, session: string, clientId: string
     try {
       lstatSync(folder);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, dir };
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, dir, absent: true };
       return { ok: false, why: `the client inbox folder "${folder}" cannot be read` };
     }
     const check = checkInboxFolder(folder);
     if (!check.ok) return check;
   }
-  return { ok: true, dir };
+  return { ok: true, dir, absent: false };
 }
 
 /**
@@ -638,13 +638,17 @@ function admitRead(
     const why = keyState.kind === 'missing' ? 'no message key; nothing was shown' : `${keyState.why}; nothing was shown`;
     return { ok: false, kind: 'key', why };
   }
-  const scanned = scanClientInbox({
-    home: input.home,
-    root: current.teamRoot,
-    session: current.session,
-    clientId: active.grant.clientId,
-    key: keyState.key,
-  });
+  // An inbox found absent is read as empty for this invocation and never listed: a folder that
+  // appears after the check has not passed it. The next read checks it.
+  const scanned: ReturnType<typeof scanClientInbox> = 'absent' in inbox && inbox.absent
+    ? { ok: true, scan: { shown: [], refused: [] } }
+    : scanClientInbox({
+      home: input.home,
+      root: current.teamRoot,
+      session: current.session,
+      clientId: active.grant.clientId,
+      key: keyState.key,
+    });
   if (!scanned.ok) return { ok: false, kind: 'refused', why: scanned.why };
   return {
     ok: true,
@@ -867,7 +871,26 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
     }),
     ...(ack !== undefined ? { ack } : {}),
   };
-  printReading(io, reading, json, sources.now());
+  // A plain read holds no lock, so its admission is not its last word: the page and the statuses
+  // were gathered after it. The presented grant and the coordinator binding are read again with a
+  // fresh clock before anything is printed; a revocation, expiry or rebinding that landed while
+  // the page was gathered refuses the read with nothing shown.
+  const printedAt = sources.now();
+  const still = activeClientGrant(sources.home, outcome.presented, printedAt);
+  const acked = ack?.written === true ? ` (the ack receipt for ${ack.id} was written first)` : '';
+  if (!still.ok) return refused(`the grant was revoked or expired while the read ran; nothing was shown${acked}: ${still.why}`);
+  const bound = resolveEntityCoordinator(sources.home, still.grant.entity, { seat: still.grant.recipientSeat, clientId: still.grant.clientId, teamId: still.grant.teamId, ...(still.grant.team !== undefined ? { team: still.grant.team } : {}) });
+  if (
+    !bound.ok ||
+    bound.coordinator.teamId !== outcome.coordinator.teamId ||
+    bound.coordinator.recipientId !== outcome.coordinator.recipientId ||
+    bound.coordinator.recipientSeat !== outcome.coordinator.recipientSeat ||
+    !sameFolder(bound.coordinator.teamRoot, outcome.coordinator.teamRoot) ||
+    bound.coordinator.session !== outcome.coordinator.session
+  ) {
+    return refused(`the coordinator binding changed while the read ran; nothing was shown${acked}`);
+  }
+  printReading(io, reading, json, printedAt);
 
   if (differences.length > 0 || ack?.status === 'refused') {
     return refused(
