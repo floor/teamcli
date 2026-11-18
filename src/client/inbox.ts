@@ -167,6 +167,28 @@ export function ensureClientInbox(root: string, session: string, clientId: strin
 }
 
 /**
+ * The read-only form of {@link ensureClientInbox}: checks the inbox folders that exist and creates
+ * none. An absent `.clients` or `.clients/<clientId>` is an empty inbox, not a refusal, so a read
+ * from a caller that may not write the team's `.agents` (a sandboxed seat) still answers.
+ */
+export function checkClientInbox(root: string, session: string, clientId: string): { ok: true; dir: string } | { ok: false; why: string } {
+  if (!CLIENT_WORD_PATTERN.test(clientId)) return { ok: false, why: `"${clientId}" is not a client id` };
+  const clients = seatDropDir(root, session, '.clients');
+  const dir = join(clients, clientId);
+  for (const folder of [clients, dir]) {
+    try {
+      lstatSync(folder);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, dir };
+      return { ok: false, why: `the client inbox folder "${folder}" cannot be read` };
+    }
+    const check = checkInboxFolder(folder);
+    if (!check.ok) return check;
+  }
+  return { ok: true, dir };
+}
+
+/**
  * Publishes one file whole at mode 0600: a dot-named temporary in the same folder, written and
  * flushed, then linked onto the final name. `exists` means a file already holds the name and was
  * not replaced. No `chmod` call runs on the folder or the file.
@@ -548,14 +570,20 @@ type ClientReadOutcome =
   | { ok: false; kind: 'key' | 'refused'; why: string };
 
 /**
- * Admits one read under the grant lock: re-reads the presented grant, resolves the checkout from
- * the registry (never from cwd), requires the signed binding to be the current coordinator, builds
- * and verifies the signed v2 request, requires the grant still active, claims the request id, and
- * only then scans the inbox. Any failure leaves no row scanned and no receipt written.
+ * Admits one read: re-reads the presented grant, resolves the checkout from the registry (never
+ * from cwd), requires the signed binding to be the current coordinator, builds and verifies the
+ * signed v2 request, requires the grant still active, and only then scans the inbox. Any failure
+ * leaves no row scanned and no receipt written.
+ *
+ * An ack (`input.ack` set) runs under the grant lock, claims the request id and creates the inbox
+ * folders, since it writes a receipt. A plain read writes nothing: no lock, no claim, no folder.
+ * It has no effect a replay could repeat, and a caller whose sandbox refuses writes to the grants
+ * folder and the team's `.agents` can still read its replies.
  */
 function admitRead(
   input: { home: string; grantFile: string; keyFile: string; since: string | null; ack: string | null; limit: number; requestId?: string; now: Date },
 ): ClientReadOutcome {
+  const writes = input.ack !== null;
   const presented = readClientGrantFile(input.home, input.grantFile);
   if (!presented.ok) return { ok: false, kind: 'refused', why: presented.why };
   const grant = presented.grant;
@@ -597,9 +625,13 @@ function admitRead(
   ) {
     return { ok: false, kind: 'refused', why: `the coordinator binding changed before the read; nothing was read` };
   }
-  const claim = claimClientRequest(current.teamRoot, active.grant.clientId, verified.request.request_id, input.now);
-  if (!claim.ok) return { ok: false, kind: 'refused', why: claim.why };
-  const inbox = ensureClientInbox(current.teamRoot, current.session, active.grant.clientId);
+  if (writes) {
+    const claim = claimClientRequest(current.teamRoot, active.grant.clientId, verified.request.request_id, input.now);
+    if (!claim.ok) return { ok: false, kind: 'refused', why: claim.why };
+  }
+  const inbox = writes
+    ? ensureClientInbox(current.teamRoot, current.session, active.grant.clientId)
+    : checkClientInbox(current.teamRoot, current.session, active.grant.clientId);
   if (!inbox.ok) return { ok: false, kind: 'refused', why: inbox.why };
   const keyState = messageKeyState(input.home);
   if (keyState.kind !== 'key') {
@@ -692,24 +724,29 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
   const limit = clientLimitOf(args.values.limit);
   if (limit === null) return usage(`--limit is a page bound between 1 and ${String(CLIENT_READ_MAX_LIMIT)}`);
 
+  const admit = (): ClientReadOutcome =>
+    admitRead({
+      home: sources.home,
+      grantFile,
+      keyFile,
+      since,
+      ack: ackId,
+      limit,
+      ...(args.values['request-id'] !== undefined ? { requestId: args.values['request-id'] } : {}),
+      now: sources.now(),
+    });
   let outcome: ClientReadOutcome;
-  try {
-    outcome = withClientGrantLock(
-      sources.home,
-      () =>
-        admitRead({
-          home: sources.home,
-          grantFile,
-          keyFile,
-          since,
-          ack: ackId,
-          limit,
-          ...(args.values['request-id'] !== undefined ? { requestId: args.values['request-id'] } : {}),
-          now: sources.now(),
-        }),
-    );
-  } catch (error) {
-    return refused(error instanceof Error ? error.message : 'the client grant lock could not be taken');
+  if (ackId === null) {
+    // A plain read writes nothing, so it takes no lock: a held lock or a grants folder the caller
+    // may not write never stops it.
+    outcome = admit();
+  } else {
+    try {
+      outcome = withClientGrantLock(sources.home, admit);
+    } catch (error) {
+      const why = error instanceof Error ? error.message : 'the client grant lock could not be taken';
+      return refused(`${why}; the ack writes a receipt and was not made. A read without --ack writes nothing and can page with --since <id>`);
+    }
   }
   if (!outcome.ok) return outcome.kind === 'key' ? keyRefusal(outcome.why) : refused(outcome.why);
 

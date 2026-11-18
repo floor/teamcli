@@ -5,11 +5,12 @@
 // send-only grant opens no conversation, and a revoked grant stops new replies.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clientInboxFolder } from '../src/client/inbox.ts';
-import { clientKeyDir, newClientKeyPair, appendClientRevocation, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
+import { clientGrantsFolder, clientKeyDir, newClientKeyPair, appendClientRevocation, withClientGrantLock, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
+import { clientReplayFolder } from '../src/client/replay.ts';
 import { runMessages } from '../src/commands/messages.ts';
 import { runReply } from '../src/commands/reply.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -21,7 +22,10 @@ import { fixtureBase, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-22T21:00:00Z');
 const made: string[] = [];
+// Folders a test made unwritable, given their write bit back before the fixture is removed.
+const locked: string[] = [];
 afterEach(() => {
+  for (const dir of locked.splice(0)) chmodSync(dir, 0o700);
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -286,4 +290,117 @@ test('client listings ignore watcher sidecars and still refuse a corrupt record'
   const corrupt = await clientRead(w);
   expect(corrupt.code).toBe(1);
   expect(corrupt.out).toContain(`${reply.json.record}-corrupt`);
+});
+
+describe('a client read from a caller that may not write the grants folder or the team (a sandboxed seat)', () => {
+  // A sandbox refuses the writes with EPERM; a folder without its write bit refuses them with
+  // EACCES. Either way the old read failed at the grant lock, before any row.
+  function confine(w: World): void {
+    for (const dir of [clientGrantsFolder(w.home), join(w.root, '.agents')]) {
+      chmodSync(dir, 0o500);
+      locked.push(dir);
+    }
+  }
+
+  async function replied(w: World) {
+    const sent = await clientSend(w, 'are you there?');
+    expect(sent.code).toBe(0);
+    const reply = await seatReply(w, 'orchestrator', sent.id, 'here');
+    expect(reply.code).toBe(0);
+    return reply.json.record as string;
+  }
+
+  test('the lock the read used to take cannot be taken there', async () => {
+    const w = world(true);
+    await replied(w);
+    confine(w);
+    expect(() => withClientGrantLock(w.home, () => 0)).toThrow(/cannot be taken \(EACCES\)/);
+  });
+
+  test('the read succeeds, returns the inbox, and writes nothing', async () => {
+    const w = world(true);
+    const id = await replied(w);
+    const claimsBefore = readdirSync(join(clientReplayFolder(w.root), 'grok-bot')).length;
+    confine(w);
+    const read = await clientRead(w);
+    expect(read.err).not.toContain('refused');
+    expect(read.code).toBe(0);
+    expect(read.json.rows).toHaveLength(1);
+    expect(read.json.rows[0]).toMatchObject({ id, from: 'orchestrator', status: 'shown' });
+    expect(readdirSync(join(clientReplayFolder(w.root), 'grok-bot'))).toHaveLength(claimsBefore);
+    expect(existsSync(join(clientGrantsFolder(w.home), '.client.lock'))).toBe(false);
+    const since = await clientRead(w, ['--since', id, '--limit', '5']);
+    expect(since.code).toBe(0);
+    expect(since.json.rows).toHaveLength(0);
+  });
+
+  test('a read with no inbox folder yet is an empty reading, and creates none', async () => {
+    const w = world(true);
+    // The send makes the message key; no reply has made the inbox.
+    expect((await clientSend(w, 'anyone?')).code).toBe(0);
+    expect(existsSync(clientInboxFolder(w.root, 'acme', 'grok-bot'))).toBe(false);
+    confine(w);
+    const read = await clientRead(w);
+    expect(read.code).toBe(0);
+    expect(read.json.rows).toHaveLength(0);
+    expect(existsSync(clientInboxFolder(w.root, 'acme', 'grok-bot'))).toBe(false);
+  });
+
+  test('an ack there is refused with the cause named, writes no receipt, and the read still works', async () => {
+    const w = world(true);
+    const id = await replied(w);
+    confine(w);
+    const acked = await clientRead(w, ['--ack', id]);
+    expect(acked.code).toBe(1);
+    expect(acked.json.error.code).toBe('messages.client-refused');
+    expect(acked.json.error.message).toContain('cannot be taken (EACCES)');
+    expect(acked.json.error.message).toContain('A read without --ack writes nothing');
+    expect(existsSync(join(clientInboxFolder(w.root, 'acme', 'grok-bot'), `${id}.read.json`))).toBe(false);
+    const read = await clientRead(w);
+    expect(read.code).toBe(0);
+    expect(read.json.rows).toHaveLength(1);
+  });
+});
+
+describe('the grant lock guards mutations, never a read', () => {
+  function hold(w: World): void {
+    writeFileSync(join(clientGrantsFolder(w.home), '.client.lock'), `${JSON.stringify({ pid: 1, token: 'held', at: NOW.toISOString() })}\n`);
+  }
+
+  test('a held lock does not block a read', async () => {
+    const w = world(true);
+    const sent = await clientSend(w, 'ping');
+    const reply = await seatReply(w, 'orchestrator', sent.id, 'pong');
+    hold(w);
+    const started = Date.now();
+    const read = await clientRead(w);
+    expect(read.code).toBe(0);
+    expect(read.json.rows[0]).toMatchObject({ id: reply.json.record, status: 'shown' });
+    // The lock's wait is two seconds; a read never waits on it.
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  test('an ack and a client send still take the lock, and a held one refuses both', async () => {
+    const w = world(true);
+    const sent = await clientSend(w, 'ping');
+    const reply = await seatReply(w, 'orchestrator', sent.id, 'pong');
+    hold(w);
+    const acked = await clientRead(w, ['--ack', reply.json.record]);
+    expect(acked.code).toBe(1);
+    expect(acked.json.error.message).toContain('another command holds the client grant lock');
+    expect(existsSync(join(clientInboxFolder(w.root, 'acme', 'grok-bot'), `${reply.json.record}.read.json`))).toBe(false);
+    const again = await clientSend(w, 'second');
+    expect(again.code).not.toBe(0);
+    expect(again.out + again.err).toContain('another command holds the client grant lock');
+  });
+
+  test('with the lock free the ack writes its receipt once', async () => {
+    const w = world(true);
+    const sent = await clientSend(w, 'ping');
+    const reply = await seatReply(w, 'orchestrator', sent.id, 'pong');
+    const acked = await clientRead(w, ['--ack', reply.json.record]);
+    expect(acked.code).toBe(0);
+    expect(acked.json.ack).toMatchObject({ id: reply.json.record, status: 'acknowledged', written: true });
+    expect(existsSync(join(clientInboxFolder(w.root, 'acme', 'grok-bot'), `${reply.json.record}.read.json`))).toBe(true);
+  });
 });
