@@ -1,14 +1,18 @@
 // The live actors of a root, read for the activation check (rfc-event-comms §3, step E6).
 //
-// Positive coverage, never "whatever markers we could read": every seat the root's state records
-// as launched, whose launched CLI process is still alive, is an actor that must be accounted for by
-// its own seat's inbox-listener marker. Each answer is one of:
-//   - not live: no launched record, or every recorded CLI pid is gone;
+// The actors are the long-lived processes that can read or deliver mail for the root: the daemon
+// (which hosts the watches, the wake, typed and app-server legs, the retry workers and the send
+// host) and each seat's MCP inbox server. A `team` command a seat runs (ack, reply, drops) executes
+// the installed package, so after an install it is at the installed level by construction and is
+// not an actor (E7b, the coordinator's decision). For each seat, the answer is one of:
+//   - not an actor: no inbox-listener marker at all (a seat whose CLI runs no inbox server, a
+//     Codex seat for one), or a marker whose process is gone while no launched CLI is live;
 //   - live and reporting a level: the marker is readable, bound to this root, session and seat,
 //     and its process is alive;
-//   - unknown: anything else (an unreadable or malformed marker, a marker bound elsewhere, a live
-//     CLI with no marker, a folder or state that cannot be read). Unknown is an actor of level null,
-//     which refuses activation and fences an active root. Nothing is skipped.
+//   - unknown: an unreadable or malformed marker, a marker bound elsewhere, a marker that stands
+//     while its process is gone and the seat's launched CLI is live, a folder or state that cannot
+//     be read. Unknown is an actor of level null, which refuses activation (fail closed) until the
+//     marker is cleaned or the seat is relaunched.
 // The machine daemon (which hosts the watches, wake and retry workers and the send host, one build)
 // is read from its state record. A listener marker for a seat the state does not record is an
 // actor too, never dropped.
@@ -51,10 +55,9 @@ export function liveFloorActors(root: string, home: string): FloorActor[] | null
     const dropDir = join(root, '.agents', 'send-drops', session, seat);
     const marker = markerState(dropDir);
     if (marker === 'unknown') return unknown(name, 0);
-    if (marker === 'absent') {
-      if (launchedLive) unknown(`${name} (live CLI, no inbox marker)`, 0);
-      return;
-    }
+    // No marker: the seat runs no inbox server, so it reads and delivers only through `team`
+    // commands (the installed build) and the daemon's legs. Not an actor.
+    if (marker === 'absent') return;
     const listener = readListener(dropDir);
     if (listener === null) return unknown(`${name} (unreadable marker)`, 0);
     if (listener.root !== root || listener.session !== session || listener.seat !== seat) return unknown(`${name} (marker bound elsewhere)`, listener.pid);

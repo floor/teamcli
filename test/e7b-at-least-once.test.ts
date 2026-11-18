@@ -569,3 +569,50 @@ describe('closing items after round 4', () => {
     expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M2)))).toBe(true);
   });
 });
+
+describe('the actor proof counts long-lived readers and carriers only (coordinator decision)', () => {
+  const launched = (at: At, seat: string) => writeFileSync(join(at.root, '.agents', 'team.state.json'), JSON.stringify({
+    format: 1, sessions: { [SESSION]: { seats: { [seat]: { stage: 'ready', launched: { shell: process.pid, cli: [process.pid] } } } } },
+  }));
+  const marker = (at: At, seat: string, fields: Record<string, unknown>) => {
+    const dir = join(at.root, '.agents', 'send-drops', SESSION, seat);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat, session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), level: 3, ...fields })}\n`);
+  };
+  const actorsOf = async (at: At) => {
+    const { liveFloorActors } = await import('../src/queue/floor-actors.ts');
+    return (liveFloorActors(at.root, at.home) ?? []).filter((a) => a.kind !== 'daemon');
+  };
+
+  test('a live seat with no inbox server and no marker (a Codex seat) is not an actor: activation is allowed', async () => {
+    const at = place();
+    launched(at, 'builder');
+    expect(await actorsOf(at)).toEqual([]);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...[]] }).kind).toBe('activated');
+  });
+
+  test('a marker standing while its process is gone and the seat\'s CLI is live is unknown: activation refused', async () => {
+    const at = place();
+    launched(at, 'lead');
+    marker(at, 'lead', { pid: 999_999_99 });
+    const actors = await actorsOf(at);
+    expect(actors).toMatchObject([{ kind: 'other', level: null }]);
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
+  });
+
+  test('a marker bound elsewhere is unknown: activation refused', async () => {
+    const at = place();
+    launched(at, 'lead');
+    marker(at, 'lead', { root: '/elsewhere' });
+    const actors = await actorsOf(at);
+    expect(actors[0]?.name).toContain('marker bound elsewhere');
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon, ...actors] }).kind).toBe('refused');
+  });
+
+  test('a live inbox server at level 3 is an actor at level 3', async () => {
+    const at = place();
+    launched(at, 'lead');
+    marker(at, 'lead', {});
+    expect(await actorsOf(at)).toMatchObject([{ kind: 'inbox-server', level: 3 }]);
+  });
+});
