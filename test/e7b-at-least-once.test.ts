@@ -533,3 +533,39 @@ describe('code round 3 fixes', () => {
     expect(listUnread(at.dropDir, context(at), at.home).map((m) => m.id)).toEqual([M1]);
   });
 });
+
+describe('closing items after round 4', () => {
+  const archive = (at: At, ids: string[]) => {
+    const archived = join(at.dropDir, 'archive', '2026-11', 'unread');
+    mkdirSync(archived, { recursive: true, mode: 0o700 });
+    for (const id of ids) writeFileSync(join(archived, id), `${JSON.stringify(signRecord(stampedPayload(payloadOf(at, id), at.home), at.home), null, 2)}\n`, { mode: 0o600 });
+    return archived;
+  };
+  const team = { session: SESSION, orchestrator: 'boss', seats: [{ name: 'boss' }] } as unknown as Parameters<typeof import('../src/daemon/chores/inbox-archive.ts').noticeUndelivered>[0]['team'];
+
+  test('a stray, unsigned "notice sent" mark counts as absent: the notice is written and the mark replaced', async () => {
+    const { noticeUndelivered } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    const archived = archive(at, [M1]);
+    writeFileSync(join(archived, `${M1}.noticed`), '{}\n');
+    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString() };
+    expect(noticeUndelivered(input)).toBe(1);
+    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M1)))).toBe(true);
+    expect(readFileSync(join(archived, `${M1}.noticed`), 'utf8')).toContain('notice-mark');
+    expect(noticeUndelivered(input)).toBe(0);
+  });
+
+  test('the reconcile walks a bounded step and resumes from its cursor', async () => {
+    const { noticeUndeliveredFrom } = await import('../src/daemon/chores/inbox-archive.ts');
+    const at = place();
+    activateRoot(at);
+    archive(at, [M1, M2]);
+    const input = { home: at.home, root: at.root, session: SESSION, seat: 'lead', dropDir: at.dropDir, team, context: context(at), key: key(at), at: new Date().toISOString(), limit: 1 };
+    const first = noticeUndeliveredFrom(input);
+    expect(first).toMatchObject({ written: 1, more: true });
+    const second = noticeUndeliveredFrom({ ...input, after: first.last as string });
+    expect(second).toMatchObject({ written: 1 });
+    expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'boss', undeliveredNoticeId(M2)))).toBe(true);
+  });
+});
