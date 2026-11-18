@@ -683,7 +683,7 @@ export async function appendDelivery<T>(input: AppendInput, write: () => Promise
 
 function drainAfterRelease(dropDir: string, options: QueueOptions): void {
   try {
-    drainPendingReceipts(dropDir, options.home);
+    drainPendingReceipts(dropDir, options.home, options.log);
   } catch (error) {
     options.log?.(`queue: the pending receipts could not be drained (${(error as Error).message})`);
   }

@@ -193,8 +193,10 @@ describe('E6 body hand-over on the E5 read claim', () => {
     const generation = currentGenerationName(at.dropDir)!;
     const journal = join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'journal.jsonl');
     const lines = readFileSync(journal, 'utf8').trimEnd().split('\n');
-    writeFileSync(journal, `${[lines[0], 'not json', ...lines.slice(1)].join('\n')}\n`);
-    expect(verifiedQueuePlaceOf(at.dropDir, M2, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
+    const afterM1 = lines.findIndex(l => l.includes(M1) && l.includes('"committed"')) + 1;
+    writeFileSync(journal, `${[...lines.slice(0, afterM1), 'not json', ...lines.slice(afterM1)].join('\n')}\n`);
+    // M1's committed line sits in the valid prefix: only the corruption guard keeps it unproved.
+    expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
   });
 
   test('a failed commit flush poisons the journal: no proof until a later holder flushes it, and a failing flush keeps it poisoned', () => {
@@ -238,13 +240,52 @@ describe('E6 body hand-over on the E5 read claim', () => {
     const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
     const binding = { root: at.root, session: SESSION, seat: 'lead', generation };
     // Still held: the drain proves nothing and keeps the marker.
-    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 1 });
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 1, dropped: 0 });
     if ('release' in holder) holder.release();
-    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0 });
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 0 });
     expect(readdirSync(pending).length).toBe(0);
-    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 0 });
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 0, dropped: 0 });
     const receipts = readQueueReceipts(binding, at.home, entryAt)!;
     expect(receipts.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
+  });
+
+  test('a read in the record-to-index window leaves a signed marker, drained to exactly one receipt after the commit', () => {
+    const at = place();
+    const record = signRecord({
+      kind: 'message', id: M1, to: 'lead', to_id: null, root: at.root, session: SESSION,
+      at: '2026-11-18T00:00:00.000Z', body: 'b', from: 'worker', from_id: null, rule: 'the owner', thread: M1,
+    }, at.home);
+    let readInWindow = false;
+    appendDeliverySync({ dropDir: at.dropDir, record }, () => {
+      writeFileSync(join(at.dropDir, M1), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+      // The canonical record is published; its entry and id index are not written yet.
+      readInWindow = readMessage(target(at), M1, at.home).ok;
+      return { ok: true, value: true };
+    }, { home: at.home });
+    expect(readInWindow).toBe(true);
+    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
+    // The writer's release drained the marker once the entry was placed.
+    expect(readdirSync(join(base, 'pending-receipts')).length).toBe(0);
+    const generation = currentGenerationName(at.dropDir)!;
+    const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
+    expect(readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
+  });
+
+  test('a forged or modified pending marker signs no receipt and is dropped', () => {
+    const at = place();
+    message(at, M1);
+    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
+    const folder = join(base, 'pending-receipts');
+    mkdirSync(folder, { recursive: true });
+    const payload = { v: 1, kind: 'queue-pending', root: at.root, session: SESSION, seat: 'lead', msg_id: M1, receipt: 'read', actor: { kind: 'recipient', name: 'lead' } };
+    writeFileSync(join(folder, `0000000000001.${M1}.read.json`), `${JSON.stringify({ payload, signature: 'AAAA' })}\n`);
+    writeFileSync(join(folder, `0000000000002.${M1}.read.json`), `${JSON.stringify({ payload })}\n`);
+    expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 0, left: 0, dropped: 2 });
+    const generation = currentGenerationName(at.dropDir)!;
+    const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
+    const receipts = readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!;
+    expect(receipts).toEqual([]);
+    expect(derivedProgress(receipts).prefix).toBe(0);
   });
 
   test('the next holder of the queue lock drains the pending dual writes when it lets go', () => {

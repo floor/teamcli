@@ -14,7 +14,8 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { createExclusive, readFence, removeDurable, type DurableFaults } from './durable.ts';
-import { queueBaseOf, queuePlaceOf, verifiedQueuePlaceOf } from './append.ts';
+import { lstatSync } from 'node:fs';
+import { queueBaseOf, verifiedQueuePlaceOf } from './append.ts';
 
 export const QUEUE_RECEIPT_DOMAIN = 'team-queue-receipt-v1\n';
 
@@ -188,11 +189,13 @@ export function shadowQueueReceipt(input: {
   try {
     const written = placeAndWrite(input);
     if (written !== 'unplaced') return written;
-    // The id is indexed but its placement cannot be proved right now (the queue lock is held, or
-    // the journal is not yet proved durable): the decision is never skipped. A durable pending
-    // marker beside the queue records it, and the next holder of the lock (or the reconcile pass)
-    // drains it in order, writing the receipt exactly once (`drainPendingReceipts`).
-    if (queuePlaceOf(input.dropDir, input.msgId) === null) return 'unplaced';
+    // The placement cannot be proved right now: the queue lock is held, the journal is not yet
+    // proved durable, or the record is published but not yet indexed (the append's record-to-index
+    // window). The decision is never skipped: a signed, durable pending marker keyed by the record
+    // id records it, and the next holder of the lock (or the reconcile pass) drains it once the
+    // entry is placed, writing the receipt exactly once (`drainPendingReceipts`). A seat with no
+    // queue at all has nothing to dual-write to.
+    if (pendingFolder(input.dropDir) === null || !queueExists(input.dropDir)) return 'unplaced';
     return writePending(input) ? 'pending' : 'failed';
   } catch {
     return 'failed';
@@ -221,14 +224,48 @@ function pendingFolder(dropDir: string): string | null {
   return base === null ? null : join(base, PENDING);
 }
 
+export const QUEUE_PENDING_DOMAIN = 'team-queue-pending-v1\n';
+
+type PendingPayload = {
+  v: 1;
+  kind: 'queue-pending';
+  root: string;
+  session: string;
+  seat: string;
+  msg_id: string;
+  receipt: QueueReceiptKind;
+  actor: { kind: ReceiptActorKind; name: string };
+};
+
+function queueExists(dropDir: string): boolean {
+  const base = queueBaseOf(dropDir);
+  if (base === null) return false;
+  try {
+    return lstatSync(base).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** The pending decision, signed with the home's message key (the same key a receipt is signed
+ *  with) and bound to the recipient, message, kind and actor. Nothing unsigned is ever replayed. */
 function writePending(input: PendingInput): boolean {
   const folder = pendingFolder(input.dropDir);
-  if (folder === null || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.msgId)) return false;
-  const marker = { msg_id: input.msgId, kind: input.kind, actor: input.actor, root: input.root, session: input.session, seat: input.seat };
+  if (folder === null || !NAME.test(input.msgId) || !NAME.test(input.session) || !NAME.test(input.seat)) return false;
+  if (!actorMay(input.kind, input.actor.kind)) return false;
   // One marker per (message, kind): a second contention for the same decision finds it standing.
-  const existing = listPending(folder).find(name => name.slice(14) === `${input.msgId}.${input.kind}.json`);
-  if (existing !== undefined) return true;
-  const outcome = createExclusive(join(folder, `${String(Date.now()).padStart(13, '0')}.${input.msgId}.${input.kind}.json`), `${JSON.stringify(marker)}\n`);
+  if (listPending(folder).some(name => name.slice(14) === `${input.msgId}.${input.kind}.json`)) return true;
+  const payload: PendingPayload = {
+    v: 1, kind: 'queue-pending', root: input.root, session: input.session, seat: input.seat,
+    msg_id: input.msgId, receipt: input.kind, actor: input.actor,
+  };
+  let signature: string;
+  try {
+    signature = signDomain(QUEUE_PENDING_DOMAIN, payload as unknown as Json, messageKeyOf(input.home));
+  } catch {
+    return false;
+  }
+  const outcome = createExclusive(join(folder, `${String(Date.now()).padStart(13, '0')}.${input.msgId}.${input.kind}.json`), `${JSON.stringify({ payload, signature })}\n`);
   return outcome === 'created' || outcome === 'exists';
 }
 
@@ -246,28 +283,31 @@ function listPending(folder: string): string[] {
  * answers `exists`), then the marker is removed durably. A marker whose placement still cannot be
  * proved, or whose write or removal fails, stays for the next pass. Called with no queue lock held.
  */
-export function drainPendingReceipts(dropDir: string, home: string): { written: number; left: number } {
+export function drainPendingReceipts(dropDir: string, home: string, log?: (line: string) => void): { written: number; left: number; dropped: number } {
   const folder = pendingFolder(dropDir);
-  if (folder === null) return { written: 0, left: 0 };
+  if (folder === null) return { written: 0, left: 0, dropped: 0 };
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return { written: 0, left: listPending(folder).length, dropped: 0 };
   let written = 0;
   let left = 0;
+  let dropped = 0;
   for (const name of listPending(folder)) {
     const path = join(folder, name);
     const text = readFence(path);
-    let marker: { msg_id?: unknown; kind?: unknown; actor?: { kind?: unknown; name?: unknown }; root?: unknown; session?: unknown; seat?: unknown } | null = null;
-    try {
-      marker = text === null || text === '' ? null : JSON.parse(text);
-    } catch {
-      marker = null;
-    }
-    if (marker === null || typeof marker.msg_id !== 'string' || typeof marker.kind !== 'string' || typeof marker.root !== 'string'
-      || typeof marker.session !== 'string' || typeof marker.seat !== 'string' || typeof marker.actor?.kind !== 'string' || typeof marker.actor?.name !== 'string') {
-      left += 1;
+    if (text === null) { left += 1; continue; }
+    const marker = verifiedPending(text, name, key.key);
+    if (marker === null) {
+      // A marker that does not verify is never replayed: it proves no decision. It is removed and
+      // logged, so a forged or damaged marker can neither sign a receipt nor stay to be retried.
+      log?.(`queue: dropped a pending receipt marker that does not verify (${name})`);
+      if (removeDurable(path) === 'removed') dropped += 1;
+      else left += 1;
       continue;
     }
+    // An unindexed marker (the record-to-index window) stays until the entry is placed.
     const outcome = placeAndWrite({
       dropDir, root: marker.root, session: marker.session, seat: marker.seat, msgId: marker.msg_id,
-      kind: marker.kind as QueueReceiptKind, actor: { kind: marker.actor.kind as ReceiptActorKind, name: marker.actor.name }, home,
+      kind: marker.receipt, actor: marker.actor, home,
     });
     if ((outcome === 'written' || outcome === 'exists') && removeDurable(path) === 'removed') {
       if (outcome === 'written') written += 1;
@@ -275,5 +315,22 @@ export function drainPendingReceipts(dropDir: string, home: string): { written: 
     }
     left += 1;
   }
-  return { written, left };
+  return { written, left, dropped };
+}
+
+function verifiedPending(text: string, name: string, key: Parameters<typeof verifyDomain>[3]): PendingPayload | null {
+  let record: { payload?: PendingPayload; signature?: unknown };
+  try {
+    record = JSON.parse(text) as { payload?: PendingPayload; signature?: unknown };
+  } catch {
+    return null;
+  }
+  const payload = record.payload;
+  if (!payload || typeof record.signature !== 'string' || payload.kind !== 'queue-pending' || payload.v !== 1) return null;
+  if (typeof payload.msg_id !== 'string' || typeof payload.receipt !== 'string' || typeof payload.actor?.kind !== 'string' || typeof payload.actor?.name !== 'string') return null;
+  // The file name must name the same message and kind the signed payload does.
+  if (name.slice(14) !== `${payload.msg_id}.${payload.receipt}.json`) return null;
+  if (!actorMay(payload.receipt, payload.actor.kind)) return null;
+  if (!verifyDomain(QUEUE_PENDING_DOMAIN, payload as unknown as Json, record.signature, key)) return null;
+  return payload;
 }
