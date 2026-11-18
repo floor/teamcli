@@ -1,3 +1,5 @@
+import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { recordStampAt } from './record.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { recordDeliveredBody, RUNTIME_WAKE_MAX } from './readable-wake.ts';
@@ -1853,6 +1855,14 @@ async function executeSocketSend(
   const bodyIncluded = fits && !pointerOnly;
   if (!fits) content = `${content.split('\n')[0]}\n\nBody too long for this wake; read it with: team drops --read.`;
   else if (pointerOnly) content = `${content.split('\n')[0]}\n\n${exposurePointer(msgId, null)}`;
+  // E7b: a stamped record's copy carries its delivery number, taken durably before the frame.
+  if (bodyIncluded && recordStampAt(dropDir, msgId) !== false) {
+    const n = takeCopyNumber(dropDir, msgId, 'socket');
+    if (n === null) {
+      return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'refused', detail: `${seatName}: the delivery history could not be written; nothing was sent` };
+    }
+    content = wrapCopy(content, msgId, n);
+  }
   // The reader line rides with the body too: a seat handed the whole body still needs the id
   // to answer it on its thread.
   const frame = frameFor(content, msgId, reply);

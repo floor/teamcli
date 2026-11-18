@@ -30,6 +30,8 @@ import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE, folderOfDrop } from './drop-fo
 import { publishRecordRead } from './read-receipt.ts';
 import {
   isLeadAckReadBy,
+  isRead,
+  isStampedPayload,
   readRecord,
   readVerifiedReceipt,
   sameFolder,
@@ -62,7 +64,12 @@ const ID_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
 /** One family to move. `unread` marks mail moved before it was read, from a seat at rest; it
  *  lands in `archive/<YYYY-MM>/unread/`. */
-export type InboxArchiveMove = { seat: string; id: string; month: string; files: string[]; unread?: true };
+export type InboxArchiveMove = {
+  seat: string; id: string; month: string; files: string[]; unread?: true;
+  /** E7b: a stamped record moved unacknowledged because its seat is retired; its sender is told
+   *  "not delivered: seat retired". */
+  undelivered?: { from: string };
+};
 
 /** What a plan may take beyond the settled mail. */
 export type InboxArchivePlanOptions = {
@@ -72,6 +79,9 @@ export type InboxArchivePlanOptions = {
   /** Move mail still unread when its signed `at` is older than this. Only for a seat the caller
    *  proved is stopped or retired; null or absent moves no unread mail. */
   unreadKeepMs?: number | null;
+  /** E7b: the seat is retired or removed (no longer in the registry or the team file). Only then
+   *  does an unacknowledged stamped record move, marked undelivered. Absent: it never moves. */
+  retired?: boolean;
   /** The most families one plan takes (moves and marks together), orphans finished first
    *  included. Absent: no bound. */
   limit?: number;
@@ -243,6 +253,22 @@ export function planSeatArchive(
     const payload = looked.record.payload;
     if (isGeneralBriefRecord(payload)) continue;
     if (payload.from_client !== undefined || payload.to_client !== undefined) continue;
+    if (isStampedPayload(payload)) {
+      // E7b (decision 4): a stamped record is settled only by its recipient. Settled, it moves as
+      // acknowledged mail; unsettled, it never moves while its seat is in the registry, running or
+      // stopped (a writer-side read is not settlement, and the pre-channel mark is not written). A
+      // retired seat's unacknowledged record moves to the unread archive, and its sender is told.
+      if (isRead(dropDir, family.id, context, key)) {
+        const month = archiveMonth(payload.at);
+        if (month !== null) move.push({ seat, id: family.id, month, files: family.files });
+        continue;
+      }
+      if (options.retired === true) {
+        const month = archiveMonth(payload.at);
+        if (month !== null) move.push({ seat, id: family.id, month, files: family.files, unread: true, undelivered: { from: payload.from } });
+      }
+      continue;
+    }
     const read = readVerifiedReceipt(join(dropDir, `${family.id}.read.json`), family.id, 'read', context, key);
     const replied = readVerifiedReceipt(join(dropDir, `${family.id}.replied.json`), family.id, 'replied', context, key);
     const delivered = readVerifiedReceipt(join(dropDir, `${family.id}.delivered.json`), family.id, 'delivered', context, key);

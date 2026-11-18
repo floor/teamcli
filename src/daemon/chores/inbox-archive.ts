@@ -14,7 +14,8 @@
 // A pass while the load per core is above the limit does nothing and tries again on the next.
 // When the day's run ends having moved anything, the team's lead gets one line saying so.
 // The day, the totals and the line's state live in `<root>/.agents/send-drops/.drops-archive-run.json`.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { writeRuntimeNotice } from '../../send/endpoint-notice.ts';
 import { cpus, loadavg } from 'node:os';
 import { join } from 'node:path';
 import type { TeamFile } from '../../file/types.ts';
@@ -166,6 +167,22 @@ export function seatAtRest(agents: readonly Agent[], teamId: string, team: TeamF
   if (!inSession || declaredAny.length === 0) return true;
   return declaredAny.every((entry) => entry.stopped)
     || records.some((agent) => agent.reach.session.toLowerCase() === session.toLowerCase() && agent.lifecycle === 'stopped');
+}
+
+/** Whether the seat is retired or removed (E7b decision 4): the team file no longer declares it and
+ *  no registry record for it is running, registered or stopped. A stopped seat is not retired. */
+export function seatRetired(agents: readonly Agent[], teamId: string, team: TeamFile, seat: string): boolean {
+  const name = seat.toLowerCase();
+  if (name === 'owner') return false;
+  if (team.seats.some((entry) => entry.name.toLowerCase() === name)) return false;
+  return !agents.some((agent) => agent.reach.team === teamId && agent.reach.seat.toLowerCase() === name
+    && (agent.lifecycle === 'running' || agent.lifecycle === 'registered' || agent.lifecycle === 'stopped'));
+}
+
+/** A stable, UUID-shaped id for one message's not-delivered notice. */
+export function undeliveredNoticeId(id: string): string {
+  const hex = createHash('sha256').update(`not-delivered\n${id}`).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 /** Whether send-drops, the session folder and the seat folder are each a plain folder, not a
@@ -322,6 +339,7 @@ export async function inboxArchivePass(input: {
         refused.push('the registry could not be read whole; no unread mail moved');
       }
       const atRest = agents !== null && seatAtRest(agents, teamId, team, folder.session, folder.seat);
+      const retired = agents !== null && seatRetired(agents, teamId, team, folder.seat);
       const after = run.cursor[key2];
       const report = archiveSeatInbox({
         dropDir: folder.dropDir,
@@ -334,6 +352,7 @@ export async function inboxArchivePass(input: {
         options: {
           markPreChannel: false,
           unreadKeepMs: atRest ? STOPPED_UNREAD_KEEP_MS : null,
+          retired,
           limit: budget,
           scanLimit: Math.min(INBOX_ARCHIVE_SCAN_CHUNK, scanBudget),
           orphans: false,
@@ -342,6 +361,16 @@ export async function inboxArchivePass(input: {
         },
       });
       const unreadHere = report.move.filter((item) => item.unread === true).length;
+      // E7b (decision 4): each unacknowledged stamped record moved off a retired seat is answered
+      // to its sender once (a stable id per message, so a retry finds the first notice).
+      for (const item of report.move) {
+        if (item.undelivered === undefined || item.undelivered.from === 'owner' || item.undelivered.from.includes(':')) continue;
+        writeRuntimeNotice({
+          home, root, session: folder.session, lead: item.undelivered.from, id: undeliveredNoticeId(item.id),
+          body: `not delivered: seat retired (${folder.seat}). Your message ${item.id} was never acknowledged and is archived; list it with \`team drops archive --unread\`.`,
+          at: now.toISOString(),
+        });
+      }
       moved += report.move.length - unreadHere;
       unread += unreadHere;
       if (unreadHere > 0) run.unread[folder.seat] = (run.unread[folder.seat] ?? 0) + unreadHere;

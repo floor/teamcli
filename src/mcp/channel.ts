@@ -17,8 +17,8 @@ import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, fstatSync, fsyncSync, readFileSync, statSync } from 'node:fs';
-import { linkSync, openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
-import { join } from 'node:path';
+import { linkSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { basename, join } from 'node:path';
 import { cliWordListOf, provenScriptWord, shellScriptWordOf } from '../launch/cli-scope.ts';
 import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { shellWords } from '../launch/shell-words.ts';
@@ -57,6 +57,8 @@ export const CHANNEL_TICK_MS = 250;
  *  idle server does not scan the inbox several times a second. A new record is pushed from the
  *  folder watch or from a bus event, not from this pass. */
 export const CHANNEL_IDLE_MS = 2_000;
+/** How often the channel server looks for stamped records due another copy (E7b). */
+export const CHANNEL_REDELIVER_MS = 30_000;
 
 /** How often a serving inbox with a live bus subscription still reads its inbox whole: the bus
  *  carries each arrival at once, and this slow pass catches a sender that could not reach it. */
@@ -1021,4 +1023,31 @@ export function recordChannelPush(dropDir: string, receipt: ChannelPushReceipt):
   } catch {
     return false;
   }
+}
+
+/**
+ * rfc-event-comms E7b: retires one channel attempt of a stamped record, so the next copy can be
+ * pushed (R2.4 per-attempt markers). Under the record's channel commit lock, the push marker, the
+ * emitted marker and the abort beside them are moved, never deleted, into the record's delivery
+ * history (`.exposures/<id>/c<time>.<name>`), where they stay as evidence of the earlier copy.
+ * True once none stands at its live name; false on any fault (the next pass tries again).
+ */
+export function retireChannelAttempt(dropDir: string, id: string, nowMs: number = Date.now()): boolean {
+  const done = withChannelCommit(dropDir, id, () => {
+    const history = join(dropDir, '.exposures', id);
+    try {
+      mkdirSync(history, { recursive: true, mode: 0o700 });
+    } catch {
+      return false;
+    }
+    for (const path of [channelPushPath(dropDir, id), channelEmittedPath(dropDir, id), channelAbortPath(dropDir, id)]) {
+      try {
+        renameSync(path, join(history, `c${String(nowMs)}.${basename(path)}`));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      }
+    }
+    return true;
+  });
+  return done === true;
 }

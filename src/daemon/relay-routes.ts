@@ -1,3 +1,5 @@
+import { copyFor } from '../queue/handover.ts';
+import { isStampedPayload } from '../send/record.ts';
 // Machine-daemon route-selection and runtime-adapter integration.
 //
 // Bridges a host-resolved `HostedRoute` (`src/daemon/routes.ts`) and its validated `TeamFile` with
@@ -896,12 +898,13 @@ function resolveSocketFrameFor(
   if (input.frame !== undefined) return input.frame;
   if (body === undefined) return undefined;
   const compact = plan.compactDelivery === true;
-  const content = attributedBody(body, from, {
+  // E7b: a stamped record's relayed copy is numbered like every other copy.
+  const content = copyFor(attributedBody(body, from, {
     ...(record === undefined ? {} : { record }),
     home: plan.home,
     root: plan.route.root,
     compact,
-  });
+  }), plan.dropDir, id, record !== undefined && isStampedPayload(record), 'socket');
   const existingIds = existingRecordIdsIn(plan.dropDir);
   return frameFor(
     content,

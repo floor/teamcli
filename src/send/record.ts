@@ -31,6 +31,7 @@ import { version } from '../version.ts';
 import { folderOfDrop } from './drop-folder.ts';
 import { readNoFollow, type MessageStatus } from './history.ts';
 import { dropMessage } from './native.ts';
+import { floorState } from '../queue/floor.ts';
 
 /** The `kind` a message record's payload carries. A receipt carries `receipt`, a thread's close
  *  `thread-close`. */
@@ -110,6 +111,12 @@ export type RecordPayload = {
    *  immutable client id and the grant that opened the thread. A record carries `from_client` or
    *  `to_client`, never both. */
   to_client?: { client_id: string; grant_id: string };
+  /** The delivery level (rfc-event-comms E7b): 3 on a record signed while its root
+   *  was not proven dark. A stamped record is under the at-least-once contract for its whole life:
+   *  it is settled only by its recipient's acknowledgement, a reply or a lead's clearance, never by
+   *  a writer-side read. Absent: the legacy contract. A build that predates the field refuses the
+   *  record as unsupported, so no older carrier ever presents a stamped body. */
+  lvl?: 3;
 };
 
 export type SignedRecord = {
@@ -121,6 +128,105 @@ export type SignedRecord = {
   /** The signed field names this version does not read, when the record came from a file. */
   unknown?: readonly string[];
 };
+
+/** The delivery level a stamped record carries (rfc-event-comms E7b). */
+export const DELIVERY_LEVEL = 3 as const;
+
+/**
+ * The payload as it is signed: stamped `lvl: 3` unless its root is proven dark (E7b decision 3).
+ * A root whose floor cannot be read, or that is active or fenced, stamps: an activated team never
+ * loses the guarantee to an unreadable floor. A record to an external client is not stamped (a
+ * client settles through its own grant), and a payload that already carries the stamp keeps it.
+ */
+export function stampedPayload(payload: RecordPayload, home: string): RecordPayload {
+  if (payload.lvl === DELIVERY_LEVEL || payload.to_client !== undefined) return payload;
+  let dark: boolean;
+  try {
+    dark = floorState(payload.root, home).kind === 'dark';
+  } catch {
+    dark = false;
+  }
+  return dark ? payload : { ...payload, lvl: DELIVERY_LEVEL };
+}
+
+/** Whether a payload is under the at-least-once contract. */
+export function isStampedPayload(payload: { lvl?: unknown }): boolean {
+  return payload.lvl === DELIVERY_LEVEL;
+}
+
+const stampCache = new Map<string, { stamp: string; value: boolean }>();
+
+/**
+ * Whether the record at `dropDir/id` is stamped, read from its file (the envelope's payload field;
+ * the signature is checked by every reader that serves the body, and a stripped stamp breaks it).
+ * `false` for a readable file without the stamp (a legacy text drop included), or no record at all;
+ * `'unknown'` for a record that cannot be read now, which every settlement check treats as stamped.
+ */
+export function recordStampAt(dropDir: string, id: string): boolean | 'unknown' {
+  if (!recordNameOk(id)) return false;
+  const path = recordFile(dropDir, id);
+  const stamp = fileStatStamp(path);
+  if (stamp === null) {
+    try {
+      lstatSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    }
+    return 'unknown';
+  }
+  const cached = stampCache.get(path);
+  if (cached !== undefined && cached.stamp === stamp) return cached.value;
+  const text = readNoFollow(path);
+  if (text === null) return 'unknown';
+  // A readable file that is not a signed envelope (a legacy text drop) is not stamped: only a
+  // record this build signs can carry the stamp. Only a file that cannot be read is unknown.
+  let value: boolean;
+  try {
+    const parsed = JSON.parse(text) as { payload?: { lvl?: unknown } } | null;
+    value = parsed !== null && typeof parsed === 'object' && parsed.payload?.lvl === DELIVERY_LEVEL;
+  } catch {
+    value = false;
+  }
+  if (stampCache.size > 4096) stampCache.clear();
+  stampCache.set(path, { stamp, value });
+  return value;
+}
+
+/** The `read_by` a writer-side read of a stamped record carries (E7b): a copy was handed over and
+ *  nobody has confirmed it. It never settles the message; only the recipient's ack (the note at
+ *  `<id>.ack.json`, `read_by: ack`), a reply or a lead's clearance does. An older build cannot
+ *  read a stamped record at all, so every read of one is this build's and carries this word. */
+export const COPY_READ_BY = 'copy';
+
+/** The acknowledgement note beside the record (`<id>.ack.json`, `read_by: ack`): the one `team ack`
+ *  writes, and where a stamped record's acknowledgement goes when an unconfirmed copy's receipt
+ *  already holds the read name (E7b). */
+export function ackedFile(dropDir: string, id: string): string {
+  return join(folderOfDrop(dropDir, id), `${id}.ack.json`);
+}
+
+/** The `read_by` words that confirm: the recipient's own ack, its channel ack tool, a reply (the
+ *  reply op and answered-by-send), and a lead's clearance. */
+export function isConfirmedReadBy(readBy: string | undefined): boolean {
+  return readBy === 'ack' || readBy === 'channel' || readBy === 'reply' || readBy === 'answered-by-send' || isLeadAckReadBy(readBy);
+}
+
+const copyCache = new Map<string, { stamp: string; copy: boolean }>();
+
+/** Whether the verifying read receipt at `path` is an unconfirmed copy's (`read_by: copy`).
+ *  Cached by the file's stat stamp, so a hot listing reads each receipt once. */
+function copyReceipt(path: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
+  const stamp = fileStatStamp(path);
+  const cached = stamp === null ? undefined : copyCache.get(path);
+  if (cached !== undefined && cached.stamp === stamp) return cached.copy;
+  const receipt = readVerifiedReceipt(path, id, 'read', context, key, brief);
+  const copy = receipt !== null && receipt.payload.read_by === COPY_READ_BY;
+  if (stamp !== null) {
+    if (copyCache.size > 4096) copyCache.clear();
+    copyCache.set(path, { stamp, copy });
+  }
+  return copy;
+}
 
 /** The statuses a receipt can record. `sent` is the absence of a receipt, never written. */
 export type ReceiptStatus = Exclude<MessageStatus, 'sent'>;
@@ -214,7 +320,7 @@ export type Sealed = { payload: RawPayload; signature: string };
 const RECORD_FIELDS: readonly string[] = [
   'kind', 'id', 'to', 'to_id', 'root', 'session', 'at', 'body', 'from', 'from_id', 'rule',
   'thread', 'subject', 'message_kind', 'work', 'in_reply_to', 'brief_sha256', 'incarnation',
-  'from_client', 'to_client',
+  'from_client', 'to_client', 'lvl',
 ];
 
 /** The signed fields this version reads on a receipt. The last is the writer's signed
@@ -374,6 +480,7 @@ export function projectRecord(value: unknown): RecordProjection | null {
   if (value.subject !== undefined && !nonEmpty(value.subject)) return null;
   if (value.message_kind !== undefined && typeof value.message_kind !== 'string') return null;
   if (value.work !== undefined && !nonEmpty(value.work)) return null;
+  if (value.lvl !== undefined && value.lvl !== DELIVERY_LEVEL) return null;
   // A brief's record carries both binding fields or neither: a record with only one is not one
   // this version wrote, and an ordinary message carries neither.
   const brief = value.brief_sha256 !== undefined || value.incarnation !== undefined;
@@ -402,6 +509,7 @@ export function projectRecord(value: unknown): RecordProjection | null {
   // reader refuse the record. An unknown field NAME stays unsupported, as RECORD_FIELDS says.
   if (value.message_kind !== undefined && isMessageKind(value.message_kind)) payload.message_kind = value.message_kind;
   if (value.work !== undefined) payload.work = value.work as string;
+  if (value.lvl === DELIVERY_LEVEL) payload.lvl = DELIVERY_LEVEL;
   // A record is one side of a client exchange, never both: the writer and the addressee are
   // different principals, and a payload claiming both is not one this version writes. The two
   // maps have exactly the same strict shape.
@@ -625,8 +733,9 @@ export function closeFile(dropDir: string, id: string): string {
 /** Signs a payload with the checkout's message key. The key is created on the first sign. */
 export function signRecord(payload: RecordPayload, home: string): SignedRecord {
   const key = messageKeyOf(home);
-  const raw = payload as unknown as RawPayload;
-  return withRaw({ payload, signature: signDomain(MESSAGE_DOMAIN, raw as unknown as Json, key) }, raw, []);
+  const stamped = stampedPayload(payload, home);
+  const raw = stamped as unknown as RawPayload;
+  return withRaw({ payload: stamped, signature: signDomain(MESSAGE_DOMAIN, raw as unknown as Json, key) }, raw, []);
 }
 
 /** The exact text a staged record holds: pretty-printed JSON and one newline. This is what
@@ -1121,7 +1230,17 @@ export function statusOf(dropDir: string, id: string, context: StatusContext, ke
  * reader that asks only this question does not stat them.
  */
 export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
-  if (receiptHolds(receiptFile(dropDir, id, 'read'), id, 'read', context, key, brief)) return true;
+  // E7b: an unconfirmed copy's read (`read_by: copy`) settles nothing; the acknowledgement note does.
+  const readName = receiptFile(dropDir, id, 'read');
+  if (receiptHolds(readName, id, 'read', context, key, brief)) {
+    if (!copyReceipt(readName, id, context, key, brief)) return true;
+    const note = ackedFile(dropDir, id);
+    if (heldAt(note).kind === 'file') {
+      const acked = readVerifiedReceipt(note, id, 'read', context, key, brief);
+      if (acked !== null && acked.payload.read_by === 'ack') return true;
+    }
+    return receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
+  }
   return receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
 }
 
@@ -1183,7 +1302,7 @@ export function readVerifiedReceipt(
 const SHOWN_SEAT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** Words this build writes on `read_by` that are not themselves seat names. */
-const KNOWN_READER = new Set(['ack', 'answered-by-send', 'channel', 'reply']);
+const KNOWN_READER = new Set(['ack', 'answered-by-send', 'channel', 'copy', 'reply']);
 
 /** Role words a receipt must not print. The shared message key can sign any of them, and none is
  *  a claim that the owner, the lead, or the orchestrator read the message. */

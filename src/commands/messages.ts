@@ -1,3 +1,5 @@
+import { copyFor } from '../queue/handover.ts';
+import { isStampedPayload } from '../send/record.ts';
 // `team messages`: verify a record that is already waiting, publish the read receipt that proves
 // it was served, and only then print its body. The signed read receipt is the per-id gate every
 // reader shares — this command, `team drops --read` and `inbox_read` — so the receipt is written
@@ -1125,11 +1127,11 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       status: 'shown',
       body: result.body,
       sender_attribution: senderAttribution,
-      renderedBody: attributedBody(result.body, result.from ?? candidate.seat, {
+      renderedBody: copyFor(attributedBody(result.body, result.from ?? candidate.seat, {
         record: recordPayload, home: sources.home, root,
         ...(recordPayload?.rule === undefined ? {} : { rule: recordPayload.rule }),
         at: result.at,
-      }),
+      }), dirname(candidate.path), candidate.id, recordPayload !== null && recordPayload !== undefined && isStampedPayload(recordPayload), 'read'),
     };
     rows.push(row);
     shownCount += 1;

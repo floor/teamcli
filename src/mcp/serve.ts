@@ -33,7 +33,7 @@ import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { namingFor, senderDisplayName } from '../send/names.ts';
-import { alreadyReadSentence, readSealedRecord, recordAuthOfSealed, settledReadOf } from '../send/record.ts';
+import { alreadyReadSentence, isRecordSidecarName, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -50,6 +50,8 @@ import {
   CHANNEL_PUSH_STATUS,
   CHANNEL_READ_BY,
   CHANNEL_IDLE_MS,
+  CHANNEL_REDELIVER_MS,
+  retireChannelAttempt,
   CHANNEL_SAFETY_MS,
   CHANNEL_TICK_MS,
   channelAborted,
@@ -80,6 +82,7 @@ import {
 import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
+import { deliveryDue, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 
@@ -438,7 +441,7 @@ function watchChannel(
   serving: Serving,
   write: (line: string) => void,
   notice?: () => boolean,
-  options: { follow?: typeof followBus; fallbackMs?: number; safetyMs?: number; retryMinMs?: number; retryMaxMs?: number } = {},
+  options: { follow?: typeof followBus; fallbackMs?: number; safetyMs?: number; retryMinMs?: number; retryMaxMs?: number; redeliverMs?: number } = {},
 ): () => void {
   const seen = new Set<string>();
   let primed = false;
@@ -447,6 +450,7 @@ function watchChannel(
   let namesTimer: ReturnType<typeof setInterval> | null = null;
   let pulse: ReturnType<typeof setTimeout> | null = null;
   let drainTimer: ReturnType<typeof setTimeout> | null = null;
+  let redeliverTimer: ReturnType<typeof setInterval> | null = null;
   let folder: FSWatcher | null = null;
   let subscription: BusFollow | null = null;
   /** Busy commits retried off the main wait. Five tries, then one logged give-up. The id stays
@@ -464,6 +468,8 @@ function watchChannel(
     pulse = null;
     if (drainTimer !== null) clearTimeout(drainTimer);
     drainTimer = null;
+    if (redeliverTimer !== null) clearInterval(redeliverTimer);
+    redeliverTimer = null;
     for (const pending of retryTimer.values()) clearTimeout(pending);
     retryTimer.clear();
     folder?.close();
@@ -545,6 +551,13 @@ function watchChannel(
       const exposure = exposeBody({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
       heldExposure = exposure;
       if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(serving.dropDir, id)?.seq ?? null);
+      // E7b: a stamped record's copy is numbered immediately before the line leaves; a history
+      // that cannot be written sends nothing now, and the redelivery pass offers it again.
+      if (recordStampAt(serving.dropDir, id) === true) {
+        const n = takeCopyNumber(serving.dropDir, id, 'channel');
+        if (n === null) return 'skip' as const;
+        push.content = wrapCopy(push.content, id, n);
+      }
       const reserved = recordChannelPush(serving.dropDir, {
         v: 1,
         kind: 'channel-push',
@@ -803,6 +816,31 @@ function watchChannel(
   // the inbox is read whole only on the slow safety pass, for a sender that could not reach the bus.
   namesEvery();
   every(options.fallbackMs ?? CHANNEL_IDLE_MS);
+  // rfc-event-comms E7b (R3.4): a stamped record this server, or an earlier one, already pushed
+  // stays due until its recipient acknowledges it. Each pass retires the due ones' channel
+  // attempt (the markers move into the record's history) and pushes the next numbered copy.
+  const redeliverPass = (): void => {
+    if (halted()) return;
+    let names: string[];
+    try {
+      names = readdirSync(serving.dropDir);
+    } catch {
+      return;
+    }
+    const nowMs = Date.now();
+    for (const name of names) {
+      if (name.startsWith('.') || isRecordSidecarName(name) || !MESSAGE_ID.test(name)) continue;
+      if (recordStampAt(serving.dropDir, name) !== true) continue;
+      if (!channelPushHeld(serving.dropDir, name)) continue;
+      if (receiptHeld(serving.dropDir, name, { to: serving.seat, root: serving.root, session: serving.session }, serving.home,
+        claimBindingIn(serving.root, serving.session, serving.seat, name))) continue;
+      if (!deliveryDue(serving.dropDir, name, nowMs)) continue;
+      if (!retireChannelAttempt(serving.dropDir, name, nowMs)) continue;
+      seen.delete(name);
+      pushOne(name);
+    }
+  };
+  redeliverTimer = setInterval(redeliverPass, options.redeliverMs ?? CHANNEL_REDELIVER_MS);
   // A dropped or absent bus is dialled again with a doubling wait, so a seat that fell back to
   // its poll returns to events when the bus comes back, without a server restart.
   subscription = followBusRetrying(serving.root, { seat: serving.seat, kinds: ['message.arrived'], skipBacklog: true }, {

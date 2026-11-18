@@ -1,3 +1,4 @@
+import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
 import { relayIfConfined } from '../send/confined-outbox.ts';
@@ -68,7 +69,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, isRead, isRecordSidecarName, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -6725,6 +6726,12 @@ async function deliverSocketFrame(
   if (socketExposure?.kind === 'pointer') {
     content = `${content.split('\n')[0]}\n\n${pointerFor(msgId, null)}`;
     bodyIncluded = false;
+  }
+  // E7b: a stamped record's copy carries its delivery number, taken durably before the frame.
+  if (bodyIncluded && isStampedPayload(stampedPayload(payload, host.home))) {
+    const n = takeCopyNumber(dropDir, msgId, 'socket');
+    if (n === null) return { kind: 'fallback', reason: 'the delivery history could not be written' };
+    content = wrapCopy(content, msgId, n);
   }
   // The reader line rides with the body too: a seat handed the whole body still needs the id to
   // answer it on its thread.

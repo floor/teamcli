@@ -240,26 +240,11 @@ function journalDurable(folder: string, sync: (fd: number) => void = fsyncSync):
   } finally {
     closeSync(fd);
   }
-  return clearPoison(marker);
+  // E7b (R6 parity gate): the marker is removed durably on every successful flush, folder fsync
+  // included, exactly as E6 did, so a queue open meets the same faults on every build.
+  return removeDurable(marker) === 'removed';
 }
 
-/** Removes the poisoned marker after a successful flush. The folder is fsynced only when a marker
- *  was actually removed: an absent marker leaves nothing to make durable, and a removal that a
- *  crash undoes only brings the marker back, which makes the next holder flush again (fail closed).
- *  This keeps the steady-state open at one journal fsync (E7 gate 5). */
-function clearPoison(marker: string): boolean {
-  try {
-    unlinkSync(marker);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT';
-  }
-  try {
-    fsyncFolder(dirname(marker));
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function plainFolder(path: string): boolean {
   try {

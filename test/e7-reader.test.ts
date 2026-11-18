@@ -70,7 +70,7 @@ const on = (at: At, actors: FloorActor[] = [daemon]) => setReaderSwitch(at.root,
   unreadOf: (dropDir) => ({ binding: binding(at), ids: listUnread(dropDir, context(at), at.home).map(m => m.id) }),
 });
 const off = (at: At) => setReaderSwitch(at.root, false, { home: at.home, actors: () => [daemon], unreadOf: () => null });
-const activateRoot = (at: At, actors: FloorActor[] = [daemon]) => activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => actors, level: 3 });
+const activateRoot = (at: At, actors: FloorActor[] = [daemon]) => activate(at.root, { home: at.home, build: 'b', actors: () => actors, level: 3 });
 
 const M1 = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e01';
 const M2 = '7e0b8d82-7a8e-4da2-9e6f-9b5aac2d3e02';
@@ -104,7 +104,7 @@ describe('E7 entry gates', () => {
 
   test('gate 2: a record whose publication was cut off is unknown (fences honoured, none created) until A0 republishes', () => {
     const at = place();
-    expect(() => activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon], after: (step) => { if (step === 'record') throw new Error('crash'); } })).toThrow('crash');
+    expect(() => activate(at.root, { home: at.home, build: 'b', actors: () => [daemon], after: (step) => { if (step === 'record') throw new Error('crash'); } })).toThrow('crash');
     expect(existsSync(join(queuesFolder(at.root), 'ACTIVATION'))).toBe(true);
     expect(existsSync(join(queuesFolder(at.root), 'PUBLISHED'))).toBe(false);
     expect(floorState(at.root, at.home).kind).toBe('unknown');
@@ -149,14 +149,15 @@ describe('E7 reader switch', () => {
     expect(listed(at)).toEqual([[M1, null]]);
   });
 
-  test('a fenced root (a legacy actor appeared after activation) falls back to the legacy listing', async () => {
+  test('E7b: a legacy actor appearing after activation rolls the root back to dark, and the listing is legacy', async () => {
     const at = place();
     message(at, M1, LATER);
     message(at, M2, EARLIER);
     expect(activateRoot(at).kind).toBe('activated');
     expect(on(at).kind).toBe('on');
     const { checkActors } = await import('../src/queue/floor.ts');
-    expect(checkActors(at.root, at.home, [daemon, e6Server]).kind).toBe('fenced');
+    expect(checkActors(at.root, at.home, [daemon, e6Server]).kind).toBe('dark');
+    expect(readerSwitch(at.root, at.home).kind).toBe('off');
     expect(listed(at)).toEqual([[M2, null], [M1, null]]);
   });
 
@@ -231,7 +232,7 @@ describe('E7 round 2', () => {
   test('P1 recovery: a record cut off before publication is never published without today\'s proof', () => {
     for (const actors of [[daemon, e6Server], [] as FloorActor[]]) {
       const at = place();
-      expect(() => activate(at.root, { home: at.home, build: 'b', launchBoundary: true, actors: () => [daemon], after: (step) => { if (step === 'record') throw new Error('crash'); } })).toThrow('crash');
+      expect(() => activate(at.root, { home: at.home, build: 'b', actors: () => [daemon], after: (step) => { if (step === 'record') throw new Error('crash'); } })).toThrow('crash');
       // A level-2 actor appeared, or the daemon is gone: the recovery run refuses and publishes nothing.
       expect(activateRoot(at, actors).kind).toBe('refused');
       expect(existsSync(join(queuesFolder(at.root), 'PUBLISHED'))).toBe(false);
@@ -341,8 +342,8 @@ describe('E7 round 3', () => {
 });
 
 
-describe('E7a activation stays dark', () => {
-  test('team queues activate refuses in this build and writes nothing', async () => {
+describe('E7b activation keeps its authority gate', () => {
+  test('team queues activate refuses a caller who is neither the owner nor a dev-mode lead, and writes nothing', async () => {
     const at = place();
     writeFileSync(join(at.root, '.agents', 'team.yaml'), `format: 1
 project: acme
@@ -362,9 +363,11 @@ seats:
 `);
     const out: string[] = [];
     const io = { cwd: at.root, env: { TEAMCLI_DEV_MODE: '1' }, stdout: (t: string) => { out.push(t); }, stderr: (t: string) => { out.push(t); } } as unknown as Parameters<typeof runQueues>[1];
+    // E7b: activation is no longer dark for everyone; it keeps its authority gate. This caller is
+    // neither the owner nor a lead in development mode, so it is refused and nothing is written.
     const code = await runQueues(['activate'], io, { home: at.home });
     expect(code).toBe(1);
-    expect(out.join('')).toContain('activation stays dark');
+    expect(out.join('')).toContain('only the owner or a lead in development mode');
     expect(existsSync(join(queuesFolder(at.root), 'PROTOCOL'))).toBe(false);
     expect(floorState(at.root, at.home).kind).toBe('dark');
   });

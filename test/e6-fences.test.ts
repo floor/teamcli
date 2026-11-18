@@ -25,12 +25,12 @@ function scene(): { root: string; home: string } {
   return { root, home };
 }
 
-const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 2 };
+const daemon: FloorActor = { kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 };
 const server = (level: number | null): FloorActor => ({ kind: 'inbox-server', name: 's/seat', pid: 2, build: 'b', level });
 
 function active(): { root: string; home: string } {
   const s = scene();
-  expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(2)] }).kind).toBe('activated');
+  expect(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon, server(3)] }).kind).toBe('activated');
   return s;
 }
 
@@ -40,7 +40,7 @@ describe('activation floor', () => {
   test('an actor below the floor, or with no level, refuses activation and writes nothing', () => {
     for (const below of [server(null), server(1)]) {
       const s = scene();
-      const out = activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, below] });
+      const out = activate(s.root, { home: s.home, build: 'b', actors: () => [daemon, below] });
       expect(out.kind).toBe('refused');
       expect(floorState(s.root, s.home).kind).toBe('dark');
       expect(existsSync(join(queuesFolder(s.root), 'PROTOCOL'))).toBe(false);
@@ -49,23 +49,23 @@ describe('activation floor', () => {
 
   test('no live daemon means no activation', () => {
     const s = scene();
-    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [server(2)] }).kind).toBe('refused');
+    expect(activate(s.root, { home: s.home, build: 'b', actors: () => [server(2)] }).kind).toBe('refused');
     expect(floorState(s.root, s.home).kind).toBe('dark');
   });
 
   test('every actor at the floor activates; marker then record', () => {
     const s = active();
-    expect(floorState(s.root, s.home)).toMatchObject({ kind: 'active', level: 2 });
+    expect(floorState(s.root, s.home)).toMatchObject({ kind: 'active', level: 3 });
     expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(true);
   });
 
   test('a crash after the marker leaves the root dark, and the next pass removes the marker and activates', () => {
     const s = scene();
-    expect(() => activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon], after: (step) => { if (step === 'marker') throw new Error('crash'); } })).toThrow('crash');
+    expect(() => activate(s.root, { home: s.home, build: 'b', actors: () => [daemon], after: (step) => { if (step === 'marker') throw new Error('crash'); } })).toThrow('crash');
     expect(existsSync(join(queuesFolder(s.root), 'PROTOCOL'))).toBe(true);
     expect(floorState(s.root, s.home).kind).toBe('dark');
     expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(false);
-    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon] }).kind).toBe('activated');
+    expect(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
     expect(floorState(s.root, s.home).kind).toBe('active');
   });
 
@@ -74,7 +74,7 @@ describe('activation floor', () => {
       for (const step of STEPS) {
         const s = scene();
         const out = activate(s.root, {
-          home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon],
+          home: s.home, build: 'b', actors: () => [daemon],
           faults: { before: (at, path) => { if (at === step && path.endsWith(file)) throw new Error('fault'); } },
         });
         expect(out.kind).toBe('failed');
@@ -89,30 +89,30 @@ describe('activation floor', () => {
         expect(fencesEnforced(s.root, s.home)).toBe(after !== 'dark');
         if (after !== 'active') expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(false);
         // A clean pass afterwards reaches one consistent state: active.
-        expect(['activated', 'already']).toContain(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon] }).kind);
+        expect(['activated', 'already']).toContain(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon] }).kind);
         expect(floorState(s.root, s.home).kind).toBe('active');
       }
     }
   });
 
-  test('a legacy actor after activation fences the root: no new fences, existing ones honoured; a clean proof lifts it', () => {
+  test('E7b: a legacy actor after activation rolls the root back to dark; a clean proof activates it again', () => {
     const s = active();
-    expect(checkActors(s.root, s.home, [daemon, server(null)]).kind).toBe('fenced');
+    expect(checkActors(s.root, s.home, [daemon, server(null)]).kind).toBe('dark');
     expect(mayCreateFence(s.root, s.home, 'exposure')).toBe(false);
-    expect(fencesEnforced(s.root, s.home)).toBe(true);
-    expect(activate(s.root, { home: s.home, build: 'b', launchBoundary: true, actors: () => [daemon, server(2)] }).kind).toBe('activated');
+    expect(fencesEnforced(s.root, s.home)).toBe(false);
+    expect(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon, server(3)] }).kind).toBe('activated');
     expect(floorState(s.root, s.home).kind).toBe('active');
   });
 
-  test('E6 ships dark: without the managed launch boundary nothing activates', () => {
+  test('E7b: activation needs a live daemon at the floor', () => {
     const s = scene();
-    expect(activate(s.root, { home: s.home, build: 'b', actors: () => [daemon] }).kind).toBe('refused');
+    expect(activate(s.root, { home: s.home, build: 'b', actors: () => [server(3)] }).kind).toBe('refused');
     expect(floorState(s.root, s.home).kind).toBe('dark');
   });
 
-  test('an unreadable actor probe on an active root fences it (no new fences)', () => {
+  test('E7b: an unreadable actor probe on an active root rolls it back to dark (no new fences)', () => {
     const s = active();
-    expect(checkActors(s.root, s.home, null).kind).toBe('fenced');
+    expect(checkActors(s.root, s.home, null).kind).toBe('dark');
     expect(mayCreateFence(s.root, s.home, 'wake-attempt')).toBe(false);
   });
 
@@ -234,15 +234,28 @@ describe('wake-attempt states', () => {
     expect(attemptGate(scope(s.root, 'i0000000000000002'), target, s.home, none).kind).toBe('open');
   });
 
-  test('a fenced root honours an unresolved attempt and creates no new attempt state', () => {
+  test('E7b: a rollback to dark returns the wake gate to E6-dark behaviour (shadow states, open)', () => {
     const s = active();
     const a = prepareAttempt(scope(s.root), target, s.home, true)!;
     a.emit();
     a.settle({ delivered: false, typed: true });
     checkActors(s.root, s.home, [daemon, server(null)]);
+    expect(attemptGate(scope(s.root), target, s.home, none)).toMatchObject({ kind: 'open', create: 'shadow' });
+  });
+
+  test('E7b: an unconfirmed wake is retyped once its backoff has passed (at-least-once)', () => {
+    const s = active();
+    const a = prepareAttempt(scope(s.root), target, s.home, true)!;
+    a.emit();
+    a.settle({ delivered: false, typed: true });
     expect(attemptGate(scope(s.root), target, s.home, none).kind).toBe('blocked');
-    const open = attemptGate(scope(s.root, 'i0000000000000003'), target, s.home, none);
-    expect(open).toMatchObject({ kind: 'open', create: 'none' });
+    const realNow = Date.now;
+    try {
+      Date.now = () => realNow() + 61_000;
+      expect(attemptGate(scope(s.root), target, s.home, none).kind).toBe('open');
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   test('an unknown incarnation, or unreadable attempts, block on an enforcing root', () => {

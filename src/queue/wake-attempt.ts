@@ -12,10 +12,11 @@
 // The retry rule, enforced on an active, fenced or unknown root (only a proven-dark root writes the
 // states in shadow and enforces nothing):
 //   - `prepared` only: no key was sent; a retry is allowed.
-//   - `emitted` or `uncertain` with no `confirmed`: NO retype. It resolves only on evidence: a read
-//     receipt for the attempt's target, the attempt's token found in the pane's scrollback, or a new
-//     seat incarnation (another folder: the process that might hold the input is gone).
-//   - An expired verify window never grants permission to type.
+//   - `emitted` or `uncertain` with no `confirmed`: no retype until its backoff has passed (E7b,
+//     at-least-once: 60 s doubling to 30 minutes, then one more attempt). Evidence resolves it
+//     sooner: a read receipt for the attempt's target, the attempt's token found in the pane's
+//     scrollback, or a new seat incarnation (another folder: the process that might hold the input
+//     is gone).
 // One wake per seat: no new attempt while an unresolved attempt targets an equal or later message.
 import { createHash, randomBytes } from 'node:crypto';
 import { readdirSync } from 'node:fs';
@@ -23,6 +24,7 @@ import { join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { createExclusive, readFence, type DurableFaults } from './durable.ts';
 import { floorState } from './floor.ts';
+import { backoffMs } from './handover.ts';
 
 export const WAKE_ATTEMPT_DOMAIN = 'team-wake-attempt-v1\n';
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -55,7 +57,8 @@ function scopeFolder(scope: AttemptScope): string | null {
   return join(scope.root, '.agents', 'wakes', scope.session, scope.seat, scope.incarnation);
 }
 
-export type Attempt = { n: number; state: AttemptStateName; target: AttemptTarget; token: string };
+/** `at`: when the attempt's highest standing state was written (its backoff counts from it). */
+export type Attempt = { n: number; state: AttemptStateName; target: AttemptTarget; token: string; at: string };
 
 /**
  * The attempts of one incarnation with their highest verifying state. Null when the folder or the
@@ -94,7 +97,7 @@ export function attemptsOf(scope: AttemptScope, home: string): Attempt[] | null 
     const state = payload.state as AttemptStateName;
     // `confirmed` outranks `uncertain` (evidence resolved it); otherwise the later step stands.
     const rank = (s: AttemptStateName): number => (s === 'confirmed' ? 9 : ORDER.indexOf(s));
-    if (held === undefined || rank(state) > rank(held.state)) byN.set(payload.n, { n: payload.n, state, target: payload.target, token: payload.token });
+    if (held === undefined || rank(state) > rank(held.state)) byN.set(payload.n, { n: payload.n, state, target: payload.target, token: payload.token, at: payload.at });
   }
   return [...byN.values()].sort((a, b) => a.n - b.n);
 }
@@ -159,6 +162,11 @@ export function attemptGate(scope: AttemptScope, target: AttemptTarget, home: st
       continue;
     }
     if (targets(target, attempt.target)) {
+      // E7b (at-least-once, §5): an unconfirmed wake no longer blocks forever. Once its backoff
+      // has passed (60 s, doubling, capped at 30 minutes), one more attempt may be typed; a stamped
+      // record's copy it carries is numbered, so the repeat is never silent.
+      const age = Date.now() - Date.parse(attempt.at);
+      if (Number.isFinite(age) && age >= backoffMs(attempt.n)) continue;
       return { kind: 'blocked', why: `blocked: wake uncertain (attempt ${String(attempt.n)})` };
     }
   }
@@ -196,7 +204,7 @@ export function prepareAttemptAs(scope: AttemptScope, target: AttemptTarget, hom
   const existing = attemptsOf(scope, home);
   if (existing === null && enforced) return null;
   const n = (existing ?? []).reduce((max, a) => Math.max(max, a.n), 0) + 1;
-  const attempt: Attempt = { n, state: 'prepared', target, token: randomBytes(2).toString('hex') };
+  const attempt: Attempt = { n, state: 'prepared', target, token: randomBytes(2).toString('hex'), at: new Date().toISOString() };
   const prepared = writeState(scope, attempt, 'prepared', home, faults);
   if (prepared !== 'created' && enforced) return null;
   let emitted = false;
