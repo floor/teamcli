@@ -20,8 +20,8 @@ import { dirname, join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { ensureFolder, fsyncFolder, readFence, removeDurable } from './durable.ts';
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fsyncSync, writeSync } from 'node:fs';
-import { openSync, renameSync } from '../host/guarded-fs.ts';
+import { closeSync, constants, fsyncSync } from 'node:fs';
+import { openSync, renameSync, writeSync } from '../host/guarded-fs.ts';
 import { ACTOR_LEVEL, queuesFolder, withActivationLock } from './floor.ts';
 
 export const LAUNCH_LEVEL_DOMAIN = 'team-launch-level-v1\n';
