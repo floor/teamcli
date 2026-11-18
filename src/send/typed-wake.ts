@@ -1,3 +1,4 @@
+import { encodeIdentity } from '../comms/identity.ts';
 import { typedWakeMaxFor } from './readable-wake.ts';
 // The typed wake: one line, one acknowledgement. A profile that declares `typed_wake: screen`
 // lets a send put one trigger line into a composer two reads showed as the empty idle prompt.
@@ -775,4 +776,19 @@ async function walkTypedWake(
     }
     screen = await host.read(pane);
   }
+}
+
+/**
+ * The Claude adapter's typed pointer (§2.4): one line with no body, no subject and no
+ * sender-written text — the sender's identity (each field one line, src/comms/identity.ts), the
+ * copy it stands for, and the two commands that read and settle it. A copy after the first says
+ * it is a re-send.
+ *
+ *   team 1 new message from <name> · <address> · <model> (copy <n>[, a re-send]) — read it with: team drops, then team ack <id>
+ */
+export function adapterPointerLine(identity: { name: string; address?: string; model?: string }, id: string, copy: number): string {
+  const shown = encodeIdentity(identity);
+  const who = [shown.name, ...(shown.address === undefined ? [] : [shown.address]), ...(shown.model === undefined ? [] : [shown.model])].join(' · ');
+  const which = copy <= 1 ? `copy ${String(copy)}` : `copy ${String(copy)}, a re-send`;
+  return `team 1 new message from ${who} (${which}) — read it with: team drops, then team ack ${id}`;
 }

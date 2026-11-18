@@ -274,6 +274,30 @@ describe('the schedule: from the delivery history, 60 s doubling to 30 minutes, 
     expect(resendCandidates(seatOf(at, dropDir, 'native'), Date.now() + 61_000)).toEqual([ID]);
   });
 
+  test('the Claude adapter change makes a record due at once; the clock starts at the reservation; there is no second timer', () => {
+    const at = made(['drop']);
+    activateRoot(at);
+    const dropDir = stamped(at, 'helper', ID);
+    const folder = stampedFolder(at, 'helper');
+    const arrived = Date.now();
+    // Inside the first wait, only the adapter change makes it due.
+    expect(resendDue(folder, ID, arrived + 1_000, arrived)).toBe(false);
+    expect(resendDue(folder, ID, arrived + 1_000, arrived, true)).toBe(true);
+    // A seat that is unproven, whose newest offer went by the channel: due now.
+    const seat = seatOf(at, dropDir, 'helper');
+    expect(resendCandidates({ ...seat, unproven: () => true }, Date.now())).toEqual([ID]);
+    expect(resendCandidates({ ...seat, unproven: () => false }, Date.now())).toEqual([]);
+    // A reservation by the channel server starts the clock at its own time.
+    const k = reserveAttempt(folder, ID, 'channel', Date.now() - 10_000);
+    expect(k).toBe(1);
+    // The newest offer is that attempt; a pointer reserved after it is the newest (not channel).
+    expect(reserveAttempt(folder, ID, 'watch', Date.now())).toBe(2);
+    expect(resendCandidates({ ...seat, unproven: () => true }, Date.now())).toEqual([]);
+    // Without a change, the one clock is the backoff from the newest attempt: 240 s after two attempts.
+    expect(resendDue(folder, ID, Date.now() + backoffMs(3) + 1, null)).toBe(true);
+    expect(resendDue(folder, ID, Date.now() + backoffMs(3) - 5_000, null)).toBe(false);
+  });
+
   test('a dark root has no stamped folder: nothing is a candidate and nothing is offered', async () => {
     const at = made(['native']);
     const dropDir = seatMailDirIn(at.dir, SESSION, 'native');
@@ -732,10 +756,8 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(lines).toEqual([]);
   });
 
-  test('socket (a Claude seat that accepts cross-session frames); the frame names the sender, never the receiver\'s persona', async () => {
+  test('socket: on an active root a Claude seat that accepts cross-session frames is never re-sent on the socket (the Claude adapter)', async () => {
     const at = made(null);
-    const file = join(at.dir, 'team.yaml');
-    writeFileSync(file, readFileSync(file, 'utf8').replace('    name: helper\n', '    name: helper\n    label: "Persona Zed"\n'));
     const path = cliHookSettingsPath(at.dir, SESSION, 'helper');
     if (path === null) throw new Error('the fixture declares no settings path for helper');
     mkdirSync(dirname(path), { recursive: true });
@@ -747,21 +769,11 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     const dropDir = stamped(at, 'helper', ID);
     takeCopyNumber(dropDir, ID, 'socket');
     const host = fake(at, { agents: () => [{ name: 'helper', pane: 'pane-helper', cli: 'claude' }] });
+    // The walk a Claude seat resolves on an active root is the channel (none here) and the drop:
+    // it carries nothing and dials no socket; the adapter's typed pointer is the watch's.
     const results = await twoOffers(at, 'helper', adapter(at, host, 'claude-code', 'helper', dropDir), dropDir);
-    expect(results).toEqual([[{ id: ID, attempt: 1, copy: 2, via: 'socket' }], [{ id: ID, attempt: 2, copy: 3, via: 'socket' }]]);
-    expect(host.frames).toHaveLength(2);
-    expect(host.frames[0]).toContain(`message ${ID} · delivery 2 — a re-send`);
-    expect(host.frames[1]).toContain(`message ${ID} · delivery 3 — a re-send`);
-    for (const frame of host.frames) expect(frame).not.toContain('Persona Zed');
-    // A sender whose signed agent id no longer resolves, spelled like the labelled local seat:
-    // the frame names its signed spelling, never that seat's persona.
-    const unresolved = stamped(at, 'helper', ID2, 'from afar', at.root, { from: 'helper', from_id: 'agt_0123456789ab' });
-    takeCopyNumber(unresolved, ID2, 'socket');
-    age(stampedFolder(at, 'helper'), ID2, 31 * MIN);
-    await resendPass(seatOf(at, unresolved, 'helper'), Date.now(), adapter(at, host, 'claude-code', 'helper', unresolved), 'watch');
-    const last = host.frames.at(-1) ?? '';
-    expect(last).toContain(`message ${ID2} · delivery 2`);
-    expect(last).not.toContain('Persona Zed');
+    expect(results.map((one) => one.map((r) => r.via))).toEqual([[null], [null]]);
+    expect(host.frames).toHaveLength(0);
   });
 
   test('webhook: an earlier 2xx does not stand for a re-send; every attempt is a new request', async () => {
@@ -952,54 +964,50 @@ seats:
     for (let at = 0; at < limit && !check(); at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
-  test('copies 1, 2 and 3 are pushed after each wait, numbered; the ack ends them; the watch leaves the seat to it', async () => {
+  test('the Claude adapter: a proven channel pushes copy 1; unsettled 90 s after its start the seat is unproven, the record is due at once, and the server pushes nothing more', async () => {
     const at = channelPlace();
     activateRoot(at);
-    const payload: RecordPayload = {
-      kind: 'message', id: ID2, to: 'lead', to_id: at.leadId, root: at.root, session: SESSION, at: new Date().toISOString(),
-      body: 'from a worker — admitted by: the owner\n\nplease ack', from: 'worker', from_id: at.workerId, rule: 'the owner', thread: ID2,
-    };
-    mkdirSync(at.dropDir, { recursive: true, mode: 0o700 });
-    expect(writeRecord(at.dropDir, signRecord(stampedPayload(payload, at.home), at.home)).ok).toBe(true);
-    const folder = seatMailDirIn(at.dir, SESSION, 'lead', 'stamped');
-    // Waiting before the server starts: the prime leaves it, and the scheduler offers it once its
-    // first wait from arrival has passed.
-    age(folder, ID2, 61_000);
     const io = testIo(at.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
     const stream = feed();
     const running = runMcpServe({ seat: 'lead', session: SESSION, redeliverMs: 20 }, io, stream, { home: at.home });
     await until(() => existsSync(listenerPath(at.dropDir)));
-    await until(() => notices(stream.replies).length >= 1);
-    expect(notices(stream.replies).map(headerOf)).toEqual([`message ${ID2} · delivery 1`]);
-    // Inside the wait (attempt 1 done: 120 s) nothing more is pushed.
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(notices(stream.replies)).toHaveLength(1);
-    age(folder, ID2, 121_000);
-    await until(() => notices(stream.replies).length >= 2);
-    expect(headerOf(notices(stream.replies)[1])).toStartWith(`message ${ID2} · delivery 2 — a re-send`);
-    age(folder, ID2, 241_000);
-    await until(() => notices(stream.replies).length >= 3);
-    expect(headerOf(notices(stream.replies)[2])).toStartWith(`message ${ID2} · delivery 3 — a re-send`);
-    // The ownership rule gives this seat to its server: the watch's pass offers nothing for it.
+    const write = (id: string): void => {
+      const payload: RecordPayload = {
+        kind: 'message', id, to: 'lead', to_id: at.leadId, root: at.root, session: SESSION, at: new Date().toISOString(),
+        body: 'from a worker — admitted by: the owner\n\nplease ack', from: 'worker', from_id: at.workerId, rule: 'the owner', thread: id,
+      };
+      mkdirSync(at.dropDir, { recursive: true, mode: 0o700 });
+      expect(writeRecord(at.dropDir, signRecord(stampedPayload(payload, at.home), at.home)).ok).toBe(true);
+    };
+    const metas = (): Record<string, string>[] => stream.replies.map((line) => JSON.parse(line) as Record<string, any>)
+      .filter((one) => one.method === 'notifications/claude/channel').map((one) => one.params.meta as Record<string, string>);
+    // A first message, acked with its offer: the channel is proven.
+    write(ID);
+    await until(() => metas().length >= 1);
+    stream.push(JSON.stringify({ jsonrpc: '2.0', id: 'p', method: 'tools/call', params: { name: 'ack', arguments: { id: ID, offer: metas()[0]!.offer } } }));
+    await until(() => stream.replies.some((line) => (JSON.parse(line) as { id?: string }).id === 'p'));
     const loaded = loadTeamFile(at.root, { home: at.home });
     if (!loaded.ok) throw new Error('fixture team failed to load');
-    const legs = send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat: 'lead', team: loaded.team, now: () => new Date() });
-    expect(channelOwnsSeat({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', walkTakesChannel: legs.channel })).toBe(true);
-    const offered: string[] = [];
-    const scene: RetryScene = {
-      dir: at.dir, session: SESSION, root: at.root, home: at.home, team: loaded.team, ownPane: null, now: new Date(Date.now() + 60 * MIN),
-      live: { running: true, agents: [], workspaces: [], screens: {} }, say: () => {},
-      sources: { screen: () => null, status: () => 'idle', typeText: () => false, pressEnter: () => false, sleep: async () => {} },
-      eventLegs: (seat: string) => send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat, team: loaded.team, now: () => new Date() }),
-      resendStamped: async (_seat, _dropDir, id) => { offered.push(id); return null; },
-    };
-    await wakeUnreadDrops(scene, { unreadAfter: 600 });
-    expect(offered).toEqual([]);
-    // The ack ends the pushes.
-    ack(at, at.dropDir, 'lead', ID2);
-    age(folder, ID2, 31 * MIN);
+    const context = { to: 'lead', root: at.root, session: SESSION, lead: 'lead' };
+    const owns = (): boolean => channelOwnsSeat({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', walkTakesChannel: false, adapter: { cli: 'claude-code', home: at.home, context, key: keyOf(at.home), nowMs: Date.now() } });
+    expect(owns()).toBe(true);
+    // The second is pushed once and not acked.
+    write(ID2);
+    await until(() => metas().length >= 2);
+    expect(headerOf(notices(stream.replies)[1])).toBe(`message ${ID2} · delivery 1`);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(notices(stream.replies)).toHaveLength(2);
+    expect(owns()).toBe(true);
+    // 91 s after its arrival: overdue. The seat is unproven, the server owns nothing, and the
+    // record is due at once for the watch's pointer (the adapter change), not after a backoff.
+    const folder = seatMailDirIn(at.dir, SESSION, 'lead', 'stamped');
+    age(folder, ID2, 91_000);
+    expect(owns()).toBe(false);
+    const seat: ResendSeat = { ...seatOf(at, at.dropDir, 'lead'), unproven: () => !owns() };
+    expect(resendCandidates(seat, Date.now())).toEqual([ID2]);
+    expect(resendCandidates(seatOf(at, at.dropDir, 'lead'), Date.now())).toEqual([ID2]);
     await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(notices(stream.replies)).toHaveLength(3);
+    expect(notices(stream.replies)).toHaveLength(2);
     stream.end();
     expect(await running).toBe(0);
   });

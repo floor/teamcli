@@ -876,7 +876,15 @@ function watchChannel(
     if (team === null) return false;
     const { permittedEventLegs } = await import('../commands/send.ts');
     const legs = permittedEventLegs({ dir: join(serving.root, '.agents'), root: serving.root, home: serving.home, session: serving.session, seat: serving.seat, team, now: () => new Date() });
-    return channelOwnsSeat({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, walkTakesChannel: legs.channel });
+    const keyNow = messageKeyState(serving.home);
+    const declared = team.seats.find((one) => one.name === serving.seat);
+    const cli = declared?.cli ?? 'claude-code';
+    // The Claude adapter (§2.1): on an active root this server owns the seat's offers exactly while
+    // its channel is proven, read live; otherwise the watch offers the typed pointer.
+    const adapter = keyNow.kind === 'key'
+      ? { cli, webhook: declared?.webhook !== undefined, home: serving.home, context: { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key: keyNow.key, nowMs: Date.now() }
+      : undefined;
+    return channelOwnsSeat({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, walkTakesChannel: legs.channel, ...(adapter === undefined ? {} : { adapter }) });
   };
   const redeliverPass = (): void => {
     if (halted() || resending) return;

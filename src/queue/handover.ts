@@ -134,6 +134,93 @@ export function offeredCopies(dropDir: string, id: string): OfferedCopy[] {
   return out.sort((a, b) => a.n - b.n);
 }
 
+/** The scheduler's reserved attempts, with their times, in number order (withdrawn ones out). */
+export function attemptTimes(dropDir: string, id: string): { k: number; atMs: number; channel: boolean }[] {
+  const folder = historyFolder(dropDir, id);
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return [];
+  }
+  const present = new Set(names);
+  const out: { k: number; atMs: number; channel: boolean }[] = [];
+  for (const name of names) {
+    const match = ATTEMPT_NAME.exec(name);
+    if (match === null) continue;
+    if (present.has(`${name}.done`) && withdrawn(join(folder, `${name}.done`))) continue;
+    let at = Number.NaN;
+    let host: unknown;
+    try {
+      const entry = JSON.parse(readFileSync(join(folder, name), 'utf8')) as { at?: unknown; host?: unknown };
+      at = Date.parse(entry.at as string);
+      host = entry.host;
+    } catch {
+      // Read by its file time below.
+    }
+    let via: unknown;
+    if (present.has(`${name}.done`)) {
+      try {
+        via = (JSON.parse(readFileSync(join(folder, `${name}.done`), 'utf8')) as { via?: unknown }).via;
+      } catch {
+        via = undefined;
+      }
+    }
+    if (!Number.isFinite(at)) {
+      try {
+        at = statSync(join(folder, name)).mtimeMs;
+      } catch {
+        continue;
+      }
+    }
+    // A channel attempt: reserved by the channel server, or noted as taken by the channel.
+    out.push({ k: Number(match[1]), atMs: at, channel: host === 'channel' || via === 'channel' });
+  }
+  return out.sort((a, b) => a.k - b.k);
+}
+
+/** The legs the message's numbered copies left through, in number order. */
+export function copyLegs(dropDir: string, id: string): CopyLeg[] | 'unknown' {
+  const folder = historyFolder(dropDir, id);
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : 'unknown';
+  }
+  const legs: { n: number; leg: CopyLeg }[] = [];
+  for (const name of names) {
+    const match = COPY_NAME.exec(name);
+    if (match === null) continue;
+    try {
+      const leg = (JSON.parse(readFileSync(join(folder, name), 'utf8')) as { leg?: unknown }).leg;
+      if (typeof leg === 'string') legs.push({ n: Number(match[1]), leg: leg as CopyLeg });
+    } catch {
+      return 'unknown';
+    }
+  }
+  return legs.sort((a, b) => a.n - b.n).map((one) => one.leg);
+}
+
+/** The legs that are offers to a seat (a read is the seat's own, never an offer). */
+const OFFER_LEGS: readonly CopyLeg[] = ['channel', 'typed', 'native', 'socket', 'webhook', 'pointer'];
+
+/**
+ * The message's newest offer (the Claude adapter §2.3, the one clock): its start and whether it
+ * went by the channel. With scheduler attempts, it is the newest attempt: its reservation time,
+ * and channel when the channel server reserved it or noted it taken. Without any, it is the
+ * send's own first offer: the record's arrival, and channel unless a copy left on another
+ * offering leg (a seat whose first offer was a pointer or a native queue).
+ */
+export function newestOffer(dropDir: string, id: string, arrivedMs: number): { startMs: number; channel: boolean } {
+  const attempts = attemptTimes(dropDir, id);
+  const newest = attempts.reduce<{ k: number; atMs: number; channel: boolean } | null>((best, one) => (best === null || one.k > best.k ? one : best), null);
+  if (newest !== null) return { startMs: newest.atMs, channel: newest.channel };
+  const legs = copyLegs(dropDir, id);
+  const other = legs === 'unknown' ? false : legs.some((leg) => leg !== 'channel' && OFFER_LEGS.includes(leg));
+  return { startMs: arrivedMs, channel: !other };
+}
+
 /**
  * The re-send scheduler's attempts at one message, beside its history: one dot-named file per
  * attempt, `.attempt-<k>`, created exclusively and durably (file and folder fsync) immediately
@@ -249,7 +336,10 @@ export function takeExactCopyNumber(dropDir: string, id: string, leg: CopyLeg, n
  * arrival (`arrivedMs`). So copy 1 then an offer that carried nothing waits 120 s, and a crash
  * after a reservation still spaces the next one.
  */
-export function resendDue(dropDir: string, id: string, nowMs: number, arrivedMs: number | null): boolean {
+export function resendDue(dropDir: string, id: string, nowMs: number, arrivedMs: number | null, adapterChanged = false): boolean {
+  // The Claude adapter §2.3: a record whose newest offer went by the channel, at a seat that is
+  // now unproven, is due at once, so the pointer follows within one sweep.
+  if (adapterChanged) return true;
   const seen = copyHistory(dropDir, id);
   const lastCopy = seen === 'unknown' ? null : seen.lastMs;
   const ledger = attemptLedger(dropDir, id);

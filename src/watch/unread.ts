@@ -72,7 +72,9 @@ import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from 
 import { appendHistory, readHistory, type HistoryEntry } from '../send/history.ts';
 import { dropMessage, readTriggerLine, socketWakeHint } from '../send/native.ts';
 import { logLine } from '../log.ts';
-import { deliverLeadTypedWake, type TypedWakeHost } from '../send/typed-wake.ts';
+import { adapterPointerLine, deliverLeadTypedWake, type TypedWakeHost } from '../send/typed-wake.ts';
+import { renderedIdentity } from '../send/sender-claim.ts';
+import { DEFAULT_WATCH_WAKE_TRIES } from '../profiles/profile.ts';
 import {
   markWake as mark,
   releaseWake as release,
@@ -93,7 +95,7 @@ import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus,
 import { climbUnreadLead } from './status-events.ts';
 import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutcome } from '../queue/wake-attempt.ts';
 import { floorPass } from '../queue/floor.ts';
-import { channelOwnsSeat, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
+import { channelOwnsSeat, channelUnproven, claudeAdapterRoot, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
 import { copyHistory, noteAttemptOutcome, takeExactCopyNumber, withdrawAttempt } from '../queue/handover.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
@@ -789,8 +791,21 @@ async function resendStampedDrops(scene: RetryScene, seat: Seat, key: KeyObject,
   if (resend === undefined) return requested;
   const legs = scene.eventLegs?.(seat.name);
   const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
-  if (channelOwnsSeat({ dropDir, root: scene.root, session: scene.session, seat: seat.name, walkTakesChannel: legs?.channel === true })) return requested;
   const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
+  // The Claude adapter (§2.1, §2.4): on an active root a claude-code seat's attempt is the channel
+  // push while its channel is proven (its channel server offers then), and otherwise the typed
+  // pointer, which this pass's guarded typed wake types. No walk is asked.
+  if (scene.home !== undefined && claudeAdapterRoot(seat.cli, scene.root, scene.home, seat.webhook !== undefined)) {
+    const unproven = (): boolean => channelUnproven({ dropDir, root: scene.root, session: scene.session, seat: seat.name, context, key, nowMs }) !== null;
+    if (!unproven()) return requested;
+    const results = await resendPass({ dropDir, context, key, agentsDir: scene.dir, unproven }, nowMs, async (id) => {
+      release(wakePath(dropDir, id));
+      return TYPED_REQUESTED;
+    }, 'watch');
+    for (const one of results) if (one.via === TYPED_REQUESTED) requested.set(one.id, one.attempt);
+    return requested;
+  }
+  if (channelOwnsSeat({ dropDir, root: scene.root, session: scene.session, seat: seat.name, walkTakesChannel: legs?.channel === true })) return requested;
   const results = await resendPass({ dropDir, context, key, agentsDir: scene.dir }, nowMs, (id) => resend(seat, dropDir, id, () => {
     // The pointer wake's single-writer marker belongs to the scheduler's attempt for a stamped
     // record: the earlier attempt's marker is let go, so this attempt's wake can reserve it.
@@ -946,6 +961,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const pointerCopies = new Map<string, number | null>();
     /** Requests whose wake put a key into the pane but not the pointer line. */
     const keysOnly = new Set<string>();
+    // The Claude adapter's seat: its pointer is the attempt, and no walk goes on after it.
+    const adapterSeat = claudeAdapterRoot(seat.cli, scene.root, home, seat.webhook !== undefined);
     if (requested.size > 0) {
       const seatDir = seatMailDirIn(scene.dir, scene.session, seat.name);
       const resend = scene.resendStamped;
@@ -953,6 +970,10 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         for (const [id, attempt] of requested) {
           if (keysOnly.has(id)) {
             noteAttemptOutcome(seatDir, id, attempt, { copy: pointerCopies.get(id) ?? null, via: null });
+            continue;
+          }
+          if (adapterSeat) {
+            withdrawAttempt(seatDir, id, attempt);
             continue;
           }
           let via: string | null = null;
@@ -1055,7 +1076,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // A Claude seat has no typed wake of its own, so without this a message its channel push or
     // its socket did not get read sat "pull-only" until the seat's next turn: the watch re-offers
     // it on the event legs, channel push then socket, on the typed wake's slow ladder.
-    if (seat.cli === 'claude-code' && retry === null) {
+    if (seat.cli === 'claude-code' && retry === null && !(adapterSeat && requested.size > 0)) {
       const candidates = [...unread];
       for (const one of fresh) if (!candidates.some((item) => item.id === one.id)) candidates.push(one);
       const reoffered = await reofferOnEventLegs(scene, seat, dropDir, candidates, nowMs, unreadAfter, home, pendingOwned);
@@ -1212,16 +1233,20 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         : linesNow().get(audited.message.id)?.via === 'socket' ? socketWakeHint(audited.message.id) : undefined;
       // A re-send's pointer never renders a wake template (no subject, no summary): only the
       // sender as the registry names it, then the message, its delivery number and `team drops`.
-      const line = pointer !== null
-        ? composeMessageLine(`${sender.name ?? sender.seat} —`, pointer.hint)
-        : readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
+      // The Claude adapter's pointer (§2.4) names the sender by its one identity and the copy.
+      const adapterPointer = adapterSeat && pointerFor !== null && pointer !== null;
+      const line = adapterPointer && pointer !== null
+        ? adapterPointerLine(renderedIdentity(audited.payload.from, { record: audited.payload, home }), audited.message.id, pointer.copy)
+        : pointer !== null
+          ? composeMessageLine(`${sender.name ?? sender.seat} —`, pointer.hint)
+          : readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
       if (line === null) continue;
       // The typed retry submits a box that already holds exactly its line, and leaves every
       // other draft. A lead's draft is the exception the delivery below can keep: it copies
       // the text and puts it back, and types nothing when it cannot. The typed-wake seam has
       // no restore, so it is not used while that draft is there.
       const preserveDraft = leadSeat && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen);
-      if (!preserveDraft && retry !== null && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen)) continue;
+      if (!preserveDraft && (retry !== null || adapterPointer) && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen)) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an
       // earlier attempt whose effect is unknown, and no second line is typed for it.
@@ -1248,7 +1273,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // and that text is put back, or the wake line is not typed.
       if (leadSeat) {
         let pushed = false;
-        try {
+        if (!adapterPointer) try {
           pushed = (await nudgeBus(scene.root, {
             session: scene.session,
             seat: seat.name,
@@ -1330,7 +1355,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // wake a send types, through the one seam that carries the module (src/send/typed-wake.ts).
       // That wake is delivered only when the profile's working screen showed; a refused or
       // failed attempt gives its reservations back, so it never spends the message's one wake.
-      if (retry !== null && !preserveDraft) {
+      if ((retry !== null || adapterPointer) && !preserveDraft) {
         // One pane takes at most `WAKE_LINES_PER_HOUR` typed lines from this retry, whatever
         // number of messages wait: the slow retries must never flood a seat's box.
         if (scene.sources.typedWake !== undefined && typedLinesWithinHour(dropDir, nowMs) >= WAKE_LINES_PER_HOUR) {
@@ -1392,7 +1417,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
             recordWakeTry(dropDir, id, {
               tries,
               typed: before?.typed === true || typed.typed,
-              next_at: new Date(nowMs + wakeRetryDelayMs(tries, retry.tries)).toISOString(),
+              next_at: new Date(nowMs + wakeRetryDelayMs(tries, retry?.tries ?? DEFAULT_WATCH_WAKE_TRIES)).toISOString(),
             });
           }
           continue;

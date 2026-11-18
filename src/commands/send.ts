@@ -1,6 +1,6 @@
 import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { withSignedIdentity } from '../comms/identity.ts';
-import { TYPED_REQUESTED } from '../queue/resend.ts';
+import { claudeAdapterRoot, TYPED_REQUESTED } from '../queue/resend.ts';
 import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
@@ -71,7 +71,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, stampedSettlement, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -1312,6 +1312,16 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   const eventLegs: WalkLeg[] = cascade.filter((leg) => !isTypingLeg(leg) || (walkingTyped && leg === 'typed'));
   if (!eventLegs.includes('drop')) eventLegs.push('drop');
   const typingSetAside = ordered.filter((leg) => isTypingLeg(leg) && !(walkingTyped && leg === 'typed'));
+  // The Claude adapter (§2.1): on an active root a claude-code receiver's declared order is
+  // ignored. Its walk is the channel when its listener serves one (the channel server pushes the
+  // copy with its offer), then the drop; the scheduler's pointer covers a seat whose channel is
+  // not proven. No socket and no typed leg is walked from here.
+  const adapterRoot = !human && claudeAdapterRoot(input.cli, input.root, input.home, input.declared?.webhook !== undefined);
+  if (adapterRoot) {
+    const live = channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
+    eventLegs.splice(0, eventLegs.length, ...(live ? ['channel', 'drop'] as WalkLeg[] : ['drop'] as WalkLeg[]));
+    typingSetAside.splice(0, typingSetAside.length);
+  }
   const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop' && leg !== 'webhook');
   const chosen: readonly WalkLeg[] = human ? (webhookWalked ? ['webhook', 'drop'] : ['drop']) : eventLegs;
   return {
@@ -4772,15 +4782,32 @@ function findThreadReply(
  * Waits up to `timeoutMs` for a verified reply record on `sentPayload.thread`, looking once,
  * then every `pollMs`. A timeout of zero is the one look and no wait at all.
  */
+/** The receiving team's lead seat, whose clearance settles a stamped record; null when unread. */
+function leadAt(root: string, home: string): string | null {
+  try {
+    const loaded = readTeamConfig(root, { home });
+    return loaded.ok && loaded.team.orchestrator !== '' ? loaded.team.orchestrator : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A stamped record's settlement other than a reply, as `--wait` reports it (§3). */
+type SettledReport = { kind: 'acked' } | { kind: 'cleared'; by: string };
+
 async function awaitThreadReply(
   roots: readonly { root: string; session: string }[],
   sentPayload: RecordPayload,
   home: string,
   timeoutMs: number,
   pollMs = INBOX_POLL_MS,
-): Promise<ThreadReply | null> {
+  /** A stamped record's settlement: the wait ends on it too. */
+  settled?: () => SettledReport | null,
+): Promise<ThreadReply | SettledReport | null> {
   const immediate = findThreadReply(roots, sentPayload, home);
   if (immediate !== null) return immediate;
+  const first = settled?.() ?? null;
+  if (first !== null) return first;
   const deadline = Date.now() + timeoutMs;
   for (let left = deadline - Date.now(); left > 0; left = deadline - Date.now()) {
     await new Promise((resolve) => {
@@ -4788,6 +4815,8 @@ async function awaitThreadReply(
     });
     const found = findThreadReply(roots, sentPayload, home);
     if (found !== null) return found;
+    const done = settled?.() ?? null;
+    if (done !== null) return done;
   }
   return null;
 }
@@ -4824,7 +4853,21 @@ async function finishThreadWait(
     ? [{ root, session }, extraRoot]
     : [{ root, session }];
   const waitMs = host.waitMs ?? timeoutS * 1000;
-  const found = await awaitThreadReply(roots, payload, host.home, waitMs);
+  // The Claude adapter §3: a stamped record's wait also ends on its settlement — the recipient's
+  // ack or a lead's or the owner's clearance — never on a read, which is only a copy.
+  const lead = isStampedPayload(payload) ? leadAt(root, host.home) : null;
+  const stampedContext = { to: seatName, root, session, ...(lead === null ? {} : { lead }) };
+  const settledNow = isStampedPayload(payload)
+    ? (): SettledReport | null => {
+        const key = messageKeyState(host.home);
+        if (key.kind !== 'key') return null;
+        const settled = stampedSettlement(dropDir, payload.id, stampedContext, key.key);
+        return settled === null || settled.kind === 'answered' ? null : settled;
+      }
+    : undefined;
+  const raced = await awaitThreadReply(roots, payload, host.home, waitMs, INBOX_POLL_MS, settledNow);
+  const found = raced !== null && 'reply' in raced ? raced : null;
+  const settledBy = raced !== null && 'kind' in raced ? raced : null;
   if ((via === 'mcp-inbox' || via === 'drop' || via === 'channel') && (found !== null || receiptHeld(dropDir, payload.id, { to: seatName, root, session }, host.home, claimBindingIn(root, session, seatName, payload.id)))) {
     clearPending(dropDir, payload.id);
   }
@@ -4858,6 +4901,18 @@ async function finishThreadWait(
       ...failed,
     });
     return answered(io, seatName, found, report, via, payload.thread);
+  }
+  if (settledBy !== null) {
+    const outcome = settledBy.kind === 'acked' ? 'delivered (acked)' : `cleared by ${settledBy.by}`;
+    logLine(dir, 'send', who, `${seatName}: ${outcome}`, host.now());
+    appendHistory(project, root, host.home, { ...entry, outcome, ...(note !== undefined ? { note } : {}), ms: host.now().getTime() - startedAt, via, ...failed });
+    const summary = withId(`${seatName}: ${outcome}`, report);
+    if (report.json) writeAction(io, report, { status: 'delivered', summary, channel: via, thread: payload.thread });
+    else {
+      openText(io, report);
+      io.stdout(`${summary}\n`);
+    }
+    return 0;
   }
   logLine(dir, 'send', who, `${seatName}: timeout (sent, no reply on the thread within ${String(timeoutS)}s; the thread stays open)`, host.now());
   appendHistory(project, root, host.home, {
@@ -5023,7 +5078,9 @@ async function deliverDropped(
   const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken', project, staged);
   if (stored.ok) {
     stored.release();
-    if (human && wait) {
+    // A stamped record's wait ends on its settlement (the Claude adapter §3): the stored copy is
+    // the message, and the scheduler's offers follow it.
+    if ((human || isStampedPayload(payload)) && wait) {
       return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
     }
     const ms = host.now().getTime() - startedAt;

@@ -262,6 +262,26 @@ export function stampedSettled(dropDir: string, id: string, context: StatusConte
   return note !== null && note.payload.read_by === 'ack';
 }
 
+/**
+ * How a stamped record was settled, for the sender's report (the Claude adapter §3): `answered`
+ * (a reply), `acked` (the recipient's ack, by `team ack` or the channel's ack tool), or `cleared`
+ * by the owner or the lead the context binds. Null while it is not settled. The same rule as
+ * `stampedSettled`, read for what it says.
+ */
+export function stampedSettlement(dropDir: string, id: string, context: StatusContext, key: KeyObject): { kind: 'answered' } | { kind: 'acked' } | { kind: 'cleared'; by: string } | null {
+  if (receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key)) return { kind: 'answered' };
+  const read = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
+  const word = read?.payload.read_by;
+  if (read !== null && word === 'reply') return { kind: 'answered' };
+  if (read !== null && (word === 'ack' || word === 'channel')) return { kind: 'acked' };
+  if (read !== null && isLeadAckReadBy(word)) {
+    const cleared = leadAckReceiptAt(dropDir, id, context, key);
+    if (cleared !== null) return { kind: 'cleared', by: cleared.by };
+  }
+  const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
+  return note !== null && note.payload.read_by === 'ack' ? { kind: 'acked' } : null;
+}
+
 const copyCache = new Map<string, { stamp: string; copy: boolean }>();
 
 /** Whether the verifying read receipt at `path` is an unconfirmed copy's (`read_by: copy`).
