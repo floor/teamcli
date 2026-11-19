@@ -319,6 +319,31 @@ describe('activation and the first guarded pointer', () => {
     };
   }
 
+  function claudeTree(at: World) {
+    const state = readState(at.dir);
+    const nodes = new Map<number, { pid: number; ppid: number; birth: number }>();
+    const fronts = new Map<string, { shell: number; foreground: number[] }>();
+    ['lead', SEAT].forEach((name, index) => {
+      const shell = 111 + index * 200;
+      const cli = 222 + index * 200;
+      const held = state.sessions[SESSION]!.seats[name]!;
+      held.pane_shell = shell;
+      held.launched = { shell, cli: [cli], cli_start: [1_700_000_000_500] };
+      fronts.set(`pane-${name}`, { shell, foreground: [cli, cli + 1, cli + 2, cli + 3] });
+      nodes.set(cli, { pid: cli, ppid: shell, birth: 1_700_000_000_500_000 });
+      nodes.set(cli + 1, { pid: cli + 1, ppid: cli, birth: 1_700_000_000_500_100 });
+      nodes.set(cli + 2, { pid: cli + 2, ppid: cli, birth: 1_700_000_000_500_200 });
+      nodes.set(cli + 3, { pid: cli + 3, ppid: cli + 2, birth: 1_700_000_000_500_300 });
+    });
+    writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
+    return {
+      ...paneOwner(), nodes, fronts,
+      processes: (pane: string) => fronts.get(pane) ?? null,
+      processStart: (pid: number) => pid === 111 || pid === 311 ? 1_700_000_000_000 : 1_700_000_000_500,
+      processParent: (pid: number) => nodes.get(pid) ?? null,
+    };
+  }
+
   function freshActivation(): World {
     const at = world(null);
     cleanups.push(at.cleanup);
@@ -479,6 +504,53 @@ describe('activation and the first guarded pointer', () => {
     await wakeUnreadDrops(scene, { unreadAfter: 600 });
     expect(lines).toEqual([]);
     expect(JSON.parse(readFileSync(wakeTryPath(dropOf(at), ID), 'utf8')).reason).toContain('recorded pane identity cannot be read');
+  });
+
+  test('a dark root with real-shaped Claude MCP and tool descendants activates without channel history', async () => {
+    const at = freshActivation();
+    const owner = claudeTree(at);
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: owner })).toBe(0);
+  });
+
+  test('an unrelated foreground process refuses only its unreachable running seat without writes', async () => {
+    const at = freshActivation();
+    const owner = claudeTree(at);
+    const child = owner.nodes.get(425)!;
+    owner.nodes.set(425, { ...child, ppid: 311 });
+    const before = [snapshot(at.root), snapshot(at.home)];
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: owner })).toBe(1);
+    expect(io.err).toContain(`${SEAT}:`);
+    expect(io.err).not.toContain('lead:');
+    expect([snapshot(at.root), snapshot(at.home)]).toEqual(before);
+  });
+
+  test('the guarded pointer accepts CLI descendants and refuses a changed parent before Enter', async () => {
+    for (const changeParent of [false, true]) {
+      const at = place();
+      const owner = claudeTree(at);
+      stamped(at, ID);
+      const lines: string[] = [];
+      let entered = false;
+      const scene = pass(at, new Date(Date.now() + 1_000), lines);
+      scene.sources.keyOwner = owner;
+      scene.sources.typedWake = (pane, line, cli, _session, options) => deliverTypedWake({
+        read: () => entered ? CLAUDE_IDLE.replace('❯', '✻ Working…\n❯')
+          : lines.length === 0 ? CLAUDE_IDLE : CLAUDE_IDLE.replace(/❯[^\n]*/, `❯ ${lines[0]}`),
+        type: (_pane, text) => {
+          lines.push(text);
+          if (changeParent) owner.nodes.set(425, { ...owner.nodes.get(425)!, ppid: 311 });
+          return true;
+        },
+        enter: () => { entered = true; return true; },
+        wait: async () => {},
+      }, pane, line, cli, { ...options, settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 });
+      await wakeUnreadDrops(scene, { unreadAfter: 600 });
+      expectPointer(lines[0], ID, 1);
+      expect(entered).toBe(!changeParent);
+      if (changeParent) expect(JSON.parse(readFileSync(wakeTryPath(dropOf(at), ID), 'utf8')).reason).toBeString();
+    }
   });
 });
 

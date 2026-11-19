@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import type { ChildOptions } from '../child.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
+import type { TypedPaneSources } from '../launch/identity.ts';
 import { READ_LIMITS_DEFAULT_MS } from './read-limits.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
@@ -82,7 +83,7 @@ export type RetrySources = {
   /** The fresh readings the shared typed path proves a pane's owner with, immediately before
    *  every key (src/watch/unread.ts `paneStillSeats`): the terminal host's agent list, and a
    *  process's start time. Absent (a test host), the path keeps its earlier checks. */
-  keyOwner?: { agents(session: string): { name: string; pane: string; session?: string }[] | null; processes(pane: string, session: string): PaneProcesses | null; processStart(pid: number): number | null };
+  keyOwner?: TypedPaneSources;
   /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the one seam
    *  through which the watch's unread pass types, and only for a seat whose profile declares
    *  `typed_wake` and whose retry is on. Absent, the pass keeps its drop-file typed leg, whose

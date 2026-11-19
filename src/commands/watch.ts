@@ -30,7 +30,8 @@ import { agentList, agentStatus, evictHerdrAgentList, evictHerdrPaneProcessInfo,
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Command, Io } from '../io.ts';
 import { isShellName } from '../launch/cli-scope.ts';
-import { paneHoldsOnlyShell } from '../launch/identity.ts';
+import { paneHoldsOnlyShell, type TypedPaneSources } from '../launch/identity.ts';
+import { readProcessParent } from '../process-parent-adapter.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
 import { hasJsonFlag, writeJsonError } from '../output/index.ts';
@@ -190,7 +191,7 @@ export type WatchSources = {
    *  when herdr can't tell. */
   processes?(pane: string, session: string): PaneProcesses | null;
   /** The shared typed path's fresh owner readings (src/watch/retry.ts `RetrySources.keyOwner`). */
-  keyOwner?: { agents(session: string): { name: string; pane: string; session?: string }[] | null; processes(pane: string, session: string): PaneProcesses | null; processStart(pid: number): number | null };
+  keyOwner?: TypedPaneSources;
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
   /** One key, spelled as herdr spells it: a delivery that meets unsent text clears the box with
@@ -470,6 +471,7 @@ export const realWatchSources: WatchSources = {
       return paneProcesses(pane, session);
     },
     processStart: (pid) => processStartOf(pid),
+    processParent: readProcessParent,
   },
   processesAsync: async (pane, session, options) => paneProcessesOf(await paneProcessInfoAsync(pane, session, options)),
   // No pane messaging: the watch never types a nudge or a reminder (src/send/no-pane-messaging.ts).
