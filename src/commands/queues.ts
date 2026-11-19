@@ -12,6 +12,12 @@ import { liveFloorActors } from '../queue/floor-actors.ts';
 import { readerSwitch, seatQueueCheck, setReaderSwitch, type SeatBinding } from '../queue/reader.ts';
 import { buildIdentity } from '../version.ts';
 import { seatDropDir } from '../queue/mail-tree.ts';
+import { channelUnproven } from '../queue/resend.ts';
+import { messageKeyState } from '../store/keys.ts';
+import { readState, type SeatState } from '../state.ts';
+import { typedPaneProof, type TypedPaneSources } from '../launch/identity.ts';
+import { realWatchSources } from './watch.ts';
+import { permittedEventLegs } from './send.ts';
 
 export const USAGE = `Usage: team queues status
        team queues activate
@@ -21,7 +27,9 @@ export const USAGE = `Usage: team queues status
 The per-seat delivery queues of this checkout (rfc-event-comms, steps E6-E7).
 status      the root's floor state, the reader switch, and each seat queue's check.
 activate    turns on at-least-once delivery for this team, once every live TeamCLI process of
-            the team runs this build: from then on every message is delivered until its
+            the team runs this build and every running Claude Code seat has a proven channel
+            or can receive a typed pointer:
+            from then on every message is delivered until its
             recipient acknowledges it (team ack), and every copy names its message and its
             delivery number; any copy after the first says it is a re-send. If an older TeamCLI
             process appears later, the daemon rolls the team back to dark on its next pass.
@@ -34,7 +42,7 @@ reader      turns the reader switch on (seats read their mail in queue order, on
 Exits 0 on success, 1 when the change is refused or fails, 2 when the invocation or project can't be read.
 `;
 
-export type QueuesSources = { home: string; now?: () => Date };
+export type QueuesSources = { home: string; now?: () => Date; paneOwner?: TypedPaneSources };
 
 export const queues: Command = (argv, io) => runQueues(argv, io, { home: homedir() });
 export default queues;
@@ -96,6 +104,50 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
     return 1;
   }
   if (verb === 'activate') {
+    // Check before activate creates its folder, takes a lock or recovers a cut-off publication:
+    // a refused activation must leave the root and the machine folder exactly as they were.
+    const key = messageKeyState(home);
+    const nowMs = (sources.now?.() ?? new Date()).getTime();
+    const session = loaded.team.session;
+    let recorded: Record<string, SeatState>;
+    try {
+      recorded = readState(join(root, '.agents')).sessions[session]?.seats ?? {};
+    } catch {
+      out.stderr('team queues: activation refused: recorded seat state cannot be read\n');
+      for (const seat of loaded.team.seats) if (seat.cli === 'claude-code' && !seat.stopped) out.stderr(`  ${seat.name}: seat state cannot be read\n`);
+      return 1;
+    }
+    const owner = sources.paneOwner ?? realWatchSources.keyOwner;
+    let agents: ReturnType<TypedPaneSources['agents']> = null;
+    try { agents = owner?.agents(session) ?? null; } catch { /* Unreadable is not a positive proof. */ }
+    // Only this root's running roster is considered. An entity orchestrator in another root
+    // has no local recorded pane here; its protected pane cannot block this root's activation.
+    const unproven = loaded.team.seats.filter(seat => seat.cli === 'claude-code' && !seat.stopped).flatMap(seat => {
+      const held = recorded[seat.name];
+      if (held?.pane === undefined) return [];
+      if (agents !== null && !agents.some(agent => agent.pane === held.pane)) return [];
+      const why = key.kind !== 'key' ? 'no message key' : channelUnproven({
+        dropDir: seatDropDir(root, session, seat.name), root, session, seat: seat.name,
+        context: { to: seat.name, root, session, ...(lead === undefined ? {} : { lead }) },
+        key: key.key, nowMs,
+      });
+      if (why === null) return [];
+      let pointerWhy = 'the typed pointer is protected or its settings cannot be read';
+      try {
+        const legs = permittedEventLegs({ dir: join(root, '.agents'), root, home, session, seat: seat.name, team: loaded.team, now: () => new Date(nowMs) });
+        if (legs.pointer === true && owner !== undefined) {
+          const proof = typedPaneProof(held, seat.name, held.pane, session, owner, true);
+          if (proof.ok) return [];
+          pointerWhy = proof.why;
+        }
+      } catch { /* No unreadable setting permits typing. */ }
+      return [{ seat: seat.name, why: `${why}; ${pointerWhy}` }];
+    });
+    if (unproven.length > 0) {
+      out.stderr('team queues: activation refused: running Claude Code seats have no proven channel and no typed pointer proof\n');
+      for (const seat of unproven) out.stderr(`  ${seat.seat}: ${seat.why}\n`);
+      return 1;
+    }
     const outcome = activate(root, {
       home,
       build: buildIdentity().build,

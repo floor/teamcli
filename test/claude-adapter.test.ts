@@ -11,6 +11,9 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as send from '../src/commands/send.ts';
+import { runQueues } from '../src/commands/queues.ts';
+import { runWatch } from '../src/commands/watch.ts';
+import { writeDaemonState } from '../src/daemon/state.ts';
 import type { SendHost } from '../src/commands/send.ts';
 import { listenerKeyOf, offerAcks, proveOffer } from '../src/comms/offer.ts';
 import { loadTeamFile } from '../src/file/load.ts';
@@ -28,9 +31,11 @@ import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { typedWakeMaxFor } from '../src/send/readable-wake.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
-import { wakeUnreadDrops } from '../src/watch/unread.ts';
+import { wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
+import { readState } from '../src/state.ts';
+import { hostedLoop } from './helpers/hosted-watch.ts';
 import { testIo } from './helpers.ts';
 import { fake, world, type World } from './send-native-fixtures.ts';
 
@@ -205,6 +210,275 @@ describe('F1: a listener that declares the channel but never proves it', () => {
     expectPointer(lines[0], ID, 2);
     expect(settled(at, ID)).toBe(false);
     expect(attemptLedger(stampedOf(at), ID).attempts).toBe(1);
+  });
+});
+
+describe('activation and the first guarded pointer', () => {
+  for (const recordedStarts of [false, true]) {
+    test(`an unproven ${recordedStarts ? 'relaunched' : 'pre-install'} seat gets a pointer in one pass through the real typed helper`, async () => {
+      const at = place();
+      // A reused workspace predates create-time shell anchors. Relaunch records the new CLI
+      // identity but does not recreate that workspace, so both ages can lack these fields.
+      const state = readState(at.dir);
+      const held = state.sessions[SESSION]!.seats[SEAT]!;
+      delete held.pane_shell;
+      delete held.pane_shell_start;
+      if (!recordedStarts) delete held.launched!.cli_start;
+      writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
+      stamped(at, ID);
+      const lines: string[] = [];
+      const scene = pass(at, new Date(Date.now() + 1_000), lines);
+      let entered = false;
+      scene.live.screens[`pane-${SEAT}`] = CLAUDE_IDLE;
+      scene.sources.keyOwner = {
+        agents: () => [{ name: SEAT, pane: `pane-${SEAT}`, session: `session-of-${SEAT}` }],
+        processes: () => ({ shell: 111, foreground: [222] }),
+        processStart: pid => pid === 111 ? 1_700_000_000_000 : 1_700_000_000_500,
+      };
+      scene.sources.typedWake = (pane, line, cli, _session, options) => deliverTypedWake({
+        read: () => entered
+          ? CLAUDE_IDLE.replace('❯', '✻ Working…\n❯')
+          : lines.length === 0 ? CLAUDE_IDLE : CLAUDE_IDLE.replace(/❯[^\n]*/, `❯ ${lines[0]}`),
+        type: (_pane, text) => { lines.push(text); return true; },
+        enter: () => { entered = true; return true; },
+        wait: async () => {},
+      }, pane, line, cli, { ...options, settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 });
+      const io = testIo(at.root, { kind: 'owner' });
+      expect(await runWatch(['--file', join(at.dir, 'team.yaml')], io, {
+        ...scene.sources,
+        live: () => scene.live,
+        machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
+        standing: () => ({ kind: 'none' }),
+        readChecks: () => [],
+        foreground: () => ['claude'],
+        notify: () => {},
+        now: () => scene.now,
+        wait: async () => false,
+        alive: () => false,
+        pid: process.pid,
+        home: at.home,
+        hosted: hostedLoop(),
+      })).toBe(0);
+      expectPointer(lines[0], ID, 1);
+      expect(entered).toBe(true);
+      expect(attemptLedger(stampedOf(at), ID).attempts).toBe(1);
+    });
+  }
+
+  test('conversation continuity never rescues a missing, ambiguous or contradictory proof', async () => {
+    for (const change of [
+      { session: undefined },
+      { session: 'another-conversation' },
+      { session: `session-of-${SEAT}`, duplicate: true },
+      { session: `session-of-${SEAT}`, shell: 333 },
+      { session: `session-of-${SEAT}`, cliStart: 1_700_000_009_999 },
+      { session: `session-of-${SEAT}`, anchor: 'mismatched' },
+      { session: `session-of-${SEAT}`, anchor: 'incomplete' },
+    ]) {
+      const at = place();
+      const state = readState(at.dir);
+      const held = state.sessions[SESSION]!.seats[SEAT]!;
+      if (change.anchor === undefined) delete held.pane_shell;
+      if (change.anchor !== 'mismatched') delete held.pane_shell_start;
+      else held.pane_shell_start = 1_700_000_009_999;
+      writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
+      stamped(at, ID);
+      const lines: string[] = [];
+      const scene = pass(at, new Date(Date.now() + 1_000), lines);
+      scene.sources.keyOwner = {
+        agents: () => [
+          { name: SEAT, pane: `pane-${SEAT}`, ...(change.session === undefined ? {} : { session: change.session }) },
+          ...(change.duplicate ? [{ name: 'another-seat', pane: 'another-pane', session: change.session }] : []),
+        ],
+        processes: () => ({ shell: change.shell ?? 111, foreground: [222] }),
+        processStart: pid => pid === 111 ? 1_700_000_000_000 : change.cliStart ?? 1_700_000_000_500,
+      };
+      await wakeUnreadDrops(scene, { unreadAfter: 600 });
+      expect(lines).toEqual([]);
+      expect(attemptLedger(stampedOf(at), ID).attempts).toBe(0);
+      const retry = JSON.parse(readFileSync(wakeTryPath(dropOf(at), ID), 'utf8')) as { reason?: string };
+      expect(retry.reason).toContain('; ');
+      expect(retry.reason).not.toEndWith('refused before the first key');
+    }
+  });
+
+  function daemonAt(at: World): void {
+    const now = new Date().toISOString();
+    writeDaemonState(at.home, {
+      format: 1, pid: process.pid, uid: process.getuid!(), since: now, heartbeatAt: now,
+      startedBy: 'manual', version: 'b', socket: join(at.home, 'daemon.sock'),
+      features: { broker: 'off' }, stuck: [], roots: [], floorLevel: 3,
+    });
+  }
+
+  function paneOwner(provable = true): NonNullable<RetrySources['keyOwner']> {
+    return {
+      agents: () => ['lead', SEAT].map(name => ({ name, pane: `pane-${name}`, session: `session-of-${name}` })),
+      processes: () => provable ? { shell: 111, foreground: [222] } : null,
+      processStart: pid => pid === 111 ? 1_700_000_000_000 : 1_700_000_000_500,
+    };
+  }
+
+  function freshActivation(): World {
+    const at = world(null);
+    cleanups.push(at.cleanup);
+    daemonAt(at);
+    const seats = Object.fromEntries(['lead', SEAT].map(name => [name, {
+      stage: 'ready', pane: `pane-${name}`, agent_session: `session-of-${name}`,
+      launched: { shell: 111, cli: [222], cli_start: [1_700_000_000_500] },
+      pane_shell: 111, pane_shell_start: 1_700_000_000_000,
+    }]));
+    writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify({ format: 1, sessions: { [SESSION]: { seats, worktrees: {} } } }));
+    return at;
+  }
+
+  function declareEntity(at: World, entity: string): void {
+    const lobby = resolveLobby(at.home, { entity });
+    mkdirSync(lobby, { recursive: true });
+    const file = join(at.dir, 'team.yaml');
+    writeFileSync(file, `${readFileSync(file, 'utf8').replace(lobbyDir(at.home), lobby)}entity: ${entity}\n`);
+  }
+
+  function proveSeat(at: Place, seat: string): void {
+    stampedTo(at, seat, OTHER);
+    const dropDir = seatMailDirIn(at.dir, SESSION, seat);
+    const listener = { ...at.listener, seat };
+    expect(writeListener(dropDir, listener)).toBe(true);
+    const token = 'd'.repeat(32);
+    expect(takeCopyNumber(seatMailDirIn(at.dir, SESSION, seat, 'stamped'), OTHER, 'channel', Date.now(), { token, listener: listenerKeyOf(listener) })).not.toBeNull();
+    expect(publishRecordRead({ dropDir, id: OTHER, to: seat, root: at.root, session: SESSION, home: at.home, key: keyOf(at.home), at: new Date().toISOString(), readBy: 'channel' }).kind).toBe('published');
+    expect(proveOffer(dropDir, OTHER, token, listenerKeyOf(listener), { root: at.root, session: SESSION, seat, key: keyOf(at.home) })).not.toBeNull();
+  }
+
+  function snapshot(folder: string): string {
+    return JSON.stringify(readdirSync(folder, { recursive: true }).map(String).sort().map(name => {
+      try { return [name, readFileSync(join(folder, name), 'base64')]; } catch { return [name, 'directory']; }
+    }));
+  }
+
+  test('activation refuses every unproven Claude seat by name and changes no file', async () => {
+    const at = place();
+    daemonAt(at);
+    expect(deactivate(at.root, at.home).kind).toBe('dark');
+    const before = [snapshot(at.root), snapshot(at.home)];
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner(false) })).toBe(1);
+    expect(io.err).toContain(SEAT);
+    expect(io.err).toContain('lead');
+    expect(io.err).toContain('no proven channel');
+    expect([snapshot(at.root), snapshot(at.home)]).toEqual(before);
+  });
+
+  test('activation refuses one unproven Claude seat after the other is proven', async () => {
+    const at = place();
+    daemonAt(at);
+    proveSeat(at, 'lead');
+    expect(deactivate(at.root, at.home).kind).toBe('dark');
+    const before = [snapshot(at.root), snapshot(at.home)];
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner(false) })).toBe(1);
+    expect(io.err).toContain(SEAT);
+    expect(io.err).not.toContain('lead:');
+    expect([snapshot(at.root), snapshot(at.home)]).toEqual(before);
+  });
+
+  test('activation succeeds once all Claude seats have proven their current channel', async () => {
+    const at = place();
+    daemonAt(at);
+    proveSeat(at, 'lead');
+    proveSeat(at, SEAT);
+    expect(deactivate(at.root, at.home).kind).toBe('dark');
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner(false) })).toBe(0);
+    expect(io.out).toContain('activated at level 3');
+  });
+
+  test('a fresh root activates when every running Claude seat has a passing pointer proof', async () => {
+    const at = freshActivation();
+    expect(messageKeyState(at.home).kind).not.toBe('key');
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner() })).toBe(0);
+  });
+
+  test('a stopped Claude row never blocks activation', async () => {
+    const at = place();
+    daemonAt(at);
+    proveSeat(at, 'lead');
+    expect(deactivate(at.root, at.home).kind).toBe('dark');
+    const file = join(at.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace(`name: ${SEAT}\n`, `name: ${SEAT}\n    stopped: true\n`));
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner(false) })).toBe(0);
+  });
+
+  test('an entity orchestrator in another root does not block this root', async () => {
+    const at = freshActivation();
+    declareEntity(at, 'parent');
+    const own = paneOwner();
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: {
+      ...own,
+      agents: () => [...own.agents(SESSION)!, { name: 'entity-orchestrator', pane: 'foreign-pane', session: 'foreign-conversation' }],
+    } })).toBe(0);
+  });
+
+  test('the protected entity orchestrator counts on its own root', async () => {
+    const at = freshActivation();
+    declareEntity(at, 'acme');
+    const before = [snapshot(at.root), snapshot(at.home)];
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner() })).toBe(1);
+    expect(io.err).toContain('lead:');
+    expect(io.err).not.toContain(`${SEAT}:`);
+    expect([snapshot(at.root), snapshot(at.home)]).toEqual(before);
+  });
+
+  test('rows without a live recorded pane do not block activation', async () => {
+    const at = freshActivation();
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: { ...paneOwner(false), agents: () => [] } })).toBe(0);
+  });
+
+  test('doctor identifies legacy Claude seats using the conversation proof', async () => {
+    const at = place();
+    const state = readState(at.dir);
+    delete state.sessions[SESSION]!.seats[SEAT]!.pane_shell;
+    delete state.sessions[SESSION]!.seats[SEAT]!.pane_shell_start;
+    writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
+    const { runDoctor } = await import('../src/commands/doctor.ts');
+    const io = testIo(at.root, { kind: 'owner' });
+    await runDoctor(['--file', '.agents/team.yaml'], io, { version: () => '2.1.326', onPath: () => true, loggedIn: () => true, herdrVersion: () => '0.7.1', sessionRunning: () => false, now: () => new Date(), home: at.home });
+    expect(`${io.out}${io.err}`).toContain(`${SEAT}: shell anchors absent; typed pointers require the recorded conversation until relaunch`);
+  });
+
+  test('activation refuses unreadable seat state without changing any file', async () => {
+    const at = freshActivation();
+    writeFileSync(join(at.dir, 'team.state.json'), '{');
+    const before = [snapshot(at.root), snapshot(at.home)];
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner() })).toBe(1);
+    expect(io.err).toContain(SEAT);
+    expect(io.err).toContain('state cannot be read');
+    expect([snapshot(at.root), snapshot(at.home)]).toEqual(before);
+  });
+
+  test('state becoming unreadable before the first key refuses the pointer and records why', async () => {
+    const at = place();
+    stamped(at, ID);
+    const lines: string[] = [];
+    const scene = pass(at, new Date(Date.now() + 1_000), lines);
+    scene.sources.keyOwner = paneOwner();
+    const type = scene.sources.typedWake!;
+    const file = join(at.dir, 'team.state.json');
+    const saved = readFileSync(file, 'utf8');
+    scene.sources.typedWake = async (...args) => {
+      writeFileSync(file, '{');
+      try { return await type(...args); }
+      finally { writeFileSync(file, saved); }
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+    expect(JSON.parse(readFileSync(wakeTryPath(dropOf(at), ID), 'utf8')).reason).toContain('recorded pane identity cannot be read');
   });
 });
 

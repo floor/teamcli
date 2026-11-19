@@ -244,7 +244,7 @@ export type Host = {
   processInfo?(session: string, pane: string): PaneProcesses | null;
   /**
    * The instant a process started, in epoch milliseconds, or null when it is gone or its start
-   * line does not read. Read once, when the seat's pane is created, to record the pane shell's
+   * line does not read. Read when the pane is created or a launch reuses it, to record the shell's
    * start beside its pid: a pid the OS hands to another process after the shell exits is then
    * told from the same shell. Absent: the run reads the process table itself.
    */
@@ -264,8 +264,8 @@ export type Host = {
       /** The actual scoped start folder, written only after a channel workspace was created. */
       start_cwd?: string;
       launched?: LaunchedIdentity;
-      /** The pane's own shell pid and that process's start instant, read when the pane was
-       *  created: the identity a pane herdr has not named yet is placed by. */
+      /** The pane's shell pid and start, captured at creation and refreshed on a same-pane
+       *  launch: the identity used before the terminal host has named the seat. */
       pane_shell?: number;
       pane_shell_start?: number;
       /** The agent session read with the process, stored beside `launched`. */
@@ -1944,11 +1944,16 @@ export async function executePlan(
           const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null, host.processStartOf ?? processStartOf);
           if (identity) {
             identities.set(op.seat, identity);
+            // A same-pane relaunch skips workspace creation. Refresh its shell anchor beside
+            // the launched CLI identity too, so it cannot keep a pre-anchor workspace record.
+            const shellStart = (host.processStartOf ?? processStartOf)(identity.shell);
             const sessionId = liveSession(op.seat, here.pane, op.cli) ?? launchSessions.get(op.seat);
             recordSeat(op.seat, {
               stage: 'launched',
               pane: here.pane,
               launched: identity,
+              pane_shell: identity.shell,
+              ...(shellStart === null ? {} : { pane_shell_start: shellStart }),
               ...(here.workspace ? { workspace: here.workspace } : {}),
               ...(sessionId ? { agent_session: sessionId } : {}),
               ...(model !== undefined && version !== undefined

@@ -601,6 +601,9 @@ function identityFindings(team: TeamFile, dir: string, session: string, sources?
       });
       continue;
     }
+    if (seat.cli === 'claude-code' && held.pane !== undefined && held.pane_shell === undefined && held.pane_shell_start === undefined) {
+      findings.push({ level: 'note', text: `${seat.name}: shell anchors absent; typed pointers require the recorded conversation until relaunch` });
+    }
     // The launch recorded the process but not its CLI's start time (a launch before E7b's re-send
     // fix): the watch's typed wake proves the pane by the older check (pane, shell pid and start,
     // a recorded CLI pid in front) until the seat is relaunched, which records the CLI's start.

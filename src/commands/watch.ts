@@ -190,7 +190,7 @@ export type WatchSources = {
    *  when herdr can't tell. */
   processes?(pane: string, session: string): PaneProcesses | null;
   /** The shared typed path's fresh owner readings (src/watch/retry.ts `RetrySources.keyOwner`). */
-  keyOwner?: { agents(session: string): { name: string; pane: string }[] | null; processes(pane: string, session: string): PaneProcesses | null; processStart(pid: number): number | null };
+  keyOwner?: { agents(session: string): { name: string; pane: string; session?: string }[] | null; processes(pane: string, session: string): PaneProcesses | null; processStart(pid: number): number | null };
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
   /** One key, spelled as herdr spells it: a delivery that meets unsent text clears the box with
@@ -463,7 +463,7 @@ export const realWatchSources: WatchSources = {
   keyOwner: {
     agents: (session) => {
       evictHerdrAgentList(session);
-      return agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane })) ?? null;
+      return agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane, ...(agent.session === undefined ? {} : { session: agent.session }) })) ?? null;
     },
     processes: (pane, session) => {
       evictHerdrPaneProcessInfo(pane, session);

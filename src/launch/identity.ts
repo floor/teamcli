@@ -54,6 +54,56 @@ export function seatProcessVerdict(recorded: LaunchedIdentity | undefined, pane:
   return 'replaced';
 }
 
+/** Fresh metadata readers shared by activation and the watch's per-key ownership check. */
+export type TypedPaneSources = {
+  agents(session: string): { name: string; pane: string; session?: string }[] | null;
+  processes(pane: string, session: string): PaneProcesses | null;
+  processStart(pid: number): number | null;
+};
+
+export type TypedPaneRecord = {
+  pane?: string;
+  launched?: LaunchedIdentity;
+  pane_shell?: number;
+  pane_shell_start?: number;
+  agent_session?: string;
+};
+
+/** The existing typed ownership proof, with conversation continuity only for legacy Claude
+ *  pointer records lacking shell anchors. No process arguments, screen or environment is read. */
+export function typedPaneProof(held: TypedPaneRecord | undefined, seat: string, pane: string, session: string, owner: TypedPaneSources, conversationFallback = false): { ok: true } | { ok: false; why: string } {
+  const no = (why: string) => ({ ok: false as const, why });
+  try {
+    if (held === undefined || held.pane !== pane || held.launched === undefined) return no('the recorded pane or launched identity is absent or different');
+    const agents = owner.agents(session);
+    if (agents === null) return no('the terminal host agent list cannot be read');
+    const onPane = agents.filter(agent => agent.pane === pane);
+    if (onPane.length !== 1 || onPane[0]?.name !== seat) return no('the recorded pane does not uniquely name this seat');
+    if (agents.filter(agent => agent.name === seat).length !== 1) return no('the seat name is not unique');
+    const processes = owner.processes(pane, session);
+    if (processes === null) return no('the pane process identity cannot be read');
+    if (processes.shell !== (held.pane_shell ?? held.launched.shell)) return no('the shell is not the recorded shell');
+    if (seatProcessVerdict(held.launched, processes) !== 'same') return no('the recorded CLI is not in front of its shell');
+    if (held.pane_shell === undefined && held.pane_shell_start === undefined) {
+      if (!conversationFallback) return no('the shell anchors are absent');
+      const conversation = held.agent_session;
+      if (conversation === undefined || conversation === '' || onPane[0]?.session !== conversation) return no('the live conversation does not match the recorded conversation');
+      if (agents.filter(agent => agent.session === conversation).length !== 1) return no('the recorded conversation is not unique');
+    } else {
+      if (held.pane_shell === undefined || held.pane_shell_start === undefined) return no('the shell anchors are incomplete');
+      if (owner.processStart(processes.shell) !== held.pane_shell_start) return no('the shell start does not match the recorded start');
+    }
+    const starts = held.launched.cli_start;
+    if (starts === undefined) return { ok: true };
+    if (starts.length !== held.launched.cli.length) return no('the recorded CLI starts are incomplete');
+    if (processes.foreground.some(pid => pid !== processes.shell && !held.launched!.cli.includes(pid))) return no('an unrecorded process is in front of the shell');
+    if (!held.launched.cli.every((pid, at) => processes.foreground.includes(pid) && owner.processStart(pid) === starts[at])) return no('a recorded CLI process or its birth no longer matches');
+    return { ok: true };
+  } catch {
+    return no('the pane ownership proof could not be read');
+  }
+}
+
 /** The identity to record from a pane reading, or null when herdr can't give one: no shell pid,
  *  or no foreground process beside it. A seat with no record keeps today's behaviour. */
 export function launchedIdentity(pane: PaneProcesses | null | undefined, startOf?: (pid: number) => number | null): LaunchedIdentity | null {
