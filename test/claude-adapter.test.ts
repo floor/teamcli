@@ -31,7 +31,7 @@ import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { typedWakeMaxFor } from '../src/send/readable-wake.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
-import { wakeUnreadDrops } from '../src/watch/unread.ts';
+import { wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { readState } from '../src/state.ts';
@@ -296,16 +296,47 @@ describe('activation and the first guarded pointer', () => {
       await wakeUnreadDrops(scene, { unreadAfter: 600 });
       expect(lines).toEqual([]);
       expect(attemptLedger(stampedOf(at), ID).attempts).toBe(0);
+      const retry = JSON.parse(readFileSync(wakeTryPath(dropOf(at), ID), 'utf8')) as { reason?: string };
+      expect(retry.reason).toContain('; ');
+      expect(retry.reason).not.toEndWith('refused before the first key');
     }
   });
 
-  function daemonAt(at: Place): void {
+  function daemonAt(at: World): void {
     const now = new Date().toISOString();
     writeDaemonState(at.home, {
       format: 1, pid: process.pid, uid: process.getuid!(), since: now, heartbeatAt: now,
       startedBy: 'manual', version: 'b', socket: join(at.home, 'daemon.sock'),
       features: { broker: 'off' }, stuck: [], roots: [], floorLevel: 3,
     });
+  }
+
+  function paneOwner(provable = true): NonNullable<RetrySources['keyOwner']> {
+    return {
+      agents: () => ['lead', SEAT].map(name => ({ name, pane: `pane-${name}`, session: `session-of-${name}` })),
+      processes: () => provable ? { shell: 111, foreground: [222] } : null,
+      processStart: pid => pid === 111 ? 1_700_000_000_000 : 1_700_000_000_500,
+    };
+  }
+
+  function freshActivation(): World {
+    const at = world(null);
+    cleanups.push(at.cleanup);
+    daemonAt(at);
+    const seats = Object.fromEntries(['lead', SEAT].map(name => [name, {
+      stage: 'ready', pane: `pane-${name}`, agent_session: `session-of-${name}`,
+      launched: { shell: 111, cli: [222], cli_start: [1_700_000_000_500] },
+      pane_shell: 111, pane_shell_start: 1_700_000_000_000,
+    }]));
+    writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify({ format: 1, sessions: { [SESSION]: { seats, worktrees: {} } } }));
+    return at;
+  }
+
+  function declareEntity(at: World, entity: string): void {
+    const lobby = resolveLobby(at.home, { entity });
+    mkdirSync(lobby, { recursive: true });
+    const file = join(at.dir, 'team.yaml');
+    writeFileSync(file, `${readFileSync(file, 'utf8').replace(lobbyDir(at.home), lobby)}entity: ${entity}\n`);
   }
 
   function proveSeat(at: Place, seat: string): void {
@@ -331,7 +362,7 @@ describe('activation and the first guarded pointer', () => {
     expect(deactivate(at.root, at.home).kind).toBe('dark');
     const before = [snapshot(at.root), snapshot(at.home)];
     const io = testIo(at.root, { kind: 'owner' });
-    expect(await runQueues(['activate'], io, { home: at.home })).toBe(1);
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner(false) })).toBe(1);
     expect(io.err).toContain(SEAT);
     expect(io.err).toContain('lead');
     expect(io.err).toContain('no proven channel');
@@ -345,7 +376,7 @@ describe('activation and the first guarded pointer', () => {
     expect(deactivate(at.root, at.home).kind).toBe('dark');
     const before = [snapshot(at.root), snapshot(at.home)];
     const io = testIo(at.root, { kind: 'owner' });
-    expect(await runQueues(['activate'], io, { home: at.home })).toBe(1);
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner(false) })).toBe(1);
     expect(io.err).toContain(SEAT);
     expect(io.err).not.toContain('lead:');
     expect([snapshot(at.root), snapshot(at.home)]).toEqual(before);
@@ -358,8 +389,96 @@ describe('activation and the first guarded pointer', () => {
     proveSeat(at, SEAT);
     expect(deactivate(at.root, at.home).kind).toBe('dark');
     const io = testIo(at.root, { kind: 'owner' });
-    expect(await runQueues(['activate'], io, { home: at.home })).toBe(0);
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner(false) })).toBe(0);
     expect(io.out).toContain('activated at level 3');
+  });
+
+  test('a fresh root activates when every running Claude seat has a passing pointer proof', async () => {
+    const at = freshActivation();
+    expect(messageKeyState(at.home).kind).not.toBe('key');
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner() })).toBe(0);
+  });
+
+  test('a stopped Claude row never blocks activation', async () => {
+    const at = place();
+    daemonAt(at);
+    proveSeat(at, 'lead');
+    expect(deactivate(at.root, at.home).kind).toBe('dark');
+    const file = join(at.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace(`name: ${SEAT}\n`, `name: ${SEAT}\n    stopped: true\n`));
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner(false) })).toBe(0);
+  });
+
+  test('an entity orchestrator in another root does not block this root', async () => {
+    const at = freshActivation();
+    declareEntity(at, 'parent');
+    const own = paneOwner();
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: {
+      ...own,
+      agents: () => [...own.agents(SESSION)!, { name: 'entity-orchestrator', pane: 'foreign-pane', session: 'foreign-conversation' }],
+    } })).toBe(0);
+  });
+
+  test('the protected entity orchestrator counts on its own root', async () => {
+    const at = freshActivation();
+    declareEntity(at, 'acme');
+    const before = [snapshot(at.root), snapshot(at.home)];
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner() })).toBe(1);
+    expect(io.err).toContain('lead:');
+    expect(io.err).not.toContain(`${SEAT}:`);
+    expect([snapshot(at.root), snapshot(at.home)]).toEqual(before);
+  });
+
+  test('rows without a live recorded pane do not block activation', async () => {
+    const at = freshActivation();
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: { ...paneOwner(false), agents: () => [] } })).toBe(0);
+  });
+
+  test('doctor identifies legacy Claude seats using the conversation proof', async () => {
+    const at = place();
+    const state = readState(at.dir);
+    delete state.sessions[SESSION]!.seats[SEAT]!.pane_shell;
+    delete state.sessions[SESSION]!.seats[SEAT]!.pane_shell_start;
+    writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
+    const { runDoctor } = await import('../src/commands/doctor.ts');
+    const io = testIo(at.root, { kind: 'owner' });
+    await runDoctor(['--file', '.agents/team.yaml'], io, { version: () => '2.1.326', onPath: () => true, loggedIn: () => true, herdrVersion: () => '0.7.1', sessionRunning: () => false, now: () => new Date(), home: at.home });
+    expect(`${io.out}${io.err}`).toContain(`${SEAT}: shell anchors absent; typed pointers require the recorded conversation until relaunch`);
+  });
+
+  test('activation refuses unreadable seat state without changing any file', async () => {
+    const at = freshActivation();
+    writeFileSync(join(at.dir, 'team.state.json'), '{');
+    const before = [snapshot(at.root), snapshot(at.home)];
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runQueues(['activate'], io, { home: at.home, paneOwner: paneOwner() })).toBe(1);
+    expect(io.err).toContain(SEAT);
+    expect(io.err).toContain('state cannot be read');
+    expect([snapshot(at.root), snapshot(at.home)]).toEqual(before);
+  });
+
+  test('state becoming unreadable before the first key refuses the pointer and records why', async () => {
+    const at = place();
+    stamped(at, ID);
+    const lines: string[] = [];
+    const scene = pass(at, new Date(Date.now() + 1_000), lines);
+    scene.sources.keyOwner = paneOwner();
+    const type = scene.sources.typedWake!;
+    const file = join(at.dir, 'team.state.json');
+    const saved = readFileSync(file, 'utf8');
+    scene.sources.typedWake = async (...args) => {
+      writeFileSync(file, '{');
+      try { return await type(...args); }
+      finally { writeFileSync(file, saved); }
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: 600 });
+    expect(lines).toEqual([]);
+    expect(JSON.parse(readFileSync(wakeTryPath(dropOf(at), ID), 'utf8')).reason).toContain('recorded pane identity cannot be read');
   });
 });
 

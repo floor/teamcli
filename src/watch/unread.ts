@@ -113,7 +113,7 @@ import { copyHistory, noteAttemptOutcome, takeExactCopyNumber, withdrawAttempt }
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { readState } from '../state.ts';
-import { seatProcessVerdict } from '../launch/identity.ts';
+import { typedPaneProof } from '../launch/identity.ts';
 import { composeMessageLine } from '../settings/message-display.ts';
 import { readScreen } from './screen.ts';
 import { seatDropDir, seatMailDirIn } from '../queue/mail-tree.ts';
@@ -235,12 +235,13 @@ export function wakeRetryDelayMs(tries: number, fastTries: number): number {
  *  attempt. The file is written whole and 0600, like every record beside a message. */
 function wakeTryOf(dropDir: string, id: string): WakeTry | null {
   try {
-    const parsed = JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { tries?: unknown; typed?: unknown; next_at?: unknown };
+    const parsed = JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { tries?: unknown; typed?: unknown; next_at?: unknown; reason?: unknown };
     if (typeof parsed.tries !== 'number' || !Number.isInteger(parsed.tries) || parsed.tries < 0) return null;
     return {
       tries: parsed.tries,
       typed: parsed.typed === true,
       next_at: typeof parsed.next_at === 'string' ? parsed.next_at : '',
+      ...(typeof parsed.reason === 'string' ? { reason: parsed.reason } : {}),
     };
   } catch {
     return null;
@@ -871,53 +872,15 @@ function resendPointerHint(dropDir: string, id: string): { hint: string; copy: n
  * nothing is typed and the message stays due. A source set that binds no owner reader (a test
  * host) keeps today's path.
  */
-function paneStillSeats(scene: RetryScene, seatName: string, pane: string, conversationFallback = false): boolean {
+function paneStillSeats(scene: RetryScene, seatName: string, pane: string, conversationFallback = false, refused?: (why: string) => void): boolean {
   const owner = scene.sources.keyOwner;
   if (owner === undefined) return true;
   try {
-    const held = readState(scene.dir).sessions[scene.session]?.seats[seatName];
-    if (held === undefined || held.pane !== pane || held.launched === undefined) return false;
-    const agents = owner.agents(scene.session);
-    if (agents === null) return false;
-    const onPane = agents.filter((agent) => agent.pane === pane);
-    if (onPane.length !== 1 || onPane[0]?.name !== seatName) return false;
-    if (agents.filter((agent) => agent.name === seatName).length !== 1) return false;
-    const processes = owner.processes(pane, scene.session);
-    if (processes === null || processes.shell !== (held.pane_shell ?? held.launched.shell)) return false;
-    if (seatProcessVerdict(held.launched, processes) !== 'same') return false;
-    if (held.pane_shell === undefined && held.pane_shell_start === undefined) {
-      if (!conversationFallback) return false;
-      // Reusing a workspace on relaunch records a new CLI identity without running create,
-      // where shell anchors are captured. Old workspaces therefore lack both anchors even
-      // after relaunch. Prove their conversation live, never invent a historical shell start.
-      const session = held.agent_session;
-      if (session === undefined || session === '' || onPane[0]?.session !== session) return false;
-      if (agents.filter(agent => agent.session === session).length !== 1) return false;
-    } else {
-      // An incomplete or mismatched anchor is not a legacy record and never takes the fallback.
-      if (held.pane_shell === undefined || held.pane_shell_start === undefined) return false;
-      if (owner.processStart(processes.shell) !== held.pane_shell_start) return false;
-    }
-    // The CLI in front is the recorded one by its birth too, not only its pid: a pid reused under
-    // the same shell is not the launch. A seat launched before the CLI's start time was recorded
-    // keeps the older proof (the pane, the seats on it, the shell pid and its start, a recorded
-    // CLI pid in front) until it is relaunched; `team doctor` names it.
-    const starts = held.launched.cli_start;
-    if (starts === undefined) return true;
-    if (starts.length !== held.launched.cli.length) return false;
-    // Every process in front beside the shell is a recorded one, born when it was recorded: a
-    // surviving helper cannot stand in for a replaced CLI, and a process the record does not name
-    // refuses.
-    const recorded = held.launched.cli;
-    for (const pid of processes.foreground) {
-      if (pid === processes.shell) continue;
-      if (!recorded.includes(pid)) return false;
-    }
-    // The whole recorded set, each born when recorded: the record does not say which pid is the
-    // CLI (herdr's order is the process group's), so any missing member fails closed (`team
-    // doctor` names such a seat: "typed proof incomplete: relaunch").
-    return recorded.every((pid, at) => processes.foreground.includes(pid) && owner.processStart(pid) === starts[at]);
+    const proof = typedPaneProof(readState(scene.dir).sessions[scene.session]?.seats[seatName], seatName, pane, scene.session, owner, conversationFallback);
+    if (!proof.ok) refused?.(proof.why);
+    return proof.ok;
   } catch {
+    refused?.('the recorded pane identity cannot be read');
     return false;
   }
 }
@@ -1460,11 +1423,22 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         // The shared typed path's proof before every key; the pointer's number and the attempt's
         // `emitted` before the first. An adapter pointer also asks the floor and its protection
         // again at every key, under the seat lock this pass holds.
-        const typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, {
-          beforeEachKey: () => paneStillSeats(scene, seat.name, pane, adapterPointer) && (!adapterPointer || (floorActive(scene.root, home) && pointerPermittedNow())),
-          beforeFirstKey: () => (handle === null || handle.emit()) && takePointer(),
+        let refusal: string | undefined;
+        let typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, {
+          beforeEachKey: () => {
+            if (!paneStillSeats(scene, seat.name, pane, adapterPointer, why => { refusal = why; })) return false;
+            if (adapterPointer && !floorActive(scene.root, home)) { refusal = 'the queue floor is no longer active'; return false; }
+            if (adapterPointer && !pointerPermittedNow()) { refusal = 'the typed pointer is no longer permitted'; return false; }
+            return true;
+          },
+          beforeFirstKey: () => {
+            if (handle !== null && !handle.emit()) { refusal = 'the wake attempt could not be emitted'; return false; }
+            if (!takePointer()) { refusal = 'the pointer copy could not be reserved'; return false; }
+            return true;
+          },
           reportLine: true,
         });
+        if (typed !== undefined && refusal !== undefined) typed = { ...typed, reason: `${typed.reason}; ${refusal}` };
         if (typed !== undefined) handle?.settle(typed);
         settleTypedRequest(pointerFor, typed, typedLine !== line, at);
         if (typed?.typed === true) noteTypedLine(dropDir, nowMs);
@@ -1491,6 +1465,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
               tries,
               typed: before?.typed === true || typed.typed,
               next_at: new Date(nowMs + wakeRetryDelayMs(tries, retry?.tries ?? DEFAULT_WATCH_WAKE_TRIES)).toISOString(),
+              reason: typed.reason,
             });
           }
           continue;
