@@ -217,18 +217,21 @@ describe('activation and the first guarded pointer', () => {
   for (const recordedStarts of [false, true]) {
     test(`an unproven ${recordedStarts ? 'relaunched' : 'pre-install'} seat gets a pointer in one pass through the real typed helper`, async () => {
       const at = place();
-      if (!recordedStarts) {
-        const state = readState(at.dir);
-        delete state.sessions[SESSION]!.seats[SEAT]!.launched!.cli_start;
-        writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
-      }
+      // A reused workspace predates create-time shell anchors. Relaunch records the new CLI
+      // identity but does not recreate that workspace, so both ages can lack these fields.
+      const state = readState(at.dir);
+      const held = state.sessions[SESSION]!.seats[SEAT]!;
+      delete held.pane_shell;
+      delete held.pane_shell_start;
+      if (!recordedStarts) delete held.launched!.cli_start;
+      writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
       stamped(at, ID);
       const lines: string[] = [];
       const scene = pass(at, new Date(Date.now() + 1_000), lines);
       let entered = false;
       scene.live.screens[`pane-${SEAT}`] = CLAUDE_IDLE;
       scene.sources.keyOwner = {
-        agents: () => [{ name: SEAT, pane: `pane-${SEAT}` }],
+        agents: () => [{ name: SEAT, pane: `pane-${SEAT}`, session: `session-of-${SEAT}` }],
         processes: () => ({ shell: 111, foreground: [222] }),
         processStart: pid => pid === 111 ? 1_700_000_000_000 : 1_700_000_000_500,
       };
@@ -261,6 +264,40 @@ describe('activation and the first guarded pointer', () => {
       expect(attemptLedger(stampedOf(at), ID).attempts).toBe(1);
     });
   }
+
+  test('conversation continuity never rescues a missing, ambiguous or contradictory proof', async () => {
+    for (const change of [
+      { session: undefined },
+      { session: 'another-conversation' },
+      { session: `session-of-${SEAT}`, duplicate: true },
+      { session: `session-of-${SEAT}`, shell: 333 },
+      { session: `session-of-${SEAT}`, cliStart: 1_700_000_009_999 },
+      { session: `session-of-${SEAT}`, anchor: 'mismatched' },
+      { session: `session-of-${SEAT}`, anchor: 'incomplete' },
+    ]) {
+      const at = place();
+      const state = readState(at.dir);
+      const held = state.sessions[SESSION]!.seats[SEAT]!;
+      if (change.anchor === undefined) delete held.pane_shell;
+      if (change.anchor !== 'mismatched') delete held.pane_shell_start;
+      else held.pane_shell_start = 1_700_000_009_999;
+      writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
+      stamped(at, ID);
+      const lines: string[] = [];
+      const scene = pass(at, new Date(Date.now() + 1_000), lines);
+      scene.sources.keyOwner = {
+        agents: () => [
+          { name: SEAT, pane: `pane-${SEAT}`, ...(change.session === undefined ? {} : { session: change.session }) },
+          ...(change.duplicate ? [{ name: 'another-seat', pane: 'another-pane', session: change.session }] : []),
+        ],
+        processes: () => ({ shell: change.shell ?? 111, foreground: [222] }),
+        processStart: pid => pid === 111 ? 1_700_000_000_000 : change.cliStart ?? 1_700_000_000_500,
+      };
+      await wakeUnreadDrops(scene, { unreadAfter: 600 });
+      expect(lines).toEqual([]);
+      expect(attemptLedger(stampedOf(at), ID).attempts).toBe(0);
+    }
+  });
 
   function daemonAt(at: Place): void {
     const now = new Date().toISOString();

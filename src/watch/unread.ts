@@ -863,27 +863,41 @@ function resendPointerHint(dropDir: string, id: string): { hint: string; copy: n
 /**
  * The positive proof the shared typed path asks immediately before every key, under the seat lock
  * (every typed wake the watch types, re-sends included): the seat's recorded pane is this pane;
- * herdr's agent list, read fresh, names this seat on it and no other seat; the pane's live
+ * the terminal host's agent list, read fresh, names this seat on it and no other seat; the pane's live
  * processes, read fresh, are the recorded launch (its shell pid and that shell's start time, a
- * recorded CLI pid in front and that CLI's start time). Any mismatch or unreadable value is no proof: nothing is typed and
- * the message stays due. A source set that binds no owner reader (a test host) keeps today's path.
+ * recorded CLI pid in front and that CLI's start time). A Claude adapter pointer for a
+ * workspace predating shell anchors instead needs its uniquely reported recorded conversation
+ * as well as that launched shell and CLI identity. Any mismatch or unreadable value is no proof:
+ * nothing is typed and the message stays due. A source set that binds no owner reader (a test
+ * host) keeps today's path.
  */
-function paneStillSeats(scene: RetryScene, seatName: string, pane: string): boolean {
+function paneStillSeats(scene: RetryScene, seatName: string, pane: string, conversationFallback = false): boolean {
   const owner = scene.sources.keyOwner;
   if (owner === undefined) return true;
   try {
     const held = readState(scene.dir).sessions[scene.session]?.seats[seatName];
     if (held === undefined || held.pane !== pane || held.launched === undefined) return false;
-    if (held.pane_shell === undefined || held.pane_shell_start === undefined) return false;
     const agents = owner.agents(scene.session);
     if (agents === null) return false;
     const onPane = agents.filter((agent) => agent.pane === pane);
     if (onPane.length !== 1 || onPane[0]?.name !== seatName) return false;
     if (agents.filter((agent) => agent.name === seatName).length !== 1) return false;
     const processes = owner.processes(pane, scene.session);
-    if (processes === null || processes.shell !== held.pane_shell) return false;
+    if (processes === null || processes.shell !== (held.pane_shell ?? held.launched.shell)) return false;
     if (seatProcessVerdict(held.launched, processes) !== 'same') return false;
-    if (owner.processStart(processes.shell) !== held.pane_shell_start) return false;
+    if (held.pane_shell === undefined && held.pane_shell_start === undefined) {
+      if (!conversationFallback) return false;
+      // Reusing a workspace on relaunch records a new CLI identity without running create,
+      // where shell anchors are captured. Old workspaces therefore lack both anchors even
+      // after relaunch. Prove their conversation live, never invent a historical shell start.
+      const session = held.agent_session;
+      if (session === undefined || session === '' || onPane[0]?.session !== session) return false;
+      if (agents.filter(agent => agent.session === session).length !== 1) return false;
+    } else {
+      // An incomplete or mismatched anchor is not a legacy record and never takes the fallback.
+      if (held.pane_shell === undefined || held.pane_shell_start === undefined) return false;
+      if (owner.processStart(processes.shell) !== held.pane_shell_start) return false;
+    }
     // The CLI in front is the recorded one by its birth too, not only its pid: a pid reused under
     // the same shell is not the launch. A seat launched before the CLI's start time was recorded
     // keeps the older proof (the pane, the seats on it, the shell pid and its start, a recorded
@@ -1447,7 +1461,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         // `emitted` before the first. An adapter pointer also asks the floor and its protection
         // again at every key, under the seat lock this pass holds.
         const typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, {
-          beforeEachKey: () => paneStillSeats(scene, seat.name, pane) && (!adapterPointer || (floorActive(scene.root, home) && pointerPermittedNow())),
+          beforeEachKey: () => paneStillSeats(scene, seat.name, pane, adapterPointer) && (!adapterPointer || (floorActive(scene.root, home) && pointerPermittedNow())),
           beforeFirstKey: () => (handle === null || handle.emit()) && takePointer(),
           reportLine: true,
         });
