@@ -12,6 +12,8 @@ import { liveFloorActors } from '../queue/floor-actors.ts';
 import { readerSwitch, seatQueueCheck, setReaderSwitch, type SeatBinding } from '../queue/reader.ts';
 import { buildIdentity } from '../version.ts';
 import { seatDropDir } from '../queue/mail-tree.ts';
+import { channelUnproven } from '../queue/resend.ts';
+import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team queues status
        team queues activate
@@ -21,7 +23,8 @@ export const USAGE = `Usage: team queues status
 The per-seat delivery queues of this checkout (rfc-event-comms, steps E6-E7).
 status      the root's floor state, the reader switch, and each seat queue's check.
 activate    turns on at-least-once delivery for this team, once every live TeamCLI process of
-            the team runs this build: from then on every message is delivered until its
+            the team runs this build and every Claude Code seat has a proven channel:
+            from then on every message is delivered until its
             recipient acknowledges it (team ack), and every copy names its message and its
             delivery number; any copy after the first says it is a re-send. If an older TeamCLI
             process appears later, the daemon rolls the team back to dark on its next pass.
@@ -96,6 +99,24 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
     return 1;
   }
   if (verb === 'activate') {
+    // Check before activate creates its folder, takes a lock or recovers a cut-off publication:
+    // a refused activation must leave the root and the machine folder exactly as they were.
+    const key = messageKeyState(home);
+    const nowMs = (sources.now?.() ?? new Date()).getTime();
+    const unproven = loaded.team.seats.filter(seat => seat.cli === 'claude-code').flatMap(seat => {
+      const session = loaded.team.session;
+      const why = key.kind !== 'key' ? 'no message key' : channelUnproven({
+        dropDir: seatDropDir(root, session, seat.name), root, session, seat: seat.name,
+        context: { to: seat.name, root, session, ...(lead === undefined ? {} : { lead }) },
+        key: key.key, nowMs,
+      });
+      return why === null ? [] : [{ seat: seat.name, why }];
+    });
+    if (unproven.length > 0) {
+      out.stderr('team queues: activation refused: Claude Code seats have no proven channel\n');
+      for (const seat of unproven) out.stderr(`  ${seat.seat}: ${seat.why}\n`);
+      return 1;
+    }
     const outcome = activate(root, {
       home,
       build: buildIdentity().build,
