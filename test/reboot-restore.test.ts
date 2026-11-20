@@ -2,8 +2,9 @@
 // terminal host, no process table and no registry of the machine's own.
 //
 // 1. `team up --rebind` on a pane the host restored: the recorded pids cannot survive a restart,
-//    so the proof is the record's launch predating this boot plus the pane holding exactly the
-//    recorded conversation and the declared CLI (`rebootRebindProof`).
+//    so the proof is the pane being a later start than the recorded launch plus the pane holding
+//    exactly the recorded conversation, reported by it alone, and the declared CLI
+//    (`rebootRebindProof`).
 // 2. A workspace carrying a declared seat's label with no record naming it is offered to the
 //    sweep, which closes it only from fresh readings (`labelledLeftovers`).
 // 3. A seat that stays is repainted with the model its pane shows (`liveLineOf`, the plan's
@@ -30,6 +31,7 @@ function input(over: Partial<RebootRebindInput> = {}): RebootRebindInput {
     processes: { shell: 700, foreground: [800] },
     foreground: ['claude'],
     liveSession: SES,
+    sessionReports: 1,
     startOf: (pid) => (pid === 1 ? BOOT : pid === 700 ? AFTER : null),
     ...over,
   };
@@ -38,7 +40,7 @@ function input(over: Partial<RebootRebindInput> = {}): RebootRebindInput {
 describe('rebind across a machine restart', () => {
   test('a restored pane with the recorded conversation, a pre-boot launch and the CLI in front is the seat', () => {
     const proof = rebootRebindProof(input());
-    expect(proof).toEqual({ ok: true, launched: { shell: 700, cli: [800] }, shell: 700, shellStart: AFTER, boot: BOOT });
+    expect(proof).toEqual({ ok: true, launched: { shell: 700, cli: [800] }, shell: 700, shellStart: AFTER });
   });
 
   test('the recorded process still in front is not this proof (the plain rebind takes it)', () => {
@@ -59,19 +61,34 @@ describe('rebind across a machine restart', () => {
     expect(rebootRebindProof(input({ foreground: null })).ok).toBe(false);
   });
 
-  test('a launch from this boot is refused: only a restart explains the lost pids', () => {
-    const proof = rebootRebindProof(input({ paneShellStart: BOOT + 60_000 }));
-    expect(proof.ok).toBe(false);
-    if (!proof.ok) expect(proof.why).toContain('launched in this boot');
-    // Within the clock's granularity of the boot is not before it either.
-    expect(rebootRebindProof(input({ paneShellStart: BOOT - BOOT_SKEW_MS + 1 })).ok).toBe(false);
+  test('a session restarted within this boot is the seat too: the live shell is a later start than the record', () => {
+    expect(rebootRebindProof(input({ paneShellStart: BOOT + 60_000 })).ok).toBe(true);
   });
 
-  test('no recorded shell start, an unreadable boot, or a live shell older than the boot is refused', () => {
+  test('a live shell no later than the recorded launch is refused, within the clock granularity too', () => {
+    const proof = rebootRebindProof(input({ paneShellStart: AFTER }));
+    expect(proof.ok).toBe(false);
+    if (!proof.ok) expect(proof.why).toContain('not a later start than the recorded launch');
+    expect(rebootRebindProof(input({ paneShellStart: AFTER - BOOT_SKEW_MS + 1 })).ok).toBe(false);
+    // The same shell pid, read again with its recorded start: an in-place CLI change is not a restart.
+    expect(rebootRebindProof(input({ processes: { shell: 100, foreground: [800] }, startOf: (pid) => (pid === 100 ? BEFORE : null) })).ok).toBe(false);
+  });
+
+  test('a record with no shell start is dated by its newest recorded CLI start, and refused with neither', () => {
     expect(rebootRebindProof(input({ paneShellStart: undefined })).ok).toBe(false);
-    expect(rebootRebindProof(input({ startOf: (pid) => (pid === 700 ? AFTER : null) })).ok).toBe(false);
-    expect(rebootRebindProof(input({ startOf: (pid) => (pid === 1 ? BOOT : pid === 700 ? BEFORE : null) })).ok).toBe(false);
-    expect(rebootRebindProof(input({ startOf: (pid) => (pid === 1 ? BOOT : null) })).ok).toBe(false);
+    expect(rebootRebindProof(input({ paneShellStart: undefined, launched: { shell: 100, cli: [200, 201], cli_start: [BEFORE, BEFORE + 1_000] } })).ok).toBe(true);
+    expect(rebootRebindProof(input({ paneShellStart: undefined, launched: { shell: 100, cli: [200], cli_start: [AFTER] } })).ok).toBe(false);
+  });
+
+  test('an unreadable live shell start is refused', () => {
+    expect(rebootRebindProof(input({ startOf: () => null })).ok).toBe(false);
+  });
+
+  test('a conversation another pane also reports is refused', () => {
+    const proof = rebootRebindProof(input({ sessionReports: 2 }));
+    expect(proof.ok).toBe(false);
+    if (!proof.ok) expect(proof.why).toContain('not reported by this pane alone');
+    expect(rebootRebindProof(input({ sessionReports: 0 })).ok).toBe(false);
   });
 
   test('a pane back at its bare shell is not a restored seat', () => {

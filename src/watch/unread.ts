@@ -107,7 +107,8 @@ import { MailPass, STUCK_MARKER } from './mail-pass.ts';
 import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
 import { climbUnreadLead } from './status-events.ts';
 import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutcome } from '../queue/wake-attempt.ts';
-import { floorPass } from '../queue/floor.ts';
+import { deactivate, floorPass } from '../queue/floor.ts';
+import { clearStranded, noteReachedPointer, noteStrandedPointer, strandedSeats } from '../queue/stranded.ts';
 import { channelOwnsSeat, channelUnproven, claudeAdapterRoot, overdueChannelRecords, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
 import { copyHistory, noteAttemptOutcome, takeExactCopyNumber, withdrawAttempt } from '../queue/handover.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
@@ -917,6 +918,23 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   // The activation floor (rfc-event-comms §3, E6): the hosted watch runs the root's floor pass —
   // activation once every live actor is at the floor, and the legacy-actor watch after it.
   floorPass(scene.root, home, scene.now.getTime(), () => liveFloorActors(scene.root, home), null);
+  // The net under the restart rebind (src/queue/stranded.ts): a seat whose typed pointer the pane
+  // ownership proof has kept refusing is reached by nothing on an active root, and by dark
+  // delivery once the root is rolled back. The rollback is said, never silent.
+  const stranded = strandedSeats(scene.root, scene.now.getTime());
+  if (stranded.length > 0) {
+    if (!floorActive(scene.root, home)) clearStranded(scene.root);
+    else {
+      const names = stranded.map(one => `${one.seat} (${one.why}, since ${new Date(one.since).toISOString()})`).join(', ');
+      const rolled = deactivate(scene.root, home);
+      if (rolled.kind === 'dark') {
+        clearStranded(scene.root);
+        scene.say(`the root was rolled back to dark: its typed pointers kept failing the pane ownership proof for ${names}; dark delivery reaches them again; activate it again once \`team doctor\` shows them proven`, true);
+      } else {
+        scene.say(`the root could not be rolled back to dark (${rolled.kind === 'failed' ? rolled.why : 'the activation lock is busy'}) for ${names}; tried again next pass`, true);
+      }
+    }
+  }
   // The receiving team's `message-display` template is the same for every seat this pass wakes.
   const nowMs = scene.now.getTime();
   // The first history line per message id names the leg that carried it. Read once per pass, on
@@ -1424,9 +1442,10 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         // `emitted` before the first. An adapter pointer also asks the floor and its protection
         // again at every key, under the seat lock this pass holds.
         let refusal: string | undefined;
+        let ownership: string | undefined;
         let typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, {
           beforeEachKey: () => {
-            if (!paneStillSeats(scene, seat.name, pane, adapterPointer, why => { refusal = why; })) return false;
+            if (!paneStillSeats(scene, seat.name, pane, adapterPointer, why => { refusal = why; ownership = why; })) return false;
             if (adapterPointer && !floorActive(scene.root, home)) { refusal = 'the queue floor is no longer active'; return false; }
             if (adapterPointer && !pointerPermittedNow()) { refusal = 'the typed pointer is no longer permitted'; return false; }
             return true;
@@ -1439,6 +1458,10 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           reportLine: true,
         });
         if (typed !== undefined && refusal !== undefined) typed = { ...typed, reason: `${typed.reason}; ${refusal}` };
+        if (adapterPointer && typed !== undefined) {
+          if (ownership !== undefined && !typed.typed) noteStrandedPointer(scene.root, seat.name, nowMs, ownership);
+          else if (typed.typed) noteReachedPointer(scene.root, seat.name);
+        }
         if (typed !== undefined) handle?.settle(typed);
         settleTypedRequest(pointerFor, typed, typedLine !== line, at);
         if (typed?.typed === true) noteTypedLine(dropDir, nowMs);

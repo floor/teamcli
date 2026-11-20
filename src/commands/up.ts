@@ -122,7 +122,7 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent, recordProvenAgentAddress, recordProvenSeatConversation } from '../registry/agents.ts';
-import { proveSeatRebind, runSeatRebind } from './up-rebind.ts';
+import { proveSeatRebind, rebindRestartedSeats, runSeatRebind } from './up-rebind.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
@@ -4293,6 +4293,10 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     }
   };
   try {
+    // A restart (the machine's, or the terminal host's session) carried seats across with new
+    // pids: each one the restart proof ties is rebound first, before the plan reads its pane, so
+    // it is reachable again. A restore's kept panes are included: the rebind touches no pane.
+    if (state === 'running') rebindRestartedSeats({ root, dir, session, seats: team.seats, sources, actor: callerLabel(caller) });
     refreshAddresses();
     // A restore whose daemon already hosts this session's watch drops a dead pane-watch record.
     // The pane and the pid go; one audit line names the pane. A live or fresh record stays.

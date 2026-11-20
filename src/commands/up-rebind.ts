@@ -58,8 +58,9 @@ export function proveSeatRebind(input: {
   // Working is not a refusal: no input, exit, close or launch is being attempted.
   let reboot: Extract<RebootRebind, { ok: true }> | null = null;
   if (seatProcessVerdict(held.launched, measured) !== 'same') {
-    // A machine restart leaves no recorded pid alive. The restored pane is the seat only when the
-    // record's launch predates this boot and the pane holds exactly the recorded conversation.
+    // A restart (of the machine, or of the terminal host's session) leaves no recorded pid in
+    // front. The restored pane is the seat only when it is a later start than the recorded launch
+    // and holds exactly the recorded conversation, reported by no other pane.
     const proof = rebootRebindProof({
       cli: seat.cli,
       launched: held.launched,
@@ -68,6 +69,7 @@ export function proveSeatRebind(input: {
       processes: measured,
       foreground: launch.foreground(session, held.pane),
       liveSession: conversation,
+      sessionReports: (live ?? []).filter((one) => one.session === conversation).length,
       startOf: launch.processStartOf ?? processStartOf,
     });
     if (!proof.ok) return fail(proof.why);
@@ -101,14 +103,86 @@ export function proveSeatRebind(input: {
   return { ok: true as const, agent, held, conversation, address: socketOk && seat.cli === 'claude-code' ? address : null, reboot, unnamed };
 }
 
+type SeatRebindProof = Extract<ReturnType<typeof proveSeatRebind>, { ok: true }>;
+
+/** Whether a proven rebind changes anything the records hold. */
+function rebindChanges(proof: SeatRebindProof): boolean {
+  return proof.reboot !== null || proof.unnamed || proof.conversation !== proof.agent.reach.agent_session || proof.address !== proof.agent.reach.address;
+}
+
+/** Writes a proven rebind through the fenced dual-store writers, then gives an unnamed pane its
+ *  name back. The caller holds the session's run lock. `written: false` means a snapshot moved
+ *  and nothing was written. */
+function applySeatRebind(proof: SeatRebindProof, input: { dir: string; session: string; seat: Seat; sources: UpSources }): { written: boolean; named: string } {
+  const { dir, session, seat, sources } = input;
+  const written = proof.reboot !== null
+    ? recordRebootRebind(sources.home, proof.agent, dir, proof.held, {
+      launched: proof.reboot.launched, paneShell: proof.reboot.shell, paneShellStart: proof.reboot.shellStart, address: proof.address,
+    })
+    : proof.address !== null && recordProvenSeatConversation(sources.home, proof.agent, dir, proof.held, proof.conversation, proof.address);
+  if (!written) return { written: false, named: '' };
+  // The host cleared the pane's name: it is given back once the record names the pane, so a
+  // send and the next `up` find the seat by it. A failed rename is said; the record stands.
+  if (!proof.unnamed) return { written: true, named: '' };
+  const launch = sources.launch;
+  return {
+    written: true,
+    named: launch !== undefined && launch.renameAgent(session, proof.held.pane as string, seat.name)
+      ? '; its pane is named back'
+      : '; its pane could not be named back (herdr agent rename)',
+  };
+}
+
+/**
+ * `team up`'s own re-anchor, run under the session's run lock before anything is planned or
+ * launched (the daemon's boot restore and its attach watch run `team up` too): every running,
+ * declared seat whose recorded launch is no longer in front of its pane is rebound when the
+ * restart proof holds for it, so a seat a restart carried across is reachable again with nobody
+ * typing. Only the restart proof writes here; a seat it refuses is said once and left as it is.
+ * No pane is typed into, stopped or launched.
+ */
+export function rebindRestartedSeats(input: {
+  root: string; dir: string; session: string; seats: readonly Seat[]; sources: UpSources; actor: string;
+}): string[] {
+  const { root, dir, session, sources } = input;
+  const launch = sources.launch;
+  if (launch?.processInfo === undefined) return [];
+  const notes: string[] = [];
+  const state = readState(dir).sessions[session]?.seats ?? {};
+  for (const seat of input.seats) {
+    if (seat.human === true || seat.stopped === true) continue;
+    const held = state[seat.name];
+    if (held?.pane === undefined || held.launched === undefined || !held.agent_session) continue;
+    evictHerdrPaneProcessInfo(held.pane, session === 'default' ? undefined : session);
+    if (seatProcessVerdict(held.launched, launch.processInfo(session, held.pane)) !== 'replaced') continue;
+    let line: string;
+    try {
+      const proof = proveSeatRebind({ root, dir, session, seat, sources });
+      if (!proof.ok) line = `${seat.name}: not rebound after a restart: ${proof.why}; left as it is`;
+      else if (proof.reboot === null) continue;
+      else {
+        const applied = applySeatRebind(proof, { dir, session, seat, sources });
+        line = applied.written
+          ? `${seat.name}: rebound to the live conversation on its recorded pane after a restart (its pane is a later start than the recorded launch)${applied.named}; no process was stopped or launched`
+          : `${seat.name}: its state or registry snapshot changed; not rebound after a restart`;
+      }
+    } catch (error) {
+      line = `${seat.name}: could not be rebound after a restart (${error instanceof Error ? error.message : String(error)})`;
+    }
+    logLine(dir, 'up', input.actor, line, sources.now?.() ?? new Date());
+    notes.push(line);
+  }
+  return notes;
+}
+
 export function runSeatRebind(input: {
   root: string; dir: string; session: string; team: TeamFile; seat: Seat; sources: UpSources;
   dry: boolean; json: boolean; io: Io; actor: string;
 }): number {
-  const { root, dir, session, seat, sources, dry, json, io } = input;
-  const lock = dry ? null : acquireRunLock(dir, session);
+  const { seat, sources, dry, json, io } = input;
+  const lock = dry ? null : acquireRunLock(input.dir, input.session);
   if (lock !== null && !('release' in lock)) {
-    refuse(io, json, 'up', { id: 'up.run-lock', message: runLockText(lock.held, session, dir, lock.startedAt), repair: null });
+    refuse(io, json, 'up', { id: 'up.run-lock', message: runLockText(lock.held, input.session, input.dir, lock.startedAt), repair: null });
     return 1;
   }
   try {
@@ -117,33 +191,21 @@ export function runSeatRebind(input: {
       refuse(io, json, 'up', { id: 'up.rebind-proof', message: `${seat.name}: ${proof.why}; nothing was changed`, repair: null });
       return 1;
     }
-    const changed = proof.reboot !== null || proof.unnamed || proof.conversation !== proof.agent.reach.agent_session || proof.address !== proof.agent.reach.address;
-    const written = dry || !changed ? true : proof.reboot !== null
-      ? recordRebootRebind(sources.home, proof.agent, dir, proof.held, {
-        launched: proof.reboot.launched, paneShell: proof.reboot.shell, paneShellStart: proof.reboot.shellStart, address: proof.address,
-      })
-      : proof.address !== null && recordProvenSeatConversation(sources.home, proof.agent, dir, proof.held, proof.conversation, proof.address);
-    if (!written) {
-      refuse(io, json, 'up', { id: 'up.rebind-changed', message: `${seat.name}: its state or registry snapshot changed; nothing was rebound`, repair: null });
-      return 1;
-    }
-    // The host cleared the pane's name: it is given back once the record names the pane, so a
-    // send and the next `up` find the seat by it. A failed rename is said; the record stands.
+    const changed = rebindChanges(proof);
     let named = '';
-    if (proof.unnamed) {
-      if (dry) named = '; would name its pane back';
-      else {
-        const launch = sources.launch;
-        named = launch !== undefined && launch.renameAgent(session, proof.held.pane as string, seat.name)
-          ? '; its pane is named back'
-          : '; its pane could not be named back (herdr agent rename)';
+    if (!dry && changed) {
+      const applied = applySeatRebind(proof, input);
+      if (!applied.written) {
+        refuse(io, json, 'up', { id: 'up.rebind-changed', message: `${seat.name}: its state or registry snapshot changed; nothing was rebound`, repair: null });
+        return 1;
       }
-    }
-    const across = proof.reboot !== null ? ' across the machine restart (its launch predates this boot)' : '';
+      named = applied.named;
+    } else if (dry && proof.unnamed) named = '; would name its pane back';
+    const across = proof.reboot !== null ? ' across a restart (its pane is a later start than the recorded launch)' : '';
     const detail = `${seat.name}: ${dry ? changed ? 'would rebind' : 'already bound' : changed ? 'rebound' : 'already bound'} to the live conversation on its recorded pane${across}${named}; no process was stopped or launched`;
-    if (!dry && changed) logLine(dir, 'up', input.actor, detail, sources.now?.() ?? new Date());
+    if (!dry && changed) logLine(input.dir, 'up', input.actor, detail, sources.now?.() ?? new Date());
     if (json) writeJson(io, 'team.up', { format: 1, dry_run: dry, status: dry ? 'dry-run' : 'ready',
-      action_summary: detail, project: input.team.project, session, seats: [seat.name],
+      action_summary: detail, project: input.team.project, session: input.session, seats: [seat.name],
       plan: [], notes: [detail], rebind: { seat: seat.name, changed, applied: !dry && changed, ...(proof.reboot !== null ? { reboot: true } : {}) } });
     else io.stdout(`${detail}\n`);
     return 0;
