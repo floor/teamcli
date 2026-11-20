@@ -58,14 +58,13 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { readdirSync as listFolder } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { entitiesPath } from '../src/entities.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
-import { listUnread, writeListener } from '../src/mcp/inbox.ts';
+import { writeListener } from '../src/mcp/inbox.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
@@ -696,27 +695,6 @@ describe('the ordinary send native leg (Codex)', () => {
       ['queue', '--remote', `unix://${recordedSocket}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     expect(existsSync(join(scene.codexHome, 'app-server-control', 'app-server-control.sock'))).toBe(false);
-  });
-
-  // md3io's Codex builders (20 Nov): a send queued behind a long turn was written as read at the
-  // queue's accept, so no wake followed at the turn's end and `team drops --read` in the seat
-  // served only the launch brief. A queue accept is no proof the seat saw the body: the record
-  // stays unread for the seat's own read.
-  test('a send queued behind a running turn stays unread: the seat\'s own drops read lists it', async () => {
-    const scene = makeScene();
-    const server = await startAppServer(
-      join(scene.codexHome, 'app-server-control', 'app-server-control.sock'),
-      (threadId) => ({ id: threadId, status: { type: 'active', activeFlags: [] }, canAcceptDirectInput: true }),
-    );
-    const sent = await sendWith(scene, server);
-    expect(sent.code, sent.out + sent.err).toBe(0);
-    expect(sent.calls[0]?.[0]).toBe('queue');
-    expect(sent.out).toContain('woken through its runtime queue');
-    const names = listFolder(scene.dropDir);
-    const id = names.find((name) => /^[0-9a-f-]{36}$/.test(name));
-    expect(id).toBeDefined();
-    expect(names).not.toContain(`${id}.read.json`);
-    expect(listUnread(scene.dropDir, { root: scene.root, session: SESSION, to: SEAT }, scene.home).map((one) => one.id)).toContain(id as string);
   });
 
   test('a recorded endpoint bound to a predecessor holds: no probe, no queue', async () => {

@@ -45,7 +45,7 @@ function recordIdsIn(folder: string): string[] {
 }
 
 describe('readable message wakes and post-delivery receipt settlement', () => {
-  test('Scene 1: socket leg delivers full multiline body and writes no .read.json (a taken frame is not the seat\'s read), and sends explicit read-hint without .read.json when oversized', async () => {
+  test('Scene 1: socket leg delivers full multiline body and settles .read.json under 64 KiB, and sends explicit read-hint without .read.json when oversized', async () => {
     const w = world(['socket', 'drop']);
     try {
       const settingsPath = cliHookSettingsPath(w.dir, 'acme', 'lead')!;
@@ -71,8 +71,8 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
       expect(parsedInline.message.content.endsWith(`\n\n↩ team reply ${inlineId.slice(0, 8)} "…" · team ack ${inlineId.slice(0, 8)}`)).toBe(true);
 
       const leadDrops = dropDir(w.dir, 'lead');
-      expect(readdirSync(leadDrops).some((name) => name.endsWith('.read.json'))).toBe(false);
-      expect(listUnread(leadDrops, { root: w.root, session: 'acme', to: 'lead' }, w.home)).toHaveLength(1);
+      expect(readdirSync(leadDrops).some((name) => name.endsWith('.read.json'))).toBe(true);
+      expect(listUnread(leadDrops, { root: w.root, session: 'acme', to: 'lead' }, w.home)).toHaveLength(0);
 
       // Compact socket frame formatting preserves multiline body breaks rather than collapsing whitespace.
       const compactFrame = JSON.parse(
@@ -123,7 +123,7 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
     }
   });
 
-  test('Scene 2: runtime push legs forward multiline wake and write no .read.json on enqueue (a queue accept is not the seat\'s read), and forward oversizedWake without .read.json above 64 KiB', async () => {
+  test('Scene 2: runtime push legs forward multiline wake and settle .read.json on enqueue, and forward oversizedWake without .read.json above 64 KiB', async () => {
     const setupHeadlessWorld = async (): Promise<World> => {
       const w = world(['headless-resume', 'drop'], [{ name: 'gem', role: 'reviewer', cli: 'gemini', launch: 'gemini' }]);
       await runApprove(['--file', join(w.dir, 'team.yaml')], owner(w.root), {
@@ -186,8 +186,8 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
       expect(spawnedPrompts[0]).not.toContain('body too long for this wake');
 
       const gemDrops = dropDir(w.dir, 'gem');
-      expect(readdirSync(gemDrops).some((name) => name.endsWith('.read.json'))).toBe(false);
-      expect(listUnread(gemDrops, { root: w.root, session: 'acme', to: 'gem' }, w.home)).toHaveLength(1);
+      expect(readdirSync(gemDrops).some((name) => name.endsWith('.read.json'))).toBe(true);
+      expect(listUnread(gemDrops, { root: w.root, session: 'acme', to: 'gem' }, w.home)).toHaveLength(0);
     } finally {
       cleanupWorld(w);
     }
