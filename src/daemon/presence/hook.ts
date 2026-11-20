@@ -27,6 +27,14 @@ import type { Io } from '../../io.ts';
  *  carried into the record as `raw`, so the log keeps the adapter's own vocabulary. */
 const PERMISSION_PROMPT = 'permission_prompt';
 
+/** The session-start filter's word. Claude Code's SessionStart hook names its `source`; only a
+ *  start that leaves the CLI at its prompt (`startup`, `resume`, `clear`) stages the launch's
+ *  first `turn-end`. `compact` can fire inside a running turn, so it, and any other or missing
+ *  source, declines. Without this a fresh incarnation that has not taken a turn has no projection
+ *  of its own, and the watch holds it (and its first message) behind its predecessor's. */
+const SESSION_START = 'session-start';
+const AT_PROMPT_SOURCES = new Set(['startup', 'resume', 'clear']);
+
 type Parsed = {
   dir: string;
   session: string;
@@ -35,9 +43,11 @@ type Parsed = {
   event: PresenceEvent;
   /** Present only on the notification command: the payload must also match its fields. */
   notification?: typeof PERMISSION_PROMPT;
+  /** Present only on the session-start command: the payload must name an at-prompt start. */
+  start?: typeof SESSION_START;
 };
 
-const FLAGS = new Set(['--dir', '--session', '--seat', '--binding', '--event', '--notification']);
+const FLAGS = new Set(['--dir', '--session', '--seat', '--binding', '--event', '--notification', '--start']);
 
 function parse(argv: readonly string[]): Parsed | null {
   const found = new Map<string, string>();
@@ -53,6 +63,7 @@ function parse(argv: readonly string[]): Parsed | null {
   const binding = found.get('--binding');
   const event = found.get('--event');
   const notification = found.get('--notification');
+  const start = found.get('--start');
   if (dir === undefined || dir === '' || session === undefined || session === '') return null;
   if (seat === undefined || seat === '') return null;
   if (binding === undefined || !isPresenceBinding(binding)) return null;
@@ -62,7 +73,13 @@ function parse(argv: readonly string[]): Parsed | null {
   if (notification !== undefined && notification !== PERMISSION_PROMPT) return null;
   if (notification !== undefined && event !== 'human-wait') return null;
   if (notification === undefined && event === 'human-wait') return null;
-  return { dir, session, seat, binding, event, ...(notification !== undefined ? { notification } : {}) };
+  // The session-start filter only ever stages the at-prompt word, and never with a notification.
+  if (start !== undefined && (start !== SESSION_START || event !== 'turn-end' || notification !== undefined)) return null;
+  return {
+    dir, session, seat, binding, event,
+    ...(notification !== undefined ? { notification } : {}),
+    ...(start !== undefined ? { start } : {}),
+  };
 }
 
 /** The exact payload the runtime measured on this adapter: a JSON object naming the Notification
@@ -78,6 +95,21 @@ function isPermissionPromptPayload(text: string): boolean {
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return false;
   const record = payload as Record<string, unknown>;
   return record.hook_event_name === 'Notification' && record.notification_type === PERMISSION_PROMPT;
+}
+
+/** A SessionStart payload whose source leaves the CLI at its prompt; every other shape declines. */
+function isAtPromptStartPayload(text: string): boolean {
+  if (text.length > 65_536) return false;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  const record = payload as Record<string, unknown>;
+  return record.hook_event_name === 'SessionStart'
+    && typeof record.source === 'string' && AT_PROMPT_SOURCES.has(record.source);
 }
 
 /** The CLI's payload buffer. A terminal never carries one, so the command declines without
@@ -112,6 +144,7 @@ export default function run(argv: readonly string[], readInput: () => string = r
   if (native) stageNativeHook(identity, input(), io!, nativeHome);
   // exit: team.presence-hook-ignored
   if (parsed.notification !== undefined && !isPermissionPromptPayload(input())) return 0;
+  if (parsed.start !== undefined && !isAtPromptStartPayload(input())) return 0;
   const staged = stagePresenceRecord(parsed.dir, {
     session: parsed.session,
     seat: parsed.seat,
@@ -119,6 +152,7 @@ export default function run(argv: readonly string[], readInput: () => string = r
     source: 'runtime-hook',
     event: parsed.event,
     ...(parsed.notification !== undefined ? { raw: parsed.notification } : {}),
+    ...(parsed.start !== undefined ? { raw: parsed.start } : {}),
   });
   // exit: team.presence-hook-staged
   // exit: team.presence-hook-refused
