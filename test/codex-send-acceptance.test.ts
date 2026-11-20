@@ -54,6 +54,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -65,6 +66,8 @@ import { runSend, type SendHost } from '../src/commands/send.ts';
 import { entitiesPath } from '../src/entities.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
 import { writeListener } from '../src/mcp/inbox.ts';
+import { listDrops } from '../src/commands/drops.ts';
+import { messageKeyOf } from '../src/store/keys.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
@@ -787,6 +790,32 @@ describe('the ordinary send native leg (Codex)', () => {
     );
     expect(server.requests).toEqual([]);
     expect(queueCalls(scene.queueLog)).toEqual([]);
+  });
+
+  test('an active thread takes the body on its queue: delivered, never the seat\'s read, and the seat\'s own drop read still lists it', async () => {
+    // md3io, 2026-11-20: a Codex seat mid-turn, its queue accepted the body on purpose, and the
+    // send logged `delivered (read) (native queue receipt)` off a receipt the carrier itself wrote.
+    const scene = makeScene();
+    const server = await startAppServer(
+      join(scene.codexHome, 'app-server-control', 'app-server-control.sock'),
+      (threadId) => ({ id: threadId, status: { type: 'active', activeFlags: [] }, canAcceptDirectInput: true }),
+    );
+    const sent = await sendWith(scene, server);
+    // One `codex queue` call carried the whole body (the recorder logs its lines one per row).
+    expect(sent.calls[0]!.slice(0, 1)).toEqual(['queue']);
+    expect(sent.calls.filter((call) => call[0] === 'queue')).toHaveLength(1);
+    expect(sent.out).toContain(`${SEAT}: sent (unconfirmed) (native,`);
+    expect(sent.out).not.toContain('delivered (read)');
+    const names = readdirSync(scene.dropDir);
+    const id = names.find((name) => /^[0-9a-f-]{36}$/.test(name))!;
+    expect(names).toContain(`${id}.delivered.json`);
+    expect(names).not.toContain(`${id}.read.json`);
+    const key = messageKeyOf(scene.home);
+    const listed = listDrops(scene.dropDir, key, { root: scene.root, session: SESSION, to: SEAT });
+    expect(listed.kind === 'ok' ? listed.rows.map((row) => row.id) : listed).toEqual([id]);
+    const history = readHistory('acme', scene.root, scene.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) expect(history.entries.some((entry) => entry.id === id && entry.outcome === 'delivered (read)')).toBe(false);
   });
 
   /** One ordinary send whose native leg must hold before contacting any endpoint: no queue
