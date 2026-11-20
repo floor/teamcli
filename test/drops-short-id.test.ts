@@ -52,3 +52,26 @@ test('a short id finds a record in the seat\'s stamped folder too', () => {
   writeFileSync(join(stamped, `${C}.wake-try`), '{}');
   expect(resolveDropId(dir, C.slice(0, 8))).toBe(C);
 });
+
+test('an unreadable folder of the seat leaves the word as given: half a listing never makes a prefix unique', () => {
+  const dir = seatFolder();
+  writeFileSync(join(dir, A), '{}');
+  // The stamped seat folder is not a folder that lists: a second match could sit there.
+  mkdirSync(join(base, '.agents', 'send-stamped', 'acme'), { recursive: true });
+  writeFileSync(join(base, '.agents', 'send-stamped', 'acme', 'worker'), 'not a folder');
+  expect(resolveDropId(dir, A.slice(0, 8))).toBe(A.slice(0, 8));
+  // The legacy folder itself not listing is the same refusal.
+  const fileDir = join(base, 'not-a-folder');
+  writeFileSync(fileDir, 'x');
+  expect(resolveDropId(fileDir, A.slice(0, 8))).toBe(A.slice(0, 8));
+});
+
+test('only a regular file with a record name counts: a folder, or an entry with another name, never blocks the one match', () => {
+  const dir = seatFolder();
+  writeFileSync(join(dir, A), '{}');
+  // A folder named like a record with the same prefix, and dotless names that are no record.
+  mkdirSync(join(dir, B));
+  writeFileSync(join(dir, '5203223c-junk'), 'x');
+  mkdirSync(join(dir, '5203223c-folder'));
+  expect(resolveDropId(dir, '5203223c')).toBe(A);
+});

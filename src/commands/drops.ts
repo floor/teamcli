@@ -320,24 +320,37 @@ function legacyDropAt(path: string): boolean {
  *  id or names no unique record, else the one record name (never a sidecar) that starts with a
  *  prefix of at least 8 characters. An ambiguous prefix is left as given, so the read refuses it. */
 export function resolveDropId(dropDir: string, word: string): string {
-  if (word.length < 8 || /^(?:unread-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(word)) return word;
-  const stamped = stampedListing(dropDir);
-  const folders: string[][] = [];
+  if (word.length < 8 || DROP_RECORD_NAME.test(word)) return word;
+  // Every folder must list: a tree that cannot be read could hold a second match, so the word is
+  // left as given (the read then refuses it) rather than resolved against half the folders.
+  const folders: { folder: string; names: readonly string[] }[] = [];
   try {
-    folders.push(readdirSync(dropDir));
-  } catch {
-    // A folder that does not list holds no record.
+    folders.push({ folder: dropDir, names: readdirSync(dropDir) });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return word;
   }
-  if (stamped !== null && stamped !== 'unreadable') folders.push([...stamped.names]);
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return word;
+  if (stamped !== null) folders.push({ folder: stamped.folder, names: stamped.names });
+  // Only a regular file with a record's own name is a candidate, as the inbox reader counts them:
+  // a sidecar, a folder, a link or any other entry never makes or breaks a match.
   const matches = new Set<string>();
-  for (const names of folders) {
+  for (const { folder, names } of folders) {
     for (const name of names) {
-      if (name.includes('.') || isRecordSidecarName(name) || !name.startsWith(word)) continue;
+      if (!name.startsWith(word) || !DROP_RECORD_NAME.test(name) || isRecordSidecarName(name)) continue;
+      try {
+        if (!lstatSync(join(folder, name)).isFile()) continue;
+      } catch {
+        return word;
+      }
       matches.add(name);
     }
   }
   return matches.size === 1 ? [...matches][0]! : word;
 }
+
+/** A record's own file name: a lowercase UUID, or the `unread-<uuid>` an earlier build wrote. */
+const DROP_RECORD_NAME = /^(?:unread-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'; reason: string };
 
