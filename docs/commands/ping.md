@@ -54,13 +54,14 @@ Whoever `team send` admits, message by message.
 ## Output and exit codes
 
 One line per seat on stdout:
-`<seat>: send <s> s (<leg>); read <s> s; reply sent <s> s, landed <s> s`, or
+`<seat>: send <s> s (<leg>); <stages>; reply sent <s> s, landed <s> s`, or
 `<seat>: send <s> s; refused: <reason>`, or
-`<seat>: send <s> s (<leg>); read <s> s; no reply within <n> s (<send outcome>)`
-(`delivered <s> s, not read by the seat` in place of `read <s> s` when only a carrier's
-delivered receipt came, `no read receipt` when nothing came). With `--json`, each row carries
-`delivered_ms` beside `read_ms`, and a row whose body was delivered but not read has status
-`delivered`.
+`<seat>: send <s> s (<leg>); <stages>; no reply within <n> s (<send outcome>)`,
+where `<stages>` names each stage a verified receipt proves, in order: `delivered <s> s` when a
+carrier's signed delivered receipt came, then `read <s> s` for the seat's own read, or
+`no read receipt from the seat` when none came. The seat's read is the earliest of its own read
+receipt, its replied receipt and its acknowledgement note; a writer-side copy, a lead's or the
+owner's clearance and a carrier's delivery are never counted as it.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
@@ -69,6 +70,6 @@ delivered receipt came, `no read receipt` when nothing came). With `--json`, eac
 | usage | `team ping: <problem>` and the usage on stderr | 2 |
 
 Under `--json` it prints one `team.ping` document — `{token, wait_seconds, rows, all_replied}`,
-each row `{seat, team, id, outcome, leg, send_ms, read_ms, reply_sent_ms, reply_landed_ms, status}`
-with `status` one of `replied`, `read`, `not read` or `refused`; a usage refusal prints the structured error document (`error.id`
+each row `{seat, team, id, outcome, leg, send_ms, delivered_ms, read_ms, reply_sent_ms, reply_landed_ms, reply_by, status}`
+with `status` one of `replied`, `read`, `delivered` (a carrier's delivery and no read by the seat), `not read` or `refused`; a usage refusal prints the structured error document (`error.id`
 `ping.usage`).

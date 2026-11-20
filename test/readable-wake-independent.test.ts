@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { stripSgr } from '../src/ansi.ts';
 import { runApprove } from '../src/approve/command.ts';
@@ -8,7 +8,8 @@ import { serveWakeChild } from '../src/daemon/wake/child.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
-import { listUnread, readMessage } from '../src/mcp/inbox.ts';
+import { listUnread, readMessage, writeListener } from '../src/mcp/inbox.ts';
+import { archiveSeatInbox, planSeatArchive } from '../src/send/inbox-retention.ts';
 import { listDrops } from '../src/commands/drops.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { socketMessageFrame } from '../src/send/frame.ts';
@@ -21,7 +22,7 @@ import {
   RUNTIME_WAKE_MAX,
   TYPED_WAKE_MAX,
 } from '../src/send/readable-wake.ts';
-import { verifiedRecordAt } from '../src/send/record.ts';
+import { readVerifiedReceipt, verifiedRecordAt } from '../src/send/record.ts';
 import { deliverTypedWake } from '../src/send/typed-wake.ts';
 import { reserveWake, wakePath } from '../src/send/wake-marker.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
@@ -557,6 +558,43 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
       expect(listUnread(nativeDrops, context, w.home)).toHaveLength(0);
       const after = listDrops(nativeDrops, key, context);
       expect(after.kind === 'ok' ? after.rows : after).toEqual([]);
+    } finally {
+      cleanupWorld(w);
+    }
+  });
+
+  test('Scene 5b: a carrier delivery of another checkout\'s record gets no receipt, and a later channel listener does not sweep a carried body read', async () => {
+    const w = world(['drop']);
+    try {
+      const io = owner(w.root);
+      expect(await runSend(['native', 'Carried row 1\nCarried row 2'], io, fake(w))).toBe(1);
+      const nativeDrops = dropDir(w.dir, 'native');
+      const msgId = recordIdsIn(nativeDrops)[0]!;
+      const key = messageKeyOf(w.home);
+      const payload = verifiedRecordAt(join(nativeDrops, msgId), msgId, key)!;
+      const exactWake = inlineWake(payload, w.home)!;
+      // Another checkout: the same seat, session and key, but not this record's root.
+      expect(recordDeliveredBody({ dropDir: nativeDrops, id: msgId, root: join(w.root, 'elsewhere'), session: 'acme', seat: 'native', home: w.home, wake: exactWake })).toBe(false);
+      expect(readdirSync(nativeDrops).some((name) => name.endsWith('.delivered.json'))).toBe(false);
+      // The carrier's own hand-over: a delivered receipt that verifies for this message and place.
+      expect(recordDeliveredBody({ dropDir: nativeDrops, id: msgId, root: w.root, session: 'acme', seat: 'native', home: w.home, wake: exactWake })).toBe(true);
+      const context = { root: w.root, session: 'acme', to: 'native' };
+      const delivered = readVerifiedReceipt(join(nativeDrops, `${msgId}.delivered.json`), msgId, 'delivered', context, key);
+      expect(delivered?.payload.read_by).toBe('carrier');
+      // The send's own retry markers are settled (a later pass would clear them); only the record
+      // and its delivered receipt remain, so the archive pass is not held off by them.
+      for (const name of readdirSync(nativeDrops)) {
+        if (name.startsWith(`${msgId}.`) && name !== `${msgId}.delivered.json`) unlinkSync(join(nativeDrops, name));
+      }
+      // The seat's channel listener starts after the hand-over; a real archive pass runs.
+      writeListener(nativeDrops, { v: 1, seat: 'native', session: 'acme', root: w.root, cli: 'claude-code', pid: process.pid, ts: new Date(Date.now() + 60_000).toISOString(), channel: true });
+      const report = archiveSeatInbox({ dropDir: nativeDrops, seat: 'native', context, key, home: w.home, now: new Date(Date.now() + 120_000), dryRun: false });
+      expect(report.markRead).toEqual([]);
+      // The sweep itself, given that later channel start: the carried body is not marked read.
+      const planned = planSeatArchive(nativeDrops, 'native', context, key, Date.now() + 120_000, Date.now() + 60_000);
+      expect('refused' in planned ? planned : planned.markRead).toEqual([]);
+      expect(readdirSync(nativeDrops).some((name) => name.endsWith('.read.json'))).toBe(false);
+      expect(listUnread(nativeDrops, context, w.home)).toHaveLength(1);
     } finally {
       cleanupWorld(w);
     }

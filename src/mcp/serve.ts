@@ -612,7 +612,7 @@ function watchChannel(
         : markChannelNotified(dropDir, id);
       if (!marked) return 'uncertain' as const;
       // E3: the frame was written; the read is sealed through this hand-over's own claim only.
-      const delivered = { dropDir: dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home };
+      const delivered = { dropDir: dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home, via: 'channel' };
       if (exposure.kind === 'expose') exposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
       else if (exposure.kind === 'legacy') recordDeliveredBody(delivered);
       return 'pushed' as const;

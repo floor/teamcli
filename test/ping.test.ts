@@ -32,7 +32,7 @@ function io(cwd: string): Io & { out: string; err: string } {
 
 type Answer = 'reply' | 'unsigned-reply' | 'bad-signature' | 'wrong-sender' | 'wrong-recipient' | 'unsigned-receipt' | 'none'
   | 'send' | 'send-other-token' | 'send-wrong-sender' | 'send-and-reply' | 'reply-elsewhere'
-  | 'delivered-only' | 'copy-read' | 'lead-ack-read';
+  | 'delivered-only' | 'copy-read' | 'lead-ack-read' | 'copy-then-ack' | 'copy-then-clearance' | 'delivered-then-read';
 
 /**
  * Team `alpha` is registry-only: no `.agents/team.yaml` anywhere. The caller runs from team
@@ -126,6 +126,20 @@ function scene(answers: Record<string, Answer>, owner = false) {
         // A carrier's hand-over (socket, runtime queue, typed wake): delivered, and nothing more.
         const delivered = { kind: 'receipt' as const, status: 'delivered' as const, id, to: seat, root: alpha, session: 'alpha', at: new Date(clock + 500).toISOString() };
         writeFileSync(join(drop(seat), `${id}.delivered.json`), JSON.stringify(signReceiptPayload(delivered, home)));
+      } else if (answer === 'copy-then-ack' || answer === 'copy-then-clearance') {
+        // A stamped copy holds the read name; the recipient's ack (or a lead's clearance, written as
+        // its signed intent beside an ack note of the same instant) lands as the note.
+        const base = { kind: 'receipt' as const, status: 'read' as const, id, to: seat, root: alpha, session: 'alpha' };
+        writeFileSync(join(drop(seat), `${id}.read.json`), JSON.stringify(signReceiptPayload({ ...base, at: new Date(clock + 500).toISOString(), read_by: 'copy' }, home)));
+        const noteAt = new Date(clock + 1_500).toISOString();
+        writeFileSync(join(drop(seat), `${id}.ack.json`), JSON.stringify(signReceiptPayload({ ...base, at: noteAt, read_by: 'ack' }, home)));
+        if (answer === 'copy-then-clearance') {
+          writeFileSync(join(drop(seat), `${id}.cleared.json`), JSON.stringify(signReceiptPayload({ ...base, at: noteAt, read_by: 'lead-ack:lead' }, home)));
+        }
+      } else if (answer === 'delivered-then-read') {
+        const base = { kind: 'receipt' as const, id, to: seat, root: alpha, session: 'alpha' };
+        writeFileSync(join(drop(seat), `${id}.delivered.json`), JSON.stringify(signReceiptPayload({ ...base, status: 'delivered', at: new Date(clock + 500).toISOString(), read_by: 'carrier' }, home)));
+        writeFileSync(join(drop(seat), `${id}.read.json`), JSON.stringify(signReceiptPayload({ ...base, status: 'read', at: new Date(clock + 1_000).toISOString() }, home)));
       } else if (answer === 'copy-read' || answer === 'lead-ack-read') {
         // A writer-side copy and a clearance hold the read name without the seat reading the body.
         const receipt = {
@@ -318,11 +332,30 @@ describe('team ping', () => {
     const copy = await rows({ worker: 'copy-read', tester: 'lead-ack-read' });
     expect(copy.by.worker).toMatchObject({ status: 'not read', read_ms: null });
     expect(copy.by.tester).toMatchObject({ status: 'not read', read_ms: null });
-    // The text row says it in words: delivered, not read by the seat.
+    // The text row says it in words: delivered, and no read receipt from the seat.
     const { beta, host } = scene({ worker: 'delivered-only' });
     const out = io(beta);
     await runPing(['worker', '--wait', '1'], out, host);
-    expect(out.out).toMatch(/worker: send [0-9.]+ s \(socket\); delivered [0-9.]+ s, not read by the seat; no reply within 1 s/);
+    expect(out.out).toMatch(/worker: send [0-9.]+ s \(socket\); delivered [0-9.]+ s, no read receipt from the seat; no reply within 1 s/);
+  });
+
+  test('a recipient ack after a stamped copy is the seat\'s read, at the ack\'s time; a lead\'s paired clearance is not', async () => {
+    const got = await rows({ worker: 'copy-then-ack', tester: 'copy-then-clearance' });
+    expect(got.by.worker).toMatchObject({ status: 'read' });
+    expect(got.by.worker!.read_ms).not.toBeNull();
+    expect(got.by.tester).toMatchObject({ status: 'not read', read_ms: null });
+  });
+
+  test('a row with both a delivery and the seat\'s read shows both stage times', async () => {
+    const got = await rows({ worker: 'delivered-then-read' });
+    expect(got.by.worker).toMatchObject({ status: 'read' });
+    expect(got.by.worker!.delivered_ms).not.toBeNull();
+    expect(got.by.worker!.read_ms).not.toBeNull();
+    expect(got.by.worker!.read_ms!).toBeGreaterThan(got.by.worker!.delivered_ms!);
+    const { beta, host } = scene({ worker: 'delivered-then-read' });
+    const out = io(beta);
+    await runPing(['worker', '--wait', '1'], out, host);
+    expect(out.out).toMatch(/worker: send [0-9.]+ s \(socket\); delivered [0-9.]+ s, read [0-9.]+ s; no reply within 1 s/);
   });
 
   test('a refused send is a refused row', async () => {

@@ -216,6 +216,22 @@ export function recordStampAt(dropDir: string, id: string): boolean | 'unknown' 
  *  read a stamped record at all, so every read of one is this build's and carries this word. */
 export const COPY_READ_BY = 'copy';
 
+/** The `read_by` on the `delivered` receipt a carrier writes (a socket frame, a runtime queue, a
+ *  typed wake, a channel push): transport acceptance, never evidence that the seat saw the body.
+ *  No reader settles or sweeps a message read on it. */
+export const CARRIER_DELIVERED_BY = 'carrier';
+
+/** Whether a `read_by` names a carrier's hand-over: `carrier`, or `carrier:<leg>` with the leg
+ *  that took the body (socket, channel, native, typed, headless-resume). */
+export function isCarrierDeliveredBy(readBy: string | undefined): boolean {
+  return readBy === CARRIER_DELIVERED_BY || (readBy?.startsWith(`${CARRIER_DELIVERED_BY}:`) ?? false);
+}
+
+/** The leg a carrier's `read_by` names, or null when it names none. */
+export function carrierLegOf(readBy: string | undefined): string | null {
+  return readBy !== undefined && readBy.startsWith(`${CARRIER_DELIVERED_BY}:`) ? readBy.slice(CARRIER_DELIVERED_BY.length + 1) : null;
+}
+
 /** The acknowledgement note beside the record (`<id>.ack.json`, `read_by: ack`): the one `team ack`
  *  writes, and where a stamped record's acknowledgement goes when an unconfirmed copy's receipt
  *  already holds the read name (E7b). */
@@ -1449,7 +1465,7 @@ export function readVerifiedReceipt(
 const SHOWN_SEAT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** Words this build writes on `read_by` that are not themselves seat names. */
-const KNOWN_READER = new Set(['ack', 'answered-by-send', 'channel', 'copy', 'reply']);
+const KNOWN_READER = new Set(['ack', 'answered-by-send', 'carrier', 'channel', 'copy', 'reply']);
 
 /** Role words a receipt must not print. The shared message key can sign any of them, and none is
  *  a claim that the owner, the lead, or the orchestrator read the message. */

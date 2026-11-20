@@ -72,7 +72,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, stampedSettlement, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, isCarrierDeliveredBy, readVerifiedReceipt, receiptFile, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, stampedSettlement, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord, type StatusContext } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -3005,7 +3005,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
         if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
-          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
+          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined, via: 'native' });
           clearEndpointBlocked(to.root, to.session, to.seat);
           report.sent = msgId;
           // The leg that took the message decides the words. The queue accepted the pointer, so
@@ -3159,7 +3159,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
       if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
-        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
+        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined, via: 'headless-resume' });
         report.sent = msgId;
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
         const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
@@ -5467,7 +5467,7 @@ async function deliverTypedWakeSeat(
       settleLegBody(typedBody, wake.typed ? 'unknown' : 'no');
       return { delivered: false, typed: wake.typed, reason: wake.reason };
     }
-    settleLegBody(typedBody, 'yes', { dropDir, id: payload.id, root, session, seat: seatName, home: host.home, wake: line });
+    settleLegBody(typedBody, 'yes', { dropDir, id: payload.id, root, session, seat: seatName, home: host.home, wake: line, via: 'typed' });
     const ms = host.now().getTime() - startedAt;
     logLine(dir, 'send', who, `${seatName}: delivered (typed wake) (drop ${String(payload.body.length)} characters, typed; ${wake.reason})`, host.now());
     if (writeHistory) {
@@ -6436,7 +6436,7 @@ export async function walkReplyDelivery(input: {
         // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
         if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
-          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
+          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined, via: 'native' });
           clearEndpointBlocked(input.root, input.session, seatName);
           const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
           if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
@@ -6518,7 +6518,7 @@ export async function walkReplyDelivery(input: {
       // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
       if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
-        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
+        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined, via: 'headless-resume' });
         const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
         if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
           return ended({ via: 'headless-resume', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, headless-resume receipt)` });
@@ -6739,6 +6739,15 @@ const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending sessi
  * seat's declaration is re-confirmed. A person's command must not wait a second on another
  * seat's screen.
  */
+/** Whether a carrier already handed this record's body over: a `delivered` receipt that verifies
+ *  for the message, its seat, checkout and session, and names the carrier. */
+function carrierDelivered(dropDir: string, id: string, context: StatusContext, home: string): boolean {
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return false;
+  const receipt = readVerifiedReceipt(receiptFile(dropDir, id, 'delivered'), id, 'delivered', context, key.key);
+  return receipt !== null && isCarrierDeliveredBy(receipt.payload.read_by);
+}
+
 async function deliverSocketFrame(
   dir: string,
   who: string,
@@ -6816,6 +6825,14 @@ async function deliverSocketFrame(
   let bodyIncluded = true;
   if (Buffer.byteLength(content, 'utf8') > RUNTIME_WAKE_MAX) {
     content = `${content.split('\n')[0]}\n\nMessage too long for this wake. Read it with: team drops --read --id ${msgId} --seat ${to.seat}`;
+    bodyIncluded = false;
+  }
+  // A body a carrier already handed over (its signed delivered receipt, bound to this record's
+  // seat, checkout and session) is not carried again by an automatic redelivery — the watch's
+  // ladder or the channel's socket retry: the frame is the ID-only wake, and the seat's own read
+  // still serves the body. A message with no such receipt keeps the body.
+  if (bodyIncluded && !isStampedPayload(payload) && carrierDelivered(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home)) {
+    content = `${content.split('\n')[0]}\n\n${pointerFor(msgId, null)}`;
     bodyIncluded = false;
   }
   // rfc-event-comms §3 (E6): the frame's hand-over decision, taken once for the exact frame sent.
@@ -6950,7 +6967,7 @@ async function deliverSocketFrame(
     }
   }
   if (bodyIncluded) {
-    const delivered = { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home };
+    const delivered = { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, via: 'socket' };
     if (socketExposure?.kind === 'expose') socketExposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
     else recordDeliveredBody(delivered);
   }

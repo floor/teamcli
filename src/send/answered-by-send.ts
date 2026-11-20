@@ -21,7 +21,7 @@ import { recordDir, samePath } from '../commands/messages.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readHistory, type HistoryEntry } from './history.ts';
 import { publishRecordRead } from './read-receipt.ts';
-import { recordAuthOfSealed, isReadOrCleared, readRecord, sealedOfRecord } from './record.ts';
+import { carrierLegOf, recordAuthOfSealed, isReadOrCleared, readRecord, readVerifiedReceipt, receiptFile, sealedOfRecord } from './record.ts';
 import { readUnreadHint } from './unread-hint.ts';
 import { liveRecordPath } from './drop-folder.ts';
 
@@ -106,11 +106,20 @@ export function markAnsweredBySend(input: AnsweredBySendInput): AnsweredBySendOu
     // A registry id that disagrees names another agent under the same seat name; without one on
     // either side the name is all the evidence there is.
     if (senderId !== null && payload.from_id !== null && payload.from_id !== senderId) continue;
-    const line = lines.get(payload.id);
-    if (line === undefined || line.via === undefined || !DELIVERED_VIAS.includes(line.via)) continue;
     // The delivery is the first history line's instant: a message delivered after this send is
-    // not answered by it. An equal instant is not later — the frame was already there.
-    const deliveredAt = Date.parse(line.ts);
+    // not answered by it. An equal instant is not later — the frame was already there. A leg that
+    // is still waiting for the seat's receipt (a native queue's grace) writes that line only after
+    // the wait, so the carrier's own signed delivered receipt, written at hand-over and naming its
+    // leg, is the same evidence earlier: transport acceptance by an eligible leg, never a read.
+    const line = lines.get(payload.id);
+    let deliveredAt = Number.NaN;
+    if (line !== undefined && line.via !== undefined && DELIVERED_VIAS.includes(line.via)) {
+      deliveredAt = Date.parse(line.ts);
+    } else if (line === undefined) {
+      const carried = readVerifiedReceipt(receiptFile(dropDir, payload.id, 'delivered'), payload.id, 'delivered', context, state.key);
+      const leg = carried === null ? null : carrierLegOf(carried.payload.read_by);
+      if (carried !== null && leg !== null && DELIVERED_VIAS.includes(leg)) deliveredAt = Date.parse(carried.payload.at);
+    }
     if (Number.isNaN(deliveredAt) || deliveredAt > sentAt) continue;
     if (Number.isNaN(Date.parse(payload.at))) continue;
     // The index may still name a message that is already read or that a lead cleared — a clear

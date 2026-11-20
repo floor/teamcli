@@ -29,6 +29,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { DROP_ARCHIVE_UNREAD, DROP_MONTH_ARCHIVE, folderOfDrop } from './drop-folder.ts';
 import { publishRecordRead } from './read-receipt.ts';
 import {
+  isCarrierDeliveredBy,
   isLeadAckReadBy,
   isStampedPayload,
   stampedSettled,
@@ -302,6 +303,10 @@ export function planSeatArchive(
     if (!markPreChannel || channelStartMs === null) continue;
     // A read receipt already settled the message above. What is still unread was delivered only
     // when its delivered receipt says so. The record's sent time is not that proof.
+    // A carrier's delivered receipt is transport acceptance only (a runtime queue may hold the body
+    // unseen): it is never the proof this sweep marks a read on, so that message stays unread
+    // until the seat's own read, a reply or an authorized clearance.
+    if (delivered !== null && isCarrierDeliveredBy(delivered.payload.read_by)) continue;
     const proofAt = delivered?.payload.at ?? null;
     const proofMs = proofAt === null ? Number.NaN : Date.parse(proofAt);
     if (!Number.isFinite(proofMs) || proofMs >= channelStartMs) continue;

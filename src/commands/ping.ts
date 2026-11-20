@@ -25,7 +25,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -35,12 +35,12 @@ import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { resolveOwnerReplyTo } from '../policy/owner-reply.ts';
 import { teamBinding } from '../registry/binding.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
-import { COPY_READ_BY, isLeadAckReadBy, sameFolder, signedReceiptOf, verifiedRecordAt, verifyReceipt, type RecordPayload } from '../send/record.ts';
+import { ackedFile, clearedFile, COPY_READ_BY, isLeadAckReadBy, readVerifiedReceipt, receiptFile, sameFolder, verifiedRecordAt, type RecordPayload, type SignedReceipt, type StatusContext } from '../send/record.ts';
 import { resolveTarget } from '../send/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { seatDropDir, stampedListing } from '../queue/mail-tree.ts';
-import { liveRecordPath, seatFolderOf } from '../send/drop-folder.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team ping <seat> [--wait <seconds>] [--json]
        team ping --all [--wait <seconds>] [--json]
@@ -169,41 +169,50 @@ export function sentRecordOf(places: readonly Place[], seat: string, id: string,
   return null;
 }
 
-/** When the recipient's verified receipt of `status` for `sent` was written, in epoch
- *  milliseconds; null while there is none that verifies and names that record, recipient, root
- *  and session. */
-function signedReceiptAt(sent: RecordPayload, key: KeyObject, status: 'read' | 'delivered'): { at: number; readBy: string | undefined; status: string } | null {
-  const path = join(seatFolderOf(seatDropDir(sent.root, sent.session, sent.to), sent.id), `${sent.id}.${status}.json`);
-  let receipt;
-  try {
-    receipt = signedReceiptOf(JSON.parse(readFileSync(path, 'utf8')));
-  } catch {
-    return null;
-  }
-  if (receipt === null || !verifyReceipt(receipt, key)) return null;
-  const at = receipt.payload;
-  if (at.id !== sent.id || at.to !== sent.to || at.session !== sent.session || !sameFolder(at.root, sent.root)) return null;
-  const when = Date.parse(at.at);
-  return Number.isNaN(when) ? null : { at: when, readBy: at.read_by, status: at.status };
+/** The receipt context of `sent`: its recipient, checkout and session, as its own signed fields
+ *  name them, and the folder its receipts sit in. */
+function receiptPlace(sent: RecordPayload): { dir: string; context: StatusContext } {
+  return { dir: seatDropDir(sent.root, sent.session, sent.to), context: { to: sent.to, root: sent.root, session: sent.session } };
 }
 
-/** When the recipient's verified read receipt for `sent` was written, in epoch milliseconds;
- *  null while there is none that verifies and names that record, recipient, root and session.
- *  Only a read the seat made counts: a writer-side copy (`read_by: copy`) and a lead's or the
- *  owner's clearance (`lead-ack:`) are not the seat seeing the body. */
+function instantOf(receipt: SignedReceipt | null): number | null {
+  if (receipt === null) return null;
+  const when = Date.parse(receipt.payload.at);
+  return Number.isNaN(when) ? null : when;
+}
+
+/** When the recipient itself read `sent`, in epoch milliseconds: the earliest of its own verified
+ *  read receipt, its replied receipt, or its acknowledgement note; null while none verifies. A
+ *  writer-side copy (`read_by: copy`) and a lead's or the owner's clearance are not the seat's
+ *  read — a clearance whose ack note is paired with its signed clearance intent is not either —
+ *  and a carrier never writes a read at all. The same verified receipts every reader settles by. */
 export function receiptAt(sent: RecordPayload, key: KeyObject): number | null {
-  const read = signedReceiptAt(sent, key, 'read');
-  if (read === null || (read.status !== 'read' && read.status !== 'replied')) return null;
-  if (read.readBy === COPY_READ_BY || isLeadAckReadBy(read.readBy)) return null;
-  return read.at;
+  const { dir, context } = receiptPlace(sent);
+  const times: number[] = [];
+  const read = readVerifiedReceipt(receiptFile(dir, sent.id, 'read'), sent.id, 'read', context, key);
+  const word = read?.payload.read_by;
+  if (read !== null && word !== COPY_READ_BY && !isLeadAckReadBy(word)) {
+    const at = instantOf(read);
+    if (at !== null) times.push(at);
+  }
+  const replied = instantOf(readVerifiedReceipt(receiptFile(dir, sent.id, 'replied'), sent.id, 'replied', context, key));
+  if (replied !== null) times.push(replied);
+  const note = readVerifiedReceipt(ackedFile(dir, sent.id), sent.id, 'read', context, key);
+  if (note !== null && note.payload.read_by === 'ack') {
+    const intent = readVerifiedReceipt(clearedFile(dir, sent.id), sent.id, 'read', context, key);
+    const clearance = intent !== null && isLeadAckReadBy(intent.payload.read_by) && intent.payload.at === note.payload.at;
+    const at = instantOf(note);
+    if (!clearance && at !== null) times.push(at);
+  }
+  return times.length === 0 ? null : Math.min(...times);
 }
 
 /** When a carrier handed the body over (the signed `delivered` receipt a socket, a runtime queue,
  *  a typed wake or a channel push writes), in epoch milliseconds; null when none verifies. A
  *  delivery is not a read: the seat may be mid-turn, or its runtime may hold the body unseen. */
 export function deliveredAt(sent: RecordPayload, key: KeyObject): number | null {
-  const delivered = signedReceiptAt(sent, key, 'delivered');
-  return delivered === null || delivered.status !== 'delivered' ? null : delivered.at;
+  const { dir, context } = receiptPlace(sent);
+  return instantOf(readVerifiedReceipt(receiptFile(dir, sent.id, 'delivered'), sent.id, 'delivered', context, key));
 }
 
 /** Where the recipient's reply to `sent` lands and whom it must name: the folder and the
@@ -425,11 +434,11 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
       const name = row.team === null ? row.seat : `${row.seat}@${row.team}`;
       const sent = `send ${(row.send_ms / 1000).toFixed(1)} s${row.leg === null ? '' : ` (${row.leg})`}`;
       const secs = (ms: number | null) => `${((ms ?? 0) / 1000).toFixed(1)} s`;
-      const read = row.read_ms !== null
-        ? `read ${secs(row.read_ms)}`
-        : row.delivered_ms !== null
-          ? `delivered ${secs(row.delivered_ms)}, not read by the seat`
-          : 'no read receipt';
+      // Each stage the receipts prove, in order: the carrier's delivery, then the seat's own read.
+      const read = [
+        ...(row.delivered_ms === null ? [] : [`delivered ${secs(row.delivered_ms)}`]),
+        row.read_ms === null ? 'no read receipt from the seat' : `read ${secs(row.read_ms)}`,
+      ].join(', ');
       const tail = row.status === 'replied'
         ? `${read}; ${row.reply_by === 'send' ? 'answer (team send, not on the thread)' : 'reply'} sent ${secs(row.reply_sent_ms)}, landed ${secs(row.reply_landed_ms)}`
         : row.status === 'refused'

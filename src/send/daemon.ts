@@ -2002,7 +2002,7 @@ async function executeSocketSend(
         return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: taken.reason };
       }
       if (bodyIncluded) {
-        const delivered = { dropDir, id: msgId, root, session: team.session, seat: seatName, home: host.home };
+        const delivered = { dropDir, id: msgId, root, session: team.session, seat: seatName, home: host.home, via: 'socket' };
         if (socketExposure?.kind === 'expose') socketExposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
         else recordDeliveredBody(delivered);
       }

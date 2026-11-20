@@ -68,6 +68,7 @@ import { resolveLobby } from '../src/lobby/gate.ts';
 import { writeListener } from '../src/mcp/inbox.ts';
 import { listDrops } from '../src/commands/drops.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
+import { readVerifiedReceipt } from '../src/send/record.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
@@ -811,6 +812,12 @@ describe('the ordinary send native leg (Codex)', () => {
     expect(names).toContain(`${id}.delivered.json`);
     expect(names).not.toContain(`${id}.read.json`);
     const key = messageKeyOf(scene.home);
+    // The queue's --message carried the body itself (the recorder splits it one line per row).
+    const queued = sent.calls.flat();
+    expect(queued.slice(queued.indexOf('--message'))).toContain('hello');
+    // The delivery receipt verifies for this message, seat, checkout and session, and names its leg.
+    const receipt = readVerifiedReceipt(join(scene.dropDir, `${id}.delivered.json`), id, 'delivered', { to: SEAT, root: scene.root, session: SESSION }, key);
+    expect(receipt?.payload.read_by).toBe('carrier:native');
     const listed = listDrops(scene.dropDir, key, { root: scene.root, session: SESSION, to: SEAT });
     expect(listed.kind === 'ok' ? listed.rows.map((row) => row.id) : listed).toEqual([id]);
     const history = readHistory('acme', scene.root, scene.home);
