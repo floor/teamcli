@@ -366,6 +366,24 @@ test('a declared order naming the retired inbox word still reaches the accepting
   expect(io.err).not.toContain('queued, no event adapter');
 });
 
+test('an order naming the retired inbox word alone still reaches the accepting socket on a dark root, and types nothing', async () => {
+  // The floor's main orchestrator (20 Nov): `[mcp-inbox]` with no channel connected left replies
+  // as drop files that never reached the pane.
+  const made = world(['mcp-inbox']);
+  cleanup = made.cleanup;
+  declare(made, 'accept');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+  const io = owner(made.root);
+
+  const code = await runSend(['lead', 'hello'], io, host);
+
+  expect(code).toBe(0);
+  expect(host.frames.length).toBe(1);
+  expect(pane.typed).toEqual([]);
+  expect(io.out).toContain('lead: delivered (socket)');
+});
+
 test('a declared order may place socket first, and it is walked there', async () => {
   const made = world(['socket', 'typed']);
   cleanup = made.cleanup;
