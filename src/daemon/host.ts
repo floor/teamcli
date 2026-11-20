@@ -272,6 +272,9 @@ export type StartMachineDaemonInput = {
    * machine was not told about. Ignored when `presenceSubscriptions` is injected.
    */
   presenceCodexEndpoint?: (route: HostedRoute, stateDir: string, seat: string) => string | null | undefined;
+  /** Read each Codex seat's endpoint from its own state record, in the same snapshot as its
+   *  binding (the production daemon); `presenceCodexEndpoint` is then not consulted. */
+  presenceCodexEndpointFromState?: boolean;
   /**
    * Seats this route expected to carry a managed native channel but whose target resolution or
    * start did not succeed, with the truthful why. Each becomes an explicit unproven source, so a
@@ -405,6 +408,20 @@ const STUCK_MS = 10_000;
  *  mark. */
 const FALLBACK_BEAT_SLICE_MS = 10;
 const PRESENCE_EVERY_MS = 250;
+/** How long a Codex seat whose attachment is not serving (unproven, stopped, or no managed session
+ *  yet) waits before its target is resolved again. A binding change never waits for it. */
+export const PRESENCE_REBIND_RETRY_MS = 5_000;
+
+/** One seat's production source resolution: a started runtime source for the binding it was
+ *  started for, an expected attachment that could not be made, or no native channel at all. */
+type SeatSourceResolution =
+  | { kind: 'runtime'; runtime: PresenceSourceRuntime; binding: string }
+  | { kind: 'unproven'; why: string }
+  | { kind: 'skip'; why: string };
+
+/** What the rebind step remembers per Codex seat: the binding its live source was started for
+ *  (null for a placeholder or no source) and when an unserved attachment may be resolved again. */
+type RebindSlot = { binding: string | null; retryAt: number };
 /** A restore refusal that is a launch timeout (16 Nov reboot: "tester-gemini: timeout"); the
  *  route gets one more pass on the retry schedule. */
 const TIMEOUT_REASON = /\btime[ds]?[ -]?out\b/i;
@@ -754,6 +771,17 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const watchLeftStarting = new Set<string>();
   /** The presence work per accepted route, and this process's one in-flight run per route. */
   const presenceWork: {
+    /** Sources retired by a rebind whose close has not settled yet; the daemon's close drains
+     *  them beside the live sources, so a retired source cannot stage behind a claimed close. */
+    retired: Set<Promise<unknown>>;
+    /** The production re-resolution for this route's Codex seats, or null when the sources were
+     *  injected (`presenceSubscriptions`): a seat whose binding moved on gets its successor's
+     *  source in the same pass, and an attachment that is not serving is retried. */
+    rebind: {
+      seats: readonly { name: string; cli: string }[];
+      resolve: (seat: { name: string; cli: string }) => SeatSourceResolution;
+      slots: Map<string, RebindSlot>;
+    } | null;
     route: HostedRoute;
     /** The team file's folder; the seat's current binding is read from its state record. */
     stateDir: string;
@@ -1372,45 +1400,61 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         health.seatExpected(source.seat);
         sources.push(source);
       };
-      /** The production wiring: resolve each declared seat's explicit Codex target under the
+      /** The production wiring: resolve one declared seat's explicit Codex target under the
        *  signed `codex-daemon` policy, and start a source only for a resolved target. A `skip`
        *  is a seat with no managed native channel, whose route hook answer is its own; an
        *  `unproven` target is an expected attachment that could not be made, never a skip. No
-       *  endpoint is guessed: without one the resolver itself answers `unproven`. */
+       *  endpoint is guessed: without one the resolver itself answers `unproven`. The same
+       *  resolution runs again from the presence pass whenever the seat's binding moves on or
+       *  its attachment is not serving (see `rebindSources`). */
+      const resolveSeat = (seat: { name: string; cli: string }): SeatSourceResolution => {
+        const read = codexPresenceTarget({
+          enabled: true,
+          home,
+          stateDir,
+          root: canonical,
+          herdrSession: loaded.team.session,
+          session: loaded.team.session,
+          seat: { name: seat.name, cli: seat.cli },
+          endpoint: input.presenceCodexEndpointFromState === true
+            ? null
+            : input.presenceCodexEndpoint?.(route, stateDir, seat.name) ?? null,
+          ...(input.presenceCodexEndpointFromState === true ? { endpointFromState: true } : {}),
+          now: now(),
+        });
+        if (read.kind === 'skip') return { kind: 'skip', why: read.why };
+        if (read.kind === 'unproven') return { kind: 'unproven', why: read.why };
+        // The target resolver only returns a target under an `on` policy, so the start gate
+        // is already verified; a start refusal is still an explicit unproven attachment.
+        const started = codexPresenceFor({
+          target: read.target,
+          policy: 'on',
+          feature: true,
+          now,
+          frame: (text) => native.codexFrame(read.target, text),
+        });
+        if (started.kind === 'subscribed') {
+          return { kind: 'runtime', runtime: started.source, binding: read.target.binding };
+        }
+        return { kind: 'unproven', why: started.why };
+      };
+      const rebindSlots = new Map<string, RebindSlot>();
       const productionSources = (): {
         runtimes: PresenceSourceRuntime[];
         unproven: Array<{ seat: string; why: string }>;
       } => {
         const runtimes: PresenceSourceRuntime[] = [];
         const unproven: Array<{ seat: string; why: string }> = [];
+        const retryAt = now().getTime() + PRESENCE_REBIND_RETRY_MS;
         for (const seat of loaded.team.seats) {
-          const read = codexPresenceTarget({
-            enabled: true,
-            home,
-            stateDir,
-            root: canonical,
-            herdrSession: loaded.team.session,
-            session: loaded.team.session,
-            seat: { name: seat.name, cli: seat.cli },
-            endpoint: input.presenceCodexEndpoint?.(route, stateDir, seat.name) ?? null,
-            now: now(),
+          const resolved = resolveSeat(seat);
+          rebindSlots.set(seat.name, {
+            binding: resolved.kind === 'runtime' ? resolved.binding : null,
+            retryAt,
           });
-          if (read.kind === 'skip') continue;
-          if (read.kind === 'unproven') {
-            unproven.push({ seat: seat.name, why: read.why });
-            continue;
-          }
-          // The target resolver only returns a target under an `on` policy, so the start gate
-          // is already verified; a start refusal is still an explicit unproven attachment.
-          const started = codexPresenceFor({
-            target: read.target,
-            policy: 'on',
-            feature: true,
-            now,
-            frame: (text) => native.codexFrame(read.target, text),
-          });
-          if (started.kind === 'subscribed') runtimes.push(started.source);
-          else unproven.push({ seat: seat.name, why: started.why });
+          if (resolved.kind === 'skip') continue;
+          if (resolved.kind === 'unproven') unproven.push({ seat: seat.name, why: resolved.why });
+          else runtimes.push(resolved.runtime);
         }
         return { runtimes, unproven };
       };
@@ -1479,6 +1523,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           }),
         sources,
         sourceRuns: sources.map(() => null),
+        retired: new Set(),
+        rebind: input.presenceSubscriptions === undefined
+          ? {
+              seats: loaded.team.seats.filter((seat) => seat.cli === 'codex'),
+              resolve: resolveSeat,
+              slots: rebindSlots,
+            }
+          : null,
         health,
         proofs: new Map(),
         proofMiss: new Map(),
@@ -1946,6 +1998,108 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   };
 
+  /** Retires one source: its close starts now (the Codex source stops admissions and releases its
+   *  key synchronously) and is drained by the daemon's close if it has not settled by then. */
+  const retireSource = (one: (typeof presenceWork)[number], source: PresenceSource, run: Promise<void> | null): void => {
+    let closing: Promise<unknown>;
+    try {
+      closing = Promise.resolve(source.close());
+    } catch (error) {
+      closing = Promise.reject(error);
+    }
+    const drain = Promise.allSettled([closing, ...(run === null ? [] : [run])]);
+    one.retired.add(drain);
+    void drain.then(() => one.retired.delete(drain));
+  };
+
+  /** Whether a source with the seat's current binding has stopped admitting for good: the Codex
+   *  source stops on a binding it could not confirm (including an unreadable state) and never
+   *  restarts itself. */
+  const sourceStopped = (one: (typeof presenceWork)[number], source: PresenceSource, at: Date): boolean => {
+    try {
+      const reading = source.status(at);
+      if (reading.channel === 'gone') return false;
+      return reading.channel === 'stopped' || reading.reason === 'binding-changed' || reading.admitting === false;
+    } catch {
+      return true;
+    }
+  };
+
+  /**
+   * Follows each Codex seat's current incarnation. A seat's runtime source belongs to one presence
+   * binding; a relaunch (`team restart`, `team reload`, `team up` repair, a re-anchor after a
+   * reboot, the boot restore) mints a new one, and the old source stops for good. Here, in the
+   * presence pass and before any pump:
+   * - a seat whose current binding differs from its source's is retired and its successor's
+   *   source is started in the same pass;
+   * - an unproven placeholder, a source that stopped on its own and a Codex seat that resolved
+   *   `skip` are resolved again once `PRESENCE_REBIND_RETRY_MS` has passed, so a seat that came
+   *   up after the daemon gets its source.
+   * An unreadable state changes nothing this pass. A seat that had a source and now resolves
+   * `skip` keeps an explicit unproven answer rather than silently becoming a hook seat.
+   */
+  const rebindSources = (one: (typeof presenceWork)[number]): void => {
+    const rebind = one.rebind;
+    if (rebind === null || closed) return;
+    let state: State;
+    try {
+      state = readState(one.stateDir);
+    } catch {
+      return;
+    }
+    const at = now();
+    for (const seat of rebind.seats) {
+      if (closed) return;
+      const slot = rebind.slots.get(seat.name) ?? { binding: null, retryAt: 0 };
+      const index = one.sources.findIndex((candidate) => candidate.seat === seat.name);
+      const source = index === -1 ? undefined : one.sources[index];
+      const current = presenceBindingFrom(state, one.route.session, seat.name);
+      const moved = slot.binding !== null && source !== undefined && current !== slot.binding;
+      const retry = at.getTime() >= slot.retryAt && (
+        slot.binding === null || source === undefined || sourceStopped(one, source, at)
+      );
+      if (!moved && !retry) continue;
+      // The old source goes first: its key is released before the successor is started.
+      if (source !== undefined && index !== -1) retireSource(one, source, one.sourceRuns[index] ?? null);
+      const resolved = rebind.resolve(seat);
+      let next: PresenceSource | null = null;
+      let binding: string | null = null;
+      if (resolved.kind === 'runtime') {
+        const adopted = adoptPresenceSource(resolved.runtime, at);
+        if ('source' in adopted) {
+          next = adopted.source;
+          binding = resolved.binding;
+        } else {
+          // A started source that cannot be adopted still holds its key: it is closed, not leaked.
+          const closer = resolved.runtime.close ?? resolved.runtime.cancel;
+          try {
+            void closer?.call(resolved.runtime)?.catch?.(() => undefined);
+          } catch {
+            // Nothing was adopted; a close that throws leaves nothing to drain here.
+          }
+          next = unprovenSource(seat.name, adopted.why);
+        }
+      } else if (resolved.kind === 'unproven' || source !== undefined) {
+        next = unprovenSource(seat.name, resolved.why);
+      }
+      rebind.slots.set(seat.name, { binding, retryAt: at.getTime() + PRESENCE_REBIND_RETRY_MS });
+      if (next === null) continue;
+      if (index === -1) {
+        one.sources.push(next);
+        one.sourceRuns.push(null);
+        one.health.seatExpected(seat.name);
+      } else {
+        one.sources[index] = next;
+        one.sourceRuns[index] = null;
+      }
+      one.proofs.delete(seat.name);
+      one.proofMiss.delete(seat.name);
+      if (binding !== null && moved) {
+        logLine(`presence ${one.route.root}: ${seat.name}: rebound to ${binding}`);
+      }
+    }
+  };
+
   /** One bounded, independent pump per source: at most one step is in flight for a source, so a
    *  source whose step is slow or hung holds only its own seat's answer — never the route's
    *  ingest, activity or publication, and never a sibling's sample. The sample is stamped when
@@ -1958,9 +2112,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       try {
         await traceBeatWork(`presence source step (wall):${one.route.root}`, () => source.step(now()));
       } catch (error) {
+        if (one.sources[index] !== source) return;
         sampleSource(one, source, failedReading(source, `the runtime source step failed: ${messageOf(error)}`), now());
         return;
       }
+      // A source a rebind retired while this step was in flight no longer speaks for the seat:
+      // its late answer must not overwrite the successor's sample.
+      if (one.sources[index] !== source) return;
       let reading: PresenceSourceStatus;
       try {
         reading = traceBeatWork(`presence source status (sync):${one.route.root}`, () => source.status(now()));
@@ -2110,6 +2268,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // own one-flight pump, so the route's ingest, activity and publication below, and every
       // sibling source, never wait for one source's step. A seat's answer never changes the
       // route's ingest answer.
+      traceBeatWork(`presence rebind (sync):${one.route.root}`, () => rebindSources(one));
       for (let index = 0; index < one.sources.length; index += 1) pumpSource(one, index);
       // The readings cross to the child exactly as this daemon sampled them. A source that cannot
       // answer, or answers for another seat, is sent as that reason, so the child holds the seat
@@ -2796,8 +2955,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   /** Closes one source and maps its answer: `close` resolves to quiescence only once the drain
    *  actually finished; a rejection retains ownership and is retried by a later close. */
   const closeSource = (workIndex: number, sourceIndex: number): Promise<unknown> => {
-    const slot = presenceSourceCloses[workIndex]?.[sourceIndex];
     const source = presenceWork[workIndex]?.sources[sourceIndex];
+    const slots = presenceSourceCloses[workIndex];
+    // A source a rebind added after start has no slot yet; it gets one here.
+    if (slots !== undefined && source !== undefined && slots[sourceIndex] === undefined) {
+      slots[sourceIndex] = { attempt: null, closed: false, why: null };
+    }
+    const slot = slots?.[sourceIndex];
     if (slot === undefined || source === undefined || slot.closed) return Promise.resolve();
     if (slot.attempt === null) {
       let attempt: Promise<unknown>;
@@ -2951,6 +3115,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const sourceDrains: Promise<void>[] = [];
     for (const one of presenceWork) {
       for (const run of one.sourceRuns) if (run !== null) sourceDrains.push(run);
+      for (const drain of one.retired) sourceDrains.push(drain.then(() => undefined));
     }
     await Promise.allSettled(sourceDrains);
     // A later attempt retries the sources whose close did not resolve. It runs before any
