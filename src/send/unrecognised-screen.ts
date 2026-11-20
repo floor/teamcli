@@ -31,6 +31,8 @@ export type UnrecognisedScreenInput = {
    *  or when the seat is its own lead. */
   lead: string;
   at: Date;
+  /** For a test only: runs after the notice's record landed, before the marker is marked. */
+  afterPublish?: () => void;
 };
 
 /** The team's lead as its own file at `root` names it: the orchestrator, else the operator;
@@ -99,7 +101,14 @@ export function noteUnrecognisedScreen(input: UnrecognisedScreenInput): boolean 
     once: true,
   });
   if (!wrote.ok) return false;
-  markWake(marker, { ...episode, state: 'reported', seat: input.seat, pane: input.pane });
+  input.afterPublish?.();
+  // Compare and set: the marker becomes `reported` only while it is still this episode's own
+  // reserved one. A marker cleared meanwhile (a delivered wake, a pass that placed the screen)
+  // ended the episode and is never recreated; another episode's marker is never overwritten.
+  const now = existsSync(marker) ? episodeOf(marker) : null;
+  if (now !== null && now.id === episode.id && now.state === 'reserved') {
+    markWake(marker, { ...episode, state: 'reported', seat: input.seat, pane: input.pane });
+  }
   return wrote.existing !== true;
 }
 
