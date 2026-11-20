@@ -1657,6 +1657,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         // malformed or earlier-incarnation record stays null and the seat is reported unproven;
         // no home folder is consulted and no shared endpoint is guessed in its place.
         presenceCodexEndpoint: (route, stateDir, seat) => currentCodexEndpoint(stateDir, route.session, seat),
+        // The same record, read in the target's own state snapshot with the binding it names.
+        presenceCodexEndpointFromState: true,
       } : {}),
       // One hosted watch per route on the same heartbeat. Its outbound effects stay behind the
       // shared authority verifier and the direct sender, and no presence pipeline is implied: a

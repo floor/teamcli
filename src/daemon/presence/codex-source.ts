@@ -1068,6 +1068,10 @@ export function codexPresenceTarget(input: {
   session: string;
   seat: { name: string; cli: string };
   endpoint: string | null;
+  /** Take the endpoint from the seat's own `codex_endpoint` record in the same state snapshot the
+   *  binding is read from, never from `endpoint`: a missing or other-binding record is unproven.
+   *  The production daemon sets this, so a relaunch between two reads cannot pair sockets. */
+  endpointFromState?: boolean;
   codexDaemon?: CodexDaemonResolution | 'on' | 'off';
   now?: Date;
 }): CodexTargetRead {
@@ -1128,7 +1132,10 @@ export function codexPresenceTarget(input: {
   if (!isThreadToken(threadId)) {
     return { kind: 'unproven', why: 'the recorded session id is not one thread token' };
   }
-  if (input.endpoint === null || codexSocketPath(input.endpoint) === null) {
+  const endpoint = input.endpointFromState === true
+    ? readRecordedCodexEndpoint(seatState?.codex_endpoint, binding)?.url ?? null
+    : input.endpoint;
+  if (endpoint === null || codexSocketPath(endpoint) === null) {
     return { kind: 'unproven', why: 'no explicit unix app-server endpoint was resolved for this seat' };
   }
   // The endpoint was read by the caller, possibly from an earlier state snapshot than the binding
@@ -1137,7 +1144,7 @@ export function codexPresenceTarget(input: {
   // socket with the successor's binding.
   if (seatState?.codex_endpoint !== undefined) {
     const recorded = readRecordedCodexEndpoint(seatState.codex_endpoint, binding);
-    if (recorded === null || recorded.url !== input.endpoint) {
+    if (recorded === null || recorded.url !== endpoint) {
       return { kind: 'unproven', why: 'the resolved endpoint belongs to another incarnation of this seat' };
     }
   }
@@ -1149,7 +1156,7 @@ export function codexPresenceTarget(input: {
       seat: input.seat.name,
       binding,
       threadId,
-      endpoint: input.endpoint,
+      endpoint,
     },
   };
 }

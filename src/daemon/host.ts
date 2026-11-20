@@ -272,6 +272,9 @@ export type StartMachineDaemonInput = {
    * machine was not told about. Ignored when `presenceSubscriptions` is injected.
    */
   presenceCodexEndpoint?: (route: HostedRoute, stateDir: string, seat: string) => string | null | undefined;
+  /** Read each Codex seat's endpoint from its own state record, in the same snapshot as its
+   *  binding (the production daemon); `presenceCodexEndpoint` is then not consulted. */
+  presenceCodexEndpointFromState?: boolean;
   /**
    * Seats this route expected to carry a managed native channel but whose target resolution or
    * start did not succeed, with the truthful why. Each becomes an explicit unproven source, so a
@@ -1413,7 +1416,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           herdrSession: loaded.team.session,
           session: loaded.team.session,
           seat: { name: seat.name, cli: seat.cli },
-          endpoint: input.presenceCodexEndpoint?.(route, stateDir, seat.name) ?? null,
+          endpoint: input.presenceCodexEndpointFromState === true
+            ? null
+            : input.presenceCodexEndpoint?.(route, stateDir, seat.name) ?? null,
+          ...(input.presenceCodexEndpointFromState === true ? { endpointFromState: true } : {}),
           now: now(),
         });
         if (read.kind === 'skip') return { kind: 'skip', why: read.why };

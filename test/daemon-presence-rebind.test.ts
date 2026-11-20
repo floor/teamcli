@@ -435,11 +435,12 @@ describe('Codex presence sources follow the seat incarnation', () => {
     const first = await startAppServer(a);
     cleanups.push(() => first.close());
     const clock = { at: new Date('2026-11-20T06:00:00.000Z') };
-    // The endpoint reader answers from an earlier snapshot than the target resolver reads.
-    let endpoint = `unix://${a}`;
     const daemon = await start(w, {
       now: () => clock.at,
-      presenceCodexEndpoint: (_route, _dir, seat) => (seat === SEAT ? endpoint : null),
+      // The production wiring: the endpoint comes from the binding's own state snapshot. The
+      // separate reader still answers the predecessor's URL and must not be consulted.
+      presenceCodexEndpointFromState: true,
+      presenceCodexEndpoint: (_route, _dir, seat) => (seat === SEAT ? `unix://${a}` : null),
     });
     const seatOf = () => daemon.health().roots?.[0]?.presence?.seats?.find((seat) => seat.seat === SEAT);
     const readsOf = (server: { requests: { method: string }[] }) =>
@@ -447,19 +448,20 @@ describe('Codex presence sources follow the seat incarnation', () => {
     await waitUntil('the first incarnation to serve', () => seatOf()?.healthy === true);
     expect(readsOf(first)).toBe(1);
 
-    // The relaunch resumed the same thread; the predecessor's server still answers.
-    const second = await startAppServer(b);
-    cleanups.push(() => second.close());
-    writeSeatState(w.dir, SECOND, THREAD, `unix://${b}`);
+    // The relaunch resumed the same thread and minted its binding before recording its server;
+    // the predecessor's server still answers.
+    writeSeatState(w.dir, SECOND, THREAD);
     await waitUntil('the old source to be retired', () => diagnosticOf(w)?.channel === 'stopped');
+    clock.at = new Date(clock.at.getTime() + PRESENCE_REBIND_RETRY_MS + 1);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(readsOf(first)).toBe(1);
-    expect(readsOf(second)).toBe(0);
     expect(publishedBindings(w)).not.toContain(SECOND);
     expect(seatOf()?.healthy).toBe(false);
 
-    // The reader catches up; the retry attaches the successor's own socket.
-    endpoint = `unix://${b}`;
+    // The launch records the successor's server; the retry attaches that socket alone.
+    const second = await startAppServer(b);
+    cleanups.push(() => second.close());
+    writeSeatState(w.dir, SECOND, THREAD, `unix://${b}`);
     clock.at = new Date(clock.at.getTime() + PRESENCE_REBIND_RETRY_MS + 1);
     await waitUntil('the successor to be attached', () => readsOf(second) === 1);
     await waitUntil('the successor to publish', () => publishedBindings(w).includes(SECOND));
