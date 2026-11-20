@@ -216,6 +216,59 @@ describe('a seat’s send is the read it signs', () => {
   });
 });
 
+describe('a carrier\'s delivered receipt is the delivery evidence before its history line', () => {
+  /** The carrier's signed hand-over receipt, as a native queue writes it before its grace wait. */
+  function carried(w: World, id: string, leg: string, at: string): void {
+    const receipt = signReceiptPayload(
+      { kind: 'receipt', status: 'delivered', id, to: 'lead', root: w.root, session: 'acme', at, read_by: `carrier:${leg}` },
+      w.home,
+    );
+    writeFileSync(join(recordDir(w.root, 'acme', 'lead'), `${id}.delivered.json`), `${JSON.stringify(receipt, null, 2)}\n`);
+  }
+
+  test('a send made while the native leg still waits settles the message just handed over, not the older one', () => {
+    const w = makeWorld();
+    delivered(w, 'lead', OLD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
+    line(w, OLD, 'socket', '2026-11-03T09:00:01.000Z');
+    // The newer message: its queue took it at 11:59; the original send is still in its grace,
+    // so no history line names it yet.
+    delivered(w, 'lead', NEW, { from: 'worker', at: '2026-11-03T11:58:59.000Z' });
+    carried(w, NEW, 'native', '2026-11-03T11:59:00.000Z');
+    const outcome = markAnsweredBySend({ seat: 'lead', sender: 'worker', senderId: null, root: w.root, session: 'acme', project: 'acme', home: w.home, at: NOW_ISO });
+    expect(outcome).toEqual({ kind: 'marked', id: NEW });
+    expect(readReceiptOf(w, 'lead', NEW)?.payload.read_by).toBe('answered-by-send');
+    expect(readReceiptExists(w, 'lead', OLD)).toBe(false);
+  });
+
+  test('a --wait history line written after the answer does not hide a hand-over the carrier signed before it', () => {
+    const w = makeWorld();
+    delivered(w, 'lead', OLD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
+    line(w, OLD, 'socket', '2026-11-03T09:00:01.000Z');
+    // The newer message: the socket took it at 11:59, before the answer (12:00); the sender was
+    // waiting with --wait, so its first history line is stamped when the wait ended, 12:02.
+    delivered(w, 'lead', NEW, { from: 'worker', at: '2026-11-03T11:58:59.000Z' });
+    carried(w, NEW, 'socket', '2026-11-03T11:59:00.000Z');
+    line(w, NEW, 'socket', '2026-11-03T12:02:00.000Z');
+    const outcome = markAnsweredBySend({ seat: 'lead', sender: 'worker', senderId: null, root: w.root, session: 'acme', project: 'acme', home: w.home, at: NOW_ISO });
+    expect(outcome).toEqual({ kind: 'marked', id: NEW });
+    expect(readReceiptExists(w, 'lead', OLD)).toBe(false);
+  });
+
+  test('a carried typed wake, or a hand-over after the send, is not that evidence', () => {
+    const w = makeWorld();
+    delivered(w, 'lead', OLD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
+    line(w, OLD, 'socket', '2026-11-03T09:00:01.000Z');
+    delivered(w, 'lead', NEW, { from: 'worker', at: '2026-11-03T11:58:59.000Z' });
+    carried(w, NEW, 'typed', '2026-11-03T11:59:00.000Z');
+    delivered(w, 'lead', LATE, { from: 'worker', at: '2026-11-03T11:59:30.000Z' });
+    carried(w, LATE, 'native', '2026-11-03T12:00:05.000Z');
+    const outcome = markAnsweredBySend({ seat: 'lead', sender: 'worker', senderId: null, root: w.root, session: 'acme', project: 'acme', home: w.home, at: NOW_ISO });
+    expect(outcome).toEqual({ kind: 'marked', id: OLD });
+    expect(readReceiptExists(w, 'lead', NEW)).toBe(false);
+    expect(readReceiptExists(w, 'lead', LATE)).toBe(false);
+  });
+});
+
 describe('independent adversarial read-receipt intake and D7 trace checks', () => {
   test('a receipt cannot be forged by the sender: foreign-key receipt is refused and the sending seat cannot ack, reply, or settle its own outbound message', async () => {
     const w = makeWorld();

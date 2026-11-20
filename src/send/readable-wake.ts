@@ -2,7 +2,7 @@
 // the caller; a receipt is published only after that caller proves transport acceptance.
 import { exposeBody, exposurePointer, type BodyLeg, type ExposureHandle } from '../queue/exposure.ts';
 import { takeCopyNumber, unwrapCopy, wrapCopy } from '../queue/handover.ts';
-import { isStampedPayload } from './record.ts';
+import { CARRIER_DELIVERED_BY, isCarrierDeliveredBy, isStampedPayload, readVerifiedReceipt, receiptFile, recordStampAt, sameFolder, signReceiptPayload, writeReceipt, type SignedReceipt, type StatusContext } from './record.ts';
 import { join } from 'node:path';
 import { currentClaimIn, readMessage } from '../mcp/inbox.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -43,10 +43,15 @@ export function inlineWake(payload: RecordPayload, home: string, limit = RUNTIME
   return Buffer.byteLength(text, 'utf8') <= limit && !/[\x00-\x08\x0b-\x1f\x7f]/.test(text) ? text : null;
 }
 
-/** The same verified reader used by inbox_read, without printing the body a second time. */
+/** A carrier's hand-over of this record's body, verified as inbox_read verifies it. On a legacy
+ *  root it writes the signed `delivered` receipt (a launch brief keeps its bound read); under an
+ *  owned exposure claim it seals that claim. Never prints the body. */
 export function recordDeliveredBody(input: {
   dropDir: string; id: string; root: string; session: string; seat: string; home: string;
   wake?: string;
+  /** The leg that took the body (socket, channel, native, typed, headless-resume), signed on the
+   *  delivered receipt as `read_by: carrier:<leg>`. */
+  via?: string;
   /** The owned exposure claim the carrying leg holds (rfc-event-comms §3, E6): the read is sealed
    *  through that claim only. Absent: the legacy read (the root is not active). */
   owner?: string;
@@ -68,8 +73,24 @@ export function recordDeliveredBody(input: {
         brief, undefined, { receipt: 'after', owner: input.owner, adopt: true });
       return handed.ok ? (handed.seal?.() ?? false) : false;
     }
-    const read = readMessage({ dropDir: input.dropDir, root: input.root, session: input.session, seat: input.seat }, input.id, input.home, brief);
-    return read.ok || read.served === 'already-served';
+    // The shared message key signs every checkout's records: a record of another checkout with the
+    // same seat and session must not get a receipt signed for this one.
+    if (!sameFolder(payload.root, input.root)) return false;
+    if (isGeneralBriefRecord(payload)) {
+      // A launch brief's carried read stays bound to its claim, as the launch's own flow expects.
+      const read = readMessage({ dropDir: input.dropDir, root: input.root, session: input.session, seat: input.seat }, input.id, input.home, brief);
+      return read.ok || read.served === 'already-served';
+    }
+    // A carrier proves only that its transport took the body: a runtime queue that holds it until
+    // a turn ends, a pane that may be mid-turn, a socket frame. That is the signed `delivered`
+    // receipt, never the seat's `read`: a read is only what the seat's own reader writes, so the
+    // message stays unread — `team drops --read` lists it, the watch's unread pass still wakes the
+    // idle seat once, and `team ping` does not report a read the seat never made.
+    const receipt = signReceiptPayload(
+      { kind: 'receipt', status: 'delivered', id: input.id, to: input.seat, root: input.root, session: input.session, at: new Date().toISOString(), read_by: input.via === undefined ? CARRIER_DELIVERED_BY : `${CARRIER_DELIVERED_BY}:${input.via}` },
+      input.home,
+    );
+    return writeReceipt(input.dropDir, receipt, input.home).ok;
   } catch {
     return false;
   }
@@ -104,7 +125,7 @@ export function legText(body: LegBody, payload: RecordPayload): string {
 }
 
 /** E3 for a leg: records the read only for a body that was carried and handed over. */
-export function settleLegBody(body: LegBody, handedOver: 'yes' | 'no' | 'unknown', input?: { dropDir: string; id: string; root: string; session: string; seat: string; home: string; wake?: string }): void {
+export function settleLegBody(body: LegBody, handedOver: 'yes' | 'no' | 'unknown', input?: { dropDir: string; id: string; root: string; session: string; seat: string; home: string; wake?: string; via?: string }): void {
   if (!body.carriesBody) return;
   if (input === undefined) {
     if (handedOver !== 'yes') body.handle?.settle(handedOver, () => false);
@@ -115,6 +136,24 @@ export function settleLegBody(body: LegBody, handedOver: 'yes' | 'no' | 'unknown
     return;
   }
   body.handle.settle(handedOver, (owner) => recordDeliveredBody({ ...input, owner }));
+}
+
+/** The verified carrier hand-over of a legacy record, when one stands: its signed `delivered`
+ *  receipt, bound to the record's seat, checkout and session and naming a carrier
+ *  (`read_by: carrier[:<leg>]`). Null for a stamped record, for none, and for any other receipt.
+ *  Every automatic redelivery asks this one question before it carries a body again. */
+export function carrierDeliveryOf(dropDir: string, id: string, context: StatusContext, home: string): SignedReceipt | null {
+  if (recordStampAt(dropDir, id) !== false) return null;
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return null;
+  const receipt = readVerifiedReceipt(receiptFile(dropDir, id, 'delivered'), id, 'delivered', context, key.key);
+  return receipt !== null && isCarrierDeliveredBy(receipt.payload.read_by) ? receipt : null;
+}
+
+/** The ID-only wake for a body a carrier already handed over: it names the message and asks the
+ *  seat to read it from its drop before acknowledging it. */
+export function carriedPointer(id: string, seat: string): string {
+  return `message ${id} was already handed to you once; read it with team drops --read --id ${id} --seat ${seat} before you acknowledge it`;
 }
 
 export { exposurePointer };

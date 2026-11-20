@@ -6,9 +6,10 @@
 // is synthetic: a temporary team, a fake pane, a fake socket write and a settings file this test
 // writes itself. No live session is read and nothing real is dialed or written.
 import { afterEach, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { runSend } from '../src/commands/send.ts';
+import { redeliverChannelOnSocket, runSend } from '../src/commands/send.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { buildCommandOutputSchema, SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { LOG_FILE } from '../src/state.ts';
@@ -65,6 +66,35 @@ test('a dry run lists the implied socket leg as a candidate when the receiver ma
   expect(existsSync(join(made.dir, LOG_FILE))).toBe(false);
 });
 
+test('an order led by the retired inbox word, with no proven channel, still walks the socket the seat accepts ahead of the drop', async () => {
+  // The floor orchestrator's shape on a dark root: `[mcp-inbox]` resolves to the drop leg alone,
+  // and with no channel listener nothing would wake the seat. The socket its files allow is walked.
+  for (const order of [['mcp-inbox'], ['mcp-inbox', 'drop']]) {
+    const made = world(order);
+    declare(made, 'lead', 'accept');
+    const host = fake(made);
+    const io = owner(made.root);
+    try {
+      expect(await runSend(['lead', 'hello', '--dry-run', '--json'], io, host)).toBe(0);
+      const legs = deliveryOf(io).filter((entry) => entry.state === 'candidate').map((entry) => entry.leg);
+      expect(legs).toEqual(['socket', 'drop']);
+      expect(host.frames).toEqual([]);
+    } finally {
+      made.cleanup();
+    }
+  }
+});
+
+test('an inbox-led order keeps the socket out when the seat does not accept it: the drop alone, as before', async () => {
+  const made = world(['mcp-inbox']);
+  cleanup = made.cleanup;
+  const host = fake(made);
+  const io = owner(made.root);
+  expect(await runSend(['lead', 'hello', '--dry-run', '--json'], io, host)).toBe(0);
+  const legs = deliveryOf(io).filter((entry) => entry.state === 'candidate').map((entry) => entry.leg);
+  expect(legs).toEqual(['drop']);
+});
+
 test('a dry run lists the socket the walk would not dial with its reason instead of omitting it', async () => {
   const made = world(null);
   cleanup = made.cleanup;
@@ -107,4 +137,36 @@ test('the report schema accepts the channel row and still refuses a leg no repor
   const violations = validateAgainstJsonSchema(doc, schema).join('\n');
   expect(violations).toContain('$.delivery[0].leg');
   expect(violations).toContain('"invented"');
+});
+
+test('a body a carrier already delivered is not carried again by repeated socket redeliveries; an undelivered one still is', async () => {
+  // The watch's Claude ladder and the channel's socket retry both redeliver on the socket. After the
+  // first send's full-body frame, its delivered receipt stands: every later pass is the ID-only wake.
+  const made = world(['socket', 'drop']);
+  cleanup = made.cleanup;
+  declare(made, 'lead', 'accept');
+  const host = fake(made);
+  const io = owner(made.root);
+  expect(await runSend(['lead', 'Carried once\nand only once'], io, host)).toBe(0);
+  expect(host.frames).toHaveLength(1);
+  expect(host.frames[0]).toContain('Carried once\\nand only once');
+  const drops = dropDir(made.dir, 'lead');
+  const id = readdirSync(drops).find((name) => /^[0-9a-f-]{36}$/.test(name))!;
+  expect(existsSync(join(drops, `${id}.delivered.json`))).toBe(true);
+  const loaded = readTeamConfig(made.root, { home: made.home });
+  if (!loaded.ok) throw new Error('the fixture team file does not read');
+  const again = () => redeliverChannelOnSocket({
+    host, dir: made.dir, root: made.root, project: loaded.team.project, session: loaded.team.session, seat: 'lead', cli: 'claude-code',
+    dropDir: drops, drop: { id, from: 'owner' }, team: loaded.team,
+  });
+  for (let pass = 0; pass < 3; pass += 1) expect((await again()).ok).toBe(true);
+  expect(host.frames).toHaveLength(4);
+  for (const frame of host.frames.slice(1)) {
+    expect(frame).not.toContain('Carried once');
+    expect(frame).toContain(id);
+  }
+  // A message whose delivered receipt is gone (nothing proves a hand-over) keeps its body.
+  unlinkSync(join(drops, `${id}.delivered.json`));
+  expect((await again()).ok).toBe(true);
+  expect(host.frames[4]).toContain('Carried once\\nand only once');
 });

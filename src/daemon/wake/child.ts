@@ -187,7 +187,7 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
       record(walk.reason, false, ms, walk);
       return { outcome: 'failed', reason: walk.reason };
     }
-    recordDeliveredBody({ dropDir: seatMailDirIn(request.dir, request.session, request.seat), id: request.id, root: request.root, session: request.session, seat: request.seat, home: request.home, wake: request.line });
+    recordDeliveredBody({ dropDir: seatMailDirIn(request.dir, request.session, request.seat), id: request.id, root: request.root, session: request.session, seat: request.seat, home: request.home, wake: request.line, via: 'typed' });
     markWake(marker, {
       id: request.id,
       at: deps.now().toISOString(),
