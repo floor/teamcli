@@ -2377,6 +2377,36 @@ type DueReport = {
  * retry publishes each name once. A lead drop's id is fixed by the set of messages it lists, so a
  * lost marker finds the standing record rather than writing a second one.
  */
+/** The marker beside a message whose sender was told no route is left to wake its seat. */
+export function noRouteReportedPath(dropDir: string, id: string): string {
+  return join(dropDir, `${id}.no-route-reported`);
+}
+
+/** Tells a message's senders, once, that its seat is a protected pane whose channel offer was
+ *  given up before any push: nothing wakes it until the channel's re-offer. The lead is not a
+ *  target here (it may be the very seat), and its own report keeps the generic 2N rule. */
+function notifyNoRoute(scene: RetryScene, seat: string, dropDir: string, id: string, home: string, lead: ReportTarget | null, at: string): void {
+  if (existsSync(noRouteReportedPath(dropDir, id))) return;
+  const payload = payloadOf(dropDir, id, home);
+  if (payload === null || payload.rule === LEAD_REPORT_RULE) return;
+  const { targets } = reportTargets(scene, payload, home);
+  const senders = targets.filter((target) => lead === null || target.root !== lead.root || target.session !== lead.session || target.to !== lead.to);
+  if (senders.length === 0) return;
+  if (!reserve(noRouteReportedPath(dropDir, id), { id, at, state: 'reserved' })) return;
+  const text = `${seat}: a message from ${payload.from} has no route to wake its seat yet (id ${id}): the send's channel offer was given up before any push, and ${seat} is a protected pane that takes no typed pointer; the channel re-offers it as a numbered copy; the drop is at ${liveRecordPath(dropDir, id)}`;
+  let landed = 0;
+  for (const target of senders) {
+    const outcome = writeRuntimeMailboxRecord({ root: target.root, home, to: target.to, id: `no-route-${id}`, text, session: target.session, at, once: true });
+    if (outcome.ok) landed += 1;
+  }
+  if (landed === 0) {
+    release(noRouteReportedPath(dropDir, id));
+    return;
+  }
+  mark(noRouteReportedPath(dropDir, id), { id, at, state: 'reported', to: senders.map((target) => target.label) });
+  scene.say(`${seat}: no route is left to wake it for ${id}; its sender was told`, true);
+}
+
 export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, reading?: StuckReading): void {
   const home = scene.home;
   if (home === undefined) return;
@@ -2430,16 +2460,22 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
     const leadSpeaks = stuckEpisodeFor(mail, seat.name, dropDir) === null && !youngWorking(seat.name);
     // Twice this seat's own window: the wake at N and the report at 2N read one value.
     const threshold = windowForSeat(window, seat) * 1000 * 2;
-    // A protected pane on an active root (no pointer is ever typed there) whose channel offer its
-    // sender gave up before any push has no route left at all: nothing will wake it, so it is
-    // reported now, not at 2N — the lead and the sender each hear it named.
-    const noRouteLeft = (id: string): boolean => home !== undefined
-      && claudeAdapterRoot(seat.cli, scene.root, home, seat.webhook !== undefined)
-      && scene.eventLegs?.(seat.name)?.pointer !== true
-      && channelOfferGivenUp(seatFolderOf(dropDir, id), id);
+    // A confirmed protected pane on an active root (the route lookup answers, and it permits no
+    // pointer) whose channel offer its sender gave up before any push: no wake is coming until the
+    // channel server's re-offer. Its sender is told now, under its own marker and heading; the
+    // generic report at 2N (lead and senders) is untouched by it.
+    const legs = scene.eventLegs?.(seat.name);
+    const protectedPane = legs !== undefined && legs.pointer !== true
+      && claudeAdapterRoot(seat.cli, scene.root, home, seat.webhook !== undefined);
+    if (protectedPane) {
+      for (const message of unread) {
+        if (!channelOfferGivenUp(seatFolderOf(dropDir, message.id), message.id)) continue;
+        notifyNoRoute(scene, seat.name, dropDir, message.id, home, lead, at);
+      }
+    }
     for (const message of unread) {
       const age = nowMs - Date.parse(message.ts);
-      if (!(age >= threshold) && !noRouteLeft(message.id)) continue;
+      if (!(age >= threshold)) continue;
       if (existsSync(reportedPath(dropDir, message.id))) continue;
       // The pass listed this folder before the seat could read it: a receipt that landed since
       // is the read itself, and reporting the message as queued, not woken would tell its

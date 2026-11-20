@@ -84,7 +84,7 @@ import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
-import { channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
+import { channelOfferStartedGivenUp, channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { heldAt } from '../held.ts';
@@ -877,17 +877,18 @@ function watchChannel(
   // the record's channel attempt (any markers move into its history) and pushes the next numbered
   // copy.
   let resending = false;
-  const ownsSeat = async (): Promise<boolean> => {
+  const ownsSeat = async (): Promise<boolean | 'given-up'> => {
     const team = serving.loadTeam();
     if (team === null) return false;
     const { permittedEventLegs } = await import('../commands/send.ts');
     const legs = permittedEventLegs({ dir: join(serving.root, '.agents'), root: serving.root, home: serving.home, session: serving.session, seat: serving.seat, team, now: () => new Date() });
     const declared = team.seats.find((one) => one.name === serving.seat);
-    // The Claude adapter (§2.3): on an active root this server re-sends nothing. Its push of each
-    // new arrival is the channel offer; an offer that stays unsettled for 90 s makes the seat
-    // unproven, and the next attempt is the watch's pointer. A channel re-push would move no
-    // deadline and prove nothing.
-    if (claudeAdapterRoot(declared?.cli ?? 'claude-code', serving.root, serving.home, declared?.webhook !== undefined)) return false;
+    // The Claude adapter (§2.3): on an active root this server re-sends nothing of its own pushes.
+    // Its push of each new arrival is the channel offer; an offer that stays unsettled for 90 s
+    // makes the seat unproven, and the next attempt is the watch's pointer. The one exception is
+    // an offer that never left: a send's channel leg that gave up before any push. That is
+    // re-offered here on the channel, numbered, on the ordinary backoff (`givenUpOnly`).
+    if (claudeAdapterRoot(declared?.cli ?? 'claude-code', serving.root, serving.home, declared?.webhook !== undefined)) return 'given-up';
     return channelOwnsSeat({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, walkTakesChannel: legs.channel });
   };
   const redeliverPass = (): void => {
@@ -895,9 +896,12 @@ function watchChannel(
     const keyNow = messageKeyState(serving.home);
     if (keyNow.kind !== 'key') return;
     resending = true;
-    const seat = { dropDir: serving.dropDir, context: { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key: keyNow.key, agentsDir: join(serving.root, '.agents') };
+    const base = { dropDir: serving.dropDir, context: { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, key: keyNow.key, agentsDir: join(serving.root, '.agents') };
     void (async () => {
-      if (resendCandidates(seat, Date.now()).length === 0 || !(await ownsSeat())) return;
+      const owned = await ownsSeat();
+      if (owned === false) return;
+      const seat = owned === 'given-up' ? { ...base, admit: channelOfferStartedGivenUp } : base;
+      if (resendCandidates(seat, Date.now()).length === 0) return;
       await resendPass(seat, Date.now(), async (name) => {
         const folder = seatFolderOf(serving.dropDir, name);
         if (!retireChannelAttempt(folder, name, Date.now())) return null;

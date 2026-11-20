@@ -2013,7 +2013,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, heldDropRetry, ...(quiet || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
-            { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
+            { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }),
+              // The same route lookup the wake scene binds: the report pass tells a confirmed
+              // protected pane from a missing lookup by it.
+              eventLegs: (seat: string) => permittedEventLegs({ dir, root, home: sources.home ?? realHost.home, session, seat, team, now: sources.now }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
             stuckReading,
           );

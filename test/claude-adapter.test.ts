@@ -32,7 +32,7 @@ import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { typedWakeMaxFor } from '../src/send/readable-wake.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
-import { reportedPath, reportUnreadDrops, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
+import { noRouteReportedPath, reportedPath, reportUnreadDrops, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { readState } from '../src/state.ts';
@@ -734,19 +734,35 @@ describe('round 1: a protected pane (its declared order leaves typed out) takes 
     expect(`${io.out}${io.err}`).toContain(`${SEAT}: waiting: protected pane, no proven channel`);
   });
 
-  test('a given-up channel offer at a protected pane is reported to the lead and the sender at once, not left silent', async () => {
-    // No pointer is ever typed here and the sender's channel leg gave up before any push: no
-    // route is left, so the pass reports the record now instead of at 2N.
+  test('a given-up channel offer at a confirmed protected pane tells its sender at once; an eligible seat or a missing route lookup does not', async () => {
+    // The sender is told under its own marker and heading; the generic 2N report (lead and
+    // senders) is left untouched, so the lead's report is never spent by this early word.
     const at = place([], ['drop']);
-    stamped(at, ID);
+    const payload: RecordPayload = { kind: 'message', id: ID, to: SEAT, to_id: null, root: at.root, session: SESSION, at: new Date().toISOString(), body: 'from the owner', from: 'owner', from_id: null, rule: 'the owner', thread: ID };
+    expect(writeRecord(dropOf(at), signRecord(stampedPayload(payload, at.home), at.home)).ok).toBe(true);
     expect(reserveChannelFallback(stampedOf(at), { v: 1, kind: CHANNEL_HELD_RECEIPT, id: ID, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' })).toBe('held');
-    const scene = pass(at, new Date(), []);
-    reportUnreadDrops(scene, { unreadAfter: 600 });
-    expect(existsSync(reportedPath(dropOf(at), ID))).toBe(true);
-    // Without the given-up offer the same young record is not reported yet.
-    stamped(at, OTHER);
-    reportUnreadDrops(pass(at, new Date(), []), { unreadAfter: 600 });
-    expect(existsSync(reportedPath(dropOf(at), OTHER))).toBe(false);
+    const found = (): string[] => {
+      const out: string[] = [];
+      const walk = (dir: string): void => {
+        for (const name of readdirSync(dir, { withFileTypes: true })) {
+          if (name.isDirectory()) walk(join(dir, name.name));
+          else if (name.name.startsWith(`no-route-${ID}`)) out.push(join(dir, name.name));
+        }
+      };
+      walk(at.root);
+      walk(at.home);
+      return out;
+    };
+    // A missing route lookup and an eligible seat: nothing early.
+    reportUnreadDrops({ ...pass(at, new Date(), []), eventLegs: undefined }, { unreadAfter: 600 });
+    reportUnreadDrops({ ...pass(at, new Date(), []), eventLegs: () => ({ channel: false, socket: false, pointer: true }) }, { unreadAfter: 600 });
+    expect(existsSync(noRouteReportedPath(dropOf(at), ID))).toBe(false);
+    // The confirmed protected pane: the sender's record is written, once, and the 2N marker is not.
+    reportUnreadDrops({ ...pass(at, new Date(), []), eventLegs: () => ({ channel: false, socket: false, pointer: false }) }, { unreadAfter: 600 });
+    expect(existsSync(noRouteReportedPath(dropOf(at), ID))).toBe(true);
+    expect(found()).toHaveLength(1);
+    expect(readFileSync(found()[0]!, 'utf8')).toContain('has no route to wake its seat yet');
+    expect(existsSync(reportedPath(dropOf(at), ID))).toBe(false);
   });
 });
 

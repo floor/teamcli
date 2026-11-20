@@ -19,7 +19,7 @@
 // stale decision, in either host, reserves nothing. A dark root has no stamped folder, so neither
 // host finds anything to offer there.
 import type { KeyObject } from 'node:crypto';
-import { lstatSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { join } from 'node:path';
 import { stampedListing } from './mail-tree.ts';
@@ -33,6 +33,9 @@ import { isRecordSidecarName, recordStampAt, stampedSettled, type StatusContext 
 
 /** At most this many records are offered to one seat in one pass; the rest stay due. */
 export const RESEND_PER_PASS = 3;
+
+/** The record's delivery history folder name beside it (src/queue/handover.ts). */
+const EXPOSURES_DIR = '.exposures';
 
 const RECORD_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -49,6 +52,9 @@ export type ResendSeat = {
   unproven?: () => boolean;
   /** Only these records are offered (the Claude adapter: a proven seat's overdue records). */
   only?: ReadonlySet<string>;
+  /** Only records this answers true for are candidates; their clock is the ordinary one
+   *  (`resendDue`). The channel server on an active root re-offers given-up channel offers. */
+  admit?: (folder: string, id: string) => boolean;
 };
 
 /** How long a channel offer may stay unsettled before the seat is unproven (§2.3). */
@@ -128,6 +134,27 @@ export function channelOfferGivenUp(folder: string, id: string): boolean {
   return legs !== 'unknown' && !legs.includes('channel');
 }
 
+/** Whether this record's channel offering began as a given-up offer: its sender's abort stands
+ *  with no server push (`channelOfferGivenUp`), or such an abort was retired into its delivery
+ *  history by an earlier channel re-offer (`c<time>.<id>.channel-abort`, with no retired push
+ *  marker of the server's own beside it at that time). The channel server on an active root keeps
+ *  re-offering such a record on the channel, numbered and on the ordinary backoff, until it
+ *  settles: a given-up offer never holds the channel for good. */
+export function channelOfferStartedGivenUp(folder: string, id: string): boolean {
+  if (channelOfferGivenUp(folder, id)) return true;
+  let names: string[];
+  try {
+    names = readdirSync(join(folder, EXPOSURES_DIR, id));
+  } catch {
+    return false;
+  }
+  const retired = names.filter((name) => /^c\d+\./.test(name));
+  const first = retired.map((name) => Number(/^c(\d+)\./.exec(name)![1])).sort((a, b) => a - b)[0];
+  if (first === undefined) return false;
+  const firstRound = retired.filter((name) => name.startsWith(`c${String(first)}.`));
+  return firstRound.some((name) => name.endsWith('.channel-abort')) && !firstRound.some((name) => name.endsWith('.channel-emitted'));
+}
+
 /** The seat's stamped records that are unsettled and due now, oldest arrival first. */
 export function resendCandidates(seat: ResendSeat, nowMs: number): string[] {
   const listing = stampedListing(seat.dropDir);
@@ -188,6 +215,7 @@ export function claudeAdapterRoot(cli: string, root: string, home: string, webho
 
 function dueNow(folder: string, id: string, seat: ResendSeat, nowMs: number, arrived: number): boolean {
   if (seat.only !== undefined && !seat.only.has(id)) return false;
+  if (seat.admit !== undefined && !seat.admit(folder, id)) return false;
   if (recordStampAt(folder, id) !== true || stampedSettled(folder, id, seat.context, seat.key)) return false;
   // The Claude adapter's seats (the watch binds `unproven`, or the proven seat's `only` set) keep
   // the pointer clock alone (§2.3): an unreadable history declines the attempt before any other
