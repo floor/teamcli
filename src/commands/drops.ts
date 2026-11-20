@@ -66,7 +66,7 @@ import {
 import { listArchivedUnread, runInboxRetention, seatDropFolders } from '../send/inbox-retention.ts';
 import { legacySeatFolders, listLegacyArchivedUnread } from '../send/legacy-inbox-retention.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, recordStampAt, settledReadOf, signedRecordOf, type RecordPayload, type StatusContext, verifyRecord } from '../send/record.ts';
+import { alreadyReadSentence, fileStatStamp, isRecordSidecarName, isReadOrCleared, keyPrintForCache, recordNameOk, recordStampAt, settledReadOf, signedRecordOf, type RecordPayload, type StatusContext, verifyRecord } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { LEGACY_TREE, seatMailDirIn, seatMailParts, stampedListing } from '../queue/mail-tree.ts';
 
@@ -315,6 +315,42 @@ function legacyDropAt(path: string): boolean {
     return false;
   }
 }
+
+/** The record id a `--id` word names in this seat's folders: the word itself when it is a whole
+ *  id or names no unique record, else the one record name (never a sidecar) that starts with a
+ *  prefix of at least 8 characters. An ambiguous prefix is left as given, so the read refuses it. */
+export function resolveDropId(dropDir: string, word: string): string {
+  if (word.length < 8 || DROP_RECORD_NAME.test(word)) return word;
+  // Every folder must list: a tree that cannot be read could hold a second match, so the word is
+  // left as given (the read then refuses it) rather than resolved against half the folders.
+  const folders: { folder: string; names: readonly string[] }[] = [];
+  try {
+    folders.push({ folder: dropDir, names: readdirSync(dropDir) });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return word;
+  }
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return word;
+  if (stamped !== null) folders.push({ folder: stamped.folder, names: stamped.names });
+  // Only a regular file with a record's own name is a candidate, as the inbox reader counts them:
+  // a sidecar, a folder, a link or any other entry never makes or breaks a match.
+  const matches = new Set<string>();
+  for (const { folder, names } of folders) {
+    for (const name of names) {
+      if (!name.startsWith(word) || !DROP_RECORD_NAME.test(name) || isRecordSidecarName(name)) continue;
+      try {
+        if (!lstatSync(join(folder, name)).isFile()) continue;
+      } catch {
+        return word;
+      }
+      matches.add(name);
+    }
+  }
+  return matches.size === 1 ? [...matches][0]! : word;
+}
+
+/** A record's own file name: a lowercase UUID, or the `unread-<uuid>` an earlier build wrote. */
+const DROP_RECORD_NAME = /^(?:unread-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'; reason: string };
 
@@ -790,7 +826,9 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
     };
     const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
-    const asked = args.values.id;
+    // A short id, as the reader line and the event pointer print it, names the one record in this
+    // seat's folders that starts with it; a record's sidecars (`<id>.wake-try`, …) are never one.
+    const asked = args.values.id === undefined ? undefined : resolveDropId(dropDir, args.values.id);
     if (asked !== undefined) {
       // E7b revision 3 (carrier 4): an older requester's relayed read never carries a stamped body.
       if (io.legacyRelay === true && recordStampAt(dropDir, asked) !== false) {
