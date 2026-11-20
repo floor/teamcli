@@ -294,8 +294,11 @@ function presenceHookCommand(
   presence: CliHookPresence,
   event: 'turn-start' | 'turn-end' | 'human-wait',
   runner: string,
+  start = false,
 ): string {
-  const filter = event === 'human-wait' ? ' --notification permission_prompt' : '';
+  const filter = event === 'human-wait'
+    ? ' --notification permission_prompt'
+    : start ? ' --start session-start' : '';
   return `${runner} presence-hook --dir ${shellQuote(presence.dir)} --session ${shellQuote(presence.session)} --seat ${shellQuote(presence.seat)} --binding ${shellQuote(presence.binding)} --event ${event}${filter} >/dev/null 2>&1 || true`;
 }
 
@@ -412,7 +415,15 @@ export function cliHookSettings(
   // The CLI's own word on its model, at session start and at every /model switch (2026-11-13: a
   // lead the owner switched with /model kept its old model on record and every send carried a
   // drift notice). Written beside the state file; nothing here reads the screen.
-  hooks.SessionStart = [{ hooks: [{ type: 'command', command: modelReportCommand(statePath) }] }];
+  const sessionStart: unknown[] = [{ hooks: [{ type: 'command', command: modelReportCommand(statePath) }] }];
+  hooks.SessionStart = sessionStart;
+  // A fresh incarnation's first presence word: the CLI is at its prompt after a startup, resume
+  // or clear (the hook reads the payload's `source`; `compact` declines). Without it a restarted
+  // seat has no projection under its new binding until its first turn, and the watch holds the
+  // very message that would start that turn.
+  if (presence !== undefined && cli !== null) {
+    sessionStart.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-end', cli, true) }] });
+  }
   hooks.PostModelSwitch = [{ hooks: [{ type: 'command', command: modelReportCommand(statePath) }] }];
   const document: Record<string, unknown> = { hooks };
   if (inbound !== undefined && inbound !== null) document.crossSessionInbound = inbound;
