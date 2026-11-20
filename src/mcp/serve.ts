@@ -1,4 +1,4 @@
-import { recordDeliveredBody } from '../send/readable-wake.ts';
+import { carriedPointer, carrierDeliveryOf, recordDeliveredBody } from '../send/readable-wake.ts';
 // `team mcp serve`: one seat's inbox, spoken to its CLI as MCP over stdio.
 //
 // The server is started by the seat's own launch line, so the seat, session, team file and root
@@ -580,6 +580,12 @@ function watchChannel(
       const exposure = exposeBody({ dropDir: dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
       heldExposure = exposure;
       if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(dropDir, id)?.seq ?? null);
+      // A legacy body another carrier already handed over (a socket frame that won the race with
+      // this arrival) is not pushed again: the notification is the ID-only wake asking the seat to
+      // read the drop before acknowledging it. Stamped copies and owned exposures keep their paths.
+      const carriedBefore = exposure.kind === 'legacy'
+        && carrierDeliveryOf(dropDir, id, { to: serving.seat, root: serving.root, session: serving.session }, serving.home) !== null;
+      if (carriedBefore) push.content = carriedPointer(id, serving.seat);
       // E7b: a stamped record's copy is numbered immediately before the line leaves; a history
       // that cannot be written sends nothing now, and the redelivery pass offers it again.
       // The Claude adapter §2.2: the copy carries a fresh offer token in its meta, kept beside the
@@ -614,7 +620,7 @@ function watchChannel(
       // E3: the frame was written; the read is sealed through this hand-over's own claim only.
       const delivered = { dropDir: dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home, via: 'channel' };
       if (exposure.kind === 'expose') exposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
-      else if (exposure.kind === 'legacy') recordDeliveredBody(delivered);
+      else if (exposure.kind === 'legacy' && !carriedBefore) recordDeliveredBody(delivered);
       return 'pushed' as const;
     });
     // A commit that returned before the frame was written exposed nothing: give the claim back.

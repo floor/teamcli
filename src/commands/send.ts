@@ -11,7 +11,7 @@ import { queueLog } from '../queue/log.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
-import { inlineWake, legBody, legText, oversizedWake, recordDeliveredBody, settleLegBody, typedWakeMaxFor, RUNTIME_WAKE_MAX, type LegBody } from '../send/readable-wake.ts';
+import { carriedPointer, carrierDeliveryOf, inlineWake, legBody, legText, oversizedWake, recordDeliveredBody, settleLegBody, typedWakeMaxFor, RUNTIME_WAKE_MAX, type LegBody } from '../send/readable-wake.ts';
 import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -72,7 +72,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, isCarrierDeliveredBy, readVerifiedReceipt, receiptFile, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, stampedSettlement, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord, type StatusContext } from '../send/record.ts';
+import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, stampedSettlement, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -6739,15 +6739,6 @@ const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending sessi
  * seat's declaration is re-confirmed. A person's command must not wait a second on another
  * seat's screen.
  */
-/** Whether a carrier already handed this record's body over: a `delivered` receipt that verifies
- *  for the message, its seat, checkout and session, and names the carrier. */
-function carrierDelivered(dropDir: string, id: string, context: StatusContext, home: string): boolean {
-  const key = messageKeyState(home);
-  if (key.kind !== 'key') return false;
-  const receipt = readVerifiedReceipt(receiptFile(dropDir, id, 'delivered'), id, 'delivered', context, key.key);
-  return receipt !== null && isCarrierDeliveredBy(receipt.payload.read_by);
-}
-
 async function deliverSocketFrame(
   dir: string,
   who: string,
@@ -6831,8 +6822,8 @@ async function deliverSocketFrame(
   // seat, checkout and session) is not carried again by an automatic redelivery — the watch's
   // ladder or the channel's socket retry: the frame is the ID-only wake, and the seat's own read
   // still serves the body. A message with no such receipt keeps the body.
-  if (bodyIncluded && !isStampedPayload(payload) && carrierDelivered(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home)) {
-    content = `${content.split('\n')[0]}\n\n${pointerFor(msgId, null)}`;
+  if (bodyIncluded && carrierDeliveryOf(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home) !== null) {
+    content = `${content.split('\n')[0]}\n\n${carriedPointer(msgId, to.seat)}`;
     bodyIncluded = false;
   }
   // rfc-event-comms §3 (E6): the frame's hand-over decision, taken once for the exact frame sent.

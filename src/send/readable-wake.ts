@@ -2,7 +2,7 @@
 // the caller; a receipt is published only after that caller proves transport acceptance.
 import { exposeBody, exposurePointer, type BodyLeg, type ExposureHandle } from '../queue/exposure.ts';
 import { takeCopyNumber, unwrapCopy, wrapCopy } from '../queue/handover.ts';
-import { CARRIER_DELIVERED_BY, isStampedPayload, sameFolder, signReceiptPayload, writeReceipt } from './record.ts';
+import { CARRIER_DELIVERED_BY, isCarrierDeliveredBy, isStampedPayload, readVerifiedReceipt, receiptFile, recordStampAt, sameFolder, signReceiptPayload, writeReceipt, type SignedReceipt, type StatusContext } from './record.ts';
 import { join } from 'node:path';
 import { currentClaimIn, readMessage } from '../mcp/inbox.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -136,6 +136,24 @@ export function settleLegBody(body: LegBody, handedOver: 'yes' | 'no' | 'unknown
     return;
   }
   body.handle.settle(handedOver, (owner) => recordDeliveredBody({ ...input, owner }));
+}
+
+/** The verified carrier hand-over of a legacy record, when one stands: its signed `delivered`
+ *  receipt, bound to the record's seat, checkout and session and naming a carrier
+ *  (`read_by: carrier[:<leg>]`). Null for a stamped record, for none, and for any other receipt.
+ *  Every automatic redelivery asks this one question before it carries a body again. */
+export function carrierDeliveryOf(dropDir: string, id: string, context: StatusContext, home: string): SignedReceipt | null {
+  if (recordStampAt(dropDir, id) !== false) return null;
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return null;
+  const receipt = readVerifiedReceipt(receiptFile(dropDir, id, 'delivered'), id, 'delivered', context, key.key);
+  return receipt !== null && isCarrierDeliveredBy(receipt.payload.read_by) ? receipt : null;
+}
+
+/** The ID-only wake for a body a carrier already handed over: it names the message and asks the
+ *  seat to read it from its drop before acknowledging it. */
+export function carriedPointer(id: string, seat: string): string {
+  return `message ${id} was already handed to you once; read it with team drops --read --id ${id} --seat ${seat} before you acknowledge it`;
 }
 
 export { exposurePointer };
