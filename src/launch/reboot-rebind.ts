@@ -46,7 +46,7 @@ export type RebootRebindInput = {
 };
 
 export type RebootRebind =
-  | { ok: true; launched: LaunchedIdentity; shell: number; shellStart: number }
+  | { ok: true; launched: LaunchedIdentity; shell: number; shellStart: number; tree: ProcessParent[] }
   | { ok: false; why: string };
 
 /** The instant the recorded launch began: its shell's start, else its newest CLI start. */
@@ -84,30 +84,50 @@ export function restartedGeneration(
 }
 
 /** Several foreground processes must be one tree: exactly one is the shell's child, and every
- *  other descends from it within a bounded walk. One process needs no tree. */
-function oneLaunchTree(cli: readonly number[], shell: number, parentOf: ((pid: number) => ProcessParent | null) | undefined): boolean {
-  if (cli.length === 1) return true;
-  if (parentOf === undefined) return false;
+ *  other descends from it within a bounded walk, each parent born no later than its child. The
+ *  nodes read are returned, so the caller can read them again (pid, parent and birth) at the
+ *  last check before its write. One process needs no tree; null is no tree. */
+function oneLaunchTree(cli: readonly number[], shell: number, parentOf: ((pid: number) => ProcessParent | null) | undefined): ProcessParent[] | null {
+  if (cli.length === 1) return [];
+  if (parentOf === undefined) return null;
+  const seen = new Map<number, ProcessParent>();
   const read = (pid: number): ProcessParent | null => {
+    const known = seen.get(pid);
+    if (known !== undefined) return known;
     const node = parentOf(pid);
-    return node !== null && node.pid === pid && Number.isSafeInteger(node.ppid) ? node : null;
+    if (node === null || node.pid !== pid || !Number.isSafeInteger(node.ppid) || !Number.isSafeInteger(node.birth) || node.birth <= 0) return null;
+    const kept = { pid: node.pid, ppid: node.ppid, birth: node.birth };
+    seen.set(pid, kept);
+    return kept;
   };
+  for (const pid of cli) if (read(pid) === null) return null;
   const roots = cli.filter((pid) => read(pid)?.ppid === shell);
-  if (roots.length !== 1) return false;
+  if (roots.length !== 1) return null;
   const root = roots[0]!;
   for (const pid of cli) {
     if (pid === root) continue;
-    let at = pid;
+    let child = read(pid)!;
     let reached = false;
     for (let depth = 0; depth < ANCESTRY_DEPTH; depth++) {
-      const node = read(at);
-      if (node === null || node.ppid <= 1 || node.ppid === shell) break;
-      if (node.ppid === root) { reached = true; break; }
-      at = node.ppid;
+      if (child.ppid <= 1 || child.ppid === shell) break;
+      const parent = read(child.ppid);
+      if (parent === null || parent.birth > child.birth) break;
+      if (parent.pid === root) { reached = true; break; }
+      child = parent;
     }
-    if (!reached) return false;
+    if (!reached) return null;
   }
-  return true;
+  return [...seen.values()];
+}
+
+/** The tree read again: every node still has its pid, parent and birth. */
+export function launchTreeStands(tree: readonly ProcessParent[], parentOf: ((pid: number) => ProcessParent | null) | undefined): boolean {
+  if (tree.length === 0) return true;
+  if (parentOf === undefined) return false;
+  return tree.every((node) => {
+    const now = parentOf(node.pid);
+    return now !== null && now.pid === node.pid && now.ppid === node.ppid && now.birth === node.birth;
+  });
 }
 
 export function rebootRebindProof(input: RebootRebindInput): RebootRebind {
@@ -135,7 +155,8 @@ export function rebootRebindProof(input: RebootRebindInput): RebootRebind {
   // Every process recorded carries its birth: a record without them would let the typed proof
   // trust pids alone.
   if (next.cli_start === undefined) return no('the pane does not hold the recorded launched CLI process, and a live process birth cannot be read');
-  if (!oneLaunchTree(next.cli, next.shell, input.parentOf)) {
+  const tree = oneLaunchTree(next.cli, next.shell, input.parentOf);
+  if (tree === null) {
     return no('the pane does not hold the recorded launched CLI process, and its foreground is not one launch\'s process tree');
   }
   const shellStart = input.startOf(next.shell);
@@ -143,5 +164,5 @@ export function rebootRebindProof(input: RebootRebindInput): RebootRebind {
   if (shellStart === null || shellStart < launchedAt + BOOT_SKEW_MS) {
     return no('the pane does not hold the recorded launched CLI process, and its live shell is not a later start than the recorded launch');
   }
-  return { ok: true, launched: next, shell: next.shell, shellStart };
+  return { ok: true, launched: next, shell: next.shell, shellStart, tree };
 }

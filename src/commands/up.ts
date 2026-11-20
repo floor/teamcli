@@ -123,6 +123,8 @@ import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent, recordProvenAgentAddress, recordProvenSeatConversation } from '../registry/agents.ts';
 import type { ProcessParent } from '../process-parent-adapter.ts';
+import { restartedGeneration } from '../launch/reboot-rebind.ts';
+import { processStartOf as processStartOfPane } from '../watch/pane.ts';
 import { proveSeatRebind, rebindRestartedSeats, runSeatRebind } from './up-rebind.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
@@ -4270,7 +4272,10 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       const measured = launch.processInfo?.(session, placed.pane) ?? null;
       if (measured === null) continue;
       const held = readState(dir).sessions[session]?.seats[seat.name];
-      if (held?.pane !== placed.pane || seatProcessVerdict(held.launched, measured) !== 'same') continue;
+      // The recorded generation, proved with the births the record holds: reused pids in a new
+      // generation are the restart rebind's to prove, never an address or conversation refresh.
+      if (held?.pane !== placed.pane || seatProcessVerdict(held.launched, measured) !== 'same'
+        || restartedGeneration(held.launched, held.pane_shell_start, measured, launch.processStartOf ?? processStartOfPane)) continue;
       const address = liveSocketOf(agent.reach.address, measured, sources.sockets ?? defaultSocketsDirs());
       const inbound = declaredInboundOf({ dir, root, session, seat: seat.name, launch: agent.launch });
       if (address === null || inboundStaleReason(inbound, address) !== null) continue;
@@ -4297,7 +4302,6 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     }
   };
   try {
-    refreshAddresses();
     // A restore whose daemon already hosts this session's watch drops a dead pane-watch record.
     // The pane and the pid go; one audit line names the pane. A live or fresh record stays.
     // Under the lock the holder is read again: the same pane and pid, no epoch, the beat still
@@ -4381,6 +4385,9 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     if (state === 'running' && (ordinaryAdmitted || internal?.restore === true)) {
       rebindRestartedSeats({ root, dir, session, seats: team.seats.filter((seat) => !scoped || scopedSeats.has(seat.name)), sources, actor: callerLabel(caller) });
     }
+    // The address refresh follows the restart rebind and the last admission check, so the
+    // restart proof reads the binding as it was, and a refused run refreshes nothing.
+    refreshAddresses();
 
     if (createLobby) {
       // The run's first write, under the lock: the lobby the read-only pass above found absent.

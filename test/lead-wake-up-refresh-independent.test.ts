@@ -431,6 +431,26 @@ describe('explicit conversation repair on the recorded live pane', () => {
     expect(seatOf(WORKER)?.agent_session).toBe(SES);
   });
 
+  test('reused pids in a new generation, another conversation and a live socket change neither binding nor anchors', async () => {
+    ready();
+    updateState(dir, (file) => {
+      const held = file.sessions[SESSION]!.seats[WORKER]!;
+      held.launched = { ...RECORDED, cli_start: [1_000_000] };
+      held.pane_shell = RECORDED.shell;
+      held.pane_shell_start = 999_000;
+    });
+    const before = seatOf(WORKER);
+    const made = world();
+    // The same pids, born later: a new generation the record does not name.
+    made.sources.launch!.processStartOf = (pid) => (pid === 100 ? 5_000_000 : pid === 200 ? 5_001_000 : null);
+    await runUp([], testIo(root, { kind: 'owner' }), made.sources, { nonInteractive: true });
+    expect(binding()).toBe(SES);
+    expect(seatOf(WORKER)?.agent_session).toBe(SES);
+    expect(seatOf(WORKER)?.launched).toEqual(before?.launched);
+    expect(seatOf(WORKER)?.pane_shell_start).toBe(999_000);
+    expect(made.trace.typed).toEqual([]);
+  });
+
   test('a protected automatic restore leaves a present pane bound as before', async () => {
     ready();
     await runUp([], testIo(root, { kind: 'owner' }), world().sources,
@@ -943,6 +963,50 @@ describe('one-seat rebind across a machine restart', () => {
     };
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+  });
+
+  test('a bare shell with a socket path still on disk is no rebind', async () => {
+    const made = restored({ shellStart: BEFORE });
+    made.sources.launch!.processInfo = () => ({ shell: 700, foreground: [700] });
+    writeFileSync(join(sockets, '700.sock'), '');
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+  });
+
+  test('a competing name on the pane, or the seat named on another pane, at the final read refuses the rebind', async () => {
+    for (const late of [
+      (own: HerdrAgent) => [{ ...own, name: 'intruder' }],
+      (own: HerdrAgent) => [own, { ...liveAgent(WORKER, 'w9:p1', 'w9'), session: 'ses_elsewhere' }],
+    ]) {
+      const made = restored({ shellStart: BEFORE });
+      let reads = 0;
+      made.sources.launch!.agents = () => {
+        reads += 1;
+        const own = { ...liveAgent(WORKER, PANE, SPACE), session: SES };
+        return reads <= 2 ? [own] : late(own);
+      };
+      const io = testIo(root, { kind: 'owner' });
+      expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+      expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+    }
+  });
+
+  test('an intermediate process that changes between the proof and the final read refuses the rebind', async () => {
+    const made = restored({ shellStart: BEFORE });
+    made.sources.launch!.processInfo = () => ({ shell: 700, foreground: [800, 802] });
+    made.sources.launch!.processStartOf = (pid) => (pid === 700 ? AFTER : pid === 800 || pid === 802 ? AFTER + 1_000 : null);
+    let walks = 0;
+    made.sources.launch!.processParent = (pid) => {
+      if (pid === 800) return { pid, ppid: 700, birth: 10 };
+      if (pid === 802) return { pid, ppid: 801, birth: 30 };
+      if (pid === 801) { walks += 1; return { pid, ppid: 800, birth: walks === 1 ? 20 : 25 }; }
+      return null;
+    };
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(said(io)).toContain('process tree changed');
     expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
   });
 

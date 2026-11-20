@@ -25,7 +25,7 @@ import type { Live } from '../src/status/compare.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
 import { wakeUnreadDrops } from '../src/watch/unread.ts';
 import { clearStranded, noteReachedPointer, noteStrandedPointer, STRANDED_FRESH_MS, STRANDED_ROLLBACK_MS, strandedSeats } from '../src/queue/stranded.ts';
-import { floorPass, floorState, rollbackBegun } from '../src/queue/floor.ts';
+import { floorPass, floorState, resumeRollback, rollbackBegun } from '../src/queue/floor.ts';
 import { testIo } from './helpers.ts';
 import { fake, world, type World } from './send-native-fixtures.ts';
 
@@ -324,6 +324,22 @@ describe('a stranded Claude seat rolls its active root back to dark', () => {
     expect(floorState(at.root, at.home).kind).toBe('unknown');
     const later = Date.now() + 10 * 60_000;
     expect(floorPass(at.root, at.home, later, () => [DAEMON], null).kind).toBe('dark');
+    expect(rollbackBegun(at.root)).toBe(false);
+  });
+
+  test('a rollback another process finished, followed by a new activation, is never undone by a resume', () => {
+    const at = setupRoot();
+    const failed = deactivate(at.root, at.home, { removeFaults: { before: (_step, path) => { if (path.endsWith('PUBLISHED')) throw new Error('injected'); } } });
+    expect(failed.kind).toBe('failed');
+    // The watch reads the marker, then loses the race: another process finishes the rollback and
+    // the operator activates again before the watch takes the lock.
+    const seen = readFileSync(join(at.root, '.agents', 'queues', 'DEACTIVATING'), 'utf8');
+    expect(deactivate(at.root, at.home).kind).toBe('dark');
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [DAEMON] }).kind).toBe('activated');
+    expect(resumeRollback(at.root, seen).kind).toBe('superseded');
+    expect(floorState(at.root, at.home).kind).toBe('active');
+    // A malformed marker is no rollback to resume either.
+    writeFileSync(join(at.root, '.agents', 'queues', 'DEACTIVATING'), '{"v":2}\n');
     expect(rollbackBegun(at.root)).toBe(false);
   });
 

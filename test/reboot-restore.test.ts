@@ -40,7 +40,7 @@ function input(over: Partial<RebootRebindInput> = {}): RebootRebindInput {
 describe('rebind across a machine restart', () => {
   test('a restored pane with the recorded conversation, a pre-boot launch and the CLI in front is the seat', () => {
     const proof = rebootRebindProof(input());
-    expect(proof).toEqual({ ok: true, launched: { shell: 700, cli: [800], cli_start: [AFTER + 500] }, shell: 700, shellStart: AFTER });
+    expect(proof).toEqual({ ok: true, launched: { shell: 700, cli: [800], cli_start: [AFTER + 500] }, shell: 700, shellStart: AFTER, tree: [] });
   });
 
   test('the recorded process still in front is not this proof (the plain rebind takes it)', () => {

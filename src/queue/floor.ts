@@ -340,7 +340,39 @@ export type DeactivationOutcome = { kind: 'dark' } | { kind: 'busy' } | { kind: 
 
 /** A rollback to dark has begun and not finished: its own marker stands, read positively. */
 export function rollbackBegun(root: string): boolean {
-  return readJson(join(queuesFolder(root), DEACTIVATING)).kind === 'ok';
+  return rollbackMarker(root) !== null;
+}
+
+/** The rollback marker's exact text when it stands with the shape `deactivate` writes
+ *  (`{ v: 1, at: <time> }`); null when it is absent, unreadable or malformed. */
+function rollbackMarker(root: string): string | null {
+  const text = readFence(join(queuesFolder(root), DEACTIVATING));
+  if (text === null || text === '') return null;
+  try {
+    const value = JSON.parse(text) as { v?: unknown; at?: unknown };
+    return value.v === 1 && typeof value.at === 'string' && Number.isFinite(Date.parse(value.at)) ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+const ROLLBACK_STEPS: [string, DeactivationStep][] = [['READER', 'reader'], [PUBLISHED, 'published'], [ACTIVATION, 'record'], [PROTOCOL, 'marker'], [FENCED, 'fenced'], [DEACTIVATING, 'end']];
+
+/**
+ * Finishes the one rollback whose marker text was read as `seen`, and nothing else: under the
+ * activation lock the marker is read again, and only that very marker (same shape, same bytes)
+ * lets the removals run. A marker gone, replaced, unreadable or malformed leaves the floor as it
+ * is: a rollback another process finished, followed by a new activation, is never undone here.
+ */
+export function resumeRollback(root: string, seen: string, options: { removeFaults?: { before?: (step: 'unlink' | 'folder-fsync', path: string) => void } } = {}): DeactivationOutcome {
+  return withActivationLock(root, (): DeactivationOutcome => {
+    if (rollbackMarker(root) !== seen) return { kind: 'superseded' };
+    const folder = queuesFolder(root);
+    for (const [name] of ROLLBACK_STEPS) {
+      if (removeDurable(join(folder, name), options.removeFaults) === 'failed') return { kind: 'failed', why: `${name} could not be removed` };
+    }
+    return { kind: 'dark' };
+  }) as DeactivationOutcome;
 }
 
 /**
@@ -414,8 +446,9 @@ export function floorPass(root: string, home: string, nowMs: number, actors: () 
     lastFloorPass.set(root, nowMs);
     // A rollback cut off after its marker (a failed removal, a killed process) is finished here,
     // by any watch pass of any process: the root never stays between active and dark.
-    if (rollbackBegun(root)) {
-      deactivate(root, home);
+    const marker = rollbackMarker(root);
+    if (marker !== null) {
+      resumeRollback(root, marker);
       return floorState(root, home);
     }
     const state = floorState(root, home);
