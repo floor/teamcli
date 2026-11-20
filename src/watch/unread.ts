@@ -820,7 +820,7 @@ async function resendStampedDrops(scene: RetryScene, seat: Seat, key: KeyObject,
     // overdue is still owed a pointer until it settles, whatever proves the channel since.
     let only: ReadonlySet<string> | undefined;
     if (!unproven()) {
-      const overdue = overdueChannelRecords({ dropDir, context, key, nowMs });
+      const overdue = overdueChannelRecords({ dropDir, context, key, nowMs, givenUp: true });
       if (overdue === 'unreadable' || overdue.size === 0) return requested;
       only = new Set(overdue.keys());
     }

@@ -27,6 +27,7 @@ import { ACTOR_LEVEL } from './floor.ts';
 import { attemptTimes, backoffMs, copyHistory, firstChannelOffer, newestOffer, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
 import { floorState } from './floor.ts';
 import { inboxLive } from '../mcp/inbox.ts';
+import { channelAborted, channelPushed } from '../mcp/channel.ts';
 import { listenerKeyOf, offerAcks } from '../comms/offer.ts';
 import { isRecordSidecarName, recordStampAt, stampedSettled, type StatusContext } from '../send/record.ts';
 
@@ -85,7 +86,7 @@ export function channelUnproven(input: { dropDir: string; root: string; session:
  * it: each stays owed a pointer until it settles. Maps id to that start; `unreadable` for a
  * stamped folder that cannot be listed.
  */
-export function overdueChannelRecords(input: { dropDir: string; context: StatusContext; key: KeyObject; nowMs: number }): Map<string, number> | 'unreadable' {
+export function overdueChannelRecords(input: { dropDir: string; context: StatusContext; key: KeyObject; nowMs: number; givenUp?: boolean }): Map<string, number> | 'unreadable' {
   const out = new Map<string, number>();
   const listing = stampedListing(input.dropDir);
   if (listing === 'unreadable') return 'unreadable';
@@ -102,12 +103,25 @@ export function overdueChannelRecords(input: { dropDir: string; context: StatusC
     }
     if (recordStampAt(listing.folder, name) !== true) continue;
     const start = firstChannelOffer(listing.folder, name, arrived);
+    // With `givenUp`, a channel leg its sender gave up before any push is owed its pointer at once:
+    // no offer is in flight. It never makes the channel itself unproven (`channelUnproven`).
+    const givenUp = input.givenUp === true && start !== 'unknown' && channelOfferGivenUp(listing.folder, name);
     // An unreadable history authorizes nothing: the record is not listed as overdue.
-    if (start === null || start === 'unknown' || input.nowMs - start < CHANNEL_OVERDUE_MS) continue;
+    if (!givenUp && (start === null || start === 'unknown' || input.nowMs - start < CHANNEL_OVERDUE_MS)) continue;
     if (stampedSettled(listing.folder, name, input.context, input.key)) continue;
-    out.set(name, start);
+    out.set(name, givenUp ? (start ?? arrived) : start as number);
   }
   return out;
+}
+
+/** Whether the send's own channel leg gave this record up before the channel ever pushed it: the
+ *  sender's abort stands, no server push marker does, and no copy was handed out. Nothing is in
+ *  flight for the seat, so a proven seat's pointer is due at once rather than at an offer's 90 s
+ *  deadline that never started. An unreadable history is not this. */
+export function channelOfferGivenUp(folder: string, id: string): boolean {
+  if (!channelAborted(folder, id) || channelPushed(folder, id)) return false;
+  const copies = copyHistory(folder, id);
+  return copies !== 'unknown' && copies.copies === 0;
 }
 
 /** The seat's stamped records that are unsettled and due now, oldest arrival first. */
@@ -182,7 +196,12 @@ function dueNow(folder: string, id: string, seat: ResendSeat, nowMs: number, arr
     if (start === 'unknown' || attempts === 'unknown') return false;
     const pointers = attempts.filter((one) => !one.channel && (start === null || one.atMs >= start));
     if (pointers.length === 0) {
-      if (seat.only !== undefined) return start !== null && nowMs - start >= CHANNEL_OVERDUE_MS;
+      if (seat.only !== undefined) {
+        // The send's channel offer was given up before any push: nothing is in flight, so the
+        // pointer is due at once; otherwise the offer's 90 s deadline.
+        if (channelOfferGivenUp(folder, id)) return true;
+        return start !== null && nowMs - start >= CHANNEL_OVERDUE_MS;
+      }
       return seat.unproven !== undefined && seat.unproven();
     }
     const newest = Math.max(...pointers.map((one) => one.atMs));

@@ -21,6 +21,7 @@ import { readMessage, writeListener, type InboxListener } from '../src/mcp/inbox
 import { activate, deactivate, queuesFolder, type FloorActor } from '../src/queue/floor.ts';
 import { attemptLedger, EXPOSURES, offeredCopies, reserveAttempt, takeCopyNumber } from '../src/queue/handover.ts';
 import { nativePendingDir, seatMailDirIn } from '../src/queue/mail-tree.ts';
+import { CHANNEL_HELD_RECEIPT, reserveChannelFallback } from '../src/mcp/channel.ts';
 import { channelUnproven, CHANNEL_OVERDUE_MS, overdueChannelRecords } from '../src/queue/resend.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
@@ -582,6 +583,25 @@ describe('F3: the push stalls before any copy is written', () => {
     expect(lines).toEqual([]);
     age(at, ID, CHANNEL_OVERDUE_MS + 1_000);
     expect(unproven(at)).toBe('overdue offer');
+    await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expectPointer(lines[0], ID, 1);
+  });
+});
+
+describe('F3b: the send\'s channel leg gave up before any push', () => {
+  test('a proven seat whose channel the sender held off gets its pointer in the first pass, not never', async () => {
+    // material, 2026-11-20: implementer-deepseek -> orchestrator. The send's channel leg found no
+    // push within its grace and held the channel (its abort and held marker), so no server push
+    // and no copy ever follows; the seat stays proven. The pointer is due at once.
+    const at = place();
+    proven(at);
+    stamped(at, ID);
+    const folder = stampedOf(at);
+    const held = reserveChannelFallback(folder, { v: 1, kind: CHANNEL_HELD_RECEIPT, id: ID, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' });
+    expect(held).toBe('held');
+    expect(unproven(at)).toBeNull();
+    const lines: string[] = [];
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
     expectPointer(lines[0], ID, 1);
