@@ -437,6 +437,7 @@ export function recordProvenSeatConversation(
   held: SeatState,
   conversation: string,
   address: string,
+  live?: () => boolean,
 ): boolean {
   if (!isAgentId(expected.id) || expected.cli !== 'claude-code' || expected.lifecycle !== 'running'
     || !conversation.trim() || /[\x00-\x1f\x7f]/.test(conversation)
@@ -458,6 +459,8 @@ export function recordProvenSeatConversation(
     const written = updateState(dir, (state) => {
       const seat = state.sessions[current.reach.session]?.seats[current.reach.seat];
       if (seat === undefined || JSON.stringify(seat) !== snapshot) return false;
+      // The caller's live proof, read again inside both locks, right before the first change.
+      if (live !== undefined && !live()) return false;
       seat.agent_session = conversation;
       return true;
     }, { writeWhen: (result) => result });
@@ -480,6 +483,7 @@ export function recordRebootRebind(
   dir: string,
   held: SeatState,
   live: { launched: LaunchedIdentity; paneShell: number; paneShellStart: number; address: string | null },
+  stillLive?: () => boolean,
 ): boolean {
   // Any CLI the restart proof covers is tied. Only a Claude Code seat has a socket address; any
   // other CLI is written with none, so a socket reading never becomes another CLI's route.
@@ -504,6 +508,8 @@ export function recordRebootRebind(
     const written = updateState(dir, (state) => {
       const seat = state.sessions[current.reach.session]?.seats[current.reach.seat];
       if (seat === undefined || JSON.stringify(seat) !== snapshot) return false;
+      // The caller's live proof, read again inside both locks, right before the first change.
+      if (stillLive !== undefined && !stillLive()) return false;
       seat.launched = {
         shell: live.launched.shell,
         cli: [...live.launched.cli],

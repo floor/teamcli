@@ -22,7 +22,7 @@ import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
 import { discover } from '../launchers/resolve.ts';
-import { accountKeyCommand, shippedEnv, shippedLauncher, shippedLauncherIsReadOnly } from '../launchers/shipped.ts';
+import { accountKeyCommand, shippedEnv, shippedLauncher } from '../launchers/shipped.ts';
 import { launchAccountFor, type LaunchAccount } from '../launchers/accounts.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { fillSecretWords, hasSecretWord } from './secret-words.ts';
@@ -1563,14 +1563,9 @@ export function upPlan(input: UpInput): Step[] {
     const lineNamesSandbox = lineWords === null
       ? /(^|\s)--sandbox(=|\s|$)/.test(recordedLine)
       : lineWords.some((word) => word === '--sandbox' || word.startsWith('--sandbox='));
-    // A read-only seat on a shipped launcher is held by the CLI's own permission policy (it
-    // refuses writes, edits and git, and denies what is not allowed), so it takes no TeamCLI
-    // sandbox profile: that profile also stops the seat's own `team` commands from reading the
-    // registry and the process table, which left such a seat unable to send.
-    const launcherSkipsSandbox = shippedLauncherIsReadOnly(seat.launcher, seat.role, seat.access);
-    const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox && !launcherSkipsSandbox
-      ? grokSandbox
-      : undefined;
+    // Every Grok seat takes its profile, a read-only seat on a shipped launcher too: the CLI's
+    // own permission policy is a second hold beside it, never a reason to go without it.
+    const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox ? grokSandbox : undefined;
     // A start folder that is the shared project root would grant that whole checkout, including
     // `.agents` and the checkout's git directory. The launch refuses it. The repair is a worktree
     // or a clone of the seat's own, not a grant of the root.

@@ -235,6 +235,18 @@ test('held load across an observation, then a same-boot daemon restart: the queu
   expect(second.started).toEqual(['floor', 'material']);
 });
 
+test('a boot restore held by the load says so once, and says when it goes on', async () => {
+  writeSessionsRunning(home, { boot: BOOT_A, at: 1, running: [FLOOR] });
+  const w = world({ boot: BOOT_B, stopped: new Set(['floor']), load: [9, 9, 9] });
+  w.limitWaits(6);
+  await runBootWork(w.deps);
+  expect(w.started).toEqual(['floor']);
+  const held = w.logs.filter((line) => line.includes("over the boot restore's bound of 3"));
+  expect(held).toHaveLength(1);
+  expect(held[0]).toContain('floor wait for it to fall');
+  expect(w.logs).toContain('restore: the load fell under the bound; the boot restore goes on');
+});
+
 test('an unwritable queue starts nothing and leaves the observation in place for a later daemon', async () => {
   const before: SessionsRunning = { boot: BOOT_A, at: 1, running: [FLOOR] };
   writeSessionsRunning(home, before);

@@ -1030,12 +1030,23 @@ export async function executePlan(
   // plan's command. Every other launch stores the pinned recipe, never the expanded command.
   // A seat this run did not launch has no entry, so a later record keeps what an earlier launch wrote.
   const recordLines = new Map<string, string>();
+  // A reading of the very pids the record already names never drops the CLI starts the record
+  // holds (a launch's, or the restart rebind's `rebindRestartedSeats`): plan-time and re-tie
+  // readings carry pids only, and the typed path's proof needs the starts beside them.
+  const keptStarts = (seat: string, patch: Parameters<Host['record']>[1]): Parameters<Host['record']>[1] => {
+    const next = patch.launched;
+    if (next === undefined || next.cli_start !== undefined) return patch;
+    const stored = host.seatStates?.(session)?.[seat]?.launched;
+    if (stored?.cli_start === undefined || stored.shell !== next.shell || stored.cli.length !== next.cli.length
+      || !stored.cli.every((pid, at) => next.cli[at] === pid)) return patch;
+    return { ...patch, launched: { ...next, cli_start: [...stored.cli_start] } };
+  };
   const recordSeat = (seat: string, patch: Parameters<Host['record']>[1], proved = false): void => {
     // `proved`: the adoption's re-tie, written only after its own fresh proof that the recorded
     // pane holds this seat's own process; it touches no pane, so the restore guard does not hold it.
     if (!proved && !guardRestore(seat)) return;
     const line = recordLines.get(seat);
-    host.record(seat, line === undefined || patch.launch_line !== undefined ? patch : { ...patch, launch_line: line });
+    host.record(seat, line === undefined || patch.launch_line !== undefined ? keptStarts(seat, patch) : { ...keptStarts(seat, patch), launch_line: line });
   };
   // The seats this run launched: only a launch carries rules; a seat already running is never
   // typed into to give it them.

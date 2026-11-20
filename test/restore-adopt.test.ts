@@ -173,6 +173,22 @@ describe('the restart rebind writes every CLI the proof covers', () => {
     expect(readState(dir).sessions[SESSION]!.seats['seat-codex']!.launched).toEqual({ shell: 700, cli: [800], cli_start: [9_000] });
   });
 
+  test('the live proof is read inside the writer, after the snapshots match: a pane that changed meanwhile writes nothing', () => {
+    const { agent, held } = standing('codex', 'seat-codex');
+    const live = { launched: { shell: 700, cli: [800], cli_start: [9_000] }, paneShell: 700, paneShellStart: 5, address: null };
+    const seq = agent.provenance.seq;
+    let asked = 0;
+    expect(recordRebootRebind(home, agent, dir, held, live, () => { asked += 1; return false; })).toBe(false);
+    expect(asked).toBe(1);
+    expect(readState(dir).sessions[SESSION]!.seats['seat-codex']!.launched).toEqual(LAUNCHED);
+    expect(findAgent(home, { team: TEAM, seat: 'seat-codex' })!.provenance.seq).toBe(seq);
+    // A snapshot that no longer matches is refused before the live proof is asked at all.
+    const moved = { ...held, agent_session: held.agent_session };
+    updateState(dir, (file) => { file.sessions[SESSION]!.seats['seat-codex']!.stage = 'launched'; });
+    expect(recordRebootRebind(home, agent, dir, moved, live, () => { asked += 1; return true; })).toBe(false);
+    expect(asked).toBe(1);
+  });
+
   test('a socket address for a non-Claude CLI is refused and nothing is written', () => {
     const { agent, held } = standing('codex', 'seat-codex');
     const live = { launched: { shell: 700, cli: [800] }, paneShell: 700, paneShellStart: 5, address: '/fixture/800.sock' };

@@ -431,6 +431,39 @@ describe('explicit conversation repair on the recorded live pane', () => {
     expect(seatOf(WORKER)?.agent_session).toBe(SES);
   });
 
+  test('reused pids, with unreadable and then newer births, another conversation and a live socket, change neither binding, address nor anchors', async () => {
+    ready();
+    updateState(dir, (file) => {
+      const held = file.sessions[SESSION]!.seats[WORKER]!;
+      held.launched = { ...RECORDED, cli_start: [1_000_000] };
+      held.pane_shell = RECORDED.shell;
+      held.pane_shell_start = 999_000;
+    });
+    const before = seatOf(WORKER);
+    const address = addressOf(WORKER);
+    const unchanged = () => {
+      expect(binding()).toBe(SES);
+      expect(seatOf(WORKER)?.agent_session).toBe(SES);
+      expect(seatOf(WORKER)?.launched).toEqual(before?.launched);
+      expect(seatOf(WORKER)?.pane_shell_start).toBe(999_000);
+      expect(addressOf(WORKER)).toBe(address);
+    };
+    // First the births cannot be read: an unreadable birth is not the recorded generation.
+    const blind = world();
+    blind.sources.launch!.processStartOf = () => null;
+    await runUp([], testIo(root, { kind: 'owner' }), blind.sources, { nonInteractive: true });
+    unchanged();
+    expect(await runUp(['--rebind', WORKER], testIo(root, { kind: 'owner' }), blind.sources)).toBe(1);
+    unchanged();
+    // Then they read: the same pids, born later, a new generation the record does not name.
+    const made = world();
+    made.sources.launch!.processStartOf = (pid) => (pid === 100 ? 5_000_000 : pid === 200 ? 5_001_000 : null);
+    await runUp([], testIo(root, { kind: 'owner' }), made.sources, { nonInteractive: true });
+    unchanged();
+    expect(made.trace.typed).toEqual([]);
+    expect(blind.trace.typed).toEqual([]);
+  });
+
   test('a protected automatic restore leaves a present pane bound as before', async () => {
     ready();
     await runUp([], testIo(root, { kind: 'owner' }), world().sources,
@@ -843,7 +876,7 @@ describe('one-seat rebind across a machine restart', () => {
       processInfo: () => RESTORED,
       workspacePanes: () => [PANE],
     });
-    made.sources.launch!.processStartOf = (pid) => (pid === 1 ? BOOT : pid === 700 ? AFTER : null);
+    made.sources.launch!.processStartOf = (pid) => (pid === 700 ? AFTER : pid === 800 ? AFTER + 1_000 : null);
     return made;
   }
 
@@ -851,9 +884,9 @@ describe('one-seat rebind across a machine restart', () => {
     const made = restored({ shellStart: BEFORE });
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(0);
-    expect(io.out).toContain('across the machine restart');
+    expect(io.out).toContain('across a restart');
     const held = seatOf(WORKER)!;
-    expect(held.launched).toEqual({ shell: 700, cli: [800] });
+    expect(held.launched).toEqual({ shell: 700, cli: [800], cli_start: [AFTER + 1_000] });
     expect(held.pane_shell).toBe(700);
     expect(held.pane_shell_start).toBe(AFTER);
     expect(held.agent_session).toBe(SES);
@@ -872,11 +905,130 @@ describe('one-seat rebind across a machine restart', () => {
     expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
   });
 
-  test('a record launched in this boot is refused, and nothing changes', async () => {
+  test('a session restarted within this boot is tied again: its pane is a later start than the record', async () => {
     const made = restored({ shellStart: BOOT + 60_000 });
     const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(0);
+    expect(seatOf(WORKER)?.launched).toEqual({ shell: 700, cli: [800], cli_start: [AFTER + 1_000] });
+    expect(seatOf(WORKER)?.pane_shell_start).toBe(AFTER);
+  });
+
+  test('a record no older than the live shell is refused, and nothing changes', async () => {
+    const made = restored({ shellStart: AFTER });
+    const io = testIo(root, { kind: 'owner' });
     expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
-    expect(said(io)).toContain('launched in this boot');
+    expect(said(io)).toContain('not a later start than the recorded launch');
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+  });
+
+  test('a plain `team up` rebinds a restarted seat by itself, with no process started, closed or typed into', async () => {
+    const made = restored({ shellStart: BEFORE });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources, { nonInteractive: true });
+    const held = seatOf(WORKER)!;
+    // The full anchors the typed proof needs, CLI start included: no later step of the run
+    // writes a weaker reading over them.
+    expect(held.launched).toEqual({ shell: 700, cli: [800], cli_start: [AFTER + 1_000] });
+    expect(held.pane_shell).toBe(700);
+    expect(held.pane_shell_start).toBe(AFTER);
+    expect(held.agent_session).toBe(SES);
+    expect(teamLog()).toContain(`${WORKER}: rebound to the live conversation on its recorded pane after a restart`);
+    expect(made.trace.runs).toEqual([]);
+    expect(made.trace.closed).toEqual([]);
+    expect(made.trace.typed).toEqual([]);
+  });
+
+  test('`team up <other seat>` leaves a restarted seat it does not name exactly as it is', async () => {
+    const made = restored({ shellStart: BEFORE });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([LEAD], io, made.sources, { nonInteractive: true });
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+    expect(seatOf(WORKER)?.pane_shell_start).toBe(BEFORE);
+    expect(teamLog()).not.toContain(`${WORKER}: rebound`);
+    expect(made.trace.renamed ?? []).toEqual([]);
+  });
+
+  test('a caller the ordinary map does not admit rebinds nothing', async () => {
+    const made = restored({ shellStart: BEFORE });
+    const io = testIo(root, { kind: 'seat', name: WORKER, pane: PANE, session: SESSION });
+    await runUp([], io, made.sources, { nonInteractive: true });
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+    expect(teamLog()).not.toContain(`${WORKER}: rebound`);
+  });
+
+  test('a plain `team up` leaves a restarted pane whose conversation is not the recorded one as it is, and says so', async () => {
+    const made = restored({ shellStart: BEFORE, session: 'ses_someone_else' });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources, { nonInteractive: true });
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+    expect(seatOf(WORKER)?.pane_shell_start).toBe(BEFORE);
+    expect(teamLog()).toContain(`${WORKER}: not rebound after a restart`);
+    expect(made.trace.typed).toEqual([]);
+  });
+
+  test('a second pane reporting the conversation on the fresh read refuses the rebind', async () => {
+    const made = restored({ shellStart: BEFORE });
+    let reads = 0;
+    made.sources.launch!.agents = () => {
+      reads += 1;
+      const own = { ...liveAgent(WORKER, PANE, SPACE), session: SES };
+      return reads <= 2 ? [own] : [own, { ...liveAgent('other', 'w9:p1', 'w9'), session: SES }];
+    };
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+  });
+
+  test('a bare shell with a socket path still on disk is no rebind', async () => {
+    const made = restored({ shellStart: BEFORE });
+    made.sources.launch!.processInfo = () => ({ shell: 700, foreground: [700] });
+    writeFileSync(join(sockets, '700.sock'), '');
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+  });
+
+  test('a competing name on the pane, or the seat named on another pane, at the final read refuses the rebind', async () => {
+    for (const late of [
+      (own: HerdrAgent) => [{ ...own, name: 'intruder' }],
+      (own: HerdrAgent) => [own, { ...liveAgent(WORKER, 'w9:p1', 'w9'), session: 'ses_elsewhere' }],
+    ]) {
+      const made = restored({ shellStart: BEFORE });
+      let reads = 0;
+      made.sources.launch!.agents = () => {
+        reads += 1;
+        const own = { ...liveAgent(WORKER, PANE, SPACE), session: SES };
+        return reads <= 2 ? [own] : late(own);
+      };
+      const io = testIo(root, { kind: 'owner' });
+      expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+      expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+    }
+  });
+
+  test('an intermediate process that changes between the proof and the final read refuses the rebind', async () => {
+    const made = restored({ shellStart: BEFORE });
+    made.sources.launch!.processInfo = () => ({ shell: 700, foreground: [800, 802] });
+    made.sources.launch!.processStartOf = (pid) => (pid === 700 ? AFTER : pid === 800 || pid === 802 ? AFTER + 1_000 : null);
+    let walks = 0;
+    made.sources.launch!.processParent = (pid) => {
+      if (pid === 800) return { pid, ppid: 700, birth: 10 };
+      if (pid === 802) return { pid, ppid: 801, birth: 30 };
+      if (pid === 801) { walks += 1; return { pid, ppid: 800, birth: walks === 1 ? 20 : 25 }; }
+      return null;
+    };
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(said(io)).toContain('process tree changed');
+    expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
+  });
+
+  test('a conversation two panes report is not proof for either', async () => {
+    const made = restored({ shellStart: BEFORE });
+    made.sources.launch!.agents = () => [{ ...liveAgent(WORKER, PANE, SPACE), session: SES }, { ...liveAgent('other', 'w9:p1', 'w9'), session: SES }];
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(1);
+    expect(said(io)).toContain('not reported by this pane alone');
     expect(seatOf(WORKER)?.launched).toEqual(RECORDED);
   });
 
@@ -904,10 +1056,10 @@ describe('one-seat rebind across a machine restart', () => {
     made.sources.launch!.agents = () => [unnamed()];
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(['--rebind', WORKER], io, made.sources), said(io)).toBe(0);
-    expect(io.out).toContain('across the machine restart');
+    expect(io.out).toContain('across a restart');
     expect(io.out).toContain('its pane is named back');
     expect(made.trace.renamed).toEqual([{ pane: PANE, name: WORKER }]);
-    expect(seatOf(WORKER)?.launched).toEqual({ shell: 700, cli: [800] });
+    expect(seatOf(WORKER)?.launched).toEqual({ shell: 700, cli: [800], cli_start: [AFTER + 1_000] });
     expect(made.trace.runs).toEqual([]);
     expect(made.trace.closed).toEqual([]);
     expect(made.trace.typed).toEqual([]);

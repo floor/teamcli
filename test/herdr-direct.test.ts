@@ -4,7 +4,8 @@
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { directRequestOf, directSocketOf, herdrDirect, herdrDirectBound } from '../src/herdr-direct.ts';
+import { directRequestOf, directSocketOf, herdrDirect, herdrDirectBound, sessionAnswersNow } from '../src/herdr-direct.ts';
+import { homedir } from 'node:os';
 import { fallbackBudgetMs, paneProcessInfo, setHerdrSyncReadLimitForTests } from '../src/herdr.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
@@ -47,6 +48,27 @@ describe('the CLI fallback shares the read limit', () => {
 describe('the socket the CLI would use', () => {
   const env = (extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv => ({ HOME: '/home/u', ...extra });
 
+  // The daemon's own service unit sets XDG_CONFIG_HOME to `$HOME/.config`: with the old rule every
+  // boot start's last look read 'unknown', so no stopped session was ever started after a restart.
+  test('XDG_CONFIG_HOME set to $HOME/.config, as the service unit sets it, is the same socket', () => {
+    expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/home/u/.config' }))).toBe('/home/u/.config/herdr/sessions/alpha/herdr.sock');
+    expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/home/u/.config/' }))).toBe('/home/u/.config/herdr/sessions/alpha/herdr.sock');
+  });
+
+  test("a boot start's last look under the service unit's XDG_CONFIG_HOME reads a stopped session as silent", () => {
+    const saved = process.env.XDG_CONFIG_HOME;
+    try {
+      process.env.XDG_CONFIG_HOME = join(process.env.HOME ?? homedir(), '.config');
+      expect(sessionAnswersNow('alpha', () => 'absent')).toBe('silent');
+      expect(sessionAnswersNow('alpha', () => 'listening')).toBe('answers');
+      process.env.XDG_CONFIG_HOME = '/elsewhere';
+      expect(sessionAnswersNow('alpha', () => 'absent')).toBe('unknown');
+    } finally {
+      if (saved === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = saved;
+    }
+  });
+
   test('an explicit session names its own socket, whatever HERDR_SOCKET_PATH says', () => {
     expect(directSocketOf('alpha', env({ HERDR_SOCKET_PATH: '/elsewhere/x.sock' }))).toBe('/home/u/.config/herdr/sessions/alpha/herdr.sock');
   });
@@ -60,8 +82,12 @@ describe('the socket the CLI would use', () => {
     expect(directSocketOf(undefined, env({}))).toBeNull();
   });
 
-  test('XDG_CONFIG_HOME or a name the CLI refuses keeps the CLI', () => {
+  test('XDG_CONFIG_HOME naming another folder, or a name the CLI refuses, keeps the CLI', () => {
     expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/x' }))).toBeNull();
+    expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/home/u/.config/other' }))).toBeNull();
+    // A link component followed by `..` may name another folder: never the default socket.
+    expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/home/u/link/../.config' }))).toBeNull();
+    expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/home/u/./.config' }))).toBeNull();
     expect(directSocketOf('a b', env({}))).toBeNull();
     expect(directSocketOf('..', env({}))).toBeNull();
     expect(directSocketOf('a/b', env({}))).toBeNull();

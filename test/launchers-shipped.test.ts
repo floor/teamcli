@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { formatPlan, upPlan, type UpSeat } from '../src/launch/plan.ts';
-import { accountKeyCommand, isShippedLauncher, shippedClaudeSettings, shippedEnv, shippedLauncher, shippedLauncherIsReadOnly, shippedLauncherNames } from '../src/launchers/shipped.ts';
+import { accountKeyCommand, isShippedLauncher, shippedClaudeSettings, shippedEnv, shippedLauncher, shippedLauncherNames } from '../src/launchers/shipped.ts';
 import { NO_SECRET_STORE, systemSecretStore, type SecretLookup, type SecretStore } from '../src/secrets/store.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { discover, resolveLaunch } from '../src/launchers/resolve.ts';
@@ -50,14 +50,6 @@ test('a shipped launcher passes the library\'s own validation and resolves to it
   });
   expect(resolved.ok).toBe(true);
   if (resolved.ok) expect(resolved.argv.slice(0, 4)).toEqual(['grok', '--trust', '--model', 'grok-4.7']);
-});
-
-test('only a read-only seat on a shipped launcher goes without the sandbox profile', () => {
-  expect(shippedLauncherIsReadOnly('grok-build', 'reviewer')).toBe(true);
-  expect(shippedLauncherIsReadOnly('grok-build', 'builder')).toBe(false);
-  expect(shippedLauncherIsReadOnly('grok-build', undefined)).toBe(false);
-  expect(shippedLauncherIsReadOnly('some-file-launcher', 'reviewer')).toBe(false);
-  expect(shippedLauncherIsReadOnly(undefined, 'reviewer')).toBe(false);
 });
 
 test('the model follows the seat\'s version, 4.7 when it names none', () => {
@@ -161,13 +153,6 @@ describe('the Codex and Antigravity launchers', () => {
   test('both are shipped names', () => {
     expect(shippedLauncherNames()).toEqual(['antigravity', 'claude-code', 'codex', 'grok-build']);
   });
-});
-
-test('only the launchers that emit a read-only line count as read-only (review finding 5)', () => {
-  expect(shippedLauncherIsReadOnly('grok-build', 'reviewer')).toBe(true);
-  expect(shippedLauncherIsReadOnly('claude-code', 'tester')).toBe(true);
-  expect(shippedLauncherIsReadOnly('codex', 'reviewer')).toBe(false);
-  expect(shippedLauncherIsReadOnly('antigravity', 'tester')).toBe(false);
 });
 
 describe('a provider seat\'s launch plan takes its key word from the machine\'s store', () => {

@@ -122,7 +122,10 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent, recordProvenAgentAddress, recordProvenSeatConversation } from '../registry/agents.ts';
-import { proveSeatRebind, runSeatRebind } from './up-rebind.ts';
+import type { ProcessParent } from '../process-parent-adapter.ts';
+import { sameGeneration } from '../launch/reboot-rebind.ts';
+import { processStartOf as processStartOfPane } from '../watch/pane.ts';
+import { proveSeatRebind, rebindRestartedSeats, runSeatRebind } from './up-rebind.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
@@ -295,6 +298,9 @@ export type Launch = {
   /** The instant a process started, read beside the create when the pane's shell is known;
    *  absent: the run reads the process table itself. */
   processStartOf?(pid: number): number | null;
+  /** Pid, parent and birth read together, for the restart rebind's process tree; absent: the
+   *  run reads the process table itself. */
+  processParent?(pid: number): ProcessParent | null;
   /** Brings the pane to the owner's attention, without sending a key or a text into it. */
   focus?(session: string, pane: string): boolean;
   /** Stops the session (`q` in the pause, only for a session this invocation started). */
@@ -4266,7 +4272,9 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       const measured = launch.processInfo?.(session, placed.pane) ?? null;
       if (measured === null) continue;
       const held = readState(dir).sessions[session]?.seats[seat.name];
-      if (held?.pane !== placed.pane || seatProcessVerdict(held.launched, measured) !== 'same') continue;
+      // The recorded generation, proved with the births the record holds: reused pids in a new
+      // generation are the restart rebind's to prove, never an address or conversation refresh.
+      if (held?.pane !== placed.pane || !sameGeneration(held.launched, held.pane_shell_start, measured, launch.processStartOf ?? processStartOfPane)) continue;
       const address = liveSocketOf(agent.reach.address, measured, sources.sockets ?? defaultSocketsDirs());
       const inbound = declaredInboundOf({ dir, root, session, seat: seat.name, launch: agent.launch });
       if (address === null || inboundStaleReason(inbound, address) !== null) continue;
@@ -4293,7 +4301,6 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     }
   };
   try {
-    refreshAddresses();
     // A restore whose daemon already hosts this session's watch drops a dead pane-watch record.
     // The pane and the pid go; one audit line names the pane. A live or fresh record stays.
     // Under the lock the holder is read again: the same pane and pid, no epoch, the beat still
@@ -4368,6 +4375,18 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         return clientRefused(io, json, standing);
       }
     }
+
+    // A restart (the machine's, or the terminal host's session) carried seats across with new
+    // pids: each one the restart proof ties is rebound, after every admission check and before
+    // the plan's steps run, so it is reachable again. It is admitted as `--rebind` is (the
+    // ordinary owner/lead map) or as the daemon's own restore, never by a delegation or a client
+    // grant, and it visits only the seats this run names. A restore's kept panes are included.
+    if (state === 'running' && (ordinaryAdmitted || internal?.restore === true)) {
+      rebindRestartedSeats({ root, dir, session, seats: team.seats.filter((seat) => !scoped || scopedSeats.has(seat.name)), sources, actor: callerLabel(caller) });
+    }
+    // The address refresh follows the restart rebind and the last admission check, so the
+    // restart proof reads the binding as it was, and a refused run refreshes nothing.
+    refreshAddresses();
 
     if (createLobby) {
       // The run's first write, under the lock: the lobby the read-only pass above found absent.
