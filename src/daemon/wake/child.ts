@@ -1,3 +1,4 @@
+import { clearUnrecognisedScreen, leadOfRoot, noteUnrecognisedScreen } from '../../send/unrecognised-screen.ts';
 import { recordDeliveredBody } from '../../send/readable-wake.ts';
 // The wake child: one daemon-admitted typed wake, run in its own process.
 //
@@ -176,7 +177,12 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
     const host = deps.wakeHost(request.session);
     const walk = await deps.walk(host, found.pane, request.line, request.cli);
     const ms = Math.max(0, deps.now().getTime() - request.stagedAt);
+    const seatDrops = seatMailDirIn(request.dir, request.session, request.seat);
     if (!walk.delivered) {
+      // An unrecognised screen, refused before any key: the seat's lead hears it once.
+      if (walk.unrecognised === true) {
+        noteUnrecognisedScreen({ dropDir: seatDrops, root: request.root, session: request.session, home: request.home, seat: request.seat, pane: found.pane, lead: leadOfRoot(request.root, request.home), at: deps.now() });
+      }
       // A key that went out, with no proof the line is still unsent, may already have been
       // submitted. The reservation stays, and a second request for this id cannot reserve it.
       if (submissionUnproven(walk)) {
@@ -187,7 +193,8 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
       record(walk.reason, false, ms, walk);
       return { outcome: 'failed', reason: walk.reason };
     }
-    recordDeliveredBody({ dropDir: seatMailDirIn(request.dir, request.session, request.seat), id: request.id, root: request.root, session: request.session, seat: request.seat, home: request.home, wake: request.line, via: 'typed' });
+    clearUnrecognisedScreen(seatDrops);
+    recordDeliveredBody({ dropDir: seatDrops, id: request.id, root: request.root, session: request.session, seat: request.seat, home: request.home, wake: request.line, via: 'typed' });
     markWake(marker, {
       id: request.id,
       at: deps.now().toISOString(),

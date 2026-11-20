@@ -107,6 +107,16 @@ describe('the cursor typed wake', () => {
     expect(readScreen('cursor', IDLE_TASK.replace('  1 task', '  some printed text')).kind).toBe('unknown');
   });
 
+  test('a retry that finds its line held, then an unrecognised frame, presses nothing and flags the screen', async () => {
+    const strange = '  a layout no rule knows';
+    expect(readScreen('cursor', strange).kind).toBe('unknown');
+    const pane = wakeFake((read) => (read === 0 ? holding(LINE) : strange));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);
+    expect(out).toMatchObject({ delivered: false, typed: false, tries: 0, unrecognised: true });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
   test('two idle reads, one line, one Enter: the Working row is the delivery', async () => {
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);
@@ -208,4 +218,22 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
     cleanups.push(made.cleanup);
     return made;
   }
+
+  test('an unrecognised screen is never typed into, and the lead hears it once per episode with no screen content', async () => {
+    const made = cursorWorld();
+    const strange = IDLE_TASK.replace('  1 task', `  my draft about the merger, call Sam at 555-0100 ${made.home}/Code/private-thing`);
+    expect(readScreen('cursor', strange).kind).toBe('unknown');
+    const keys: string[] = [];
+    const wakeHost: TypedWakeHost = { read: () => strange, type: (_p, text) => { keys.push(text); return true; }, enter: () => { keys.push('<enter>'); return true; }, wait: async () => {} };
+    const host = fake(made, { agents: () => [{ name: 'cursor', pane: 'pane-cursor', cli: 'cursor-agent' }], typedWake: () => wakeHost, wakeVerifyMs: 1, wakePollMs: 1 });
+    await runSend(['cursor', 'first message'], owner(made.root), host);
+    await runSend(['cursor', 'second message'], owner(made.root), host);
+    expect(keys).toEqual([]);
+    const lead = join(made.root, '.agents', 'messages', 'lead');
+    const notices = (): string[] => (existsSync(lead) ? readdirSync(lead).filter((name) => name.startsWith('unrecognised-screen-cursor-')) : []);
+    expect(notices()).toHaveLength(1);
+    const body = readFileSync(join(lead, notices()[0]!), 'utf8');
+    expect(body).toContain('cursor (pane pane-cursor): screen not recognised, capture needed');
+    for (const leak of ['merger', 'Sam', '555-0100', 'private-thing', 'Grok', 'Add a follow-up']) expect(body).not.toContain(leak);
+  });
 });

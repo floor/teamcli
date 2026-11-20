@@ -1,3 +1,4 @@
+import { clearUnrecognisedScreen, noteUnrecognisedScreen } from '../send/unrecognised-screen.ts';
 import { recordStampAt } from '../send/record.ts';
 // Waking an idle seat whose message is still unread, and telling the sender and the lead.
 //
@@ -1185,9 +1186,14 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // silence. A recognised screen still meets the status rule below.
     const kind = readScreen(seat.cli, screen).kind;
     if (kind === 'unknown') {
+      // The capture request, once per episode, beside the per-message blocked report below: the
+      // lead learns the seat needs a capture even when no message is due for that report yet.
+      noteUnrecognisedScreen({ dropDir, root: scene.root, session: scene.session, home, seat: seat.name, pane, lead: scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator, at: scene.now });
       reportBlockedScreenToLead(scene, seat, pane, dropDir, context, typedDue, unreadAfter, kind, failedLeg, home);
       continue;
     }
+    // A screen the profile places again ends the episode.
+    clearUnrecognisedScreen(dropDir);
     // A profile the terminal host cannot report faithfully names its own screen as the seat's
     // state, so the typed retry trusts that reading rather than the host's word; the drop-file
     // leg keeps its own status rule. The typed wake reads the box twice itself, and only an empty
@@ -1465,6 +1471,11 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           else if (typed.typed) noteReachedPointer(scene.root, seat.name);
         }
         if (typed !== undefined) handle?.settle(typed);
+        if (typed?.unrecognised === true) {
+          noteUnrecognisedScreen({ dropDir, root: scene.root, session: scene.session, home, seat: seat.name, pane, lead: scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator, at: scene.now });
+        } else if (typed?.delivered === true) {
+          clearUnrecognisedScreen(dropDir);
+        }
         settleTypedRequest(pointerFor, typed, typedLine !== line, at);
         if (typed?.typed === true) noteTypedLine(dropDir, nowMs);
         if (typed === undefined) {

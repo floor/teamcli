@@ -48,6 +48,8 @@ import { declaredUnreadAfter, UNREAD_AFTER_PULL_SECONDS, UNREAD_AFTER_WAKEABLE_S
 import { wakeAttemptOf } from '../src/watch/wake-attempt.ts';
 import { reportStuckSeats, reportUnreadDrops, reportedPath, wakeBackoffMs, wakeLinesPath, WAKE_SLOW_MAX_AGE_MS, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
+import { unrecognisedScreenPath } from '../src/send/unrecognised-screen.ts';
+import { seatMailDirIn } from '../src/queue/mail-tree.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
 
@@ -1139,6 +1141,45 @@ describe("the watch's typed wake retry", () => {
 
     expect(calls).toHaveLength(1);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
+  test('a persistent unrecognised screen gets zero keys and one capture notice to the lead per episode, with no screen content', async () => {
+    const { made, team } = typedWorld('cursor');
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const strange = `  my private draft about the launch plan\n  ${made.home}/Code/secret-place\n  a layout no rule knows`;
+    expect(readScreen('cursor', strange).kind).toBe('unknown');
+    const one = pane(strange, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const notices = (): string[] => {
+      const dir = join(made.root, '.agents');
+      const out: string[] = [];
+      const walk = (at: string): void => {
+        for (const entry of readdirSync(at, { withFileTypes: true })) {
+          if (entry.isDirectory()) walk(join(at, entry.name));
+          else if (entry.name.startsWith('unrecognised-screen-helper-')) out.push(join(at, entry.name));
+        }
+      };
+      walk(dir);
+      return out;
+    };
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane', 'done') }), { unreadAfter: N });
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane', 'done'), now: new Date(NOW.getTime() + 60_000) }), { unreadAfter: N });
+    expect(calls).toEqual([]);
+    expect(notices()).toHaveLength(1);
+    const body = readFileSync(notices()[0]!, 'utf8');
+    expect(body).toContain('helper (pane helper-pane): screen not recognised, capture needed');
+    expect(body).not.toContain('private draft');
+    expect(body).not.toContain('secret-place');
+    expect(body).not.toContain('no rule knows');
+    // The seat's screen is placed again and a new message's wake is delivered: the episode ends,
+    // so a later unknown frame is reported anew.
+    expect(existsSync(unrecognisedScreenPath(seatMailDirIn(made.dir, 'acme', 'helper')))).toBe(true);
+    one.screen = CURSOR_IDLE;
+    seedMessage(made, 'acme', 'helper', UNREAD_B, 'from the owner\n\nlater', new Date(NOW.getTime() - 11 * MIN));
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane', 'idle'), now: new Date(NOW.getTime() + 120_000) }), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(existsSync(unrecognisedScreenPath(seatMailDirIn(made.dir, 'acme', 'helper')))).toBe(false);
   });
 
   test('a reliable profile keeps the terminal host’s status gate: working waits, idle reaches the seam', async () => {

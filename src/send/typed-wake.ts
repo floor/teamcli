@@ -94,6 +94,9 @@ export type TypedWakeResult = {
   /** How many Enters were pressed. */
   tries: number;
   reason: string;
+  /** True when the wake refused on a screen its profile could place no rule on (`unknown`) before
+   *  any line was typed: the caller tells the seat's lead (src/send/unrecognised-screen.ts). */
+  unrecognised?: true;
   /** When the first read after an Enter showed the wake's line gone, in the walk's clock's own
    *  milliseconds: the submission-confirmed point the delivery bound ends at. Absent when no read
    *  showed it (nothing was Entered, or every read held the line). */
@@ -512,7 +515,7 @@ async function walkTypedWake(
         : kind === 'unsent'
           ? 'the box held text other than the line'
           : `the screen read ${kind}`;
-      return { delivered: false, typed: false, tries: 0, reason: `${why} between the two looks; no Enter was pressed` };
+      return { delivered: false, typed: false, tries: 0, reason: `${why} between the two looks; no Enter was pressed`, ...(kind === 'unknown' ? { unrecognised: true } : {}) };
     }
     // Two looks, spaced by the settle, agree the box holds exactly the line: the same pair the
     // typed path waits for before its first Enter. A profile that submits by agent prompt does
@@ -583,7 +586,7 @@ async function walkTypedWake(
         kind = seenOf(cli, screen);
       }
       if (kind !== 'idle') {
-        return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${kind}, not an empty idle prompt; nothing was typed` };
+        return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${kind}, not an empty idle prompt; nothing was typed`, ...(kind === 'unknown' ? { unrecognised: true } : {}) };
       }
       firstScreen = screen;
     } else if (first === 'unsent' && firstScreen !== null) {
@@ -598,7 +601,8 @@ async function walkTypedWake(
       }
       return { delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' };
     } else if (first !== 'idle') {
-      return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${first}, not an empty idle prompt; nothing was typed` };
+      // A frame no rule of the profile places: the caller tells the seat's lead, once.
+      return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${first}, not an empty idle prompt; nothing was typed`, ...(first === 'unknown' ? { unrecognised: true } : {}) };
     }
     await host.wait(settleMs);
     const second = seenOf(cli, await host.read(pane));
@@ -610,6 +614,7 @@ async function walkTypedWake(
         reason: keyedReturn
           ? `the screen read ${second} on the second idle read, not an empty idle prompt; nothing was typed`
           : `the second read showed ${second}, not an empty idle prompt; nothing was typed`,
+        ...(second === 'unknown' ? { unrecognised: true } : {}),
       };
     }
     if (profileFor(cli)?.wake === 'agent-prompt') {
