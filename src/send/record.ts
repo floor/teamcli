@@ -548,9 +548,17 @@ const RECORD_NAME_MAX = 255;
 
 const RECORD_SIDECAR_SUFFIXES = ['.pending', '.taken', '.read', '.wake', '.woken', '.reported', '.json', '.new', '.channel-emitted', '.channel-abort'];
 
-/** Watcher, receipt and private publication sidecars are never message candidates. */
+/** A message id as a record's own file name: a UUID, or the `unread-<uuid>` an earlier build wrote. */
+const RECORD_STEM = /^(?:unread-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Watcher, receipt and private publication sidecars are never message candidates: a name with a
+ *  known sidecar suffix, or any `<record id>.<anything>` — a record's own name never has a dot, so
+ *  every file beside it that starts with its id and a dot (`.wake-try`, `.lead-episode`,
+ *  `.fallback.json`, a sidecar a later build adds) is the record's, never another record. */
 export function isRecordSidecarName(name: string): boolean {
-  return RECORD_SIDECAR_SUFFIXES.some((suffix) => name.endsWith(suffix));
+  if (RECORD_SIDECAR_SUFFIXES.some((suffix) => name.endsWith(suffix))) return true;
+  const dot = name.indexOf('.');
+  return dot > 0 && RECORD_STEM.test(name.slice(0, dot));
 }
 
 /** An id that can name one file in a folder: no separator, no traversal, no control character,
