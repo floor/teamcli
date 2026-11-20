@@ -13,7 +13,7 @@ const idle = stripSgr(readFileSync(new URL('./fixtures/codex/0.167.0/idle.txt', 
 const working = stripSgr(readFileSync(new URL('./fixtures/codex/0.167.0/working.txt', import.meta.url), 'utf8'));
 const draw = (text: string) => idle.replace('› Ask Codex to do anything', `› ${text.replaceAll('\n', '\n  ')}`);
 
-test('a full multiline typed wake is readable and settles its durable record after submission', async () => {
+test('a full multiline typed wake is readable and records its delivery, not a read, after submission', async () => {
   const w = world(['typed']);
   try {
     let typed = '';
@@ -36,8 +36,11 @@ test('a full multiline typed wake is readable and settles its durable record aft
     expect(typed).not.toContain('drops --read');
     expect(enters).toBe(1);
     const dir = join(w.dir, 'send-drops', 'acme', 'native');
-    expect(readdirSync(dir).some((name) => name.endsWith('.read.json'))).toBe(true);
-    expect(listUnread(dir, { root: w.root, session: 'acme', to: 'native' }, w.home)).toHaveLength(0);
+    // The typed wake is a carrier: it writes the delivered receipt, and only the seat's own read
+    // settles the message, so it stays unread here.
+    expect(readdirSync(dir).some((name) => name.endsWith('.delivered.json'))).toBe(true);
+    expect(readdirSync(dir).some((name) => name.endsWith('.read.json'))).toBe(false);
+    expect(listUnread(dir, { root: w.root, session: 'acme', to: 'native' }, w.home)).toHaveLength(1);
   } finally { w.cleanup(); }
 });
 
