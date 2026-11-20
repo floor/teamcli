@@ -4,7 +4,7 @@
 // its two records) and the one-use token it reads. The walk is the scene's own: no live seat is
 // touched and no pane is typed into.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readEvents } from '../src/bus/log.ts';
@@ -14,8 +14,11 @@ import { wakeEntryOf } from '../src/daemon/wake/spawn.ts';
 import { readWakeInherit, writeWakeInherit, type WakeChildRequest } from '../src/daemon/wake/token.ts';
 import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { readHistory } from '../src/send/history.ts';
-import { markWake, reserveWake, wakeMarkAt, wakePath } from '../src/send/wake-marker.ts';
-import type { TypedWakeHost, TypedWakeResult } from '../src/send/typed-wake.ts';
+import { markWake, releaseWake, reserveWake, wakeMarkAt, wakePath } from '../src/send/wake-marker.ts';
+import { deliverTypedWake, type TypedWakeHost, type TypedWakeResult } from '../src/send/typed-wake.ts';
+import { unrecognisedScreenPath } from '../src/send/unrecognised-screen.ts';
+import { seatMailDirIn } from '../src/queue/mail-tree.ts';
+import { readScreen } from '../src/watch/screen.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { world, type World } from './send-native-fixtures.ts';
 
@@ -110,6 +113,37 @@ function logOf(made: World): string {
   const path = join(made.dir, LOG_FILE);
   return existsSync(path) ? readFileSync(path, 'utf8') : '';
 }
+
+describe('the wake child and an unrecognised screen', () => {
+  test('a wake the real walk refuses on an unknown screen types nothing and tells the lead once; a delivered wake ends the episode', async () => {
+    const made = scratch();
+    const strange = '  a private line the seat typed\n  a layout no rule knows';
+    expect(readScreen('muse', strange).kind).toBe('unknown');
+    const keys: string[] = [];
+    const strangeHost: TypedWakeHost = { read: () => strange, type: (_p, text) => { keys.push(text); return true; }, enter: () => { keys.push('<enter>'); return true; }, wait: async () => {} };
+    const refusing = deps({ wakeHost: () => strangeHost, walk: (host, pane, line, cli) => deliverTypedWake(host, pane, line, cli, { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1, rereadMs: 1 }) });
+    for (let n = 0; n < 2; n += 1) {
+      const request = staged(made);
+      reserve(request);
+      expect((await serveWakeChild(request, refusing)).outcome).toBe('failed');
+      releaseWake(wakePath(dirname(request.dropPath), request.id));
+    }
+    expect(keys).toEqual([]);
+    const marker = unrecognisedScreenPath(seatMailDirIn(made.dir, 'acme', 'muse'));
+    expect(existsSync(marker)).toBe(true);
+    const lead = join(made.root, '.agents', 'messages', 'lead');
+    const notices = existsSync(lead) ? readdirSync(lead).filter((name) => name.startsWith('unrecognised-screen-muse-')) : [];
+    expect(notices).toHaveLength(1);
+    const body = readFileSync(join(lead, notices[0]!), 'utf8');
+    expect(body).toContain('muse (pane pane-1): screen not recognised, capture needed');
+    expect(body).not.toContain('private line');
+    // The next delivered wake, through the same child, ends the episode.
+    const request = staged(made);
+    reserve(request);
+    expect((await serveWakeChild(request, deps())).outcome).toBe('delivered');
+    expect(existsSync(marker)).toBe(false);
+  });
+});
 
 describe('the wake child runs one wake and records what it saw', () => {
   test('a delivered wake marks the reservation sent and writes the history, trace and log lines', async () => {

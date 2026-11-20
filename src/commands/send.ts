@@ -33,6 +33,7 @@ import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { NOT_A_REPO } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { clearUnrecognisedScreen, leadOfRoot, noteUnrecognisedScreen } from '../send/unrecognised-screen.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, beginHerdrSnapshot, endHerdrSnapshot, evictHerdrAgentList, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
@@ -5465,8 +5466,12 @@ async function deliverTypedWakeSeat(
     });
     if (!wake.delivered) {
       settleLegBody(typedBody, wake.typed ? 'unknown' : 'no');
+      if (wake.unrecognised === true) {
+        noteUnrecognisedScreen({ dropDir, root, session, home: host.home, seat: seatName, pane, lead: leadOfRoot(root, host.home), at: host.now() });
+      }
       return { delivered: false, typed: wake.typed, reason: wake.reason };
     }
+    clearUnrecognisedScreen(dropDir);
     settleLegBody(typedBody, 'yes', { dropDir, id: payload.id, root, session, seat: seatName, home: host.home, wake: line, via: 'typed' });
     const ms = host.now().getTime() - startedAt;
     logLine(dir, 'send', who, `${seatName}: delivered (typed wake) (drop ${String(payload.body.length)} characters, typed; ${wake.reason})`, host.now());
