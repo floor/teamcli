@@ -11,7 +11,7 @@ import { queueLog } from '../queue/log.ts';
 import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
 import { readEntityModelRule } from '../policy/entity-rule.ts';
 import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
-import { inlineWake, legBody, legText, oversizedWake, recordDeliveredBody, settleLegBody, typedWakeMaxFor, RUNTIME_WAKE_MAX, type LegBody } from '../send/readable-wake.ts';
+import { inlineWake, legBody, legText, oversizedWake, recordDeliveredBody, settleLegBody, settleTransportBody, typedWakeMaxFor, RUNTIME_WAKE_MAX, type LegBody } from '../send/readable-wake.ts';
 import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -2996,7 +2996,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
         if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
-          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
+          settleTransportBody(nativeBody, { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
           clearEndpointBlocked(to.root, to.session, to.seat);
           report.sent = msgId;
           // The leg that took the message decides the words. The queue accepted the pointer, so
@@ -3150,7 +3150,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
       if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
-        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
+        settleTransportBody(nativeBody, { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined });
         report.sent = msgId;
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
         const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
@@ -6427,7 +6427,7 @@ export async function walkReplyDelivery(input: {
         // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
         if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
-          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
+          settleTransportBody(nativeBody, { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
           clearEndpointBlocked(input.root, input.session, seatName);
           const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
           if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
@@ -6509,7 +6509,7 @@ export async function walkReplyDelivery(input: {
       // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
       if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
-        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
+        settleTransportBody(nativeBody, { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined });
         const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
         if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
           return ended({ via: 'headless-resume', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, headless-resume receipt)` });
@@ -6942,8 +6942,8 @@ async function deliverSocketFrame(
   }
   if (bodyIncluded) {
     const delivered = { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home };
+    // A taken frame is a transport hand-over, not the seat's read (`settleTransportBody`).
     if (socketExposure?.kind === 'expose') socketExposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
-    else recordDeliveredBody(delivered);
   }
   // Under the readable-wake policy, accepted full bodies settle their durable copies.
   // An oversized-body pointer stays unread until the receiver follows its explicit read hint.

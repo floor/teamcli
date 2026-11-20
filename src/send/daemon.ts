@@ -2003,8 +2003,8 @@ async function executeSocketSend(
       }
       if (bodyIncluded) {
         const delivered = { dropDir, id: msgId, root, session: team.session, seat: seatName, home: host.home };
+        // A taken frame is a transport hand-over, not the seat's read (`settleTransportBody`).
         if (socketExposure?.kind === 'expose') socketExposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
-        else recordDeliveredBody(delivered);
       }
       logLine(dir, 'send', who, `${seatName}: sent on the socket (${String(frame.length)} characters)`, host.now());
       const outcome = await listener.wait(timeoutS * 1000);

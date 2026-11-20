@@ -117,4 +117,15 @@ export function settleLegBody(body: LegBody, handedOver: 'yes' | 'no' | 'unknown
   body.handle.settle(handedOver, (owner) => recordDeliveredBody({ ...input, owner }));
 }
 
+/** A transport leg's hand-over (a socket frame taken, a channel notification written, a native
+ *  queue's accept): the body reached the seat's runtime, which is no proof the seat saw it. On an
+ *  active root the owned exposure claim is sealed as before; on a dark root nothing is written,
+ *  so the record stays unread until the seat itself reads, replies or acks it, and `read` means
+ *  the seat saw the body. Only a typed wake, whose working screen is the seat's own turn on the
+ *  line, records the read for the seat. */
+export function settleTransportBody(body: LegBody, input: { dropDir: string; id: string; root: string; session: string; seat: string; home: string; wake?: string }): void {
+  if (!body.carriesBody || body.handle === null) return;
+  body.handle.settle('yes', (owner) => recordDeliveredBody({ ...input, owner }));
+}
+
 export { exposurePointer };

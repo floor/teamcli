@@ -613,8 +613,8 @@ function watchChannel(
       if (!marked) return 'uncertain' as const;
       // E3: the frame was written; the read is sealed through this hand-over's own claim only.
       const delivered = { dropDir: dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home };
+      // A written notification is a transport hand-over, not the seat's read (`settleTransportBody`).
       if (exposure.kind === 'expose') exposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
-      else if (exposure.kind === 'legacy') recordDeliveredBody(delivered);
       return 'pushed' as const;
     });
     // A commit that returned before the frame was written exposed nothing: give the claim back.
