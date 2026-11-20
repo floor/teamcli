@@ -1459,7 +1459,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         });
         if (typed !== undefined && refusal !== undefined) typed = { ...typed, reason: `${typed.reason}; ${refusal}` };
         if (adapterPointer && typed !== undefined) {
-          if (ownership !== undefined && !typed.typed) noteStrandedPointer(scene.root, seat.name, nowMs, ownership);
+          if (ownership !== undefined) noteStrandedPointer(scene.root, seat.name, nowMs, ownership);
           else if (typed.typed) noteReachedPointer(scene.root, seat.name);
         }
         if (typed !== undefined) handle?.settle(typed);
