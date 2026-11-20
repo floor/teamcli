@@ -297,7 +297,7 @@ test('a client grant acknowledges an exact UUID and never a short prefix or a sc
 });
 
 
-for (const suffix of ['reported', 'wake', 'woken', 'json', 'new']) {
+for (const suffix of ['reported', 'wake', 'woken', 'json', 'new', 'wake-try', 'lead-episode', 'stuck-note', 'a-later-sidecar']) {
   test(`a short id ignores its ${suffix} sidecar`, async () => {
     sentTo('owner', SENT);
     const marker = join(recordDir(root, 'acme', 'owner'), `${SENT}.${suffix}`);
