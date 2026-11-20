@@ -1,7 +1,7 @@
 # team ping
 
-The comms test as a command. `team ping <seat>` sends one seat a message asking it to answer with
-[`team reply`](reply.md); `team ping --all` sends one to every seat of the caller's own team. It
+The comms test as a command. `team ping <seat>` sends one seat a message asking it to run
+[`team reply`](reply.md) in its terminal tool (a reply written as text reaches no one); `team ping --all` sends one to every seat of the caller's own team. It
 then waits and prints one row per seat with the stage times, each from the start of that seat's
 send: how long the send took and the leg that took it, when a carrier's signed `delivered` receipt
 landed (a socket, a runtime queue, a typed wake or a channel push took the body), when the seat's

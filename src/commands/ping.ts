@@ -354,7 +354,9 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
     const started = host.now();
     // The token is not the record's id: the answer names the id from the reader line the
     // message ends with (`↩ team reply <id> …`), never the token, which no record is named by.
-    const body = `ping ${token}: answer now with: team reply <id> "pong ${token}" — <id> is this message's id, from the ↩ team reply line under it (not ${token}). Nothing else.`;
+    // The answer is a command the seat runs, not text it writes: a Codex seat told to "answer
+    // with" the line printed it as its message, and nothing reached the sender (2026-11-20).
+    const body = `ping ${token}: run this shell command now, in your terminal tool: team reply <id> "pong ${token}" — <id> is this message's id, from the ↩ team reply line under it (not ${token}). Writing the command as text is no answer; nothing reaches the sender until it runs. Do nothing else.`;
     const result = await host.team(['send', target, body], io);
     const outcome = result.out.trim().split('\n').filter(Boolean).pop() ?? '';
     const id = idOf(outcome);

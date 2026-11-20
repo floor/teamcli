@@ -286,6 +286,9 @@ describe('team ping', () => {
     const token = /ping (P[0-9a-z]+)/.exec(bodies[0]!)![1]!;
     expect(bodies[0]).toContain(`team reply <id> "pong ${token}"`);
     expect(bodies[0]).not.toContain(`team reply ${token}`);
+    // The seat is told to run the command, not to write it: a printed line reaches no one.
+    expect(bodies[0]).toContain('run this shell command now');
+    expect(bodies[0]).toContain('Writing the command as text is no answer');
   });
 
   test('an owner ping: the reply at the owner-reply-to endpoint (another team\'s seat) counts; one from another seat or to another agent does not', async () => {
