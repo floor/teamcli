@@ -18,7 +18,7 @@
 // file also discards its output and ignores its exit, so a presence fault can never break the
 // turn it observes; the honest record of a refused stage is the missing spool file.
 import { readSync } from 'node:fs';
-import { isPresenceBinding, isPresenceEvent, type PresenceEvent } from './contract.ts';
+import { PRESENCE_SESSION_START_RAW, isPresenceBinding, isPresenceEvent, type PresenceEvent } from './contract.ts';
 import { stagePresenceRecord } from './spool.ts';
 import { nativeHookEnabled, stageNativeHook } from './native-feed.ts';
 import type { Io } from '../../io.ts';
@@ -32,7 +32,7 @@ const PERMISSION_PROMPT = 'permission_prompt';
  *  first `turn-end`. `compact` can fire inside a running turn, so it, and any other or missing
  *  source, declines. Without this a fresh incarnation that has not taken a turn has no projection
  *  of its own, and the watch holds it (and its first message) behind its predecessor's. */
-const SESSION_START = 'session-start';
+const SESSION_START = PRESENCE_SESSION_START_RAW;
 const AT_PROMPT_SOURCES = new Set(['startup', 'resume', 'clear']);
 
 type Parsed = {
@@ -141,10 +141,13 @@ export default function run(argv: readonly string[], readInput: () => string = r
   // is checked before the native path can read stdin; no argv token authenticates a caller.
   const identity = { stateDir: parsed.dir, session: parsed.session, seat: parsed.seat, binding: parsed.binding };
   const native = io !== undefined && nativeHookEnabled(identity, io, undefined, nativeHome);
-  if (native) stageNativeHook(identity, input(), io!, nativeHome);
+  // The session-start bootstrap is a presence word only: it is filtered before any write and never
+  // feeds the native advisory channel, so a `compact` start (or any other shape) writes nothing.
+  // exit: team.presence-hook-ignored
+  if (parsed.start !== undefined && !isAtPromptStartPayload(input())) return 0;
+  if (native && parsed.start === undefined) stageNativeHook(identity, input(), io!, nativeHome);
   // exit: team.presence-hook-ignored
   if (parsed.notification !== undefined && !isPermissionPromptPayload(input())) return 0;
-  if (parsed.start !== undefined && !isAtPromptStartPayload(input())) return 0;
   const staged = stagePresenceRecord(parsed.dir, {
     session: parsed.session,
     seat: parsed.seat,

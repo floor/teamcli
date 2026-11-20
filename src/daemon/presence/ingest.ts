@@ -27,7 +27,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { STATE_FILE } from '../../state.ts';
 import {
-  PRESENCE_FORMAT, PRESENCE_STATE_OF, isPresenceBinding, presenceFutureBeyond, presenceNewer,
+  PRESENCE_FORMAT, PRESENCE_SESSION_START_RAW, PRESENCE_STATE_OF, isPresenceBinding, presenceFutureBeyond, presenceNewer,
   readPresenceLogLine, readPresenceReading, readPresenceRecord,
   type PresenceLogLine, type PresenceReading, type PresenceRecord, type PresenceStatus,
 } from './contract.ts';
@@ -731,7 +731,14 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
             result.pending = true;
             break;
           }
-          const applied = index.current === null || presenceNewer(record, index.current);
+          // A session-start word only bootstraps an incarnation that has no applied line yet: a
+          // late or repeated SessionStart (after a turn began, or an in-session /clear or
+          // /resume) must never replace a newer working or waiting word with idle. It is
+          // logged, never applied, once the binding has evidence of its own.
+          const bootstrap = record.source === 'runtime-hook' && record.raw === PRESENCE_SESSION_START_RAW;
+          const applied = bootstrap
+            ? index.current === null
+            : index.current === null || presenceNewer(record, index.current);
           const line: PresenceLogLine = {
             ...record,
             seq: index.seq + 1,

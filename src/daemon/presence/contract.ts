@@ -32,6 +32,11 @@ export type PresenceWriterSource = (typeof PRESENCE_WRITER_SOURCES)[number];
 /** The canonical events. A runtime adapter maps its own word onto one of these before writing;
  *  the raw word is carried alongside for the log. */
 export const PRESENCE_EVENTS = ['turn-start', 'turn-end', 'human-wait', 'session-end'] as const;
+
+/** The `raw` word a hook's session-start bootstrap carries on its `turn-end`. The ingester applies
+ *  such a record only while its binding has no applied line yet, so it can start an incarnation's
+ *  projection but never replace a newer word. */
+export const PRESENCE_SESSION_START_RAW = 'session-start';
 export type PresenceEvent = (typeof PRESENCE_EVENTS)[number];
 
 /** The one mapping from an event to the state it establishes. */

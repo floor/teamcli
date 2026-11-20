@@ -16,10 +16,17 @@
 // 3. With a predecessor's working projection on disk, the session-start word for the new binding
 //    is ingested and fenced, and the watch's verdict turns from the predecessor refusal into a
 //    qualified idle that licenses the first message.
+// 4. A session-start word that lands after the incarnation's first turn began (a late hook, an
+//    in-session /clear or /resume) is logged but never applied: the seat stays working.
+// 5. With the native advisory channel live, a compact start writes nothing at all, and an
+//    at-prompt start feeds only the presence spool, never the advisory status spool.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { startMachineDaemon } from '../src/daemon/host.ts';
+import { readEvents } from '../src/bus/log.ts';
 import run from '../src/daemon/presence/hook.ts';
 import { createPresenceIngester } from '../src/daemon/presence/ingest.ts';
 import { createPresenceActivity } from '../src/daemon/presence/activity.ts';
@@ -116,30 +123,37 @@ describe('the session-start presence word', () => {
     expect(spoolEvents()).toEqual([]);
   });
 
-  test('a restarted seat turns from the predecessor refusal into a qualified idle', async () => {
-    const origin = Date.now() - 120_000;
-    const at = (offsetMs: number): string => new Date(origin + offsetMs).toISOString();
-    const writeSeat = (binding: string): void => {
-      const state = existsSync(join(dir, STATE_FILE)) ? readState(dir) : { format: 1, sessions: {} };
-      const sessions = state.sessions as Record<string, { seats: Record<string, Record<string, unknown>>; worktrees: object }>;
-      sessions[SESSION] ??= { seats: {}, worktrees: {} };
-      const record = sessions[SESSION].seats[SEAT] ?? { id: 'seat_0123456789ab', stage: 'ready' };
-      record.presence_binding = binding;
-      sessions[SESSION].seats[SEAT] = record;
-      writeFileSync(join(dir, STATE_FILE), `${JSON.stringify(state)}\n`);
-    };
+  const origin = Date.now() - 120_000;
+  const at = (offsetMs: number): string => new Date(origin + offsetMs).toISOString();
+  const writeSeat = (binding: string): void => {
+    const state = existsSync(join(dir, STATE_FILE)) ? readState(dir) : { format: 1, sessions: {} };
+    const sessions = state.sessions as Record<string, { seats: Record<string, Record<string, unknown>>; worktrees: object }>;
+    sessions[SESSION] ??= { seats: {}, worktrees: {} };
+    const record = sessions[SESSION].seats[SEAT] ?? { id: 'seat_0123456789ab', stage: 'ready' };
+    record.presence_binding = binding;
+    sessions[SESSION].seats[SEAT] = record;
+    writeFileSync(join(dir, STATE_FILE), `${JSON.stringify(state)}\n`);
+  };
+  /** One ingest + activity pass and the watch's verdict, on the wall clock the ingester stamps. */
+  const pipeline = () => {
     const ingester = createPresenceIngester({ stateDir: dir, session: SESSION });
     const activity = createPresenceActivity({ stateDir: dir, session: SESSION });
-    // Every pass and verdict runs on the wall clock: the ingester stamps observedAt with it.
-    const pass = async (): Promise<void> => {
-      await ingester.step();
-      await activity(new Date());
+    return {
+      pass: async (): Promise<void> => {
+        await ingester.step();
+        await activity(new Date());
+      },
+      verdict: async () => {
+        const reads = await prefetchPresence({ stateDir: dir, session: SESSION, seatNames: [SEAT] });
+        const seat = presenceSeatOf(readState(dir).sessions[SESSION], SEAT, () => true);
+        return presenceVerdict(reads.get(SEAT)!, seat, { now: new Date(), thresholdSeconds: 0 });
+      },
+      close: () => ingester.close(),
     };
-    const verdict = async () => {
-      const reads = await prefetchPresence({ stateDir: dir, session: SESSION, seatNames: [SEAT] });
-      const seat = presenceSeatOf(readState(dir).sessions[SESSION], SEAT, () => true);
-      return presenceVerdict(reads.get(SEAT)!, seat, { now: new Date(), thresholdSeconds: 0 });
-    };
+  };
+
+  test('a restarted seat turns from the predecessor refusal into a qualified idle', async () => {
+    const { pass, verdict, close } = pipeline();
 
     // The predecessor was mid-turn when it was restarted.
     writeSeat(PREDECESSOR);
@@ -162,6 +176,140 @@ describe('the session-start presence word', () => {
     const ready = await verdict();
     expect(ready).toMatchObject({ idle: true, source: 'runtime-hook' });
     expect(nativeAllowsTyping(ready)).toBe(true);
-    await ingester.close();
+    await close();
+  });
+
+  test('a session-start word after the first turn began never replaces working', async () => {
+    const { pass, verdict, close } = pipeline();
+    writeSeat(BINDING);
+    // The launch's first typed input started a turn before the SessionStart hook's write landed.
+    stagePresenceRecord(dir, {
+      session: SESSION, seat: SEAT, binding: BINDING, source: 'runtime-hook', event: 'turn-start', ts: at(0),
+    });
+    await pass();
+    expect(await verdict()).toMatchObject({ idle: false, reason: 'working' });
+    expect(run(startArgv(), () => payload('resume'))).toBe(0);
+    await pass();
+    const held = await verdict();
+    expect(held).toMatchObject({ idle: false, reason: 'working' });
+    expect(nativeAllowsTyping(held)).toBe(false);
+    // The word is in the durable log, marked not applied.
+    const log = readFileSync(presencePaths(dir, SESSION, SEAT)!.log, 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as { raw?: string; applied: boolean });
+    expect(log.map((line) => [line.raw ?? null, line.applied])).toEqual([[null, true], ['session-start', false]]);
+
+    // Both in one batch, the hook's write stamped after the turn start: still working.
+    writeSeat(PREDECESSOR);
+    await pass();
+    writeSeat('prs_aaaaaaaaaaaa');
+    stagePresenceRecord(dir, {
+      session: SESSION, seat: SEAT, binding: 'prs_aaaaaaaaaaaa', source: 'runtime-hook', event: 'turn-start', ts: at(10_000),
+    });
+    stagePresenceRecord(dir, {
+      session: SESSION, seat: SEAT, binding: 'prs_aaaaaaaaaaaa', source: 'runtime-hook', event: 'turn-end',
+      raw: 'session-start', ts: at(11_000),
+    });
+    await pass();
+    expect(await verdict()).toMatchObject({ idle: false, reason: 'working' });
+    await close();
   });
 });
+
+describe('the session-start word and the native advisory channel', () => {
+  const TEAM = `format: 1
+project: acme-web
+session: crew
+coordinator: crew-lead
+operator: crew-op
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: crew-lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+  - role: operator
+    name: crew-op
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+  - role: worker
+    name: worker-1
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+`;
+
+  test('compact writes nothing, and an at-prompt start feeds only the presence spool', async () => {
+    const made = realpathSync(mkdtempSync(join(tmpdir(), 'team-presence-fresh-native-')));
+    const root = join(made, 'repo');
+    const home = join(made, 'home');
+    const stateDir = join(root, '.agents');
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    writeFileSync(join(stateDir, 'team.yaml'), TEAM);
+    writeFileSync(join(stateDir, STATE_FILE), JSON.stringify({ format: 1, sessions: { crew: { seats: {
+      'worker-1': { stage: 'ready', pane: 'pane-example', presence_binding: BINDING },
+    }, worktrees: {} } } }));
+    const started = await startMachineDaemon({
+      home, roots: [root], startedBy: 'service-manager', version: '0.5.3-presence-fresh-test',
+      heartbeatMs: 20, presenceHosting: true, presenceEveryMs: 10, presenceSubscriptions: () => [],
+    });
+    if (started.kind !== 'serving') throw new Error(`the daemon did not start: ${started.kind}`);
+    try {
+      const paths = presencePaths(stateDir, 'crew', 'worker-1')!;
+      const marker = join(paths.root, 'status-feed.json');
+      const deadline = Date.now() + 3_000;
+      while (!existsSync(marker)) {
+        if (Date.now() > deadline) throw new Error('the native marker never appeared');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const io = {
+        cwd: root, env: { HOME: home }, stdinIsTTY: false, stdout: () => {}, stderr: () => {},
+        caller: { kind: 'seat' as const, name: 'worker-1', pane: 'pane-example', session: 'crew' },
+      };
+      const hookArgv = ['--dir', stateDir, '--session', 'crew', '--seat', 'worker-1', '--binding', BINDING,
+        '--event', 'turn-end', '--start', 'session-start'];
+      const statusSpool = join(paths.root, 'status-spool');
+      const statusFiles = (): string[] => (existsSync(statusSpool) ? readdirSync(statusSpool) : []);
+      const presenceFiles = (): string[] => (existsSync(paths.spool) ? readdirSync(paths.spool) : []);
+      const nativeStatuses = (): number => {
+        const bus = readEvents('acme-web', root, home);
+        return bus.ok ? bus.events.filter((record) => record.payload.kind === 'seat.status').length : 0;
+      };
+
+      expect(run(hookArgv, () => payload('compact'), io, () => home)).toBe(0);
+      expect(run(hookArgv, () => payload('startup'), io, () => home)).toBe(0);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(statusFiles()).toEqual([]);
+      expect(nativeStatuses()).toBe(0);
+      // The startup word reached the presence path (staged, or already taken by the ingester).
+      const log = existsSync(paths.log) ? readFileSync(paths.log, 'utf8') : '';
+      expect(presenceFiles().length + (log.includes('"session-start"') ? 1 : 0)).toBe(1);
+
+      // Control: the channel is live in this scene, so an ordinary turn command does feed it.
+      expect(presenceHookTurn(stateDir, io, home)).toBe(0);
+      const until = Date.now() + 3_000;
+      while (nativeStatuses() === 0) {
+        if (Date.now() > until) throw new Error('the native channel never published');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      await started.daemon.close();
+      rmSync(made, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+function presenceHookTurn(stateDir: string, io: Parameters<typeof run>[2], home: string): number {
+  return run(['--dir', stateDir, '--session', 'crew', '--seat', 'worker-1', '--binding', BINDING, '--event', 'turn-start'],
+    () => '{"hook_event_name":"UserPromptSubmit"}', io, () => home);
+}
