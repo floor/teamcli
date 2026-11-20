@@ -66,7 +66,7 @@ import {
 import { listArchivedUnread, runInboxRetention, seatDropFolders } from '../send/inbox-retention.ts';
 import { legacySeatFolders, listLegacyArchivedUnread } from '../send/legacy-inbox-retention.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, recordStampAt, settledReadOf, signedRecordOf, type RecordPayload, type StatusContext, verifyRecord } from '../send/record.ts';
+import { alreadyReadSentence, fileStatStamp, isRecordSidecarName, isReadOrCleared, keyPrintForCache, recordNameOk, recordStampAt, settledReadOf, signedRecordOf, type RecordPayload, type StatusContext, verifyRecord } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { LEGACY_TREE, seatMailDirIn, seatMailParts, stampedListing } from '../queue/mail-tree.ts';
 
@@ -314,6 +314,29 @@ function legacyDropAt(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** The record id a `--id` word names in this seat's folders: the word itself when it is a whole
+ *  id or names no unique record, else the one record name (never a sidecar) that starts with a
+ *  prefix of at least 8 characters. An ambiguous prefix is left as given, so the read refuses it. */
+export function resolveDropId(dropDir: string, word: string): string {
+  if (word.length < 8 || /^(?:unread-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(word)) return word;
+  const stamped = stampedListing(dropDir);
+  const folders: string[][] = [];
+  try {
+    folders.push(readdirSync(dropDir));
+  } catch {
+    // A folder that does not list holds no record.
+  }
+  if (stamped !== null && stamped !== 'unreadable') folders.push([...stamped.names]);
+  const matches = new Set<string>();
+  for (const names of folders) {
+    for (const name of names) {
+      if (name.includes('.') || isRecordSidecarName(name) || !name.startsWith(word)) continue;
+      matches.add(name);
+    }
+  }
+  return matches.size === 1 ? [...matches][0]! : word;
 }
 
 export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'; reason: string };
@@ -790,7 +813,9 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
     };
     const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
-    const asked = args.values.id;
+    // A short id, as the reader line and the event pointer print it, names the one record in this
+    // seat's folders that starts with it; a record's sidecars (`<id>.wake-try`, …) are never one.
+    const asked = args.values.id === undefined ? undefined : resolveDropId(dropDir, args.values.id);
     if (asked !== undefined) {
       // E7b revision 3 (carrier 4): an older requester's relayed read never carries a stamped body.
       if (io.legacyRelay === true && recordStampAt(dropDir, asked) !== false) {

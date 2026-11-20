@@ -524,6 +524,16 @@ function expectReceipt(id: string, seat = 'lead', dir = dropDir): void {
 }
 
 describe('team drops --read', () => {
+  test('--id takes the short id the reader line prints, and its .wake-try sidecar is never it', async () => {
+    plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello by short id', { at: '2026-10-04T09:00:00.000Z' });
+    writeFileSync(join(dropDir, `${D_RECORD}.wake-try`), JSON.stringify({ tries: 1 }));
+    writeFileSync(join(dropDir, `${D_RECORD}.lead-episode`), JSON.stringify({ at: 'x' }));
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme', '--id', D_RECORD.slice(0, 8)]);
+    expect(result.code, result.err).toBe(0);
+    expect(result.out).toContain('hello by short id');
+    expectReceipt(D_RECORD);
+  });
+
   test('the launch read serves the seat its launch names and receipts each record after the body', async () => {
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello', { at: '2026-10-04T09:00:00.000Z' });
     const first = await run(['--read', '--seat', 'lead', '--session', 'acme']);
