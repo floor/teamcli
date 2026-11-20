@@ -109,6 +109,22 @@ type SeatIndex = {
 
 class PresenceLogFault extends Error {}
 
+/** A hook's session-start bootstrap (`raw: session-start`): the incarnation's first word, which
+ *  takes no part in ordering. It is applied only while its binding has no applied line, and any
+ *  real event under the binding replaces it whatever the two stamps say. */
+function isBootstrap(line: Pick<PresenceRecord, 'source' | 'raw'>): boolean {
+  return line.source === 'runtime-hook' && line.raw === PRESENCE_SESSION_START_RAW;
+}
+
+/** Whether `line` replaces `known` as its binding's newest applied word. One rule for the live
+ *  apply, the per-binding index and the log rebuild. */
+function supersedes(line: PresenceRecord, known: PresenceRecord | null | undefined): boolean {
+  if (known === undefined || known === null) return true;
+  if (isBootstrap(line)) return false;
+  if (isBootstrap(known)) return true;
+  return presenceNewer(line, known);
+}
+
 function emptyResult(closed = false): PresenceIngestResult {
   return { ingested: [], rejected: [], stale: [], repaired: [], errors: [], pending: false, closed, healthy: false };
 }
@@ -505,7 +521,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
           index.seq = line.seq;
           if (line.applied) {
             const known = index.newest.get(line.binding);
-            if (known === undefined || presenceNewer(line, known)) index.newest.set(line.binding, line);
+            if (supersedes(line, known)) index.newest.set(line.binding, line);
           }
           expectedSeq++;
           from = newline + 1;
@@ -733,12 +749,9 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
           }
           // A session-start word only bootstraps an incarnation that has no applied line yet: a
           // late or repeated SessionStart (after a turn began, or an in-session /clear or
-          // /resume) must never replace a newer working or waiting word with idle. It is
-          // logged, never applied, once the binding has evidence of its own.
-          const bootstrap = record.source === 'runtime-hook' && record.raw === PRESENCE_SESSION_START_RAW;
-          const applied = bootstrap
-            ? index.current === null
-            : index.current === null || presenceNewer(record, index.current);
+          // /resume) is logged, never applied, and any real event replaces an applied bootstrap
+          // whatever its stamp (a delayed turn hook can carry an older one).
+          const applied = supersedes(record, index.current);
           const line: PresenceLogLine = {
             ...record,
             seq: index.seq + 1,
@@ -766,7 +779,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
           result.ingested.push(line);
           if (applied) {
             const known = index.newest.get(line.binding);
-            if (known === undefined || presenceNewer(line, known)) index.newest.set(line.binding, line);
+            if (supersedes(line, known)) index.newest.set(line.binding, line);
             if (line.binding === index.currentBinding) {
               index.current = line;
               index.projectionDirty = true;

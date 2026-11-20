@@ -17,7 +17,9 @@
 //    is ingested and fenced, and the watch's verdict turns from the predecessor refusal into a
 //    qualified idle that licenses the first message.
 // 4. A session-start word that lands after the incarnation's first turn began (a late hook, an
-//    in-session /clear or /resume) is logged but never applied: the seat stays working.
+//    in-session /clear or /resume) is logged but never applied: the seat stays working. In the
+//    reverse arrival, a real turn stamped before an applied bootstrap still replaces it, live and
+//    after a cold rebuild of the log.
 // 5. With the native advisory channel live, a compact start writes nothing at all, and an
 //    at-prompt start feeds only the presence spool, never the advisory status spool.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -212,6 +214,34 @@ describe('the session-start presence word', () => {
     await pass();
     expect(await verdict()).toMatchObject({ idle: false, reason: 'working' });
     await close();
+  });
+
+  test('a real turn stamped before an applied bootstrap still replaces it, live and rebuilt', async () => {
+    const { pass, verdict, close } = pipeline();
+    writeSeat(BINDING);
+    // The bootstrap lands and is applied first.
+    expect(run(startArgv(), () => payload('startup'))).toBe(0);
+    await pass();
+    expect(await verdict()).toMatchObject({ idle: true });
+    // A turn hook whose write was delayed: stamped before the bootstrap, ingested after it.
+    stagePresenceRecord(dir, {
+      session: SESSION, seat: SEAT, binding: BINDING, source: 'runtime-hook', event: 'turn-start', ts: at(0),
+    });
+    await pass();
+    expect(await verdict()).toMatchObject({ idle: false, reason: 'working' });
+    const log = readFileSync(presencePaths(dir, SESSION, SEAT)!.log, 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as { raw?: string; event: string; applied: boolean });
+    expect(log.map((line) => [line.raw ?? line.event, line.applied])).toEqual([['session-start', true], ['turn-start', true]]);
+    await close();
+
+    // A cold rebuild from the durable log selects the same word, with no projection to lean on.
+    rmSync(presencePaths(dir, SESSION, SEAT)!.current, { force: true });
+    const cold = pipeline();
+    await cold.pass();
+    expect(await cold.verdict()).toMatchObject({ idle: false, reason: 'working' });
+    const current = JSON.parse(readFileSync(presencePaths(dir, SESSION, SEAT)!.current, 'utf8')) as { event: string };
+    expect(current.event).toBe('turn-start');
+    await cold.close();
   });
 });
 
