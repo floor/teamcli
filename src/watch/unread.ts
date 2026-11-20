@@ -921,18 +921,19 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   // The net under the restart rebind (src/queue/stranded.ts): a seat whose typed pointer the pane
   // ownership proof has kept refusing is reached by nothing on an active root, and by dark
   // delivery once the root is rolled back. The rollback is said, never silent.
-  const stranded = strandedSeats(scene.root, scene.now.getTime());
-  if (stranded.length > 0) {
-    if (!floorActive(scene.root, home)) clearStranded(scene.root);
-    else {
-      const names = stranded.map(one => `${one.seat} (${one.why}, since ${new Date(one.since).toISOString()})`).join(', ');
-      const rolled = deactivate(scene.root, home);
-      if (rolled.kind === 'dark') {
-        clearStranded(scene.root);
-        scene.say(`the root was rolled back to dark: its typed pointers kept failing the pane ownership proof for ${names}; dark delivery reaches them again; activate it again once \`team doctor\` shows them proven`, true);
-      } else {
-        scene.say(`the root could not be rolled back to dark (${rolled.kind === 'failed' ? rolled.why : 'the activation lock is busy'}) for ${names}; tried again next pass`, true);
-      }
+  const floorNow = floorState(scene.root, home);
+  if (floorNow.kind === 'dark') clearStranded(scene.root);
+  const stranded = floorNow.kind === 'active' ? strandedSeats(scene.root, scene.now.getTime(), floorNow.at) : [];
+  if (floorNow.kind === 'active' && stranded.length > 0) {
+    const names = stranded.map(one => `${one.seat} (${one.why}, since ${new Date(one.since).toISOString()})`).join(', ');
+    const rolled = deactivate(scene.root, home, { expectAt: floorNow.at });
+    if (rolled.kind === 'dark') {
+      clearStranded(scene.root);
+      scene.say(`the root was rolled back to dark: its typed pointers kept failing the pane ownership proof for ${names}; dark delivery reaches them again; activate it again once \`team doctor\` shows them proven`, true);
+    } else if (rolled.kind === 'superseded') {
+      clearStranded(scene.root);
+    } else {
+      scene.say(`the root could not be rolled back to dark (${rolled.kind === 'failed' ? rolled.why : 'the activation lock is busy'}) for ${names}; the rollback is finished on a later pass`, true);
     }
   }
   // The receiving team's `message-display` template is the same for every seat this pass wakes.
@@ -1459,7 +1460,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         });
         if (typed !== undefined && refusal !== undefined) typed = { ...typed, reason: `${typed.reason}; ${refusal}` };
         if (adapterPointer && typed !== undefined) {
-          if (ownership !== undefined) noteStrandedPointer(scene.root, seat.name, nowMs, ownership);
+          const activation = floorState(scene.root, home);
+          if (ownership !== undefined && activation.kind === 'active') noteStrandedPointer(scene.root, seat.name, nowMs, ownership, activation.at);
           else if (typed.typed) noteReachedPointer(scene.root, seat.name);
         }
         if (typed !== undefined) handle?.settle(typed);

@@ -336,7 +336,12 @@ export function checkActors(root: string, home: string, actors: FloorActor[] | n
 
 export type DeactivationStep = 'begin' | 'reader' | 'published' | 'record' | 'marker' | 'fenced' | 'end';
 
-export type DeactivationOutcome = { kind: 'dark' } | { kind: 'busy' } | { kind: 'failed'; why: string };
+export type DeactivationOutcome = { kind: 'dark' } | { kind: 'busy' } | { kind: 'failed'; why: string } | { kind: 'superseded' };
+
+/** A rollback to dark has begun and not finished: its own marker stands, read positively. */
+export function rollbackBegun(root: string): boolean {
+  return readJson(join(queuesFolder(root), DEACTIVATING)).kind === 'ok';
+}
 
 /**
  * The one-command rollback to dark (E7b §3, `team queues deactivate`), under the activation lock,
@@ -345,10 +350,16 @@ export type DeactivationOutcome = { kind: 'dark' } | { kind: 'busy' } | { kind: 
  * DEACTIVATING removed. A cut-off run leaves DEACTIVATING (`unknown`); running it again resumes at
  * the first file still standing. Idempotent: a dark root answers dark and writes nothing.
  */
-export function deactivate(root: string, home: string, options: { after?: (step: DeactivationStep) => void; faults?: DurableFaults; removeFaults?: { before?: (step: 'unlink' | 'folder-fsync', path: string) => void } } = {}): DeactivationOutcome {
-  void home;
+export function deactivate(root: string, home: string, options: { after?: (step: DeactivationStep) => void; faults?: DurableFaults; removeFaults?: { before?: (step: 'unlink' | 'folder-fsync', path: string) => void }; expectAt?: string } = {}): DeactivationOutcome {
   const result = withActivationLock(root, (): DeactivationOutcome => {
     const folder = queuesFolder(root);
+    // A rollback decided against one activation (the watch's stranded seats) acts only on that
+    // activation, read again under the lock: a root reactivated since, or already rolling back,
+    // is left to its own state.
+    if (options.expectAt !== undefined) {
+      const record = readActivation(root, home);
+      if (rollbackBegun(root) || record.kind !== 'ok' || record.payload.at !== options.expectAt) return { kind: 'superseded' };
+    }
     const names = [PROTOCOL, ACTIVATION, PUBLISHED, FENCED, DEACTIVATING, 'READER'];
     const standing = names.map(name => readFence(join(folder, name)));
     if (standing.some(text => text === null)) return { kind: 'failed', why: 'a floor file cannot be read' };
@@ -401,6 +412,12 @@ export function floorPass(root: string, home: string, nowMs: number, actors: () 
     const last = lastFloorPass.get(root);
     if (last !== undefined && nowMs - last < 60_000) return floorState(root, home);
     lastFloorPass.set(root, nowMs);
+    // A rollback cut off after its marker (a failed removal, a killed process) is finished here,
+    // by any watch pass of any process: the root never stays between active and dark.
+    if (rollbackBegun(root)) {
+      deactivate(root, home);
+      return floorState(root, home);
+    }
     const state = floorState(root, home);
     if (state.kind === 'active') return checkActors(root, home, actors());
     // The daemon never activates on its own: activation is the explicit `team queues activate`

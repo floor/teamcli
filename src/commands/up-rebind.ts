@@ -9,7 +9,9 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { refuse, writeJson } from '../output/index.ts';
 import { findAgent, recordProvenSeatConversation, recordRebootRebind } from '../registry/agents.ts';
-import { rebootRebindProof, type RebootRebind } from '../launch/reboot-rebind.ts';
+import { rebootRebindProof, restartedGeneration, type RebootRebind } from '../launch/reboot-rebind.ts';
+import { readProcessParent } from '../process-parent-adapter.ts';
+import type { LaunchedIdentity } from '../launch/identity.ts';
 import { processStartOf } from '../watch/pane.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { liveSocketOf, defaultSocketsDirs } from '../send/address.ts';
@@ -57,7 +59,8 @@ export function proveSeatRebind(input: {
   const measured = launch.processInfo?.(session, held.pane) ?? null;
   // Working is not a refusal: no input, exit, close or launch is being attempted.
   let reboot: Extract<RebootRebind, { ok: true }> | null = null;
-  if (seatProcessVerdict(held.launched, measured) !== 'same') {
+  const startOf = launch.processStartOf ?? processStartOf;
+  if (restartedGeneration(held.launched, held.pane_shell_start, measured, startOf)) {
     // A restart (of the machine, or of the terminal host's session) leaves no recorded pid in
     // front. The restored pane is the seat only when it is a later start than the recorded launch
     // and holds exactly the recorded conversation, reported by no other pane.
@@ -70,7 +73,8 @@ export function proveSeatRebind(input: {
       foreground: launch.foreground(session, held.pane),
       liveSession: conversation,
       sessionReports: (live ?? []).filter((one) => one.session === conversation).length,
-      startOf: launch.processStartOf ?? processStartOf,
+      startOf,
+      parentOf: launch.processParent ?? readProcessParent,
     });
     if (!proof.ok) return fail(proof.why);
     reboot = proof;
@@ -100,7 +104,34 @@ export function proveSeatRebind(input: {
     || samePane.length !== 1 || samePane[0]?.agent !== reports[0]?.agent || samePane[0]?.session !== conversation) {
     return fail('the live conversation changed while its pane proof was being read');
   }
+  if (reboot !== null && !restartStillHolds({ session, pane: held.pane, conversation, launched: reboot.launched, shellStart: reboot.shellStart, sources })) {
+    return fail('the pane\'s processes or its conversation changed while its restart proof was being read');
+  }
   return { ok: true as const, agent, held, conversation, address: socketOk && seat.cli === 'claude-code' ? address : null, reboot, unnamed };
+}
+
+/** The restart proof's readings taken again, fresh: the conversation is reported by this pane
+ *  alone, and the pane's shell, foreground and births are exactly the ones about to be recorded. */
+function restartStillHolds(input: {
+  session: string; pane: string; conversation: string; launched: LaunchedIdentity; shellStart: number; sources: UpSources;
+}): boolean {
+  const launch = input.sources.launch;
+  if (launch?.processInfo === undefined) return false;
+  const aim = input.session === 'default' ? undefined : input.session;
+  evictHerdrAgentList(aim);
+  const agents = launch.agents(input.session);
+  if (agents === null) return false;
+  const reporting = agents.filter((one) => one.session === input.conversation);
+  if (reporting.length !== 1 || reporting[0]?.pane !== input.pane) return false;
+  evictHerdrPaneProcessInfo(input.pane, aim);
+  const now = launch.processInfo(input.session, input.pane);
+  if (now === null || now.shell !== input.launched.shell) return false;
+  const front = now.foreground.filter((pid) => pid !== now.shell);
+  if (front.length !== input.launched.cli.length || !front.every((pid) => input.launched.cli.includes(pid))) return false;
+  const startOf = launch.processStartOf ?? processStartOf;
+  const starts = input.launched.cli_start;
+  if (starts === undefined || startOf(now.shell) !== input.shellStart) return false;
+  return input.launched.cli.every((pid, at) => startOf(pid) === starts[at]);
 }
 
 type SeatRebindProof = Extract<ReturnType<typeof proveSeatRebind>, { ok: true }>;
@@ -124,6 +155,10 @@ function applySeatRebind(proof: SeatRebindProof, input: { dir: string; session: 
   // The host cleared the pane's name: it is given back once the record names the pane, so a
   // send and the next `up` find the seat by it. A failed rename is said; the record stands.
   if (!proof.unnamed) return { written: true, named: '' };
+  // The name is given back only while the readings the record was written from still stand.
+  if (proof.reboot !== null && !restartStillHolds({ session, pane: proof.held.pane as string, conversation: proof.conversation, launched: proof.reboot.launched, shellStart: proof.reboot.shellStart, sources })) {
+    return { written: true, named: '; its pane was not named back (its readings changed after the record was written)' };
+  }
   const launch = sources.launch;
   return {
     written: true,
@@ -154,7 +189,7 @@ export function rebindRestartedSeats(input: {
     const held = state[seat.name];
     if (held?.pane === undefined || held.launched === undefined || !held.agent_session) continue;
     evictHerdrPaneProcessInfo(held.pane, session === 'default' ? undefined : session);
-    if (seatProcessVerdict(held.launched, launch.processInfo(session, held.pane)) !== 'replaced') continue;
+    if (!restartedGeneration(held.launched, held.pane_shell_start, launch.processInfo(session, held.pane), launch.processStartOf ?? processStartOf)) continue;
     let line: string;
     try {
       const proof = proveSeatRebind({ root, dir, session, seat, sources });

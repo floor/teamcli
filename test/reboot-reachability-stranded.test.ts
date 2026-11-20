@@ -25,7 +25,7 @@ import type { Live } from '../src/status/compare.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
 import { wakeUnreadDrops } from '../src/watch/unread.ts';
 import { clearStranded, noteReachedPointer, noteStrandedPointer, STRANDED_FRESH_MS, STRANDED_ROLLBACK_MS, strandedSeats } from '../src/queue/stranded.ts';
-import { floorState } from '../src/queue/floor.ts';
+import { floorPass, floorState, rollbackBegun } from '../src/queue/floor.ts';
 import { testIo } from './helpers.ts';
 import { fake, world, type World } from './send-native-fixtures.ts';
 
@@ -277,19 +277,64 @@ async function pass(at: Fixture, nowMs: number, owner: TypedPaneSources, lines: 
 }
 
 describe('a stranded Claude seat rolls its active root back to dark', () => {
-  test('the notes: a seat is stranded only after the rollback window, while refusals are fresh, and a passing pointer clears it', () => {
+  test('the notes: one unbroken streak on one activation, past the window, while refusals are fresh; a passing pointer clears it', () => {
     const root = '/synthetic/root';
+    const A = '2026-11-20T06:00:00.000Z';
     clearStranded(root);
-    noteStrandedPointer(root, SEAT, 0, 'the shell is not the recorded shell');
-    expect(strandedSeats(root, STRANDED_ROLLBACK_MS - 1)).toEqual([]);
-    expect(strandedSeats(root, STRANDED_ROLLBACK_MS)).toEqual([]);
-    noteStrandedPointer(root, SEAT, STRANDED_ROLLBACK_MS - 1_000, 'the shell is not the recorded shell');
-    expect(strandedSeats(root, STRANDED_ROLLBACK_MS).map(one => one.seat)).toEqual([SEAT]);
+    for (let t = 0; t <= STRANDED_ROLLBACK_MS - 60_000; t += 60_000) noteStrandedPointer(root, SEAT, t, 'the shell is not the recorded shell', A);
+    expect(strandedSeats(root, STRANDED_ROLLBACK_MS - 1, A)).toEqual([]);
+    expect(strandedSeats(root, STRANDED_ROLLBACK_MS, A).map(one => one.seat)).toEqual([SEAT]);
+    // Another activation's notes never count for this one.
+    expect(strandedSeats(root, STRANDED_ROLLBACK_MS, '2026-11-20T07:00:00.000Z')).toEqual([]);
     // No refusal for longer than the freshness bound: the seat is no longer being asked for.
-    expect(strandedSeats(root, STRANDED_ROLLBACK_MS - 1_000 + STRANDED_FRESH_MS + 1)).toEqual([]);
+    expect(strandedSeats(root, STRANDED_ROLLBACK_MS - 60_000 + STRANDED_FRESH_MS + 1, A)).toEqual([]);
     noteReachedPointer(root, SEAT);
-    expect(strandedSeats(root, STRANDED_ROLLBACK_MS)).toEqual([]);
+    expect(strandedSeats(root, STRANDED_ROLLBACK_MS, A)).toEqual([]);
     clearStranded(root);
+  });
+
+  test('two failures with a gap longer than the freshness bound never add up to a stranded seat', () => {
+    const root = '/synthetic/gap';
+    const A = '2026-11-20T06:00:00.000Z';
+    clearStranded(root);
+    noteStrandedPointer(root, SEAT, 0, 'the shell is not the recorded shell', A);
+    noteStrandedPointer(root, SEAT, STRANDED_FRESH_MS + 60_000, 'the shell is not the recorded shell', A);
+    expect(strandedSeats(root, STRANDED_FRESH_MS + 120_000, A)).toEqual([]);
+    expect(strandedSeats(root, STRANDED_ROLLBACK_MS + 1, A)).toEqual([]);
+    clearStranded(root);
+  });
+
+  test('a deactivate and reactivate between refusals starts a new streak', () => {
+    const root = '/synthetic/cycle';
+    clearStranded(root);
+    noteStrandedPointer(root, SEAT, 0, 'the shell is not the recorded shell', 'first activation');
+    noteStrandedPointer(root, SEAT, 60_000, 'the shell is not the recorded shell', 'second activation');
+    for (let t = 120_000; t <= STRANDED_ROLLBACK_MS; t += 60_000) noteStrandedPointer(root, SEAT, t, 'the shell is not the recorded shell', 'second activation');
+    expect(strandedSeats(root, STRANDED_ROLLBACK_MS, 'second activation')).toEqual([]);
+    expect(strandedSeats(root, STRANDED_ROLLBACK_MS + 60_000, 'second activation').map(one => one.seat)).toEqual([SEAT]);
+    clearStranded(root);
+  });
+
+  test('a rollback cut off after its marker is finished by a later floor pass, without any stranded note', () => {
+    const at = setupRoot();
+    clearStranded(at.root);
+    const failed = deactivate(at.root, at.home, { removeFaults: { before: (_step, path) => { if (path.endsWith('PUBLISHED')) throw new Error('injected'); } } });
+    expect(failed.kind).toBe('failed');
+    expect(rollbackBegun(at.root)).toBe(true);
+    expect(floorState(at.root, at.home).kind).toBe('unknown');
+    const later = Date.now() + 10 * 60_000;
+    expect(floorPass(at.root, at.home, later, () => [DAEMON], null).kind).toBe('dark');
+    expect(rollbackBegun(at.root)).toBe(false);
+  });
+
+  test('a rollback decided on one activation leaves a root reactivated since as it is', () => {
+    const at = setupRoot();
+    const first = floorState(at.root, at.home);
+    if (first.kind !== 'active') throw new Error('not active');
+    expect(deactivate(at.root, at.home).kind).toBe('dark');
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [DAEMON], now: () => new Date(Date.parse(first.at) + 60_000) }).kind).toBe('activated');
+    expect(deactivate(at.root, at.home, { expectAt: first.at }).kind).toBe('superseded');
+    expect(floorState(at.root, at.home).kind).toBe('active');
   });
 
   test('refused past the window: the root goes dark, the rollback is said, and no key reached the pane', async () => {
@@ -324,7 +369,7 @@ describe('a stranded Claude seat rolls its active root back to dark', () => {
     await pass(at, t0 + STRANDED_ROLLBACK_MS + 1_000, ownerFromNodes(realisticClaudeNodes()), lines, said);
     expect(floorState(at.root, at.home).kind).toBe('active');
     expect(said.some(line => line.includes('rolled back to dark'))).toBe(false);
-    expect(strandedSeats(at.root, t0 + STRANDED_ROLLBACK_MS + 1_000)).toEqual([]);
+    expect(strandedSeats(at.root, t0 + STRANDED_ROLLBACK_MS + 1_000, (floorState(at.root, at.home) as { at: string }).at)).toEqual([]);
     clearStranded(at.root);
   });
 });

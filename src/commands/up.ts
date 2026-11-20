@@ -122,6 +122,7 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent, recordProvenAgentAddress, recordProvenSeatConversation } from '../registry/agents.ts';
+import type { ProcessParent } from '../process-parent-adapter.ts';
 import { proveSeatRebind, rebindRestartedSeats, runSeatRebind } from './up-rebind.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
@@ -295,6 +296,9 @@ export type Launch = {
   /** The instant a process started, read beside the create when the pane's shell is known;
    *  absent: the run reads the process table itself. */
   processStartOf?(pid: number): number | null;
+  /** Pid, parent and birth read together, for the restart rebind's process tree; absent: the
+   *  run reads the process table itself. */
+  processParent?(pid: number): ProcessParent | null;
   /** Brings the pane to the owner's attention, without sending a key or a text into it. */
   focus?(session: string, pane: string): boolean;
   /** Stops the session (`q` in the pause, only for a session this invocation started). */
@@ -4293,10 +4297,6 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     }
   };
   try {
-    // A restart (the machine's, or the terminal host's session) carried seats across with new
-    // pids: each one the restart proof ties is rebound first, before the plan reads its pane, so
-    // it is reachable again. A restore's kept panes are included: the rebind touches no pane.
-    if (state === 'running') rebindRestartedSeats({ root, dir, session, seats: team.seats, sources, actor: callerLabel(caller) });
     refreshAddresses();
     // A restore whose daemon already hosts this session's watch drops a dead pane-watch record.
     // The pane and the pid go; one audit line names the pane. A live or fresh record stays.
@@ -4371,6 +4371,15 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
         logLine(dir, 'up', `client:${held.grant.clientId}`, `client-up-refused: grant ${held.grant.grantId}: ${standing}`, at);
         return clientRefused(io, json, standing);
       }
+    }
+
+    // A restart (the machine's, or the terminal host's session) carried seats across with new
+    // pids: each one the restart proof ties is rebound, after every admission check and before
+    // the plan's steps run, so it is reachable again. It is admitted as `--rebind` is (the
+    // ordinary owner/lead map) or as the daemon's own restore, never by a delegation or a client
+    // grant, and it visits only the seats this run names. A restore's kept panes are included.
+    if (state === 'running' && (ordinaryAdmitted || internal?.restore === true)) {
+      rebindRestartedSeats({ root, dir, session, seats: team.seats.filter((seat) => !scoped || scopedSeats.has(seat.name)), sources, actor: callerLabel(caller) });
     }
 
     if (createLobby) {

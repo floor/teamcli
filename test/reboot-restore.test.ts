@@ -32,7 +32,7 @@ function input(over: Partial<RebootRebindInput> = {}): RebootRebindInput {
     foreground: ['claude'],
     liveSession: SES,
     sessionReports: 1,
-    startOf: (pid) => (pid === 1 ? BOOT : pid === 700 ? AFTER : null),
+    startOf: (pid) => (pid === 700 ? AFTER : pid === 800 ? AFTER + 500 : null),
     ...over,
   };
 }
@@ -40,7 +40,7 @@ function input(over: Partial<RebootRebindInput> = {}): RebootRebindInput {
 describe('rebind across a machine restart', () => {
   test('a restored pane with the recorded conversation, a pre-boot launch and the CLI in front is the seat', () => {
     const proof = rebootRebindProof(input());
-    expect(proof).toEqual({ ok: true, launched: { shell: 700, cli: [800] }, shell: 700, shellStart: AFTER });
+    expect(proof).toEqual({ ok: true, launched: { shell: 700, cli: [800], cli_start: [AFTER + 500] }, shell: 700, shellStart: AFTER });
   });
 
   test('the recorded process still in front is not this proof (the plain rebind takes it)', () => {
@@ -89,6 +89,35 @@ describe('rebind across a machine restart', () => {
     expect(proof.ok).toBe(false);
     if (!proof.ok) expect(proof.why).toContain('not reported by this pane alone');
     expect(rebootRebindProof(input({ sessionReports: 0 })).ok).toBe(false);
+  });
+
+  test('an unreadable birth of a process to be recorded is refused', () => {
+    const proof = rebootRebindProof(input({ startOf: (pid) => (pid === 700 ? AFTER : null) }));
+    expect(proof.ok).toBe(false);
+    if (!proof.ok) expect(proof.why).toContain('birth cannot be read');
+  });
+
+  test('several foreground processes must be one launch tree: an unrelated peer is refused', () => {
+    const starts = (pid: number) => (pid === 700 ? AFTER : pid === 800 || pid === 801 ? AFTER + 500 : null);
+    const tree = { 800: { pid: 800, ppid: 700, birth: 5 }, 801: { pid: 801, ppid: 800, birth: 6 } } as Record<number, { pid: number; ppid: number; birth: number }>;
+    const processes = { shell: 700, foreground: [800, 801] };
+    expect(rebootRebindProof(input({ processes, startOf: starts, parentOf: (pid) => tree[pid] ?? null })).ok).toBe(true);
+    const unrelated: typeof tree = { ...tree, 801: { pid: 801, ppid: 1, birth: 6 } };
+    const refused = rebootRebindProof(input({ processes, startOf: starts, parentOf: (pid) => unrelated[pid] ?? null }));
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.why).toContain("one launch's process tree");
+    // Two children of the shell are two launches, and no parent reader proves nothing.
+    const twoRoots: typeof tree = { ...tree, 801: { pid: 801, ppid: 700, birth: 6 } };
+    expect(rebootRebindProof(input({ processes, startOf: starts, parentOf: (pid) => twoRoots[pid] ?? null })).ok).toBe(false);
+    expect(rebootRebindProof(input({ processes, startOf: starts })).ok).toBe(false);
+  });
+
+  test('reused shell and CLI pids with newer births are a new generation; equal births are not', () => {
+    const recorded = { shell: 700, cli: [800], cli_start: [BEFORE + 500] };
+    const reused = rebootRebindProof(input({ launched: recorded, paneShellStart: BEFORE }));
+    expect(reused.ok).toBe(true);
+    const same = rebootRebindProof(input({ launched: recorded, paneShellStart: BEFORE, startOf: (pid) => (pid === 700 ? BEFORE : pid === 800 ? BEFORE + 500 : null) }));
+    expect(same.ok).toBe(false);
   });
 
   test('a pane back at its bare shell is not a restored seat', () => {

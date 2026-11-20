@@ -85,6 +85,9 @@ describe('the socket the CLI would use', () => {
   test('XDG_CONFIG_HOME naming another folder, or a name the CLI refuses, keeps the CLI', () => {
     expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/x' }))).toBeNull();
     expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/home/u/.config/other' }))).toBeNull();
+    // A link component followed by `..` may name another folder: never the default socket.
+    expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/home/u/link/../.config' }))).toBeNull();
+    expect(directSocketOf('alpha', env({ XDG_CONFIG_HOME: '/home/u/./.config' }))).toBeNull();
     expect(directSocketOf('a b', env({}))).toBeNull();
     expect(directSocketOf('..', env({}))).toBeNull();
     expect(directSocketOf('a/b', env({}))).toBeNull();

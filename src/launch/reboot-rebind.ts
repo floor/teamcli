@@ -21,6 +21,7 @@ import { launchedIdentity, seatProcessVerdict, type LaunchedIdentity } from './i
 import { reportedLiveAgent } from './agent.ts';
 import { profileFor } from '../profiles/index.ts';
 import type { PaneProcesses } from '../herdr.ts';
+import type { ProcessParent } from '../process-parent-adapter.ts';
 
 /** Clock granularity of a process start reading (one second) plus a small margin. */
 export const BOOT_SKEW_MS = 2_000;
@@ -39,6 +40,9 @@ export type RebootRebindInput = {
   sessionReports: number;
   /** A process's start instant, in the clock the record was written with. */
   startOf: (pid: number) => number | null;
+  /** Pid, parent and birth, read together: proves that several foreground processes are one
+   *  launch's tree. Absent: a foreground of more than one process is refused. */
+  parentOf?: (pid: number) => ProcessParent | null;
 };
 
 export type RebootRebind =
@@ -53,10 +57,63 @@ function recordedLaunchInstant(launched: LaunchedIdentity | undefined, paneShell
   return Math.max(...starts);
 }
 
+const ANCESTRY_DEPTH = 64;
+
+/**
+ * Whether the pane holds a later process generation than the record: no recorded CLI is in front
+ * (`replaced`), or the recorded pids are in front but a birth read now positively differs from
+ * the recorded one (reused pids). An unreadable birth is not a difference.
+ */
+export function restartedGeneration(
+  launched: LaunchedIdentity | undefined,
+  paneShellStart: number | undefined,
+  processes: PaneProcesses | null,
+  startOf: (pid: number) => number | null,
+): boolean {
+  const verdict = seatProcessVerdict(launched, processes);
+  if (verdict === 'replaced') return true;
+  if (verdict !== 'same' || launched === undefined || processes === null) return false;
+  const differs = (pid: number, recorded: number | undefined): boolean => {
+    if (recorded === undefined) return false;
+    const now = startOf(pid);
+    return now !== null && now !== recorded;
+  };
+  if (differs(processes.shell, paneShellStart)) return true;
+  const starts = launched.cli_start;
+  return starts !== undefined && launched.cli.some((pid, at) => processes.foreground.includes(pid) && differs(pid, starts[at]));
+}
+
+/** Several foreground processes must be one tree: exactly one is the shell's child, and every
+ *  other descends from it within a bounded walk. One process needs no tree. */
+function oneLaunchTree(cli: readonly number[], shell: number, parentOf: ((pid: number) => ProcessParent | null) | undefined): boolean {
+  if (cli.length === 1) return true;
+  if (parentOf === undefined) return false;
+  const read = (pid: number): ProcessParent | null => {
+    const node = parentOf(pid);
+    return node !== null && node.pid === pid && Number.isSafeInteger(node.ppid) ? node : null;
+  };
+  const roots = cli.filter((pid) => read(pid)?.ppid === shell);
+  if (roots.length !== 1) return false;
+  const root = roots[0]!;
+  for (const pid of cli) {
+    if (pid === root) continue;
+    let at = pid;
+    let reached = false;
+    for (let depth = 0; depth < ANCESTRY_DEPTH; depth++) {
+      const node = read(at);
+      if (node === null || node.ppid <= 1 || node.ppid === shell) break;
+      if (node.ppid === root) { reached = true; break; }
+      at = node.ppid;
+    }
+    if (!reached) return false;
+  }
+  return true;
+}
+
 export function rebootRebindProof(input: RebootRebindInput): RebootRebind {
   const no = (why: string) => ({ ok: false as const, why });
-  if (seatProcessVerdict(input.launched, input.processes) !== 'replaced') {
-    return no('the pane does not hold the recorded launched CLI process');
+  if (!restartedGeneration(input.launched, input.paneShellStart, input.processes, input.startOf)) {
+    return no('the pane does not hold a later process generation than the recorded launch');
   }
   const recorded = input.recordedSession;
   if (recorded === undefined || recorded === '' || input.liveSession !== recorded) {
@@ -75,6 +132,12 @@ export function rebootRebindProof(input: RebootRebindInput): RebootRebind {
   }
   const next = launchedIdentity(input.processes, input.startOf);
   if (next === null) return no('the pane does not hold the recorded launched CLI process, and its live process cannot be read');
+  // Every process recorded carries its birth: a record without them would let the typed proof
+  // trust pids alone.
+  if (next.cli_start === undefined) return no('the pane does not hold the recorded launched CLI process, and a live process birth cannot be read');
+  if (!oneLaunchTree(next.cli, next.shell, input.parentOf)) {
+    return no('the pane does not hold the recorded launched CLI process, and its foreground is not one launch\'s process tree');
+  }
   const shellStart = input.startOf(next.shell);
   // The same shell (or a reused pid) started no later than the recorded launch is refused here.
   if (shellStart === null || shellStart < launchedAt + BOOT_SKEW_MS) {
