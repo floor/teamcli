@@ -2385,8 +2385,11 @@ export function noRouteReportedPath(dropDir: string, id: string): string {
 /** Tells a message's senders, once, that its seat is a protected pane whose channel offer was
  *  given up before any push: nothing wakes it until the channel's re-offer. The lead is not a
  *  target here (it may be the very seat), and its own report keeps the generic 2N rule. */
-function notifyNoRoute(scene: RetryScene, seat: string, dropDir: string, id: string, home: string, lead: ReportTarget | null, at: string): void {
+function notifyNoRoute(scene: RetryScene, seat: string, dropDir: string, id: string, home: string, lead: ReportTarget | null, at: string, context: StatusContext, key: KeyObject): void {
   if (existsSync(noRouteReportedPath(dropDir, id))) return;
+  // The pass listed the folder earlier: a read or an ack that landed since settles it, and the
+  // same fresh check the regular report makes, under the same claim binding, comes first.
+  if (isRead(dropDir, id, context, key, claimBindingIn(scene.root, scene.session, seat, id))) return;
   const payload = payloadOf(dropDir, id, home);
   if (payload === null || payload.rule === LEAD_REPORT_RULE) return;
   const { targets } = reportTargets(scene, payload, home);
@@ -2465,12 +2468,14 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
     // channel server's re-offer. Its sender is told now, under its own marker and heading; the
     // generic report at 2N (lead and senders) is untouched by it.
     const legs = scene.eventLegs?.(seat.name);
-    const protectedPane = legs !== undefined && legs.pointer !== true
+    // Only an explicit verdict counts: a lookup that could not read the settings or the delivery
+    // chain answers without `pointer`, and that is not a protected pane.
+    const protectedPane = legs?.pointer === false
       && claudeAdapterRoot(seat.cli, scene.root, home, seat.webhook !== undefined);
     if (protectedPane) {
       for (const message of unread) {
         if (!channelOfferGivenUp(seatFolderOf(dropDir, message.id), message.id)) continue;
-        notifyNoRoute(scene, seat.name, dropDir, message.id, home, lead, at);
+        notifyNoRoute(scene, seat.name, dropDir, message.id, home, lead, at, context, key.key);
       }
     }
     for (const message of unread) {

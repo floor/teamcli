@@ -108,7 +108,7 @@ export function overdueChannelRecords(input: { dropDir: string; context: StatusC
       continue;
     }
     if (recordStampAt(listing.folder, name) !== true) continue;
-    const start = firstChannelOffer(listing.folder, name, arrived);
+    const start = channelOfferStart(listing.folder, name, arrived);
     // With `givenUp`, a channel leg its sender gave up before any push is owed its pointer at once:
     // no offer is in flight. It never makes the channel itself unproven (`channelUnproven`).
     const abandoned = start !== 'unknown' && channelOfferGivenUp(listing.folder, name);
@@ -153,6 +153,20 @@ export function channelOfferStartedGivenUp(folder: string, id: string): boolean 
   if (first === undefined) return false;
   const firstRound = retired.filter((name) => name.startsWith(`c${String(first)}.`));
   return firstRound.some((name) => name.endsWith('.channel-abort')) && !firstRound.some((name) => name.endsWith('.channel-emitted'));
+}
+
+/** The start of the record's first channel offer, for its deadline (§2.3). A record whose
+ *  channel offering began as a given-up offer had no offer in flight at its arrival: its start is
+ *  the channel server's first real re-offer (its first channel attempt), and null until that
+ *  attempt exists, so it stays out of the health scan until then and is proven for the full
+ *  deadline after it. Every other record keeps `firstChannelOffer`. */
+function channelOfferStart(folder: string, id: string, arrived: number): number | null | 'unknown' {
+  const start = firstChannelOffer(folder, id, arrived);
+  if (start === 'unknown' || !channelOfferStartedGivenUp(folder, id)) return start;
+  const attempts = attemptTimes(folder, id);
+  if (attempts === 'unknown') return 'unknown';
+  const channel = attempts.filter((one) => one.channel).map((one) => one.atMs);
+  return channel.length === 0 ? null : Math.min(...channel);
 }
 
 /** The seat's stamped records that are unsettled and due now, oldest arrival first. */
@@ -223,7 +237,7 @@ function dueNow(folder: string, id: string, seat: ResendSeat, nowMs: number, arr
   // unproven, or at that offer's 90 s deadline once it is proven; each later one waits
   // `backoffMs(1 + pointers)` from the newest pointer attempt. A copy never moves this clock.
   if (seat.only !== undefined || seat.unproven !== undefined) {
-    const start = firstChannelOffer(folder, id, arrived);
+    const start = channelOfferStart(folder, id, arrived);
     const attempts = attemptTimes(folder, id);
     if (start === 'unknown' || attempts === 'unknown') return false;
     // A channel offer its sender gave up before any push has no offer start to count from: every
