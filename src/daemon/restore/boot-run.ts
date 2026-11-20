@@ -111,6 +111,9 @@ export async function workBootQueue(deps: BootRunDeps, queue: BootQueue): Promis
     entry.last = why;
     save(`${route.session}: ${why}`);
   };
+  // The load guard holds every start while the machine is loaded, as it is right after a login.
+  // The hold is said once per streak: a queue waiting on load is never silent.
+  let loadHeld = false;
   while (queue.pending.length > 0) {
     if (deps.now() - startedAt > deps.budgetMs) {
       deps.log(`restore: boot queue left after the wait bound: ${queue.pending.map((route) => `${route.session} (${route.last ?? 'not tried'})`).join(', ')}; attach them to restore them`);
@@ -118,7 +121,14 @@ export async function workBootQueue(deps: BootRunDeps, queue: BootQueue): Promis
     }
     let startedOne = false;
     for (const route of [...queue.pending]) {
-      if (deps.loadPerCore() > deps.loadMaxPerCore) break;
+      const load = deps.loadPerCore();
+      if (load > deps.loadMaxPerCore) {
+        if (!loadHeld) deps.log(`restore: the load is ${load.toFixed(1)} per core, over the boot restore's bound of ${String(deps.loadMaxPerCore)}; ${queue.pending.map((one) => one.session).join(', ')} wait for it to fall`);
+        loadHeld = true;
+        break;
+      }
+      if (loadHeld) deps.log('restore: the load fell under the bound; the boot restore goes on');
+      loadHeld = false;
       // A server an earlier attempt spawned (or reserved) is never doubled: while it lives, or
       // while it cannot be told to be gone, the route waits for it (and settles once its session
       // reads running). Only a proven exit or a reused pid clears the record. Ownership is per

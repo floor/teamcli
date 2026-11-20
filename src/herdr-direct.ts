@@ -9,15 +9,16 @@
 // - Only where the socket the CLI would use is certain: an explicit `--session` (the session's
 //   own socket under the herdr config folder, which `HERDR_SOCKET_PATH` does not override), or
 //   no session with `HERDR_SOCKET_PATH` set (which wins over `HERDR_SESSION`) to a herdr socket
-//   under this `$HOME`. Any other setting (`XDG_CONFIG_HOME`, a session name the CLI would
-//   refuse, a socket elsewhere, no hint at all) keeps the CLI.
+//   under this `$HOME`. Any other setting (`XDG_CONFIG_HOME` naming another folder than
+//   `$HOME/.config`, a session name the CLI would refuse, a socket elsewhere, no hint at all)
+//   keeps the CLI.
 // - Synchronous like the CLI read it replaces, bound through `bun:ffi` (socket/connect/write/
 //   read with the CLI read's own 10 s limit). No binding, no socket file, a refused connect, a
 //   short write or an unreadable answer: `undefined`, and the caller starts the CLI exactly as
 //   before. An error answer throws, as the CLI's non-zero exit throws.
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 type Request = { method: string; params: Record<string, string> };
 
@@ -45,8 +46,10 @@ const SESSION_NAME = /^[A-Za-z0-9._-]+$/;
  *  anywhere else (another home, a test's scratch home with the real socket inherited) keeps the
  *  CLI, whatever `herdr` that PATH names. */
 export function directSocketOf(session: string | undefined, env: NodeJS.ProcessEnv = process.env): string | null {
-  if (env.XDG_CONFIG_HOME !== undefined) return null;
   const home = env.HOME !== undefined && env.HOME !== '' ? env.HOME : homedir();
+  // The daemon's service unit sets XDG_CONFIG_HOME to `$HOME/.config` (service-darwin.ts), which
+  // names the very folder the CLI uses without it. Any other value keeps the CLI.
+  if (env.XDG_CONFIG_HOME !== undefined && resolve(env.XDG_CONFIG_HOME) !== resolve(home, '.config')) return null;
   const base = join(home, '.config', 'herdr');
   if (session !== undefined) {
     if (!SESSION_NAME.test(session) || session === '.' || session === '..') return null;
