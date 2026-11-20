@@ -19,8 +19,9 @@ import { listenerKeyOf, offerAcks, proveOffer } from '../src/comms/offer.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { readMessage, writeListener, type InboxListener } from '../src/mcp/inbox.ts';
 import { activate, deactivate, queuesFolder, type FloorActor } from '../src/queue/floor.ts';
-import { attemptLedger, EXPOSURES, offeredCopies, reserveAttempt, takeCopyNumber } from '../src/queue/handover.ts';
+import { attemptLedger, EXPOSURES, noteAttemptOutcome, offeredCopies, reserveAttempt, takeCopyNumber } from '../src/queue/handover.ts';
 import { nativePendingDir, seatMailDirIn } from '../src/queue/mail-tree.ts';
+import { CHANNEL_HELD_RECEIPT, reserveChannelFallback, retireChannelAttempt } from '../src/mcp/channel.ts';
 import { channelUnproven, CHANNEL_OVERDUE_MS, overdueChannelRecords } from '../src/queue/resend.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
@@ -31,7 +32,8 @@ import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { typedWakeMaxFor } from '../src/send/readable-wake.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
-import { wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
+import { MailPass } from '../src/watch/mail-pass.ts';
+import { noRouteReportedPath, reportedPath, reportUnreadDrops, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { readState } from '../src/state.ts';
@@ -588,6 +590,54 @@ describe('F3: the push stalls before any copy is written', () => {
   });
 });
 
+describe('F3b: the send\'s channel leg gave up before any push', () => {
+  test('a proven seat whose channel the sender held off gets its pointer in the first pass, not never', async () => {
+    // material, 2026-11-20: implementer-deepseek -> orchestrator. The send's channel leg found no
+    // push within its grace and held the channel (its abort and held marker), so no server push
+    // and no copy ever follows; the seat stays proven. The pointer is due at once.
+    const at = place();
+    proven(at);
+    stamped(at, ID);
+    const folder = stampedOf(at);
+    const held = reserveChannelFallback(folder, { v: 1, kind: CHANNEL_HELD_RECEIPT, id: ID, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' });
+    expect(held).toBe('held');
+    expect(unproven(at)).toBeNull();
+    const lines: string[] = [];
+    await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expectPointer(lines[0], ID, 1);
+    // Past the 90 s deadline, still unsettled: no channel offer was ever in flight, so the seat
+    // stays proven (the health scan never counts it), and the next pointer waits its backoff.
+    age(at, ID, CHANNEL_OVERDUE_MS + 1_000);
+    expect(unproven(at)).toBeNull();
+    await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+  });
+});
+
+describe('F3c: the first channel re-offer of a given-up offer starts its own deadline', () => {
+  test('health stays proven for the full deadline after the re-offer, then turns if still unsettled', () => {
+    const at = place();
+    proven(at);
+    stamped(at, ID);
+    const folder = stampedOf(at);
+    expect(reserveChannelFallback(folder, { v: 1, kind: CHANNEL_HELD_RECEIPT, id: ID, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' })).toBe('held');
+    age(at, ID, 2 * 60_000);
+    expect(unproven(at)).toBeNull();
+    // The channel server's first real re-offer: its attempt, the retired abort, the numbered copy.
+    const reofferAt = Date.now();
+    const k = reserveAttempt(folder, ID, 'channel', reofferAt);
+    expect(k).not.toBeNull();
+    expect(retireChannelAttempt(folder, ID, reofferAt)).toBe(true);
+    const n = pushed(at, ID, 'd'.repeat(32));
+    noteAttemptOutcome(folder, ID, k!, { copy: n, via: 'channel' });
+    const health = (later: number): string | null => channelUnproven({ dropDir: dropOf(at), root: at.root, session: SESSION, seat: SEAT, context: { to: SEAT, root: at.root, session: SESSION, lead: 'lead' }, key: keyOf(at.home), nowMs: reofferAt + later });
+    expect(health(0)).toBeNull();
+    expect(health(CHANNEL_OVERDUE_MS - 5_000)).toBeNull();
+    expect(health(CHANNEL_OVERDUE_MS + 1_000)).toBe('overdue offer');
+  });
+});
+
 describe('F6: a read is a copy; --wait ends on the settlement', () => {
   test('inbox_read with its response lost leaves the record pending; --wait keeps waiting; a later ack settles it: delivered (acked)', async () => {
     const at = place();
@@ -706,6 +756,53 @@ describe('round 1: a protected pane (its declared order leaves typed out) takes 
     const io = testIo(at.root, { kind: 'owner' });
     await runDoctor(['--file', '.agents/team.yaml'], io, { version: () => '2.1.326', onPath: () => true, loggedIn: () => true, herdrVersion: () => '0.7.1', sessionRunning: () => false, now: () => new Date(), home: at.home });
     expect(`${io.out}${io.err}`).toContain(`${SEAT}: waiting: protected pane, no proven channel`);
+  });
+
+  test('a given-up channel offer at a confirmed protected pane tells its sender at once; an eligible seat or a missing route lookup does not', async () => {
+    // The sender is told under its own marker and heading; the generic 2N report (lead and
+    // senders) is left untouched, so the lead's report is never spent by this early word.
+    const at = place([], ['drop']);
+    const payload: RecordPayload = { kind: 'message', id: ID, to: SEAT, to_id: null, root: at.root, session: SESSION, at: new Date().toISOString(), body: 'from the owner', from: 'owner', from_id: null, rule: 'the owner', thread: ID };
+    expect(writeRecord(dropOf(at), signRecord(stampedPayload(payload, at.home), at.home)).ok).toBe(true);
+    expect(reserveChannelFallback(stampedOf(at), { v: 1, kind: CHANNEL_HELD_RECEIPT, id: ID, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' })).toBe('held');
+    const found = (): string[] => {
+      const out: string[] = [];
+      const walk = (dir: string): void => {
+        for (const name of readdirSync(dir, { withFileTypes: true })) {
+          if (name.isDirectory()) walk(join(dir, name.name));
+          else if (name.name.startsWith(`no-route-${ID}`)) out.push(join(dir, name.name));
+        }
+      };
+      walk(at.root);
+      walk(at.home);
+      return out;
+    };
+    // A missing route lookup, a failed one (no pointer verdict), and an eligible seat: nothing early.
+    reportUnreadDrops({ ...pass(at, new Date(), []), eventLegs: undefined }, { unreadAfter: 600 });
+    reportUnreadDrops({ ...pass(at, new Date(), []), eventLegs: () => ({ channel: false, socket: false, why: 'the delivery chain cannot be read' }) }, { unreadAfter: 600 });
+    reportUnreadDrops({ ...pass(at, new Date(), []), eventLegs: () => ({ channel: false, socket: false, pointer: true }) }, { unreadAfter: 600 });
+    expect(existsSync(noRouteReportedPath(dropOf(at), ID))).toBe(false);
+    // The confirmed protected pane: the sender's record is written, once, and the 2N marker is not.
+    reportUnreadDrops({ ...pass(at, new Date(), []), eventLegs: () => ({ channel: false, socket: false, pointer: false }) }, { unreadAfter: 600 });
+    expect(existsSync(noRouteReportedPath(dropOf(at), ID))).toBe(true);
+    expect(found()).toHaveLength(1);
+    expect(readFileSync(found()[0]!, 'utf8')).toContain('has no route to wake its seat yet');
+    expect(existsSync(reportedPath(dropOf(at), ID))).toBe(false);
+  });
+});
+
+describe('the early no-route notice rechecks settlement', () => {
+  test('a record acknowledged after the pass listed it gets no early notice', () => {
+    const at = place([], ['drop']);
+    const payload: RecordPayload = { kind: 'message', id: ID, to: SEAT, to_id: null, root: at.root, session: SESSION, at: new Date().toISOString(), body: 'from the owner', from: 'owner', from_id: null, rule: 'the owner', thread: ID };
+    expect(writeRecord(dropOf(at), signRecord(stampedPayload(payload, at.home), at.home)).ok).toBe(true);
+    expect(reserveChannelFallback(stampedOf(at), { v: 1, kind: CHANNEL_HELD_RECEIPT, id: ID, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' })).toBe('held');
+    // The pass's shared reading lists the record unread; then the seat acknowledges it.
+    const mail = new MailPass({ dir: at.dir, root: at.root, session: SESSION, home: at.home, lead: 'lead' });
+    expect(mail.unread(SEAT).map((one) => one.id)).toContain(ID);
+    ack(at, ID, 'ack');
+    reportUnreadDrops({ ...pass(at, new Date(), []), mail, eventLegs: () => ({ channel: false, socket: false, pointer: false }) }, { unreadAfter: 600 });
+    expect(existsSync(noRouteReportedPath(dropOf(at), ID))).toBe(false);
   });
 });
 

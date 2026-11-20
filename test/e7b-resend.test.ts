@@ -10,6 +10,8 @@
 // not acknowledged got copy 1 on its native leg and no copy 2 in 11 minutes, because only the
 // Claude channel and socket ladders re-sent a stamped copy.
 import { afterEach, describe, expect, test } from 'bun:test';
+import { CHANNEL_HELD_RECEIPT, reserveChannelFallback } from '../src/mcp/channel.ts';
+import { seatFolderOf } from '../src/send/drop-folder.ts';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -963,6 +965,40 @@ seats:
   async function until(check: () => boolean, limit = 600): Promise<void> {
     for (let at = 0; at < limit && !check(); at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
   }
+
+  test('a send\'s given-up channel offer does not hold the channel for good: the server re-offers it on the channel, numbered, on the backoff', async () => {
+    // material, 2026-11-20: the send's channel leg missed its grace and held the channel off, so
+    // the arrival push never happened. On an active root this server re-sends nothing of its own
+    // pushes, but an offer that never left is re-offered here (option C), numbered.
+    const at = channelPlace();
+    activateRoot(at);
+    const payload: RecordPayload = {
+      kind: 'message', id: ID, to: 'lead', to_id: at.leadId, root: at.root, session: SESSION, at: new Date().toISOString(),
+      body: 'from a worker — admitted by: the owner\n\nheld off once', from: 'worker', from_id: at.workerId, rule: 'the owner', thread: ID,
+    };
+    mkdirSync(at.dropDir, { recursive: true, mode: 0o700 });
+    expect(writeRecord(at.dropDir, signRecord(stampedPayload(payload, at.home), at.home)).ok).toBe(true);
+    const folder = seatFolderOf(at.dropDir, ID);
+    expect(reserveChannelFallback(folder, { v: 1, kind: CHANNEL_HELD_RECEIPT, id: ID, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' })).toBe('held');
+    // Past the first backoff since its arrival.
+    const then = new Date(Date.now() - 2 * MIN);
+    utimesSync(join(folder, ID), then, then);
+    const io = testIo(at.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
+    const stream = feed();
+    const running = runMcpServe({ seat: 'lead', session: SESSION, redeliverMs: 20 }, io, stream, { home: at.home });
+    try {
+      await until(() => notices(stream.replies).length >= 1, 1_000);
+      expect(notices(stream.replies)).toHaveLength(1);
+      expect(headerOf(notices(stream.replies)[0])).toBe(`message ${ID} · delivery 1`);
+      expect(notices(stream.replies)[0]).toContain('held off once');
+      // The next re-offer waits its backoff: nothing more right away.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(notices(stream.replies)).toHaveLength(1);
+    } finally {
+      stream.end();
+      await running;
+    }
+  });
 
   test('the Claude adapter: a proven channel pushes copy 1; unsettled 90 s after its start the seat is unproven, the record is due at once, and the server pushes nothing more', async () => {
     const at = channelPlace();

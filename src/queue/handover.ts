@@ -279,6 +279,24 @@ export function newestOffer(dropDir: string, id: string, arrivedMs: number): { s
   return { startMs: arrivedMs, channel: firstOfferByChannel(dropDir, id) };
 }
 
+/** Whether the first channel round retired into this record's delivery history (by
+ *  `retireChannelAttempt`, src/mcp/channel.ts: `c<time>.<id>.<marker>`) was a sender's abort with
+ *  no server emission beside it: a channel offer its send gave up before any push. False with no
+ *  retired round or an unreadable history. */
+export function firstRetiredRoundAborted(dropDir: string, id: string): boolean {
+  let names: string[];
+  try {
+    names = readdirSync(historyFolder(dropDir, id));
+  } catch {
+    return false;
+  }
+  const retired = names.filter((name) => /^c\d+\./.test(name));
+  const first = retired.map((name) => Number(/^c(\d+)\./.exec(name)![1])).sort((a, b) => a - b)[0];
+  if (first === undefined) return false;
+  const round = retired.filter((name) => name.startsWith(`c${String(first)}.`));
+  return round.some((name) => name.endsWith('.channel-abort')) && !round.some((name) => name.endsWith('.channel-emitted'));
+}
+
 /**
  * The start of the message's first channel offer that is still outstanding (§2.3): the send's own
  * first offer at arrival when it went by the channel, else the earliest channel attempt. A later
