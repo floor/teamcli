@@ -220,14 +220,6 @@ export function isShippedLauncher(name: string | undefined): boolean {
   return name !== undefined && Object.prototype.hasOwnProperty.call(SHIPPED, name);
 }
 
-/** True when the seat starts from a shipped launcher in its read-only form: the CLI's own
- *  permission policy holds it, and the launch adds no sandbox profile of its own. */
-export function shippedLauncherIsReadOnly(name: string | undefined, role: string | undefined, access?: 'read' | 'write'): boolean {
-  // Only the launchers that emit a read-only line (review finding 5): codex and antigravity run
-  // their builder line for every role (measured 2026-11-12), so no permission policy holds them.
-  return (name === 'grok-build' || name === 'claude-code') && readsOnly(role, access);
-}
-
 /** The shipped launcher `name` as this seat configures it, or null when TeamCLI ships none
  *  by that name. */
 export function shippedLauncher(name: string | undefined, options: ShippedOptions): LauncherDefinition | null {
