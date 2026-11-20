@@ -107,6 +107,16 @@ describe('the cursor typed wake', () => {
     expect(readScreen('cursor', IDLE_TASK.replace('  1 task', '  some printed text')).kind).toBe('unknown');
   });
 
+  test('a retry that finds its line held, then an unrecognised frame, presses nothing and flags the screen', async () => {
+    const strange = '  a layout no rule knows';
+    expect(readScreen('cursor', strange).kind).toBe('unknown');
+    const pane = wakeFake((read) => (read === 0 ? holding(LINE) : strange));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);
+    expect(out).toMatchObject({ delivered: false, typed: false, tries: 0, unrecognised: true });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
   test('two idle reads, one line, one Enter: the Working row is the delivery', async () => {
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);

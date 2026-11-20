@@ -515,7 +515,7 @@ async function walkTypedWake(
         : kind === 'unsent'
           ? 'the box held text other than the line'
           : `the screen read ${kind}`;
-      return { delivered: false, typed: false, tries: 0, reason: `${why} between the two looks; no Enter was pressed` };
+      return { delivered: false, typed: false, tries: 0, reason: `${why} between the two looks; no Enter was pressed`, ...(kind === 'unknown' ? { unrecognised: true } : {}) };
     }
     // Two looks, spaced by the settle, agree the box holds exactly the line: the same pair the
     // typed path waits for before its first Enter. A profile that submits by agent prompt does
