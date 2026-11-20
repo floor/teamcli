@@ -26,6 +26,12 @@ const SETTLED = readFileSync(join(FIXTURES, 'drawing-settled.txt'), 'utf8');
 
 const LINE = 'Read /t/mail/abc and do that.';
 
+/** A finished turn's idle tail, transcribed from vlist's builder-cursor and tester-cursor panes
+ *  (2026-11-20, cursor-agent on Grok 4.7): the box's `▄`/`▀` frame, `→ Add a follow-up`, then
+ *  the background-task count between the frame and the status row, then the workspace line. */
+const IDLE_TASK = readFileSync(join(import.meta.dir, 'fixtures', 'cursor', '2026.11.20', 'idle-task-edited.txt'), 'utf8');
+const holdingTask = (text: string): string => IDLE_TASK.replace('  → Add a follow-up', () => `  → ${text}`);
+
 /** The captured unsent frame with `text` drawn in its input row: `Fix the failing test` is the
  *  capture's own draft, and the row's prompt and trailing cells are left as captured. */
 function holding(text: string): string {
@@ -84,6 +90,21 @@ describe('the cursor typed wake', () => {
     expect(readScreen('cursor', IDLE).kind).toBe('idle');
     expect(readScreen('cursor', WORKING).kind).toBe('working');
     expect(readScreen('cursor', holding(LINE)).kind).toBe('unsent');
+  });
+
+  test('a finished turn with a task row under the framed box is idle, and the wake types into it', async () => {
+    // vlist 2026-11-20: this tail read `done (screen not recognised)` and every send ended
+    // "not delivered: no live route" until a restart.
+    expect(readScreen('cursor', IDLE_TASK).kind).toBe('idle');
+    expect(readScreen('cursor', holdingTask(LINE)).kind).toBe('unsent');
+    expect(boxHoldsText('cursor', LINE, holdingTask(LINE))).toBe(true);
+    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE_TASK : holdingTask(typed[typed.length - 1] ?? '')));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);
+    expect(out).toMatchObject({ delivered: true, typed: true, tries: 1 });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+    // Anything else between the frame and the status row is still not the frame: unknown.
+    expect(readScreen('cursor', IDLE_TASK.replace('  1 task', '  some printed text')).kind).toBe('unknown');
   });
 
   test('two idle reads, one line, one Enter: the Working row is the delivery', async () => {

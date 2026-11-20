@@ -418,6 +418,9 @@ screen:
     # 2026.10.01-14929f9 in a 54-column pane (scratch session, not a live seat):
     # one blank row, then `  1 task` or `  2 tasks`, then the status row. The
     # box itself held only `→ Add a follow-up`. That row is not unsent text.
+    # The framed box draws the same count between its `▀` row and the status row after a
+    # finished turn (vlist, 2026-11-20, `cursor/2026.11.20/idle-task-edited.txt`): an own row
+    # there is skipped too, and nothing else may stand there.
     own_rows:
       - '^  [0-9]+ tasks?$'
     # The box's own border, as the captures of 2026-10-05 draw it: one row of `▄` directly
