@@ -1271,14 +1271,6 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     const probe = channelProbe ?? inboxLive(dropDir, input.root, input.session, input.seat, input.build?.());
     const connected = probe.live === true && probe.listener.channel === true;
     if (connected && !declaredWithWake.includes('channel')) declaredWithWake.unshift('channel');
-    // An order that names the retired inbox word alone (no `typed` for the wake splice above)
-    // left the seat with the mailbox only: on a dark root a seat that accepts the socket was
-    // never woken (the floor's main orchestrator, 20 Nov). The socket its files accept stands
-    // behind the channel, as for a `typed` word. On an active root `socketNow` is false; a typed
-    // leg is never added, so a protected pane takes no keys.
-    if (inboxFirst && socketNow && !declaredWithWake.includes('socket')) {
-      declaredWithWake.splice(declaredWithWake.includes('channel') ? declaredWithWake.indexOf('channel') + 1 : 0, 0, 'socket');
-    }
   }
   // The development channel leads a Claude seat's walk (comms roadmap, 2026-11-17: the socket
   // frame mislabels every sender as a Claude session). A socket the team
