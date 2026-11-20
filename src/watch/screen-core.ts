@@ -1491,10 +1491,16 @@ function statusLast(
   const opensOnPrompt = input === 0 && /^ {2}→/u.test(lines[input] ?? '');
   let end = status;
   if (border && input > 0 && border.top.test(above)) {
-    if (status - 1 <= input) return { kind: 'unknown' };
-    const under = lines[status - 1] ?? '';
+    // The pane's own rows (`own_rows`: the background-task count) may stand between the frame's
+    // bottom row and the status row, as a finished turn with a task draws them: `▀…`, `  1 task`,
+    // then the status row. Nothing else may.
+    const ownBelow = 'ownRows' in composer ? composer.ownRows ?? [] : [];
+    let bottomAt = status - 1;
+    while (bottomAt > input && ownBelow.some((pattern) => pattern.test(lines[bottomAt] ?? ''))) bottomAt--;
+    if (bottomAt <= input) return { kind: 'unknown' };
+    const under = lines[bottomAt] ?? '';
     if (!border.bottom.test(under) || under.length !== above.length) return { kind: 'unknown' };
-    if ((lines[status - 2] ?? '').trim() === '') return { kind: 'unknown' };
+    if ((lines[bottomAt - 1] ?? '').trim() === '') return { kind: 'unknown' };
     const statusLine = lines[status] ?? '';
     if (under.length !== statusLine.length + 1) return { kind: 'unknown' };
     if (!composer.statusLine.some((re) => anchored(re.source) && re.test(statusLine))) {
@@ -1505,7 +1511,7 @@ function statusLast(
     for (let i = status + 2; i < lines.length; i++) {
       if ((lines[i] ?? '').trim() !== '') return { kind: 'unknown' };
     }
-    end = status - 1;
+    end = bottomAt;
   } else if (!opensOnPrompt && (input === 0 || above.trim() !== '')) {
     return { kind: 'unknown' };
   }
