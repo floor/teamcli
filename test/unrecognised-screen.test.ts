@@ -33,8 +33,7 @@ test('an episode whose reservation stands without its record is published by the
   expect(noteUnrecognisedScreen(input)).toBe(true);
   expect(notices()).toHaveLength(1);
   expect(notices()[0]!.endsWith(`${id}.json`)).toBe(true);
-  expect((JSON.parse(readFileSync(unrecognisedScreenPath(dropDir), 'utf8')) as { state: string }).state).toBe('reported');
-  // A published episode stays quiet.
+  // A published episode stays quiet: the record under the reserved id is the publication.
   expect(noteUnrecognisedScreen({ ...input, at: new Date(AT.getTime() + 120_000) })).toBe(false);
   expect(notices()).toHaveLength(1);
 });
@@ -48,14 +47,18 @@ test('a fresh episode is reserved, published and marked reported in one call', (
   expect(readFileSync(notices()[0]!, 'utf8')).toContain('helper (pane pane-h): screen not recognised, capture needed');
 });
 
-test('a marker cleared while the notice was being written is never recreated', () => {
+test('a marker cleared at any point after the reservation is never recreated, and the next episode is reported', () => {
   const { made, dropDir, notices } = scene();
-  const input = {
-    dropDir, root: made.root, session: 'acme', home: made.home, seat: 'helper', pane: 'pane-h', lead: 'lead', at: AT,
-    // The watch ends the episode (a delivered wake) between the record landing and the mark.
-    afterPublish: () => clearUnrecognisedScreen(dropDir),
-  };
-  expect(noteUnrecognisedScreen(input)).toBe(true);
-  expect(notices()).toHaveLength(1);
+  const base = { dropDir, root: made.root, session: 'acme', home: made.home, seat: 'helper', pane: 'pane-h', lead: 'lead' };
+  // The watch ends the episode (a delivered wake) right after the record lands: nothing is
+  // written to the marker afterwards, so it stays gone.
+  expect(noteUnrecognisedScreen({ ...base, at: AT, afterPublish: () => clearUnrecognisedScreen(dropDir) })).toBe(true);
   expect(existsSync(unrecognisedScreenPath(dropDir))).toBe(false);
+  // The next unrecognised frame is a new episode, and its lead hears of it.
+  expect(noteUnrecognisedScreen({ ...base, at: new Date(AT.getTime() + 60_000) })).toBe(true);
+  expect(notices()).toHaveLength(2);
+  // An open episode's marker is never rewritten by a later pass.
+  const before = readFileSync(unrecognisedScreenPath(dropDir), 'utf8');
+  expect(noteUnrecognisedScreen({ ...base, at: new Date(AT.getTime() + 120_000) })).toBe(false);
+  expect(readFileSync(unrecognisedScreenPath(dropDir), 'utf8')).toBe(before);
 });

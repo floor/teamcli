@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { markWake, reserveWake as reserveMarker } from './wake-marker.ts';
+import { reserveWake as reserveMarker } from './wake-marker.ts';
 import { mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
 
 /** The episode marker beside the seat's mail folder (dot-named: no listing takes it for mail). */
@@ -52,32 +52,34 @@ export function unrecognisedScreenText(seat: string, pane: string): string {
   return `${seat} (pane ${pane}): screen not recognised, capture needed. A wake found a screen its profile cannot place, so nothing was typed; the seat's mail waits in its inbox for the next try.`;
 }
 
-/** The episode marker's record: when the episode began, the notice's own record id, and whether
- *  that notice is published (`reported`) or only reserved. */
-type EpisodeMark = { at: string; id: string; state: 'reserved' | 'reported' };
+/** The episode marker's record: when the episode began and the notice's own record id. It is
+ *  written once, when the episode is reserved, and never rewritten: the notice counts as
+ *  published when a mailbox record exists under that id. */
+type EpisodeMark = { at: string; id: string };
 
 function episodeOf(path: string): EpisodeMark | null {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<EpisodeMark>;
     if (typeof parsed.at !== 'string' || typeof parsed.id !== 'string') return null;
-    return { at: parsed.at, id: parsed.id, state: parsed.state === 'reported' ? 'reported' : 'reserved' };
+    return { at: parsed.at, id: parsed.id };
   } catch {
     return null;
   }
 }
 
-/** Tells the lead once per episode. True when this call published the notice. The reservation
- *  names the notice's record id before the record is written; an episode whose marker is still
- *  `reserved` (a writer cut off between the two) is published again under that same id by the
- *  next pass, so an interrupted reservation never silences the episode, and the mailbox's
- *  create-once write keeps it to one record. */
+/** Tells the lead once per episode. True when this call published the notice. The marker is the
+ *  episode's reservation and names the notice's record id; nothing writes it again after that,
+ *  so a marker the watch or a delivered wake clears is never recreated. Publication is the
+ *  record itself: each pass of an open episode asks the mailbox's create-once write for that
+ *  id, which writes it when a writer was cut off before it landed and answers `existing`
+ *  otherwise, so the lead gets one record per episode. */
 export function noteUnrecognisedScreen(input: UnrecognisedScreenInput): boolean {
   if (input.lead === '' || input.lead === input.seat) return false;
   const marker = unrecognisedScreenPath(input.dropDir);
   let episode: EpisodeMark;
   if (existsSync(marker)) {
     const standing = episodeOf(marker);
-    if (standing === null || standing.state === 'reported') return false;
+    if (standing === null) return false;
     episode = standing;
   } else {
     try {
@@ -86,9 +88,8 @@ export function noteUnrecognisedScreen(input: UnrecognisedScreenInput): boolean 
     } catch {
       return false;
     }
-    const at = input.at.toISOString();
-    episode = { at, id: `unrecognised-screen-${input.seat}-${String(input.at.getTime())}`, state: 'reserved' };
-    if (!reserveMarker(marker, { ...episode, seat: input.seat, pane: input.pane })) return false;
+    episode = { at: input.at.toISOString(), id: `unrecognised-screen-${input.seat}-${String(input.at.getTime())}` };
+    if (!reserveMarker(marker, { ...episode, state: 'reserved', seat: input.seat, pane: input.pane })) return false;
   }
   const wrote = writeRuntimeMailboxRecord({
     root: input.root,
@@ -100,16 +101,8 @@ export function noteUnrecognisedScreen(input: UnrecognisedScreenInput): boolean 
     at: episode.at,
     once: true,
   });
-  if (!wrote.ok) return false;
   input.afterPublish?.();
-  // Compare and set: the marker becomes `reported` only while it is still this episode's own
-  // reserved one. A marker cleared meanwhile (a delivered wake, a pass that placed the screen)
-  // ended the episode and is never recreated; another episode's marker is never overwritten.
-  const now = existsSync(marker) ? episodeOf(marker) : null;
-  if (now !== null && now.id === episode.id && now.state === 'reserved') {
-    markWake(marker, { ...episode, state: 'reported', seat: input.seat, pane: input.pane });
-  }
-  return wrote.existing !== true;
+  return wrote.ok && wrote.existing !== true;
 }
 
 /** Ends the episode: the seat's screen was read (a delivered wake, or a pass that placed it), so
