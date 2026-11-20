@@ -19,12 +19,12 @@
 // stale decision, in either host, reserves nothing. A dark root has no stamped folder, so neither
 // host finds anything to offer there.
 import type { KeyObject } from 'node:crypto';
-import { lstatSync, readdirSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { join } from 'node:path';
 import { stampedListing } from './mail-tree.ts';
 import { ACTOR_LEVEL } from './floor.ts';
-import { attemptTimes, backoffMs, copyHistory, copyLegs, firstChannelOffer, newestOffer, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
+import { attemptTimes, backoffMs, copyHistory, copyLegs, firstChannelOffer, firstRetiredRoundAborted, newestOffer, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
 import { floorState } from './floor.ts';
 import { inboxLive } from '../mcp/inbox.ts';
 import { channelAborted, channelPushed } from '../mcp/channel.ts';
@@ -33,9 +33,6 @@ import { isRecordSidecarName, recordStampAt, stampedSettled, type StatusContext 
 
 /** At most this many records are offered to one seat in one pass; the rest stay due. */
 export const RESEND_PER_PASS = 3;
-
-/** The record's delivery history folder name beside it (src/queue/handover.ts). */
-const EXPOSURES_DIR = '.exposures';
 
 const RECORD_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -142,17 +139,7 @@ export function channelOfferGivenUp(folder: string, id: string): boolean {
  *  settles: a given-up offer never holds the channel for good. */
 export function channelOfferStartedGivenUp(folder: string, id: string): boolean {
   if (channelOfferGivenUp(folder, id)) return true;
-  let names: string[];
-  try {
-    names = readdirSync(join(folder, EXPOSURES_DIR, id));
-  } catch {
-    return false;
-  }
-  const retired = names.filter((name) => /^c\d+\./.test(name));
-  const first = retired.map((name) => Number(/^c(\d+)\./.exec(name)![1])).sort((a, b) => a - b)[0];
-  if (first === undefined) return false;
-  const firstRound = retired.filter((name) => name.startsWith(`c${String(first)}.`));
-  return firstRound.some((name) => name.endsWith('.channel-abort')) && !firstRound.some((name) => name.endsWith('.channel-emitted'));
+  return firstRetiredRoundAborted(folder, id);
 }
 
 /** The start of the record's first channel offer, for its deadline (§2.3). A record whose
