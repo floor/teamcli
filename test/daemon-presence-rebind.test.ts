@@ -12,6 +12,10 @@
 //    Before the fix the placeholder answered unproven for the daemon's whole run.
 // 3. A source that stopped under its own binding (the state was unreadable for a moment, which
 //    the source reads as a binding it cannot confirm) is started again on the retry.
+// 4. A relaunch read in between two snapshots never pairs the predecessor's socket with the
+//    successor's binding, even while the predecessor still answers for the same thread.
+// 5. A bound thread/closed whose terminal record could not be staged is retried once the spool
+//    is writable again; a closure that was staged stays terminal.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -109,9 +113,13 @@ function makeWorld(): World {
 }
 
 /** The seat's state as a launch leaves it: its binding and, once recorded, its agent session. */
-function writeSeatState(dir: string, binding: string, agentSession: string | null): void {
+function writeSeatState(dir: string, binding: string, agentSession: string | null, endpointUrl?: string): void {
   const seat: Record<string, unknown> = { id: HANDLE, stage: 'ready', presence_binding: binding };
   if (agentSession !== null) seat.agent_session = agentSession;
+  // The record a managed Codex launch writes beside its binding.
+  if (endpointUrl !== undefined) {
+    seat.codex_endpoint = { url: endpointUrl, binding, pid: 4242, started_at: '2026-11-20T05:59:00.000Z' };
+  }
   writeFileSync(join(dir, STATE_FILE), `${JSON.stringify({
     format: 1,
     sessions: {
@@ -416,6 +424,84 @@ describe('Codex presence sources follow the seat incarnation', () => {
     await waitUntil('the seat to be attached again', () => reads() === 2);
     await waitUntil('the seat to serve again', () => seatOf()?.healthy === true);
     expect(diagnosticOf(w)).toMatchObject({ binding: FIRST, channel: 'connected' });
+    await daemon.close();
+  }, 20_000);
+
+  test('a stale endpoint read is never paired with the successor binding', async () => {
+    const w = makeWorld();
+    const a = join(w.base, 'a.sock');
+    const b = join(w.base, 'b.sock');
+    writeSeatState(w.dir, FIRST, THREAD, `unix://${a}`);
+    const first = await startAppServer(a);
+    cleanups.push(() => first.close());
+    const clock = { at: new Date('2026-11-20T06:00:00.000Z') };
+    // The endpoint reader answers from an earlier snapshot than the target resolver reads.
+    let endpoint = `unix://${a}`;
+    const daemon = await start(w, {
+      now: () => clock.at,
+      presenceCodexEndpoint: (_route, _dir, seat) => (seat === SEAT ? endpoint : null),
+    });
+    const seatOf = () => daemon.health().roots?.[0]?.presence?.seats?.find((seat) => seat.seat === SEAT);
+    const readsOf = (server: { requests: { method: string }[] }) =>
+      server.requests.filter((request) => request.method === 'thread/read').length;
+    await waitUntil('the first incarnation to serve', () => seatOf()?.healthy === true);
+    expect(readsOf(first)).toBe(1);
+
+    // The relaunch resumed the same thread; the predecessor's server still answers.
+    const second = await startAppServer(b);
+    cleanups.push(() => second.close());
+    writeSeatState(w.dir, SECOND, THREAD, `unix://${b}`);
+    await waitUntil('the old source to be retired', () => diagnosticOf(w)?.channel === 'stopped');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(readsOf(first)).toBe(1);
+    expect(readsOf(second)).toBe(0);
+    expect(publishedBindings(w)).not.toContain(SECOND);
+    expect(seatOf()?.healthy).toBe(false);
+
+    // The reader catches up; the retry attaches the successor's own socket.
+    endpoint = `unix://${b}`;
+    clock.at = new Date(clock.at.getTime() + PRESENCE_REBIND_RETRY_MS + 1);
+    await waitUntil('the successor to be attached', () => readsOf(second) === 1);
+    await waitUntil('the successor to publish', () => publishedBindings(w).includes(SECOND));
+    expect(readsOf(first)).toBe(1);
+    expect(diagnosticOf(w)).toMatchObject({ binding: SECOND, channel: 'connected' });
+    await daemon.close();
+  }, 20_000);
+
+  test('a closure whose terminal record failed is retried; a staged closure stays terminal', async () => {
+    const w = makeWorld();
+    const socket = join(w.base, 'a.sock');
+    writeSeatState(w.dir, FIRST, THREAD);
+    const server = await startAppServer(socket);
+    cleanups.push(() => server.close());
+    const clock = { at: new Date('2026-11-20T06:00:00.000Z') };
+    const daemon = await start(w, {
+      now: () => clock.at,
+      presenceCodexEndpoint: (_route, _dir, seat) => (seat === SEAT ? `unix://${socket}` : null),
+    });
+    const seatOf = () => daemon.health().roots?.[0]?.presence?.seats?.find((seat) => seat.seat === SEAT);
+    const reads = () => server.requests.filter((request) => request.method === 'thread/read').length;
+    await waitUntil('the seat to serve', () => seatOf()?.healthy === true);
+    const spool = presencePaths(w.dir, 'crew', SEAT)!.spool;
+
+    // The spool cannot take a record: the closure is measured but not durable.
+    rmSync(spool, { recursive: true, force: true });
+    writeFileSync(spool, 'not a folder');
+    server.push({ method: 'thread/closed', params: { threadId: THREAD } });
+    await waitUntil('the failed terminal write', () => diagnosticOf(w)?.reason === 'stage-failed');
+    rmSync(spool, { force: true });
+    mkdirSync(spool, { recursive: true });
+    clock.at = new Date(clock.at.getTime() + PRESENCE_REBIND_RETRY_MS + 1);
+    await waitUntil('the seat to be attached again', () => reads() === 2);
+    await waitUntil('the seat to serve again', () => seatOf()?.healthy === true);
+
+    // A closure that was staged is the session's end: no retry reattaches it.
+    server.push({ method: 'thread/closed', params: { threadId: THREAD } });
+    await waitUntil('the staged closure', () => diagnosticOf(w)?.channel === 'gone');
+    clock.at = new Date(clock.at.getTime() + PRESENCE_REBIND_RETRY_MS + 1);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(reads()).toBe(2);
+    expect(diagnosticOf(w)).toMatchObject({ channel: 'gone', reason: 'thread-closed' });
     await daemon.close();
   }, 20_000);
 });

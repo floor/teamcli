@@ -45,6 +45,10 @@ export type PresenceSourceStatus = {
   why?: string | null;
   /** The producer's own spelling for the same display detail as `why`. */
   reason?: string | null;
+  /** False once the source stopped admitting for good (closed, a binding it could not confirm, a
+   *  terminal write that failed). A host may then start the seat's source again; absent means the
+   *  producer does not say, and `gone` stays terminal either way. */
+  admitting?: boolean;
 };
 
 /** The read-only runtime source a route owns for one seat. `step` is the bounded stream pump

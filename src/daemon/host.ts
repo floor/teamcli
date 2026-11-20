@@ -2012,7 +2012,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const sourceStopped = (one: (typeof presenceWork)[number], source: PresenceSource, at: Date): boolean => {
     try {
       const reading = source.status(at);
-      return reading.channel === 'stopped' || reading.reason === 'binding-changed';
+      if (reading.channel === 'gone') return false;
+      return reading.channel === 'stopped' || reading.reason === 'binding-changed' || reading.admitting === false;
     } catch {
       return true;
     }
