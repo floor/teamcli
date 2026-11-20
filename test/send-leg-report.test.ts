@@ -65,6 +65,35 @@ test('a dry run lists the implied socket leg as a candidate when the receiver ma
   expect(existsSync(join(made.dir, LOG_FILE))).toBe(false);
 });
 
+test('an order led by the retired inbox word, with no proven channel, still walks the socket the seat accepts ahead of the drop', async () => {
+  // The floor orchestrator's shape on a dark root: `[mcp-inbox]` resolves to the drop leg alone,
+  // and with no channel listener nothing would wake the seat. The socket its files allow is walked.
+  for (const order of [['mcp-inbox'], ['mcp-inbox', 'drop']]) {
+    const made = world(order);
+    declare(made, 'lead', 'accept');
+    const host = fake(made);
+    const io = owner(made.root);
+    try {
+      expect(await runSend(['lead', 'hello', '--dry-run', '--json'], io, host)).toBe(0);
+      const legs = deliveryOf(io).filter((entry) => entry.state === 'candidate').map((entry) => entry.leg);
+      expect(legs).toEqual(['socket', 'drop']);
+      expect(host.frames).toEqual([]);
+    } finally {
+      made.cleanup();
+    }
+  }
+});
+
+test('an inbox-led order keeps the socket out when the seat does not accept it: the drop alone, as before', async () => {
+  const made = world(['mcp-inbox']);
+  cleanup = made.cleanup;
+  const host = fake(made);
+  const io = owner(made.root);
+  expect(await runSend(['lead', 'hello', '--dry-run', '--json'], io, host)).toBe(0);
+  const legs = deliveryOf(io).filter((entry) => entry.state === 'candidate').map((entry) => entry.leg);
+  expect(legs).toEqual(['drop']);
+});
+
 test('a dry run lists the socket the walk would not dial with its reason instead of omitting it', async () => {
   const made = world(null);
   cleanup = made.cleanup;

@@ -3,8 +3,10 @@
 The comms test as a command. `team ping <seat>` sends one seat a message asking it to answer with
 [`team reply`](reply.md); `team ping --all` sends one to every seat of the caller's own team. It
 then waits and prints one row per seat with the stage times, each from the start of that seat's
-send: how long the send took and the leg that took it, when the seat's signed read receipt landed
-(the message reached its session), when the seat sent its reply (its signed `at`: the agent acted)
+send: how long the send took and the leg that took it, when a carrier's signed `delivered` receipt
+landed (a socket, a runtime queue, a typed wake or a channel push took the body), when the seat's
+own signed read receipt landed (the seat saw the body: a carrier never writes one, and a writer-side
+copy or a lead's clearance is not counted), when the seat sent its reply (its signed `at`: the agent acted)
 and when the reply landed in the caller's folder; or why the send was refused.
 
 Each message is an ordinary [`team send`](send.md), run as this same program in the caller's own
@@ -55,7 +57,10 @@ One line per seat on stdout:
 `<seat>: send <s> s (<leg>); read <s> s; reply sent <s> s, landed <s> s`, or
 `<seat>: send <s> s; refused: <reason>`, or
 `<seat>: send <s> s (<leg>); read <s> s; no reply within <n> s (<send outcome>)`
-(`no read receipt` in place of `read <s> s` when none came).
+(`delivered <s> s, not read by the seat` in place of `read <s> s` when only a carrier's
+delivered receipt came, `no read receipt` when nothing came). With `--json`, each row carries
+`delivered_ms` beside `read_ms`, and a row whose body was delivered but not read has status
+`delivered`.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |

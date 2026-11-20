@@ -1271,6 +1271,15 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     const probe = channelProbe ?? inboxLive(dropDir, input.root, input.session, input.seat, input.build?.());
     const connected = probe.live === true && probe.listener.channel === true;
     if (connected && !declaredWithWake.includes('channel')) declaredWithWake.unshift('channel');
+    // A chain led by the retired inbox word resolves to the drop leg alone, which nothing reads
+    // while the seat is idle. When its channel is not proven (a dark root, a listener that is not
+    // serving the channel), the seat walks the socket its own gate allows — the team file's
+    // `inbound: accept`, the launch's `crossSessionInbound: accept`, no held box — ahead of the
+    // drop, exactly as a Claude seat with no declared order does. Mail is never left silent.
+    if (inboxFirst && !connected && socketNow && !declaredWithWake.includes('socket')) {
+      const at = declaredWithWake.indexOf('drop');
+      declaredWithWake.splice(at < 0 ? declaredWithWake.length : at, 0, 'socket');
+    }
   }
   // The development channel leads a Claude seat's walk (comms roadmap, 2026-11-17: the socket
   // frame mislabels every sender as a Claude session). A socket the team

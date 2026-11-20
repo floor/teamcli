@@ -31,7 +31,8 @@ function io(cwd: string): Io & { out: string; err: string } {
 }
 
 type Answer = 'reply' | 'unsigned-reply' | 'bad-signature' | 'wrong-sender' | 'wrong-recipient' | 'unsigned-receipt' | 'none'
-  | 'send' | 'send-other-token' | 'send-wrong-sender' | 'send-and-reply' | 'reply-elsewhere';
+  | 'send' | 'send-other-token' | 'send-wrong-sender' | 'send-and-reply' | 'reply-elsewhere'
+  | 'delivered-only' | 'copy-read' | 'lead-ack-read';
 
 /**
  * Team `alpha` is registry-only: no `.agents/team.yaml` anywhere. The caller runs from team
@@ -121,7 +122,18 @@ function scene(answers: Record<string, Answer>, owner = false) {
       }), home);
       writeFileSync(join(drop(seat), id), recordTextOf(sent));
       const answer = answers[seat]!;
-      if (answer !== 'none') {
+      if (answer === 'delivered-only') {
+        // A carrier's hand-over (socket, runtime queue, typed wake): delivered, and nothing more.
+        const delivered = { kind: 'receipt' as const, status: 'delivered' as const, id, to: seat, root: alpha, session: 'alpha', at: new Date(clock + 500).toISOString() };
+        writeFileSync(join(drop(seat), `${id}.delivered.json`), JSON.stringify(signReceiptPayload(delivered, home)));
+      } else if (answer === 'copy-read' || answer === 'lead-ack-read') {
+        // A writer-side copy and a clearance hold the read name without the seat reading the body.
+        const receipt = {
+          kind: 'receipt' as const, status: 'read' as const, id, to: seat, root: alpha, session: 'alpha', at: new Date(clock + 1_000).toISOString(),
+          read_by: answer === 'copy-read' ? 'copy' : 'lead-ack:owner',
+        };
+        writeFileSync(join(drop(seat), `${id}.read.json`), JSON.stringify(signReceiptPayload(receipt, home)));
+      } else if (answer !== 'none') {
         const receipt = { kind: 'receipt' as const, status: 'read' as const, id, to: seat, root: alpha, session: 'alpha', at: new Date(clock + 1_000).toISOString() };
         writeFileSync(join(drop(seat), `${id}.read.json`), answer === 'unsigned-receipt'
           ? JSON.stringify({ payload: receipt, signature: 'x' })
@@ -179,7 +191,7 @@ async function rows(answers: Record<string, Answer>, argv: string[] = ['--all', 
   const { beta, host } = scene(answers, owner);
   const out = io(beta);
   const code = await runPing(argv, out, host);
-  const doc = JSON.parse(out.out) as { rows: { seat: string; status: string; read_ms: number | null; reply_sent_ms: number | null; reply_by: string | null }[]; all_replied: boolean };
+  const doc = JSON.parse(out.out) as { rows: { seat: string; status: string; delivered_ms: number | null; read_ms: number | null; reply_sent_ms: number | null; reply_by: string | null }[]; all_replied: boolean };
   return { code, doc, by: Object.fromEntries(doc.rows.map((row) => [row.seat, row])) };
 }
 
@@ -293,6 +305,21 @@ describe('team ping', () => {
     const none = await rows({ tester: 'none' });
     expect(none.code).toBe(1);
     expect(none.by.tester).toMatchObject({ status: 'not read', read_ms: null, reply_sent_ms: null });
+  });
+
+  test('a carrier\'s delivered receipt is delivered, not read; a copy or a clearance at the read name is no read by the seat', async () => {
+    const delivered = await rows({ worker: 'delivered-only' });
+    expect(delivered.code).toBe(1);
+    expect(delivered.by.worker).toMatchObject({ status: 'delivered', read_ms: null, reply_sent_ms: null });
+    expect(delivered.by.worker!.delivered_ms).not.toBeNull();
+    const copy = await rows({ worker: 'copy-read', tester: 'lead-ack-read' });
+    expect(copy.by.worker).toMatchObject({ status: 'not read', read_ms: null });
+    expect(copy.by.tester).toMatchObject({ status: 'not read', read_ms: null });
+    // The text row says it in words: delivered, not read by the seat.
+    const { beta, host } = scene({ worker: 'delivered-only' });
+    const out = io(beta);
+    await runPing(['worker', '--wait', '1'], out, host);
+    expect(out.out).toMatch(/worker: send [0-9.]+ s \(socket\); delivered [0-9.]+ s, not read by the seat; no reply within 1 s/);
   });
 
   test('a refused send is a refused row', async () => {

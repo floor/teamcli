@@ -8,7 +8,8 @@ import { serveWakeChild } from '../src/daemon/wake/child.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
-import { listUnread } from '../src/mcp/inbox.ts';
+import { listUnread, readMessage } from '../src/mcp/inbox.ts';
+import { listDrops } from '../src/commands/drops.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { socketMessageFrame } from '../src/send/frame.ts';
 import { codexPushAdapter } from '../src/send/push-adapters/codex.ts';
@@ -45,7 +46,7 @@ function recordIdsIn(folder: string): string[] {
 }
 
 describe('readable message wakes and post-delivery receipt settlement', () => {
-  test('Scene 1: socket leg delivers full multiline body and settles .read.json under 64 KiB, and sends explicit read-hint without .read.json when oversized', async () => {
+  test('Scene 1: socket leg delivers full multiline body and writes .delivered.json (not .read.json) under 64 KiB, and sends explicit read-hint without .read.json when oversized', async () => {
     const w = world(['socket', 'drop']);
     try {
       const settingsPath = cliHookSettingsPath(w.dir, 'acme', 'lead')!;
@@ -71,8 +72,10 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
       expect(parsedInline.message.content.endsWith(`\n\n↩ team reply ${inlineId.slice(0, 8)} "…" · team ack ${inlineId.slice(0, 8)}`)).toBe(true);
 
       const leadDrops = dropDir(w.dir, 'lead');
-      expect(readdirSync(leadDrops).some((name) => name.endsWith('.read.json'))).toBe(true);
-      expect(listUnread(leadDrops, { root: w.root, session: 'acme', to: 'lead' }, w.home)).toHaveLength(0);
+      // The carrier proves the hand-over only: a delivered receipt, never the seat's read.
+      expect(readdirSync(leadDrops).some((name) => name.endsWith('.delivered.json'))).toBe(true);
+      expect(readdirSync(leadDrops).some((name) => name.endsWith('.read.json'))).toBe(false);
+      expect(listUnread(leadDrops, { root: w.root, session: 'acme', to: 'lead' }, w.home)).toHaveLength(1);
 
       // Compact socket frame formatting preserves multiline body breaks rather than collapsing whitespace.
       const compactFrame = JSON.parse(
@@ -123,7 +126,7 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
     }
   });
 
-  test('Scene 2: runtime push legs forward multiline wake and settle .read.json on enqueue, and forward oversizedWake without .read.json above 64 KiB', async () => {
+  test('Scene 2: runtime push legs forward multiline wake and write .delivered.json (not .read.json) on enqueue, and forward oversizedWake without .read.json above 64 KiB', async () => {
     const setupHeadlessWorld = async (): Promise<World> => {
       const w = world(['headless-resume', 'drop'], [{ name: 'gem', role: 'reviewer', cli: 'gemini', launch: 'gemini' }]);
       await runApprove(['--file', join(w.dir, 'team.yaml')], owner(w.root), {
@@ -186,8 +189,9 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
       expect(spawnedPrompts[0]).not.toContain('body too long for this wake');
 
       const gemDrops = dropDir(w.dir, 'gem');
-      expect(readdirSync(gemDrops).some((name) => name.endsWith('.read.json'))).toBe(true);
-      expect(listUnread(gemDrops, { root: w.root, session: 'acme', to: 'gem' }, w.home)).toHaveLength(0);
+      expect(readdirSync(gemDrops).some((name) => name.endsWith('.delivered.json'))).toBe(true);
+      expect(readdirSync(gemDrops).some((name) => name.endsWith('.read.json'))).toBe(false);
+      expect(listUnread(gemDrops, { root: w.root, session: 'acme', to: 'gem' }, w.home)).toHaveLength(1);
     } finally {
       cleanupWorld(w);
     }
@@ -288,7 +292,7 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
     });
   });
 
-  test('Scene 3: typed wake leg carries full multiline body within TYPED_WAKE_MAX (200 bytes) and settles .read.json, and falls back to read trigger without .read.json above 200 bytes', async () => {
+  test('Scene 3: typed wake leg carries full multiline body within TYPED_WAKE_MAX (200 bytes) and writes .delivered.json (not .read.json), and falls back to read trigger without .read.json above 200 bytes', async () => {
     const w = world(['typed']);
     try {
       let typed = '';
@@ -321,8 +325,9 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
       expect(enters).toBe(1);
 
       const nativeDrops = dropDir(w.dir, 'native');
-      expect(readdirSync(nativeDrops).some((name) => name.endsWith('.read.json'))).toBe(true);
-      expect(listUnread(nativeDrops, { root: w.root, session: 'acme', to: 'native' }, w.home)).toHaveLength(0);
+      expect(readdirSync(nativeDrops).some((name) => name.endsWith('.delivered.json'))).toBe(true);
+      expect(readdirSync(nativeDrops).some((name) => name.endsWith('.read.json'))).toBe(false);
+      expect(listUnread(nativeDrops, { root: w.root, session: 'acme', to: 'native' }, w.home)).toHaveLength(1);
     } finally {
       cleanupWorld(w);
     }
@@ -429,7 +434,7 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
     expect(boxHoldsText('codex', expected, draw(`${expected}\nUnexpected row`))).toBe(false);
   });
 
-  test('Scene 5: recordDeliveredBody enforces seat, session, message key, and exact inlineWake match before writing .read.json', async () => {
+  test('Scene 5: recordDeliveredBody enforces seat, session, message key, and exact inlineWake match before writing .delivered.json', async () => {
     const w = world(['drop']);
     try {
       const io = owner(w.root);
@@ -522,10 +527,12 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
           wake: exactWake!,
         }),
       ).toBe(true);
-      expect(readdirSync(nativeDrops).some((name) => name.endsWith('.read.json'))).toBe(true);
-      expect(listUnread(nativeDrops, { root: w.root, session: 'acme', to: 'native' }, w.home)).toHaveLength(0);
+      // A carrier writes the delivered receipt; the message stays unread until the seat reads it.
+      expect(readdirSync(nativeDrops).some((name) => name.endsWith('.delivered.json'))).toBe(true);
+      expect(readdirSync(nativeDrops).some((name) => name.endsWith('.read.json'))).toBe(false);
+      expect(listUnread(nativeDrops, { root: w.root, session: 'acme', to: 'native' }, w.home)).toHaveLength(1);
 
-      // Idempotent on subsequent call ('already-served')
+      // Idempotent on subsequent call (the delivered receipt already stands)
       expect(
         recordDeliveredBody({
           dropDir: nativeDrops,
@@ -537,12 +544,25 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
           wake: exactWake!,
         }),
       ).toBe(true);
+
+      // The seat's own read (`team drops --read` lists it; inbox_read serves it) still finds the
+      // carried body, and only that read writes `.read.json` and settles the message.
+      const context = { root: w.root, session: 'acme', to: 'native' };
+      const listed = listDrops(nativeDrops, key, context);
+      expect(listed.kind === 'ok' ? listed.rows.map((row) => row.id) : listed).toEqual([msgId]);
+      const read = readMessage({ dropDir: nativeDrops, root: w.root, session: 'acme', seat: 'native' }, msgId, w.home);
+      expect(read.ok).toBe(true);
+      expect(read.ok ? read.body : '').toContain('Signed body row 1\nSigned body row 2');
+      expect(readdirSync(nativeDrops).some((name) => name.endsWith('.read.json'))).toBe(true);
+      expect(listUnread(nativeDrops, context, w.home)).toHaveLength(0);
+      const after = listDrops(nativeDrops, key, context);
+      expect(after.kind === 'ok' ? after.rows : after).toEqual([]);
     } finally {
       cleanupWorld(w);
     }
   });
 
-  test('Scene 6: serveWakeChild settles .read.json when the delivered wake carries the full body, and leaves the drop unread when carrying a pointer', async () => {
+  test('Scene 6: serveWakeChild writes .delivered.json when the delivered wake carries the full body, and leaves the drop unread when carrying a pointer', async () => {
     const w = world(['drop']);
     try {
       const io = owner(w.root);
@@ -610,7 +630,7 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
       expect(outPointer.outcome).toBe('delivered');
       expect(readdirSync(nativeDrops).some((name) => name === `${longPayload.id}.read.json`)).toBe(false);
 
-      // 2) Full inlineWake for the short multiline message: delivered, and .read.json is written.
+      // 2) Full inlineWake for the short multiline message: delivered, and .delivered.json is written.
       const shortDropPath = join(stagedDir, shortPayload.id);
       writeFileSync(shortDropPath, 'staged');
       reserveWake(wakePath(stagedDir, shortPayload.id), {
@@ -641,10 +661,12 @@ describe('readable message wakes and post-delivery receipt settlement', () => {
         deps,
       );
       expect(outInline.outcome).toBe('delivered');
-      expect(readdirSync(nativeDrops).some((name) => name === `${shortPayload.id}.read.json`)).toBe(true);
+      expect(readdirSync(nativeDrops).some((name) => name === `${shortPayload.id}.delivered.json`)).toBe(true);
+      expect(readdirSync(nativeDrops).some((name) => name === `${shortPayload.id}.read.json`)).toBe(false);
 
+      // Both stay unread: a typed wake is a hand-over, and only the seat's own reader marks a read.
       const unreadAfter = listUnread(nativeDrops, { root: w.root, session: 'acme', to: 'native' }, w.home);
-      expect(unreadAfter.map((item) => item.id)).toEqual([longPayload.id]);
+      expect(unreadAfter.map((item) => item.id).sort()).toEqual([longPayload.id, shortPayload.id].sort());
     } finally {
       cleanupWorld(w);
     }

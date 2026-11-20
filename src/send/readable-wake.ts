@@ -2,7 +2,7 @@
 // the caller; a receipt is published only after that caller proves transport acceptance.
 import { exposeBody, exposurePointer, type BodyLeg, type ExposureHandle } from '../queue/exposure.ts';
 import { takeCopyNumber, unwrapCopy, wrapCopy } from '../queue/handover.ts';
-import { isStampedPayload } from './record.ts';
+import { isStampedPayload, signReceiptPayload, writeReceipt } from './record.ts';
 import { join } from 'node:path';
 import { currentClaimIn, readMessage } from '../mcp/inbox.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -43,7 +43,9 @@ export function inlineWake(payload: RecordPayload, home: string, limit = RUNTIME
   return Buffer.byteLength(text, 'utf8') <= limit && !/[\x00-\x08\x0b-\x1f\x7f]/.test(text) ? text : null;
 }
 
-/** The same verified reader used by inbox_read, without printing the body a second time. */
+/** A carrier's hand-over of this record's body, verified as inbox_read verifies it. On a legacy
+ *  root it writes the signed `delivered` receipt (a launch brief keeps its bound read); under an
+ *  owned exposure claim it seals that claim. Never prints the body. */
 export function recordDeliveredBody(input: {
   dropDir: string; id: string; root: string; session: string; seat: string; home: string;
   wake?: string;
@@ -68,8 +70,21 @@ export function recordDeliveredBody(input: {
         brief, undefined, { receipt: 'after', owner: input.owner, adopt: true });
       return handed.ok ? (handed.seal?.() ?? false) : false;
     }
-    const read = readMessage({ dropDir: input.dropDir, root: input.root, session: input.session, seat: input.seat }, input.id, input.home, brief);
-    return read.ok || read.served === 'already-served';
+    if (isGeneralBriefRecord(payload)) {
+      // A launch brief's carried read stays bound to its claim, as the launch's own flow expects.
+      const read = readMessage({ dropDir: input.dropDir, root: input.root, session: input.session, seat: input.seat }, input.id, input.home, brief);
+      return read.ok || read.served === 'already-served';
+    }
+    // A carrier proves only that its transport took the body: a runtime queue that holds it until
+    // a turn ends, a pane that may be mid-turn, a socket frame. That is the signed `delivered`
+    // receipt, never the seat's `read`: a read is only what the seat's own reader writes, so the
+    // message stays unread — `team drops --read` lists it, the watch's unread pass still wakes the
+    // idle seat once, and `team ping` does not report a read the seat never made.
+    const receipt = signReceiptPayload(
+      { kind: 'receipt', status: 'delivered', id: input.id, to: input.seat, root: input.root, session: input.session, at: new Date().toISOString() },
+      input.home,
+    );
+    return writeReceipt(input.dropDir, receipt, input.home).ok;
   } catch {
     return false;
   }

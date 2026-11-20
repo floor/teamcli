@@ -1,7 +1,8 @@
 // `team ping`: the comms test as a command. One message to the seat named (or, with `--all`, to
 // every seat of the caller's own team), each asking the seat to answer it with `team reply`, then
-// one row per seat with the stage times: how long the send took and which leg took it, when the
-// seat's signed read receipt landed (the message reached its session), when the seat sent its
+// one row per seat with the stage times: how long the send took and which leg took it, when a
+// carrier's signed delivered receipt landed (its transport took the body), when the seat's own
+// signed read receipt landed (the seat saw the body), when the seat sent its
 // reply (the agent acted on it) and when that reply landed in the caller's folder.
 //
 // Every message is an ordinary `team send`, run as this same program in the caller's own folder
@@ -34,7 +35,7 @@ import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { resolveOwnerReplyTo } from '../policy/owner-reply.ts';
 import { teamBinding } from '../registry/binding.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
-import { sameFolder, signedReceiptOf, verifiedRecordAt, verifyReceipt, type RecordPayload } from '../send/record.ts';
+import { COPY_READ_BY, isLeadAckReadBy, sameFolder, signedReceiptOf, verifiedRecordAt, verifyReceipt, type RecordPayload } from '../send/record.ts';
 import { resolveTarget } from '../send/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { hostedCommit } from '../host/request-scope.ts';
@@ -48,8 +49,9 @@ Sends the seat named (<seat>, or <seat>@<team> for a seat of another team), or
 with --all every seat of the caller's own team, one message asking it to answer
 with team reply on the message's id (an answer by team send counts too), then
 waits up to --wait seconds (default 120). One row per
-seat: the leg that took the send and how long the send took, when its read
-receipt landed, when its reply was sent and when it landed; or why the send was
+seat: the leg that took the send and how long the send took, when a carrier
+delivered the body, when the seat's own read receipt landed, when its reply was
+sent and when it landed; or why the send was
 refused. Each message is an ordinary team send from this folder: the same
 admission, signing and delivery.
 
@@ -66,7 +68,11 @@ export type PingRow = {
   /** The leg the send names: socket, channel, typed wake, read, inbox; or null. */
   leg: string | null;
   send_ms: number;
-  /** Milliseconds from the start of this seat's send to its verified read receipt; null when none came. */
+  /** Milliseconds from the start of this seat's send to its carrier's verified `delivered`
+   *  receipt; null when none came. A delivery is not a read. */
+  delivered_ms: number | null;
+  /** Milliseconds from the start of this seat's send to the read receipt the seat itself wrote;
+   *  null when none came. */
   read_ms: number | null;
   /** From the same start to the verified reply's own signed `at`: when the seat sent it. */
   reply_sent_ms: number | null;
@@ -74,7 +80,7 @@ export type PingRow = {
   reply_landed_ms: number | null;
   /** How the answer came: a `team reply` on the ping's thread, or an ordinary `team send`. */
   reply_by: 'reply' | 'send' | null;
-  status: 'replied' | 'read' | 'not read' | 'refused';
+  status: 'replied' | 'read' | 'delivered' | 'not read' | 'refused';
 };
 
 export type PingHost = {
@@ -163,10 +169,11 @@ export function sentRecordOf(places: readonly Place[], seat: string, id: string,
   return null;
 }
 
-/** When the recipient's verified read receipt for `sent` was written, in epoch milliseconds;
- *  null while there is none that verifies and names that record, recipient, root and session. */
-export function receiptAt(sent: RecordPayload, key: KeyObject): number | null {
-  const path = join(seatFolderOf(seatDropDir(sent.root, sent.session, sent.to), sent.id), `${sent.id}.read.json`);
+/** When the recipient's verified receipt of `status` for `sent` was written, in epoch
+ *  milliseconds; null while there is none that verifies and names that record, recipient, root
+ *  and session. */
+function signedReceiptAt(sent: RecordPayload, key: KeyObject, status: 'read' | 'delivered'): { at: number; readBy: string | undefined; status: string } | null {
+  const path = join(seatFolderOf(seatDropDir(sent.root, sent.session, sent.to), sent.id), `${sent.id}.${status}.json`);
   let receipt;
   try {
     receipt = signedReceiptOf(JSON.parse(readFileSync(path, 'utf8')));
@@ -176,9 +183,27 @@ export function receiptAt(sent: RecordPayload, key: KeyObject): number | null {
   if (receipt === null || !verifyReceipt(receipt, key)) return null;
   const at = receipt.payload;
   if (at.id !== sent.id || at.to !== sent.to || at.session !== sent.session || !sameFolder(at.root, sent.root)) return null;
-  if (at.status !== 'read' && at.status !== 'replied') return null;
   const when = Date.parse(at.at);
-  return Number.isNaN(when) ? null : when;
+  return Number.isNaN(when) ? null : { at: when, readBy: at.read_by, status: at.status };
+}
+
+/** When the recipient's verified read receipt for `sent` was written, in epoch milliseconds;
+ *  null while there is none that verifies and names that record, recipient, root and session.
+ *  Only a read the seat made counts: a writer-side copy (`read_by: copy`) and a lead's or the
+ *  owner's clearance (`lead-ack:`) are not the seat seeing the body. */
+export function receiptAt(sent: RecordPayload, key: KeyObject): number | null {
+  const read = signedReceiptAt(sent, key, 'read');
+  if (read === null || (read.status !== 'read' && read.status !== 'replied')) return null;
+  if (read.readBy === COPY_READ_BY || isLeadAckReadBy(read.readBy)) return null;
+  return read.at;
+}
+
+/** When a carrier handed the body over (the signed `delivered` receipt a socket, a runtime queue,
+ *  a typed wake or a channel push writes), in epoch milliseconds; null when none verifies. A
+ *  delivery is not a read: the seat may be mid-turn, or its runtime may hold the body unseen. */
+export function deliveredAt(sent: RecordPayload, key: KeyObject): number | null {
+  const delivered = signedReceiptAt(sent, key, 'delivered');
+  return delivered === null || delivered.status !== 'delivered' ? null : delivered.at;
 }
 
 /** Where the recipient's reply to `sent` lands and whom it must name: the folder and the
@@ -340,6 +365,7 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
       outcome,
       leg: id === null ? null : legOf(outcome),
       send_ms: host.now() - started,
+      delivered_ms: null,
       read_ms: null,
       reply_sent_ms: null,
       reply_landed_ms: null,
@@ -361,6 +387,13 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
         row.sent = sentRecordOf(places, row.seat, row.id, key);
         if (row.sent === null) continue;
         row.destination = replyDestinationOf(host.home, io, row.sent, teams);
+      }
+      if (row.delivered_ms === null) {
+        const delivered = deliveredAt(row.sent, key);
+        if (delivered !== null) {
+          row.delivered_ms = Math.max(0, delivered - row.started);
+          if (row.status === 'not read') row.status = 'delivered';
+        }
       }
       if (row.read_ms === null) {
         const read = receiptAt(row.sent, key);
@@ -390,7 +423,11 @@ export async function runPing(argv: string[], io: Io, host: PingHost): Promise<n
       const name = row.team === null ? row.seat : `${row.seat}@${row.team}`;
       const sent = `send ${(row.send_ms / 1000).toFixed(1)} s${row.leg === null ? '' : ` (${row.leg})`}`;
       const secs = (ms: number | null) => `${((ms ?? 0) / 1000).toFixed(1)} s`;
-      const read = row.read_ms === null ? 'no read receipt' : `read ${secs(row.read_ms)}`;
+      const read = row.read_ms !== null
+        ? `read ${secs(row.read_ms)}`
+        : row.delivered_ms !== null
+          ? `delivered ${secs(row.delivered_ms)}, not read by the seat`
+          : 'no read receipt';
       const tail = row.status === 'replied'
         ? `${read}; ${row.reply_by === 'send' ? 'answer (team send, not on the thread)' : 'reply'} sent ${secs(row.reply_sent_ms)}, landed ${secs(row.reply_landed_ms)}`
         : row.status === 'refused'
