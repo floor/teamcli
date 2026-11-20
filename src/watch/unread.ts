@@ -109,7 +109,7 @@ import { climbUnreadLead } from './status-events.ts';
 import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutcome } from '../queue/wake-attempt.ts';
 import { deactivate, floorPass } from '../queue/floor.ts';
 import { clearStranded, noteReachedPointer, noteStrandedPointer, strandedSeats } from '../queue/stranded.ts';
-import { channelOwnsSeat, channelUnproven, claudeAdapterRoot, overdueChannelRecords, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
+import { channelOfferGivenUp, channelOwnsSeat, channelUnproven, claudeAdapterRoot, overdueChannelRecords, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
 import { copyHistory, noteAttemptOutcome, takeExactCopyNumber, withdrawAttempt } from '../queue/handover.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
@@ -118,7 +118,7 @@ import { typedPaneProof } from '../launch/identity.ts';
 import { composeMessageLine } from '../settings/message-display.ts';
 import { readScreen } from './screen.ts';
 import { seatDropDir, seatMailDirIn } from '../queue/mail-tree.ts';
-import { liveRecordPath } from '../send/drop-folder.ts';
+import { liveRecordPath, seatFolderOf } from '../send/drop-folder.ts';
 
 /** The marker beside a message whose one wake line was typed (`src/send/wake-marker.ts` holds
  *  the reservations and the record; this module keeps the name its callers import). */
@@ -2430,9 +2430,16 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
     const leadSpeaks = stuckEpisodeFor(mail, seat.name, dropDir) === null && !youngWorking(seat.name);
     // Twice this seat's own window: the wake at N and the report at 2N read one value.
     const threshold = windowForSeat(window, seat) * 1000 * 2;
+    // A protected pane on an active root (no pointer is ever typed there) whose channel offer its
+    // sender gave up before any push has no route left at all: nothing will wake it, so it is
+    // reported now, not at 2N — the lead and the sender each hear it named.
+    const noRouteLeft = (id: string): boolean => home !== undefined
+      && claudeAdapterRoot(seat.cli, scene.root, home, seat.webhook !== undefined)
+      && scene.eventLegs?.(seat.name)?.pointer !== true
+      && channelOfferGivenUp(seatFolderOf(dropDir, id), id);
     for (const message of unread) {
       const age = nowMs - Date.parse(message.ts);
-      if (!(age >= threshold)) continue;
+      if (!(age >= threshold) && !noRouteLeft(message.id)) continue;
       if (existsSync(reportedPath(dropDir, message.id))) continue;
       // The pass listed this folder before the seat could read it: a receipt that landed since
       // is the read itself, and reporting the message as queued, not woken would tell its

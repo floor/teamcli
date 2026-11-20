@@ -32,7 +32,7 @@ import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { typedWakeMaxFor } from '../src/send/readable-wake.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
-import { wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
+import { reportedPath, reportUnreadDrops, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { readState } from '../src/state.ts';
@@ -605,6 +605,12 @@ describe('F3b: the send\'s channel leg gave up before any push', () => {
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
     expectPointer(lines[0], ID, 1);
+    // Past the 90 s deadline, still unsettled: no channel offer was ever in flight, so the seat
+    // stays proven (the health scan never counts it), and the next pointer waits its backoff.
+    age(at, ID, CHANNEL_OVERDUE_MS + 1_000);
+    expect(unproven(at)).toBeNull();
+    await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
   });
 });
 
@@ -726,6 +732,21 @@ describe('round 1: a protected pane (its declared order leaves typed out) takes 
     const io = testIo(at.root, { kind: 'owner' });
     await runDoctor(['--file', '.agents/team.yaml'], io, { version: () => '2.1.326', onPath: () => true, loggedIn: () => true, herdrVersion: () => '0.7.1', sessionRunning: () => false, now: () => new Date(), home: at.home });
     expect(`${io.out}${io.err}`).toContain(`${SEAT}: waiting: protected pane, no proven channel`);
+  });
+
+  test('a given-up channel offer at a protected pane is reported to the lead and the sender at once, not left silent', async () => {
+    // No pointer is ever typed here and the sender's channel leg gave up before any push: no
+    // route is left, so the pass reports the record now instead of at 2N.
+    const at = place([], ['drop']);
+    stamped(at, ID);
+    expect(reserveChannelFallback(stampedOf(at), { v: 1, kind: CHANNEL_HELD_RECEIPT, id: ID, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' })).toBe('held');
+    const scene = pass(at, new Date(), []);
+    reportUnreadDrops(scene, { unreadAfter: 600 });
+    expect(existsSync(reportedPath(dropOf(at), ID))).toBe(true);
+    // Without the given-up offer the same young record is not reported yet.
+    stamped(at, OTHER);
+    reportUnreadDrops(pass(at, new Date(), []), { unreadAfter: 600 });
+    expect(existsSync(reportedPath(dropOf(at), OTHER))).toBe(false);
   });
 });
 

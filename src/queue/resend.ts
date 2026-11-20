@@ -24,7 +24,7 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { join } from 'node:path';
 import { stampedListing } from './mail-tree.ts';
 import { ACTOR_LEVEL } from './floor.ts';
-import { attemptTimes, backoffMs, copyHistory, firstChannelOffer, newestOffer, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
+import { attemptTimes, backoffMs, copyHistory, copyLegs, firstChannelOffer, newestOffer, noteAttemptOutcome, reserveAttempt, resendDue } from './handover.ts';
 import { floorState } from './floor.ts';
 import { inboxLive } from '../mcp/inbox.ts';
 import { channelAborted, channelPushed } from '../mcp/channel.ts';
@@ -105,7 +105,10 @@ export function overdueChannelRecords(input: { dropDir: string; context: StatusC
     const start = firstChannelOffer(listing.folder, name, arrived);
     // With `givenUp`, a channel leg its sender gave up before any push is owed its pointer at once:
     // no offer is in flight. It never makes the channel itself unproven (`channelUnproven`).
-    const givenUp = input.givenUp === true && start !== 'unknown' && channelOfferGivenUp(listing.folder, name);
+    const abandoned = start !== 'unknown' && channelOfferGivenUp(listing.folder, name);
+    // The health scan never counts it: no channel offer was in flight. The pointer set names it.
+    if (abandoned && input.givenUp !== true) continue;
+    const givenUp = abandoned;
     // An unreadable history authorizes nothing: the record is not listed as overdue.
     if (!givenUp && (start === null || start === 'unknown' || input.nowMs - start < CHANNEL_OVERDUE_MS)) continue;
     if (stampedSettled(listing.folder, name, input.context, input.key)) continue;
@@ -115,13 +118,14 @@ export function overdueChannelRecords(input: { dropDir: string; context: StatusC
 }
 
 /** Whether the send's own channel leg gave this record up before the channel ever pushed it: the
- *  sender's abort stands, no server push marker does, and no copy was handed out. Nothing is in
- *  flight for the seat, so a proven seat's pointer is due at once rather than at an offer's 90 s
- *  deadline that never started. An unreadable history is not this. */
+ *  sender's abort stands, no server push marker does, and no copy went by the channel. Pointer and
+ *  read copies do not change it: the state holds for the record's life. No channel offer was ever
+ *  in flight, so it is never a failure of the channel (`channelUnproven` skips it), and a proven
+ *  seat owes it a pointer at once, then on the pointer backoff. An unreadable history is not this. */
 export function channelOfferGivenUp(folder: string, id: string): boolean {
   if (!channelAborted(folder, id) || channelPushed(folder, id)) return false;
-  const copies = copyHistory(folder, id);
-  return copies !== 'unknown' && copies.copies === 0;
+  const legs = copyLegs(folder, id);
+  return legs !== 'unknown' && !legs.includes('channel');
 }
 
 /** The seat's stamped records that are unsettled and due now, oldest arrival first. */
@@ -194,12 +198,13 @@ function dueNow(folder: string, id: string, seat: ResendSeat, nowMs: number, arr
     const start = firstChannelOffer(folder, id, arrived);
     const attempts = attemptTimes(folder, id);
     if (start === 'unknown' || attempts === 'unknown') return false;
-    const pointers = attempts.filter((one) => !one.channel && (start === null || one.atMs >= start));
+    // A channel offer its sender gave up before any push has no offer start to count from: every
+    // pointer attempt is its own, the first due at once, each later one on the pointer backoff.
+    const givenUp = seat.only !== undefined && channelOfferGivenUp(folder, id);
+    const pointers = attempts.filter((one) => !one.channel && (givenUp || start === null || one.atMs >= start));
     if (pointers.length === 0) {
       if (seat.only !== undefined) {
-        // The send's channel offer was given up before any push: nothing is in flight, so the
-        // pointer is due at once; otherwise the offer's 90 s deadline.
-        if (channelOfferGivenUp(folder, id)) return true;
+        if (givenUp) return true;
         return start !== null && nowMs - start >= CHANNEL_OVERDUE_MS;
       }
       return seat.unproven !== undefined && seat.unproven();
