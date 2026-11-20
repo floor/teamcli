@@ -364,15 +364,31 @@ const ROLLBACK_STEPS: [string, DeactivationStep][] = [['READER', 'reader'], [PUB
  * lets the removals run. A marker gone, replaced, unreadable or malformed leaves the floor as it
  * is: a rollback another process finished, followed by a new activation, is never undone here.
  */
-export function resumeRollback(root: string, seen: string, options: { removeFaults?: { before?: (step: 'unlink' | 'folder-fsync', path: string) => void } } = {}): DeactivationOutcome {
+export function resumeRollback(root: string, seen: string, options: { removeFaults?: { before?: (step: 'unlink' | 'folder-fsync', path: string) => void }; syncFault?: () => void } = {}): DeactivationOutcome {
   return withActivationLock(root, (): DeactivationOutcome => {
     if (rollbackMarker(root) !== seen) return { kind: 'superseded' };
-    const folder = queuesFolder(root);
-    for (const [name] of ROLLBACK_STEPS) {
-      if (removeDurable(join(folder, name), options.removeFaults) === 'failed') return { kind: 'failed', why: `${name} could not be removed` };
+    // The marker may be visible only because a rollback was cut off between its link and its
+    // folder fsync: the folder is synced before anything is removed, as `createExclusive` does
+    // for a name that already stands.
+    try {
+      options.syncFault?.();
+      fsyncFolder(queuesFolder(root));
+    } catch {
+      return { kind: 'failed', why: 'the rollback marker could not be made durable' };
     }
-    return { kind: 'dark' };
+    return removeRollbackFiles(root, options.removeFaults);
   }) as DeactivationOutcome;
+}
+
+/** The one removal sequence of a rollback, each removal durable before the next, shared by
+ *  `deactivate` and `resumeRollback`. */
+function removeRollbackFiles(root: string, removeFaults?: { before?: (step: 'unlink' | 'folder-fsync', path: string) => void }, after?: (step: DeactivationStep) => void): DeactivationOutcome {
+  const folder = queuesFolder(root);
+  for (const [name, step] of ROLLBACK_STEPS) {
+    if (removeDurable(join(folder, name), removeFaults) === 'failed') return { kind: 'failed', why: `${name} could not be removed` };
+    after?.(step);
+  }
+  return { kind: 'dark' };
 }
 
 /**
@@ -399,12 +415,7 @@ export function deactivate(root: string, home: string, options: { after?: (step:
     const begun = createExclusive(join(folder, DEACTIVATING), `${JSON.stringify({ v: 1, at: new Date().toISOString() })}\n`, options.faults);
     if (begun === 'failed') return { kind: 'failed', why: 'the rollback marker could not be made durable' };
     options.after?.('begin');
-    const steps: [string, DeactivationStep][] = [['READER', 'reader'], [PUBLISHED, 'published'], [ACTIVATION, 'record'], [PROTOCOL, 'marker'], [FENCED, 'fenced'], [DEACTIVATING, 'end']];
-    for (const [name, step] of steps) {
-      if (removeDurable(join(folder, name), options.removeFaults) === 'failed') return { kind: 'failed', why: `${name} could not be removed` };
-      options.after?.(step);
-    }
-    return { kind: 'dark' };
+    return removeRollbackFiles(root, options.removeFaults, options.after);
   });
   return result;
 }

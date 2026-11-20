@@ -343,6 +343,21 @@ describe('a stranded Claude seat rolls its active root back to dark', () => {
     expect(rollbackBegun(at.root)).toBe(false);
   });
 
+  test('a marker linked but not synced is synced before any removal; a failed sync removes nothing, and the resume finishes once it clears', () => {
+    const at = setupRoot();
+    // The rollback is cut off after the marker's link, before its folder fsync.
+    const cut = deactivate(at.root, at.home, { faults: { before: (step, path) => { if (step === 'folder-fsync' && path.endsWith('DEACTIVATING')) throw new Error('injected'); } } });
+    expect(cut.kind).toBe('failed');
+    expect(rollbackBegun(at.root)).toBe(true);
+    const seen = readFileSync(join(at.root, '.agents', 'queues', 'DEACTIVATING'), 'utf8');
+    const queues = join(at.root, '.agents', 'queues');
+    const before = readdirSync(queues).sort();
+    expect(resumeRollback(at.root, seen, { syncFault: () => { throw new Error('injected'); } }).kind).toBe('failed');
+    expect(readdirSync(queues).sort()).toEqual(before);
+    expect(resumeRollback(at.root, seen).kind).toBe('dark');
+    expect(floorState(at.root, at.home).kind).toBe('dark');
+  });
+
   test('a rollback decided on one activation leaves a root reactivated since as it is', () => {
     const at = setupRoot();
     const first = floorState(at.root, at.home);

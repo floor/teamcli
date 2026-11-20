@@ -123,7 +123,7 @@ import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent, recordProvenAgentAddress, recordProvenSeatConversation } from '../registry/agents.ts';
 import type { ProcessParent } from '../process-parent-adapter.ts';
-import { restartedGeneration } from '../launch/reboot-rebind.ts';
+import { sameGeneration } from '../launch/reboot-rebind.ts';
 import { processStartOf as processStartOfPane } from '../watch/pane.ts';
 import { proveSeatRebind, rebindRestartedSeats, runSeatRebind } from './up-rebind.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
@@ -4274,8 +4274,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       const held = readState(dir).sessions[session]?.seats[seat.name];
       // The recorded generation, proved with the births the record holds: reused pids in a new
       // generation are the restart rebind's to prove, never an address or conversation refresh.
-      if (held?.pane !== placed.pane || seatProcessVerdict(held.launched, measured) !== 'same'
-        || restartedGeneration(held.launched, held.pane_shell_start, measured, launch.processStartOf ?? processStartOfPane)) continue;
+      if (held?.pane !== placed.pane || !sameGeneration(held.launched, held.pane_shell_start, measured, launch.processStartOf ?? processStartOfPane)) continue;
       const address = liveSocketOf(agent.reach.address, measured, sources.sockets ?? defaultSocketsDirs());
       const inbound = declaredInboundOf({ dir, root, session, seat: seat.name, launch: agent.launch });
       if (address === null || inboundStaleReason(inbound, address) !== null) continue;

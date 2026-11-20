@@ -83,6 +83,26 @@ export function restartedGeneration(
   return starts !== undefined && launched.cli.some((pid, at) => processes.foreground.includes(pid) && differs(pid, starts[at]));
 }
 
+/**
+ * The recorded generation positively in front: the recorded pids are (`same`), and every birth
+ * the record holds reads again, equal: the shell's when the record has `pane_shell_start`, and
+ * each recorded CLI pid in front when it has `cli_start`. An unreadable birth is not the same
+ * generation. A record holding no births keeps the pid reading alone (records written before them).
+ */
+export function sameGeneration(
+  launched: LaunchedIdentity | undefined,
+  paneShellStart: number | undefined,
+  processes: PaneProcesses | null,
+  startOf: (pid: number) => number | null,
+): boolean {
+  if (launched === undefined || processes === null || seatProcessVerdict(launched, processes) !== 'same') return false;
+  if (paneShellStart !== undefined && startOf(processes.shell) !== paneShellStart) return false;
+  const starts = launched.cli_start;
+  if (starts === undefined) return true;
+  if (starts.length !== launched.cli.length) return false;
+  return launched.cli.every((pid, at) => !processes.foreground.includes(pid) || startOf(pid) === starts[at]);
+}
+
 /** Several foreground processes must be one tree: exactly one is the shell's child, and every
  *  other descends from it within a bounded walk, each parent born no later than its child. The
  *  nodes read are returned, so the caller can read them again (pid, parent and birth) at the

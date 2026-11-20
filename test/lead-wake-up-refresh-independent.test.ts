@@ -431,7 +431,7 @@ describe('explicit conversation repair on the recorded live pane', () => {
     expect(seatOf(WORKER)?.agent_session).toBe(SES);
   });
 
-  test('reused pids in a new generation, another conversation and a live socket change neither binding nor anchors', async () => {
+  test('reused pids, with unreadable and then newer births, another conversation and a live socket, change neither binding, address nor anchors', async () => {
     ready();
     updateState(dir, (file) => {
       const held = file.sessions[SESSION]!.seats[WORKER]!;
@@ -440,15 +440,28 @@ describe('explicit conversation repair on the recorded live pane', () => {
       held.pane_shell_start = 999_000;
     });
     const before = seatOf(WORKER);
+    const address = addressOf(WORKER);
+    const unchanged = () => {
+      expect(binding()).toBe(SES);
+      expect(seatOf(WORKER)?.agent_session).toBe(SES);
+      expect(seatOf(WORKER)?.launched).toEqual(before?.launched);
+      expect(seatOf(WORKER)?.pane_shell_start).toBe(999_000);
+      expect(addressOf(WORKER)).toBe(address);
+    };
+    // First the births cannot be read: an unreadable birth is not the recorded generation.
+    const blind = world();
+    blind.sources.launch!.processStartOf = () => null;
+    await runUp([], testIo(root, { kind: 'owner' }), blind.sources, { nonInteractive: true });
+    unchanged();
+    expect(await runUp(['--rebind', WORKER], testIo(root, { kind: 'owner' }), blind.sources)).toBe(1);
+    unchanged();
+    // Then they read: the same pids, born later, a new generation the record does not name.
     const made = world();
-    // The same pids, born later: a new generation the record does not name.
     made.sources.launch!.processStartOf = (pid) => (pid === 100 ? 5_000_000 : pid === 200 ? 5_001_000 : null);
     await runUp([], testIo(root, { kind: 'owner' }), made.sources, { nonInteractive: true });
-    expect(binding()).toBe(SES);
-    expect(seatOf(WORKER)?.agent_session).toBe(SES);
-    expect(seatOf(WORKER)?.launched).toEqual(before?.launched);
-    expect(seatOf(WORKER)?.pane_shell_start).toBe(999_000);
+    unchanged();
     expect(made.trace.typed).toEqual([]);
+    expect(blind.trace.typed).toEqual([]);
   });
 
   test('a protected automatic restore leaves a present pane bound as before', async () => {

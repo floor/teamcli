@@ -9,7 +9,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { refuse, writeJson } from '../output/index.ts';
 import { findAgent, recordProvenSeatConversation, recordRebootRebind } from '../registry/agents.ts';
-import { launchTreeStands, rebootRebindProof, restartedGeneration, type RebootRebind } from '../launch/reboot-rebind.ts';
+import { launchTreeStands, rebootRebindProof, restartedGeneration, sameGeneration, type RebootRebind } from '../launch/reboot-rebind.ts';
 import { readProcessParent } from '../process-parent-adapter.ts';
 import { processStartOf } from '../watch/pane.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -62,7 +62,7 @@ export function proveSeatRebind(input: {
   const restarted = restartedGeneration(held.launched, held.pane_shell_start, measured, startOf);
   // Outside a restart the recorded CLI must positively be in front: a bare shell, an unreadable
   // pane or another process never reaches the socket refresh below.
-  if (!restarted && seatProcessVerdict(held.launched, measured) !== 'same') {
+  if (!restarted && !sameGeneration(held.launched, held.pane_shell_start, measured, startOf)) {
     return fail('the pane holds neither the recorded launched CLI process nor a later generation of it');
   }
   if (restarted) {
@@ -163,12 +163,15 @@ function rebindChanges(proof: SeatRebindProof): boolean {
  *  and nothing was written. */
 function applySeatRebind(proof: SeatRebindProof, input: { dir: string; session: string; seat: Seat; sources: UpSources }): { written: boolean; named: string } {
   const { dir, session, seat, sources } = input;
-  if (finalPaneHolds(proof.final, sources) !== null) return { written: false, named: '' };
+  // The final check runs inside the writer, under the registry and state locks, after both
+  // snapshots match and before the first change: a pane that changed while a lock was waited
+  // for writes nothing.
+  const stillLive = (): boolean => finalPaneHolds(proof.final, sources) === null;
   const written = proof.reboot !== null
     ? recordRebootRebind(sources.home, proof.agent, dir, proof.held, {
       launched: proof.reboot.launched, paneShell: proof.reboot.shell, paneShellStart: proof.reboot.shellStart, address: proof.address,
-    })
-    : proof.address !== null && recordProvenSeatConversation(sources.home, proof.agent, dir, proof.held, proof.conversation, proof.address);
+    }, stillLive)
+    : proof.address !== null && recordProvenSeatConversation(sources.home, proof.agent, dir, proof.held, proof.conversation, proof.address, stillLive);
   if (!written) return { written: false, named: '' };
   // The host cleared the pane's name: it is given back once the record names the pane, so a
   // send and the next `up` find the seat by it. A failed rename is said; the record stands.
