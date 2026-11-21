@@ -11,7 +11,7 @@
 //   marker and write no consumer read receipt, while a valid push writes only `.channel-push.json`
 //   and leaves `.read.json` absent until consumer acknowledgment.
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readTeamConfig } from '../src/file/team-config.ts';
@@ -19,7 +19,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import { admitChannelDelivery } from '../src/mcp/channel-admit.ts';
 import { channelPushPath } from '../src/mcp/channel.ts';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
-import { runMcpServe } from '../src/mcp/serve.ts';
+import { runMcpServe, teamReadWitness } from '../src/mcp/serve.ts';
 import * as registryAgents from '../src/registry/agents.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
@@ -709,5 +709,82 @@ describe('one registry read per admission', () => {
     } finally {
       reads.mockRestore();
     }
+  });
+});
+
+describe('the registry scan kept across pushes', () => {
+  test('an unchanged registry is not read again; an edited, added, removed or corrupted agent file is seen on the next admission', () => {
+    const { base, home } = createHome();
+    const local = createTeam(base, home, 'alpha');
+    const admit = () => admitChannelDelivery({
+      payload: { from: 'worker', from_id: local.worker.id, to: 'lead', to_id: local.lead.id, rule: "a seat to its own team's orchestrator" },
+      home,
+      root: local.root,
+      session: local.session,
+      seat: 'lead',
+      team: local.team,
+    });
+    expect(admit().ok).toBe(true);
+    const reads = spyOn(registryAgents, 'getAgent');
+    try {
+      // Unchanged: the kept scan answers; only the sender's own record is read.
+      expect(admit().ok).toBe(true);
+      expect(reads.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      reads.mockRestore();
+    }
+    const leadFile = agentFilePath(home, local.lead.id);
+    const original = readFileSync(leadFile, 'utf8');
+    // Edited: the lead's record now names another session, so it is not the live recipient.
+    const edited = original.replace(`  session: "${local.session}"`, '  session: "elsewhere"');
+    expect(edited).not.toBe(original);
+    writeFileSync(leadFile, edited);
+    expect(admit().ok).toBe(false);
+    writeFileSync(leadFile, original);
+    expect(admit().ok).toBe(true);
+    // Added: a newer claimant of the lead seat displaces the named recipient.
+    const competitor = registerCompetitor(home, local.lead, '2021-01-01T00:00:00.000Z', '2021-01-01T00:00:00.000Z');
+    expect(admit().ok).toBe(false);
+    // Removed: the claimant's file is gone, and the lead is the holder again.
+    unlinkSync(agentFilePath(home, competitor.id));
+    expect(admit().ok).toBe(true);
+    // Corrupted: a record that no longer parses fails closed, as an uncached read does.
+    writeFileSync(leadFile, 'reach: [not: valid\n');
+    expect(admit().ok).toBe(false);
+    writeFileSync(leadFile, original);
+    expect(admit().ok).toBe(true);
+  });
+});
+
+describe('the team read kept across pushes', () => {
+  test('its witness holds through state churn and moves with the team file, the registry and a landing', () => {
+    const { base, home } = createHome();
+    const local = createTeam(base, home, 'alpha');
+    const read = () => {
+      const loaded = readTeamConfig(local.root, { home });
+      if (!loaded.ok) throw new Error('fixture team failed');
+      return teamReadWitness(loaded, home);
+    };
+    const first = read();
+    expect(first).not.toBeNull();
+    // The state file is rewritten every few seconds for heartbeats: the read is kept.
+    writeFileSync(join(local.root, '.agents', 'team.state.json'), readFileSync(join(local.root, '.agents', 'team.state.json'), 'utf8'));
+    mkdirSync(join(local.root, 'scratch'));
+    expect(read()).toBe(first);
+    // The team file changes.
+    writeFileSync(local.file, `${readFileSync(local.file, 'utf8')}# edited\n`);
+    const edited = read();
+    expect(edited).not.toBe(first);
+    // The team registry changes.
+    writeFileSync(teamsFile(home), `${readFileSync(teamsFile(home), 'utf8')}\n`);
+    const registry = read();
+    expect(registry).not.toBe(edited);
+    // A landing the placement checks walk is replaced by a link.
+    const lobby = join(home, 'lobby');
+    mkdirSync(lobby, { recursive: true });
+    const withLobby = read();
+    rmSync(lobby, { recursive: true });
+    symlinkSync(base, lobby);
+    expect(read()).not.toBe(withLobby);
   });
 });
