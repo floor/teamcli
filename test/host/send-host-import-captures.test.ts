@@ -211,6 +211,7 @@ const MUTABLE: Record<string, string> = {
   'src/process-kernel.ts: override': 'test',
   'src/profiles/trust-answer.ts: captures': 'constant',
   'src/registry/agents.ts: parsedAgentFiles': 'content',
+  'src/registry/agents.ts: keptScans': 'content',
   'src/registry/locks.ts: held': 'process',
   'src/run-memo.ts: activeMemo': 'reset',
   'src/run-memo.ts: activeDepth': 'reset',

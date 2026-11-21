@@ -9,10 +9,10 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
-import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
-import { getAgent, isAgentId, type Agent } from '../registry/agents.ts';
+import { agentFolderStamp, getAgent, isAgentId, type Agent } from '../registry/agents.ts';
 import { list as listProjects } from '../registry/projects.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { admitSend, sendGrantFor, type AdmitContext, type AdmitProjects, type AdmitTeam, type AdmitTeams, type ReplyContext, type SendSide } from '../send/admit.ts';
@@ -409,26 +409,6 @@ type AgentScan = () => { kind: 'records'; records: { path: string; agent: Agent 
 
 /** The last whole scan of a registry folder, per home, with the stat words it was read under. */
 const keptScans = new Map<string, { stamp: string; scan: Extract<ReturnType<AgentScan>, { kind: 'records' }> }>();
-
-/** What a scan of the folder depends on, by stat only: the folder's own inode and mtime, and each
- *  agent file's name, inode, size, mtime and ctime (a mode change moves only the ctime). */
-function agentFolderStamp(dir: string, names: readonly string[]): string | null {
-  try {
-    const folder = statSync(dir);
-    let stamp = `${String(folder.ino)}:${String(folder.mtimeMs)}:${String(names.length)}`;
-    for (const name of names) {
-      try {
-        const one = lstatSync(join(dir, name));
-        stamp += `|${name}:${String(one.ino)}:${String(one.size)}:${String(one.mtimeMs)}:${String(one.ctimeMs)}`;
-      } catch (error) {
-        stamp += `|${name}:${(error as NodeJS.ErrnoException).code ?? 'error'}`;
-      }
-    }
-    return stamp;
-  } catch {
-    return null;
-  }
-}
 
 function agentScan(home: string): AgentScan {
   let scan: ReturnType<AgentScan> | null = null;

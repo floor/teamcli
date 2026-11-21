@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  agentFolderStamp,
   agentsDir,
   findAgent,
   getAgent,
@@ -391,5 +392,31 @@ describe('the long-lived reader', () => {
     expect(readAgents(home)[0]?.reach.pane).toBe('w98:p1');
     expect(readAgents(home)[0]?.skills).toEqual([]);
     expect(readAgents(home, { fresh: true })[0]?.skills).toEqual([]);
+  });
+
+  // A scan is kept while its stamp stands, so the stamp must move with every change a read could see.
+  test('the scan stamp stands while nothing changes and moves with an edit, even one that keeps size and mtime', () => {
+    const first = registerAgent(home, init());
+    const dir = agentsDir(home);
+    const names = () => readdirSync(dir).filter((name) => name.endsWith('.yaml')).sort();
+    const path = join(dir, `${first.id}.yaml`);
+    const pinned = new Date('2026-11-01T00:00:00.000Z');
+    utimesSync(path, pinned, pinned);
+    const stamp = agentFolderStamp(dir, names());
+    expect(stamp).not.toBeNull();
+    expect(readAgents(home)).toHaveLength(1);
+    expect(agentFolderStamp(dir, names())).toBe(stamp);
+    // Same size, mtime put back by hand: only the ctime moves, and the stamp with it.
+    const before = statSync(path);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('w36:p1', 'w35:p1'));
+    utimesSync(path, pinned, pinned);
+    expect(statSync(path).mtimeMs).toBe(before.mtimeMs);
+    expect(statSync(path).size).toBe(before.size);
+    const edited = agentFolderStamp(dir, names());
+    expect(edited).not.toBe(stamp);
+    expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w35:p1']);
+    registerAgent(home, init({ reach: { team: 'teamcli', seat: 'builder-2', session: 'teamcli', pane: 'w37:p1', address: null } }));
+    expect(agentFolderStamp(dir, names())).not.toBe(edited);
+    expect(agentFolderStamp(join(home, 'nowhere'), [])).toBeNull();
   });
 });
