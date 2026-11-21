@@ -158,7 +158,8 @@ describe('S3: no duplicate staging on socket, typed and drop legs', () => {
 
     const id = idOf(io.out);
     expect(stageSpy).toHaveBeenCalledTimes(1);
-    expect(stepSpy).toHaveBeenCalledTimes(1);
+    // A first-leg delivery writes no step (the send path diet, step 3): its history line is the one log line.
+    expect(stepSpy).toHaveBeenCalledTimes(0);
 
     const recordPath = join(dropDir(made.dir, 'lead'), id);
     const read = readRecord(recordPath, id);
@@ -174,11 +175,7 @@ describe('S3: no duplicate staging on socket, typed and drop legs', () => {
       expect(history.entries[0]).toMatchObject({ id, to: 'lead', outcome: 'delivered', via: 'socket' });
     }
 
-    const evs = stepsOf(made, id);
-    expect(evs.map((e) => [e.kind, e.record_id])).toEqual([
-      ['message.staged', `${id}:staged`],
-      ['leg.tried', `${id}:leg.tried:socket`],
-    ]);
+    expect(stepsOf(made, id)).toEqual([]);
   });
 });
 

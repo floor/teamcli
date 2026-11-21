@@ -111,7 +111,7 @@ import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutco
 import { deactivate, floorPass } from '../queue/floor.ts';
 import { clearStranded, noteReachedPointer, noteStrandedPointer, strandedSeats } from '../queue/stranded.ts';
 import { channelOfferGivenUp, channelOwnsSeat, channelUnproven, claudeAdapterRoot, overdueChannelRecords, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
-import { copyHistory, noteAttemptOutcome, takeExactCopyNumber, withdrawAttempt } from '../queue/handover.ts';
+import { copyHistory, liveChannelCopy, noteAttemptOutcome, takeExactCopyNumber, withdrawAttempt } from '../queue/handover.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { readState } from '../state.ts';
@@ -332,7 +332,7 @@ async function reofferOnEventLegs(
     const at = scene.now.toISOString();
     let route: 'channel' | 'socket' | null = null;
     let reason = '';
-    const channelUnpushed = legs.channel && !existsSync(channelPushPath(dropDir, message.id));
+    const channelUnpushed = legs.channel && !existsSync(channelPushPath(dropDir, message.id)) && liveChannelCopy(dropDir, message.id) === null;
     if (channelUnpushed) {
       markPending(dropDir, { ts: at, from: payload.from, to: seat.name, body: payload.body, id: message.id, thread: payload.thread, leg: 'channel' });
       route = 'channel';

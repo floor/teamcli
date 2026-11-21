@@ -110,6 +110,9 @@ export type HistoryEntry = {
   thread?: string;
   /** On a reply's line, the id of the record it answers. */
   in_reply_to?: string;
+  /** The rule that admitted the pair, on a first-leg delivery's line: `team trace` reads that
+   *  walk's staging from this line, since the walk wrote no step of its own. */
+  rule?: string;
   /** Written when this send ran a typed wake that did not deliver: whether any key reached the
    *  pane. The watch reads it to tell a wake refused before any key from one submitted and not
    *  taken; absent, the send made no typed attempt it did not deliver. */
@@ -335,6 +338,7 @@ export function appendHistory(project: string, root: string, home: string, entry
   if (entry.note !== undefined) record.note = entry.note;
   if (entry.thread !== undefined) record.thread = entry.thread;
   if (entry.in_reply_to !== undefined) record.in_reply_to = entry.in_reply_to;
+  if (entry.rule !== undefined) record.rule = entry.rule;
   if (entry.wake_keys_sent !== undefined) record.wake_keys_sent = entry.wake_keys_sent;
   return appendStoreLine(project, root, home, HISTORY_FILE, record);
 }
@@ -488,6 +492,7 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
   if (typeof obj.in_reply_to === 'string' && obj.in_reply_to !== '') {
     entry.in_reply_to = obj.in_reply_to;
   }
+  if (typeof obj.rule === 'string' && obj.rule !== '') entry.rule = obj.rule;
   if (typeof obj.wake_keys_sent === 'boolean') {
     entry.wake_keys_sent = obj.wake_keys_sent;
   }

@@ -121,13 +121,7 @@ function pushMarker(made: World, id: string): ChannelPushReceipt {
     v: 1,
     kind: 'channel-push',
     id,
-    seat: 'lead',
-    session: SESSION,
-    root: realpathSync(made.root),
     at: NOW.toISOString(),
-    meta: { id, from: 'owner', seat: 'lead', team: 'acme' },
-    content_sha256: 'a'.repeat(64),
-    status: 'sent (channel)',
   };
 }
 
@@ -316,6 +310,8 @@ describe('the channel leg', () => {
       outcome: 'sent (channel)',
       ms: 0,
       via: 'channel',
+      // The admission rule rides on a first-leg delivery's line: `team trace` reads its staging there.
+      rule: 'the owner',
       failed: [`typed: ${NO_PANE_MESSAGING}`],
     });
   });

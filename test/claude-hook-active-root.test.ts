@@ -15,7 +15,6 @@ import type { Caller } from '../src/caller.ts';
 import { runDrops } from '../src/commands/drops.ts';
 import { activate, type FloorActor } from '../src/queue/floor.ts';
 import { copyHistory, EXPOSURES, takeCopyNumber } from '../src/queue/handover.ts';
-import { recordChannelEmitted } from '../src/mcp/channel.ts';
 import { cliHookSettings } from '../src/launch/cli-hook.ts';
 import { seatMailDirs } from '../src/queue/mail-tree.ts';
 import { isRead, signRecord, stampedPayload, stampedSettled, writeRecord, type RecordPayload } from '../src/send/record.ts';
@@ -173,16 +172,16 @@ describe('the hook re-shows a stamped message only when its ladder step is due',
     expect(stampedSettled(stamped, STAMPED_ID, context('lead'), keyOf())).toBe(false);
   });
 
-  test('a channel number reserved for a push that never left, or a pointer, does not hold back the first body', async () => {
+  test('a pointer does not hold back the first body', async () => {
     expect(activate(root, { home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
     record('lead', STAMPED_ID, 'the stamped note');
     const stamped = seatMailDirs(root, SESSION, 'lead').stamped;
-    // The channel server reserves copy 1 and returns before its push marker and notification.
-    expect(takeCopyNumber(stamped, STAMPED_ID, 'channel', Date.now(), { token: 'a'.repeat(32), listener: '1@then' })).toBe(1);
-    // The watch types an ID-only pointer: copy 2, no body.
-    expect(takeCopyNumber(stamped, STAMPED_ID, 'pointer')).toBe(2);
+    // A channel copy's number is its push (the send path diet, step 4): the server takes it
+    // immediately before the line, so no reserved-but-unsent channel number exists. The watch
+    // types an ID-only pointer: copy 1, no body.
+    expect(takeCopyNumber(stamped, STAMPED_ID, 'pointer')).toBe(1);
     // The seat's first prompt: the body is handed over.
-    expect(await dueRead()).toContain(`message ${STAMPED_ID} · delivery 3`);
+    expect(await dueRead()).toContain(`message ${STAMPED_ID} · delivery 2`);
     // That read is a recorded handoff: the next prompt inside the step shows nothing again.
     expect(await dueRead()).not.toContain('the stamped note');
   });
@@ -191,8 +190,8 @@ describe('the hook re-shows a stamped message only when its ladder step is due',
     expect(activate(root, { home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
     record('lead', STAMPED_ID, 'the stamped note');
     const stamped = seatMailDirs(root, SESSION, 'lead').stamped;
+    // The channel copy's entry is the emitted marker: nothing is written beside the record.
     expect(takeCopyNumber(stamped, STAMPED_ID, 'channel', Date.now(), { token: 'a'.repeat(32), listener: '1@then' })).toBe(1);
-    expect(recordChannelEmitted(stamped, STAMPED_ID, new Date().toISOString())).toBe(true);
     expect(await dueRead()).not.toContain('the stamped note');
     age(STAMPED_ID, 61_000);
     expect(await dueRead()).toContain(`message ${STAMPED_ID} · delivery 2`);

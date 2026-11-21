@@ -6,9 +6,12 @@
 // header naming the message and its delivery number, and every copy after the first says it is a
 // re-send, so no copy is ever silent, whatever order the copies arrive in (R4.1).
 //
-// Delivery history, one folder per message, never rewritten:
+// Delivery history, one folder per message:
 //   <dropDir>/.exposures/<id>/<n>   created exclusively and durably (file and folder fsync)
-//                                   immediately before the copy numbered n leaves; the leg is inside
+//                                   immediately before the copy numbered n leaves; the leg is inside.
+//                                   A channel copy's entry is its push: written before the line
+//                                   (emitted), replaced once with `notified` after it left. A retired
+//                                   channel round leaves `c<time>.<id>.channel-retired.<n>`.
 // The number is taken by the exclusive create itself: two copies racing for n, on any two legs, both try `<n>`
 // and the loser moves on to n+1, so a number is used once. A history that cannot be read or
 // written is unknown, and no copy leaves (the record stays due; R2.2 X3 defer).
@@ -99,6 +102,39 @@ export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs:
     // `exists`: a rival took n; try the next number.
   }
   return null;
+}
+
+/** A retired channel round's mark: the channel copies numbered up to `<n>` are no longer live. */
+const RETIRED_NAME = /^c\d+\..+\.channel-retired\.([1-9][0-9]{0,8})$/;
+
+/** The record's live channel copy: its newest channel copy numbered after its last retired round,
+ *  and whether its line left (`notified`). Null when none, or the history cannot be read. */
+export function liveChannelCopy(dropDir: string, id: string): { n: number; notified: boolean; path: string } | null {
+  const folder = historyFolder(dropDir, id);
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return null;
+  }
+  const retired = Math.max(0, ...names.map((name) => Number(RETIRED_NAME.exec(name)?.[1] ?? 0)));
+  for (const n of names.map((name) => Number(COPY_NAME.exec(name)?.[1] ?? 0)).filter((n) => n > retired).sort((a, b) => b - a)) {
+    const path = join(folder, String(n));
+    try {
+      const entry = JSON.parse(readRegularNoFollow(path) ?? '') as { leg?: unknown; notified?: unknown };
+      if (entry.leg === 'channel') return { n, notified: entry.notified === true, path };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/** Retires the live channel copy, so the next channel copy can be pushed: one mark naming its
+ *  number. True when there is none to retire or the mark stands. */
+export function retireChannelCopy(dropDir: string, id: string, nowMs: number): boolean {
+  const live = liveChannelCopy(dropDir, id);
+  return live === null || createExclusive(join(historyFolder(dropDir, id), `c${String(nowMs)}.${id}.channel-retired.${String(live.n)}`), '') !== 'failed';
 }
 
 /** Whether `path` is a real folder: present, a directory, and not a link. */
@@ -294,7 +330,7 @@ export function firstRetiredRoundAborted(dropDir: string, id: string): boolean {
   const first = retired.map((name) => Number(/^c(\d+)\./.exec(name)![1])).sort((a, b) => a - b)[0];
   if (first === undefined) return false;
   const round = retired.filter((name) => name.startsWith(`c${String(first)}.`));
-  return round.some((name) => name.endsWith('.channel-abort')) && !round.some((name) => name.endsWith('.channel-emitted'));
+  return round.some((name) => name.endsWith('.channel-abort')) && !round.some((name) => name.endsWith('.channel-emitted') || RETIRED_NAME.test(name));
 }
 
 /**

@@ -2351,6 +2351,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // here. A write that refuses is not this run's refusal — each leg reports its own ending — it
   // only leaves the walk without an episode to record.
   let stagedWalk: StagedForWalk | null = null;
+  let stagedTraced = false;
   let stagedRun: Promise<void> | null = null;
   let announced = false;
   // A leg records through this; until a record is staged it is a no-op, so a walk that never
@@ -2375,28 +2376,23 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         const noted = begun.noteSoon(attempt);
         if (!noted.ok) logLine(dir, 'send', who, `${to.seat}: the fallback attempt was not recorded (${noted.reason})`, host.now());
       }
-      // One signed step per attempted leg, filed in the receiving team's store beside the bus's
-      // own `message.arrived`, so `team trace <id>` prints the walk in order. The append is
-      // bounded (`STEP_APPEND_MS`); a step that cannot be written is a missing trace line, never
+      // One signed step per attempted leg (the staging's first), filed in the receiving team's
+      // store beside the bus's own `message.arrived`, so `team trace <id>` prints the walk in
+      // order. A first-leg delivery writes none: its history line is the one log line, and the
+      // trace reads it from there. A step that cannot be written is a missing trace line, never
       // a failed send, and it is logged here where the send's own log folder is in hand.
-      const step = legStep(
-        {
-          store: { project: to.project, root: to.root, home: host.home },
-          id: msgId,
-          session: to.session,
-          from: who,
-          to: to.seat,
-          thread: record.thread,
-          ts: attempt.at.toISOString(),
-        },
-        {
+      if (episode) {
+        const fields = { store: { project: to.project, root: to.root, home: host.home }, id: msgId, session: to.session, from: who, to: to.seat, thread: record.thread };
+        if (!stagedTraced && stagedWalk?.ok === true && stagedWalk.path !== null) stagedStep({ ...fields, from: record.from, rule: record.rule, ts: record.at });
+        stagedTraced = true;
+        const step = legStep({ ...fields, ts: attempt.at.toISOString() }, {
           route: attempt.route,
           outcome: attempt.outcome,
           ms: attempt.ms,
           ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
-        },
-      );
-      if (!step.ok) logLine(dir, 'send', who, `${to.seat}: the leg step ${attempt.route} was not written (${step.reason})`, host.now());
+        });
+        if (!step.ok) logLine(dir, 'send', who, `${to.seat}: the leg step ${attempt.route} was not written (${step.reason})`, host.now());
+      }
       // A direct-only caller hears the walk's ending here: the attempt that took the send, or
       // the last route's failure. The record was staged before the first attempt, whatever it was.
       if (host.direct !== undefined && !directEnded && (attempt.outcome === 'delivered' || !attempt.liveRoutesRemain)) {
@@ -2667,11 +2663,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         continue;
       }
       note(walkAttempt('channel', 'delivered', false, host.now(), startedAt, { reason: 'pushed on its development channel' }));
-      logLine(dir, 'send', who, `${to.seat}: sent on its development channel (drop ${String(body.length)} characters)`, host.now());
       const ms = host.now().getTime() - startedAt;
       const failed = failures.length > 0 ? { failed: [...failures] } : {};
       const entry = { ts: host.now().toISOString(), from, to: to.seat, ...(to.sentAs === null ? {} : to.sentAs), body, id: msgId, thread: record.thread };
-      appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (channel)', ms, via: 'channel', ...failed });
+      appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (channel)', ms, via: 'channel', rule: record.rule, ...failed });
       if (wait) {
         return finishThreadWait(io, dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'channel', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
       }
@@ -2741,7 +2736,6 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         report.sent = msgId;
         await announceStaged();
         note(walkAttempt('webhook', 'delivered', false, host.now(), startedAt, { reason: `posted in ${String(posted.ms)} ms` }));
-        logLine(dir, 'send', who, `${to.seat}: delivered to its webhook adapter (${String(posted.ms)} ms; drop ${String(body.length)} characters)`, host.now());
         appendHistory(to.project, to.root, host.home, { ...hookEntry, ...historySender(report), outcome: 'delivered', ms: hookMs, via: 'webhook', ...hookFailures() });
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'webhook', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
@@ -3027,8 +3021,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
           // The queue took the pointer: that ends the send, as a channel push does. A read is only
           // the seat's own signed receipt, which a model writes seconds later; the watch settles it.
           const ms = host.now().getTime() - startedAt;
-          logLine(dir, 'send', who, `${to.seat}: queued to its native runtime (drop ${String(body.length)} characters)`, host.now());
-          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'native', ...failed });
+          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'native', rule: record.rule, ...failed });
           return sentUnconfirmed(io, to.seat, report, ms, 'native');
         }
         // A held thread, an unreachable or refused queue, or an unreadable policy: the route did
@@ -3165,7 +3158,6 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'headless-resume', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
         }
         const ms = host.now().getTime() - startedAt;
-        logLine(dir, 'send', who, `${to.seat}: resumed headlessly (drop ${String(body.length)} characters)`, host.now());
         appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'headless-resume', ...failed });
         return sentUnconfirmed(io, to.seat, report, ms, 'headless-resume');
       }
@@ -3250,7 +3242,6 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         note(walkAttempt('session', 'delivered', false, host.now(), startedAt, { reason: `session ${attempt.session} created` }));
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
         const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
-        logLine(dir, 'send', who, `${to.seat}: delivered (session ${attempt.session}) (drop ${String(body.length)} characters)`, host.now());
         appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered', ms, via: 'session', session: attempt.session, ...failed });
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'session', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
@@ -3946,10 +3937,9 @@ async function postArrivalNow(
  * walks the owner's cascade decides when the webhook is tried (its own leg, after every
  * channel-class leg) and when the arrival is announced.
  *
- * The staging is one signed event in the receiving team's log (`message.staged`), bound to the
- * message id; `project` is that team's project, the key the post's own `webhook.posted` shares.
- * The event is a record, never a delivery fact: an append that cannot be written is logged and
- * changes nothing about the send.
+ * The staging writes no event: a walk that opens an episode files `message.staged` itself, and
+ * `team trace` reads any other send's staging from its history line. `project` is the receiving
+ * team's project, the key the post's own `webhook.posted` uses.
  */
 export async function stageSendRecord(
   dropDir: string,
@@ -3993,28 +3983,13 @@ export async function stageSendRecord(
     { home, log: queueLog(dropDir, now) },
   );
   if (staged.outcome === 'refused') return { ok: false, reason: staged.reason };
-  // The step fields are the record's own: the receiving team's store, the message id, the
-  // session, the pair and the thread. `ts` differs per step — the record's signed `at` for the
-  // staging, the post's own instant for the webhook.
-  const fields = (ts: string): StepFields => ({
-    store: { project, root: payload.root, home },
-    id: payload.id,
-    session: payload.session,
-    from: payload.from,
-    to: payload.to,
-    thread: payload.thread,
-    rule: payload.rule,
-    ts,
-  });
   if (staged.receipt.existing) {
     // Admission still decides whether the file at the name is this message's record: `ensureRecord`
     // reads it and, while the name is held, writes nothing.
     const held = ensureRecord(dropDir, signed);
     if (!held.ok) return { ok: false, reason: held.reason };
-    stagedStep(fields(payload.at));
     return { ok: true, path: held.path, existing: true, record, signed };
   }
-  stagedStep(fields(payload.at));
   return { ok: true, path: staged.receipt.copy ?? join(recordDir ?? dropDir, payload.id), record, signed };
 }
 
@@ -4903,7 +4878,6 @@ async function finishThreadWait(
     } catch {
       // A reply record on the thread is the answer even if the receipt sidecar cannot be written.
     }
-    logLine(dir, 'send', who, `${seatName}: answered (reply ${String(found.reply.length)} characters)`, host.now());
     appendHistory(project, root, host.home, {
       ...entry,
       outcome: 'answered',
@@ -5323,7 +5297,6 @@ async function deliverNative(
     // read the message, which is not a claim that it acted on it.
     if (result.evidence === 'receipt' || (result.evidence === 'taken' && receiptHeld(dropDir, msgId, { to: seatName, root, session }, host.home, claimBindingIn(root, session, seatName, msgId)))) {
       walkNote?.(walkAttempt('typed', 'delivered', false, host.now(), startedAt));
-      logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, typed, receipt${draft === undefined ? '' : `; ${draft}`})`, host.now());
       appendHistory(project, root, host.home, {
         ...entry,
         ...historySender(report),
@@ -6927,7 +6900,6 @@ async function deliverSocketFrame(
       }
     }
   }
-  logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
   // `parallel` ends the send only when both settled: the frame was taken, and the walk's own
   // write is joined here before this leg calls itself delivered. A write that failed leaves the
   // seat woken with nothing in its folder, which is `sent (unconfirmed)` — never the socket's
@@ -6950,7 +6922,7 @@ async function deliverSocketFrame(
   // Under the readable-wake policy, accepted full bodies settle their durable copies.
   // An oversized-body pointer stays unread until the receiver follows its explicit read hint.
   if (!wait && writeHistory) {
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
+    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', rule: payload.rule, ...failed });
   }
   return { kind: 'delivered' };
 }
