@@ -120,6 +120,8 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     }
   };
 
+  // A nudge that landed while the run was mid-pass: its next wait ends at once.
+  let nudged = false;
   const loop: HostedLoop = {
     signal: controller.signal,
     wait(ms) {
@@ -131,6 +133,10 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       if (faultArmed) {
         faultArmed = false;
         return Promise.resolve(false);
+      }
+      if (nudged) {
+        nudged = false;
+        return Promise.resolve(true);
       }
       return new Promise<boolean>((resolve) => {
         waiters.add({ due: now().getTime() + Math.max(0, ms), resolve });
@@ -145,6 +151,18 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       why = null;
       if (phase === 'starting') phase = 'running';
       input.onCycle?.(at);
+    },
+    nudge() {
+      // Only a running loop is started early: a stop, a standby or a failed pulse owns its exit.
+      if (stopped || phase === 'standby' || terminalFailure) return;
+      if (waiters.size === 0) {
+        nudged = true;
+        return;
+      }
+      for (const waiter of [...waiters]) {
+        waiters.delete(waiter);
+        waiter.resolve(true);
+      }
     },
     standby(reason) {
       if (stopped) return;

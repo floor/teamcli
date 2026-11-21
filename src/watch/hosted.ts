@@ -18,6 +18,11 @@ export type HostedLoop = {
    *  that holds the event loop still renews the other hosted routes' authority; the calling
    *  route keeps its own renewal on the daemon's fixed beat. Absent, the pass never yields. */
   beat?(): void;
+  /** Ends the loop's current wait now, true, so its next pass starts at once: an event the pass
+   *  must answer (a message for a seat no channel reaches) instead of the interval. Between passes
+   *  it is kept for the next wait. It never stands in for a stop, a standby or a fault. Absent,
+   *  the loop keeps its interval. */
+  nudge?(): void;
 };
 
 /**
