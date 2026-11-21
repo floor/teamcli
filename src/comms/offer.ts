@@ -49,6 +49,11 @@ export function offerAckFolder(dropDir: string, listenerKey: string): string | n
   return join(twins.stamped, OFFER_ACKS, keyFolderName(listenerKey));
 }
 
+/** The listener keys that pushed a channel copy of `id`, in copy order: never the tokens. */
+export function offeringListeners(dropDir: string, id: string): string[] {
+  return offeredCopies(dropDir, id).map((copy) => copy.listener);
+}
+
 /** One proving ack, as the log keeps it. */
 export type OfferAck = { id: string; n: number; atMs: number };
 

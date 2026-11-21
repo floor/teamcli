@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { offeredCopies } from './handover.ts';
+import { offeringListeners } from '../comms/offer.ts';
 import { appendDeliverySync } from './append.ts';
 import { queueLog } from './log.ts';
 import { seatDropDir, stampedListing } from './mail-tree.ts';
@@ -66,8 +66,8 @@ export function pendingProbe(input: { root: string; session: string; seat: strin
     const payload = read.record.payload;
     if (!isChannelProbe(payload) || payload.to !== input.seat || payload.session !== input.session) continue;
     if (stampedSettled(listing.folder, name, { to: input.seat, root: input.root, session: input.session, ...(input.lead === undefined ? {} : { lead: input.lead }) }, input.key)) continue;
-    const copies = offeredCopies(listing.folder, name);
-    if (copies.length === 0 || copies.some((copy) => copy.listener === input.listenerKey)) return name;
+    const copies = offeringListeners(listing.folder, name);
+    if (copies.length === 0 || copies.includes(input.listenerKey)) return name;
   }
   return null;
 }
