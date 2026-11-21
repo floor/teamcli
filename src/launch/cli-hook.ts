@@ -353,13 +353,14 @@ const LANDING_ESCAPER = (() => {
  * at all. The body is read from the runner's stdout and escaped here, so a body holding quotes,
  * backslashes or control bytes cannot break the JSON; a pipe that fails still prints nothing.
  * `epoch`, when the launch has written the seat's claim, is the runtime the read is bound to: the
- * hook then serves only a brief delivered under the same epoch.
+ * hook then serves only a brief delivered under the same epoch. `--due`: a stamped message is
+ * handed over again only when its re-send ladder step is due (`rereadDue`), never at every prompt.
  */
 function dropReadCommand(seat: string, session: string, runner: string, epoch?: string): string {
   const envelope = shellQuote('{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\\n');
   const bound = epoch === undefined ? '' : ` --epoch ${shellQuote(epoch)}`;
   return [
-    `ctx=$(${runner} drops --read --seat ${shellQuote(seat)} --session ${shellQuote(session)}${bound} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
+    `ctx=$(${runner} drops --read --due --seat ${shellQuote(seat)} --session ${shellQuote(session)}${bound} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
     `if [ -n "$ctx" ]; then printf ${envelope} "$ctx"; fi`,
   ].join('\n');
 }

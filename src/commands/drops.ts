@@ -69,9 +69,11 @@ import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.t
 import { alreadyReadSentence, fileStatStamp, isRecordSidecarName, isReadOrCleared, keyPrintForCache, recordNameOk, recordStampAt, settledReadOf, signedRecordOf, type RecordPayload, type StatusContext, verifyRecord } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { LEGACY_TREE, seatMailDirIn, seatMailParts, stampedListing } from '../queue/mail-tree.ts';
+import { rereadDue } from '../queue/handover.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
-       team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
+       team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>] [--due]
        team drops archive [--dry-run] [--json]
        team drops archive --unread [--seat <seat>] [--json]
 
@@ -109,6 +111,10 @@ Options:
   --session  the launch's session, which must be the team file's own
   --epoch    the runtime epoch the launch started this reader under; when
              given, only a brief delivered under that epoch is served
+  --due      with --read, a stamped message already delivered is handed over
+             again only once its re-send step is due (60 s after its newest
+             copy, doubling, capped at 30 minutes); the turn-start hook reads
+             this way, so a run of prompts does not number a copy each time
   archive    move settled mail into send-drops/<session>/<seat>/archive/<YYYY-MM>/
              and mark unread drops delivered before the seat's channel started
              as read. An acknowledged message moves at once. A read message
@@ -715,6 +721,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   const json = hasJsonFlag(argv);
   const follow = args.flags.has('follow');
   const read = args.flags.has('read');
+  const due = args.flags.has('due');
   // A launch option names a seat without the reading that serves one: no `--read` uses it, so it
   // is an invocation error rather than a silent no-op.
   const stray = !read && args.values.seat !== undefined
@@ -723,7 +730,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       ? 'session'
       : !read && args.values.epoch !== undefined
         ? 'epoch'
-        : !read && args.values.id !== undefined ? 'id' : null;
+        : !read && args.values.id !== undefined ? 'id'
+          : !read && due ? 'due' : null;
   const epoch = args.values.epoch;
   const badEpoch = read && epoch !== undefined && !isBriefEpoch(epoch);
   if (args.flags.has('dry-run') || args.flags.has('unread') || args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
@@ -917,6 +925,14 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         // A drop an earlier build wrote, as the inbox classified it: never served, counted.
         legacy += 1;
         continue;
+      }
+      // The hook's read (`--due`): a stamped message already delivered waits for its ladder
+      // step, so a run of prompts does not hand it over, and number a copy, at every prompt.
+      if (due && !peek) {
+        const folder = seatFolderOf(dropDir, message.id);
+        if (recordStampAt(folder, message.id) === true && !rereadDue(folder, message.id, Date.now())) {
+          continue;
+        }
       }
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const got = peek

@@ -442,6 +442,19 @@ export function resendDue(dropDir: string, id: string, nowMs: number, arrivedMs:
   return nowMs - Math.max(...times) >= backoffMs(1 + ledger.attempts);
 }
 
+/**
+ * Whether the turn-start hook may hand a stamped, unsettled record to the turn again now: no copy
+ * of it was taken yet, or the newest copy (any leg's: a channel push, a pointer, an earlier read)
+ * is older than the ladder's step for the copies taken so far, `backoffMs(copies)`: 60 s after the
+ * first, doubling, capped at 30 minutes. A hook runs at every prompt; without this it numbered a
+ * new copy each time. A history that cannot be read is due: the record is shown, never hidden.
+ */
+export function rereadDue(dropDir: string, id: string, nowMs: number): boolean {
+  const seen = copyHistory(dropDir, id);
+  if (seen === 'unknown' || seen.copies === 0 || seen.lastMs === null) return true;
+  return nowMs - seen.lastMs >= backoffMs(seen.copies);
+}
+
 /** The header line every copy of a stamped record carries (R4.1). */
 export function deliveryHeader(id: string, n: number): string {
   return n <= 1
