@@ -17,7 +17,7 @@ import {
   channelEmitted,
   channelNotified,
   channelPushPath,
-  recordChannelEmitted,
+  channelEmittedPath,
   reserveChannelFallback,
   withChannelCommit,
 } from '../src/mcp/channel.ts';
@@ -453,7 +453,8 @@ describe('an unfinished handoff', () => {
   test('a handoff marker is not a held fallback', () => {
     const dir = dirOf();
     try {
-      expect(recordChannelEmitted(dir, ID, '2026-11-05T00:00:00.000Z')).toBe(true);
+      // The handoff marker an earlier build wrote beside the record.
+      writeFileSync(channelEmittedPath(dir, ID), `${JSON.stringify({ v: 1, id: ID, at: '2026-11-05T00:00:00.000Z' })}\n`, { mode: 0o600 });
       const claim = reserveChannelFallback(dir, {
         v: 1,
         kind: CHANNEL_HELD_RECEIPT,

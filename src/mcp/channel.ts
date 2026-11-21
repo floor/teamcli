@@ -7,6 +7,7 @@
 // `notifications/claude/channel` per message that arrives after it starts. The body and the
 // meta travel together; the signed record stays in the inbox for `inbox_read` and for every later
 // reader, untouched. The server leaves a `<id>.channel-push.json` reservation beside the record,
+// or, for a stamped copy, its delivery history entry (`.exposures/<id>/<n>`, src/queue/handover.ts),
 // which the sender reads to end its walk as `sent (channel)`. Stdio handoff is not a read: the
 // signed receipt waits for explicit client acknowledgement, inbox read or reply.
 //
@@ -23,6 +24,7 @@ import { cliWordListOf, provenScriptWord, shellScriptWordOf } from '../launch/cl
 import { flockBound, flockExclusive } from '../lock/flock.ts';
 import { shellWords } from '../launch/shell-words.ts';
 import { seatFolderOf } from '../send/drop-folder.ts';
+import { liveChannelCopy, retireChannelCopy } from '../queue/handover.ts';
 
 /** The launch flag that loads a development channel, and the value that names this server. */
 export const CHANNEL_FLAG = '--dangerously-load-development-channels';
@@ -35,7 +37,6 @@ export const CHANNEL_METHOD = 'notifications/claude/channel';
 /** The server's reservation beside a pushed record. It is not a read receipt: only a signed
  *  consumer receipt proves a read. */
 export const CHANNEL_PUSH_RECEIPT = 'channel-push';
-export const CHANNEL_PUSH_STATUS = 'sent (channel)';
 
 /** The marker a sender leaves at the push marker's name when its own walk already wakes the seat
  *  through another leg. Any marker-aware serving server treats a marker for the id as a push and
@@ -233,54 +234,51 @@ export function channelPushPath(dropDir: string, id: string): string {
   return join(dropDir, `${id}.${CHANNEL_PUSH_RECEIPT}.json`);
 }
 
-/** Whether a marker for exactly this id is present and readable. The marker is either the
- *  server's push or the sender's held marker; both say this id is not to be pushed. A file that
- *  does not parse, or that names another id, is no marker. */
-export function channelPushHeld(dropDir: string, id: string): boolean {
-  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
+/** The marker at `path` when it names exactly this id: a file that does not parse, or that names
+ *  another id, is no marker. */
+type Marker = { id?: unknown; kind?: unknown; notified?: unknown };
+function markerAt(path: string, id: string): Marker | null {
   try {
-    const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id;
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Marker | null;
+    return parsed !== null && typeof parsed === 'object' && parsed.id === id ? parsed : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Whether a marker for exactly this id is present and readable. The marker is either the
+ *  server's push (for a stamped copy, its live channel entry in the delivery history) or the
+ *  sender's held marker; both say this id is not to be pushed. */
+export function channelPushHeld(dropDir: string, id: string): boolean {
+  return markerAt(channelPushPath(dropDir, id), id) !== null || liveChannelCopy(seatFolderOf(dropDir, id), id) !== null;
 }
 
 /** Whether the server itself wrote the push marker for this id. The sender's held marker sits at
  *  the same name but is not a push: the channel leg has not delivered anything when only that one
  *  is there, and its walk goes on. */
 export function channelPushed(dropDir: string, id: string): boolean {
-  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
-  try {
-    const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown; kind?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id && parsed.kind !== CHANNEL_HELD_RECEIPT;
-  } catch {
-    return false;
-  }
+  const marker = markerAt(channelPushPath(dropDir, id), id);
+  return (marker !== null && marker.kind !== CHANNEL_HELD_RECEIPT) || liveChannelCopy(seatFolderOf(dropDir, id), id) !== null;
 }
-
 
 /** Whether the server recorded a completed notification write for this id. A reservation, a held
  *  marker, or a marker left behind when the seat lost liveness is not a delivery. */
 export function channelNotified(dropDir: string, id: string): boolean {
-  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
-  try {
-    const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown; kind?: unknown; notified?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id && parsed.kind !== CHANNEL_HELD_RECEIPT && parsed.notified === true;
-  } catch {
-    return false;
-  }
+  const marker = markerAt(channelPushPath(dropDir, id), id);
+  return (marker?.kind !== CHANNEL_HELD_RECEIPT && marker?.notified === true) || liveChannelCopy(seatFolderOf(dropDir, id), id)?.notified === true;
 }
 
 /** Records that the notification line was written. Never creates the marker and never turns a
- *  held marker into a delivery: only the server's own reservation can become a completed write. */
+ *  held marker into a delivery: only the server's own reservation (its marker, or a stamped
+ *  copy's live entry, rewritten whole with its offer kept) can become a completed write. */
 export function markChannelNotified(dropDir: string, id: string): boolean {
   dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
-  const path = channelPushPath(dropDir, id);
+  const live = liveChannelCopy(dropDir, id);
+  const path = live?.path ?? channelPushPath(dropDir, id);
   const tmp = `${path}.${process.pid}.tmp`;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { id?: unknown; kind?: unknown };
-    if (parsed === null || typeof parsed !== 'object' || parsed.id !== id || parsed.kind === CHANNEL_HELD_RECEIPT) return false;
+    const parsed = live === null ? markerAt(path, id) : JSON.parse(readFileSync(path, 'utf8')) as Marker;
+    if (parsed === null || parsed.kind === CHANNEL_HELD_RECEIPT) return false;
     const next = { ...parsed, notified: true };
     // A reader must see the previous marker or the completed one, never a truncated rewrite.
     writeFileSync(tmp, `${JSON.stringify(next)}\n`, { flag: 'wx', mode: 0o600 });
@@ -296,33 +294,17 @@ export function markChannelNotified(dropDir: string, id: string): boolean {
   }
 }
 
-/** Written inside the commit lock before the notification line. It means the line was about to
- *  leave or did leave, including when the completion flag could not be published. It is not
- *  itself a successful delivery, and it is not permission for another leg. */
+/** The handoff marker an earlier build wrote inside the commit lock before the notification line.
+ *  It means the line was about to leave or did leave, including when the completion flag could
+ *  not be published. It is not itself a successful delivery, and it is not permission for another
+ *  leg. This build's push marker, or a stamped copy's live entry, is written at that same point. */
 export function channelEmittedPath(dropDir: string, id: string): string {
   dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   return join(dropDir, `${id}.channel-emitted`);
 }
 
 export function channelEmitted(dropDir: string, id: string): boolean {
-  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
-  try {
-    const parsed = JSON.parse(readFileSync(channelEmittedPath(dropDir, id), 'utf8')) as { id?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id;
-  } catch {
-    return false;
-  }
-}
-
-export function recordChannelEmitted(dropDir: string, id: string, at: string): boolean {
-  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
-  hostedCommit('recordChannelEmitted');
-  try {
-    writeFileSync(channelEmittedPath(dropDir, id), `${JSON.stringify({ v: 1, id, at })}\n`, { flag: 'wx', mode: 0o600 });
-    return true;
-  } catch {
-    return false;
-  }
+  return markerAt(channelEmittedPath(dropDir, id), id) !== null || channelPushed(dropDir, id);
 }
 
 /** The sender's abort beside a reservation: an in-flight server must not write the notification
@@ -333,13 +315,7 @@ export function channelAbortPath(dropDir: string, id: string): string {
 }
 
 export function channelAborted(dropDir: string, id: string): boolean {
-  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
-  try {
-    const parsed = JSON.parse(readFileSync(channelAbortPath(dropDir, id), 'utf8')) as { id?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id;
-  } catch {
-    return false;
-  }
+  return markerAt(channelAbortPath(dropDir, id), id) !== null;
 }
 
 export function recordChannelAbort(dropDir: string, id: string, at: string, reason: string): boolean {
@@ -1011,19 +987,13 @@ export function reserveChannelFallback(dropDir: string, receipt: ChannelHeldRece
   return claim === 'busy' ? 'unguarded' : claim;
 }
 
-/** The marker the server reserves before one channel notification. The meta joins the
- *  reservation to its intended message; the marker alone proves neither handoff nor read. */
+/** The marker the server reserves before one channel notification of an unstamped record. It
+ *  names the id and the instant only; it proves neither handoff nor read. */
 export type ChannelPushReceipt = {
   v: 1;
   kind: 'channel-push';
   id: string;
-  seat: string;
-  session: string;
-  root: string;
   at: string;
-  meta: { id: string; from: string; seat: string; team: string };
-  content_sha256: string;
-  status: typeof CHANNEL_PUSH_STATUS;
   /** Present only after the notification line was written. A marker without it is a reservation. */
   notified?: true;
 };
@@ -1068,7 +1038,8 @@ export function retireChannelAttempt(dropDir: string, id: string, nowMs: number 
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
       }
     }
-    return true;
+    // A stamped copy's own push is its history entry: the round's mark retires it.
+    return retireChannelCopy(dropDir, id, nowMs);
   });
   return done === true;
 }

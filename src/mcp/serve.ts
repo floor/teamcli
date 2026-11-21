@@ -9,14 +9,13 @@ import { carriedPointer, carrierDeliveryOf, recordDeliveredBody } from '../send/
 // only proof of delivery this leg has, and it means the message was read, not acted on.
 //
 // The one push is the development channel: when the launch carries the flag naming this server,
-// the server declares `claude/channel`, pushes each new record as one notification, writes a
-// `<id>.channel-push.json` reservation beside it. Handoff is not a consumer read: the `ack` tool
-// writes the signed read receipt with `read_by: channel` only when the client acknowledges the
-// message. `inbox_read` and reply also settle it through their ordinary read paths. Without
+// the server declares `claude/channel`, pushes each new record as one notification, and writes
+// its reservation first (`<id>.channel-push.json`, a stamped copy's history entry). Handoff is not
+// a consumer read: the `ack` tool writes the signed read receipt with `read_by: channel` only when
+// the client acknowledges the message. `inbox_read` and reply also settle it through their ordinary read paths. Without
 // the flag, MCP is client-pull and the seat notices a message when it calls `inbox_check`, with
 // the drop-folder watch as the bounded fall-back.
 import { listenerKeyOf, newOfferToken, proveOffer } from '../comms/offer.ts';
-import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { lstatSync, readdirSync, realpathSync, watch, type FSWatcher } from 'node:fs';
@@ -50,7 +49,6 @@ import {
   CHANNEL_CAPABILITY,
   CHANNEL_INSTRUCTIONS,
   CHANNEL_METHOD,
-  CHANNEL_PUSH_STATUS,
   CHANNEL_READ_BY,
   CHANNEL_IDLE_MS,
   CHANNEL_REDELIVER_MS,
@@ -62,7 +60,6 @@ import {
   channelNotified,
   channelPushHeld,
   markChannelNotified,
-  recordChannelEmitted,
   recordChannelPush,
   withChannelCommit,
 } from './channel.ts';
@@ -458,11 +455,11 @@ function leadOf(serving: { loadTeam?: () => { orchestrator?: string | null } | n
 /**
  * Watches the inbox for signed records that arrive after this server starts, and writes one
  * channel notification per new record. Mail already waiting at startup is left to `inbox_check`,
- * so a fresh session starts quiet. Each push writes its `<id>.channel-push.json` marker before
- * the notification, as the id's exclusive reservation. A notification handed to stdio proves no
- * consumer read, so only an explicit `ack`, `inbox_read` or reply writes a signed read receipt.
- * An ignored notification stays unread and eligible for the watch's bounded recovery. The signed
- * record itself is never touched.
+ * so a fresh session starts quiet. Each push writes its marker (`<id>.channel-push.json`, a stamped
+ * copy's numbered history entry) before the notification, as the id's exclusive reservation. A
+ * notification handed to stdio proves no consumer read, so only an explicit `ack`, `inbox_read`
+ * or reply writes a signed read receipt. An ignored notification stays unread and eligible for
+ * the watch's bounded recovery. The signed record itself is never touched.
  *
  * `notice`, when given, is read at the top of every tick: true means this process has been found
  * to run an install that is no longer on disk, so it stops pushing and never writes another
@@ -608,31 +605,20 @@ function watchChannel(
           && carrierDeliveryOf(dropDir, id, { to: serving.seat, root: serving.root, session: serving.session }, serving.home) !== null;
         if (carriedBefore) push.content = carriedPointer(id, serving.seat);
         // E7b: a stamped record's copy is numbered immediately before the line leaves; a history
-        // that cannot be written sends nothing now, and the redelivery pass offers it again.
+        // that cannot be written sends nothing now, and the redelivery pass offers it again. The
+        // copy's entry is its push and emitted marker in one: no marker file is written beside it.
+        // An unstamped record's push marker, written after the abort check, is its emitted marker.
         // The Claude adapter §2.2: the copy carries a fresh offer token in its meta, kept beside the
         // copy's number with this listener's key. The token is the only thing an ack can prove by.
         let offer: string | null = null;
+        if (channelAborted(dropDir, id)) return 'skip' as const;
         if (recordStampAt(dropDir, id) === true) {
           offer = serving.listenerKey === undefined ? null : newOfferToken();
           const n = takeCopyNumber(dropDir, id, 'channel', Date.now(), offer === null || serving.listenerKey === undefined ? undefined : { token: offer, listener: serving.listenerKey });
           if (n === null) return 'skip' as const;
           push.content = wrapCopy(push.content, id, n, offer === null ? undefined : channelAckLine(id));
-        }
-        const reserved = recordChannelPush(dropDir, {
-          v: 1,
-          kind: 'channel-push',
-          id,
-          seat: serving.seat,
-          session: serving.session,
-          root: serving.root,
-          at: new Date().toISOString(),
-          meta: push.meta as { id: string; from: string; seat: string; team: string },
-          content_sha256: createHash('sha256').update(push.content).digest('hex'),
-          status: CHANNEL_PUSH_STATUS,
-        });
-        if (!reserved || channelAborted(dropDir, id)) return 'skip' as const;
-        if (!recordChannelEmitted(dropDir, id, new Date().toISOString())) return 'skip' as const;
-        // The push marker keeps the meta without the token: no reader of the marker sees it.
+        } else if (!recordChannelPush(dropDir, { v: 1, kind: 'channel-push', id, at: new Date().toISOString() })) return 'skip' as const;
+        // No marker keeps the token: only the copy's private history entry does.
         write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: offer === null ? push : { content: push.content, meta: { ...push.meta, offer } } }));
         const marked = serving.channelMark
           ? serving.channelMark(dropDir, id)

@@ -121,13 +121,7 @@ function pushMarker(made: World, id: string): ChannelPushReceipt {
     v: 1,
     kind: 'channel-push',
     id,
-    seat: 'lead',
-    session: SESSION,
-    root: realpathSync(made.root),
     at: NOW.toISOString(),
-    meta: { id, from: 'owner', seat: 'lead', team: 'acme' },
-    content_sha256: 'a'.repeat(64),
-    status: 'sent (channel)',
   };
 }
 

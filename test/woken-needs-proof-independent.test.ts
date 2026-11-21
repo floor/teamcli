@@ -258,13 +258,7 @@ function makePushReceipt(world: FixtureWorld, seat: string, id: string): Channel
     v: 1,
     kind: 'channel-push',
     id,
-    seat,
-    session: SESSION,
-    root: world.root,
     at: NOW.toISOString(),
-    meta: { id, from: 'owner', seat, team: 'acme' },
-    content_sha256: 'b'.repeat(64),
-    status: 'sent (channel)',
   };
 }
 
