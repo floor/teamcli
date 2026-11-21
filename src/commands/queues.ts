@@ -236,36 +236,54 @@ function proveSeats(out: Io, root: string, home: string, session: string, lead: 
     return 0;
   }
   const key = messageKeyState(home);
-  let failed = false;
+  // Every check comes first, for every chosen seat, before anything is written: a refusal here
+  // leaves the checkout exactly as it was, whatever the other seats would have taken.
+  const plan: { seat: string; pending: string | null }[] = [];
+  const refused: string[] = [];
   for (const gap of chosen) {
     if (gap.channel !== 'unproven since launch' || key.kind !== 'key') {
-      out.stderr(`  ${gap.seat}: no probe: ${gap.why}\n`);
-      failed = true;
+      refused.push(`  ${gap.seat}: no probe: ${gap.why}\n`);
       continue;
     }
     const dropDir = seatDropDir(root, session, gap.seat);
     const live = inboxLive(dropDir, root, session, gap.seat);
-    if (!live.live) {
-      out.stderr(`  ${gap.seat}: no probe: its listener is gone\n`);
-      failed = true;
+    const since = live.live ? Date.parse(live.listener.ts) : Number.NaN;
+    if (!live.live || !Number.isFinite(since)) {
+      refused.push(`  ${gap.seat}: no probe: its listener is gone\n`);
       continue;
     }
-    const listenerKey = listenerKeyOf(live.listener);
-    const pending = pendingProbe({ root, session, seat: gap.seat, key: key.key, listenerKey, nowMs: now.getTime(), ...(lead === undefined ? {} : { lead }) });
-    if (pending !== null) {
-      out.stdout(`${gap.seat}: probe ${pending} is waiting for its ack\n`);
+    plan.push({ seat: gap.seat, pending: pendingProbe({ root, session, seat: gap.seat, key: key.key, listenerKey: listenerKeyOf(live.listener), listenerSinceMs: since, nowMs: now.getTime(), ...(lead === undefined ? {} : { lead }) }) });
+  }
+  if (refused.length > 0) {
+    out.stderr('team queues: nothing probed; the checkout is unchanged:\n');
+    for (const line of refused) out.stderr(line);
+    // exit: queues.prove-refused
+    return 1;
+  }
+  // Placement: each probe is its own write. A write that fails after it began may leave the
+  // queue's own void entry for that seat (src/queue/append.ts); what was placed is reported apart
+  // from what was not, and the run exits 1 unless every seat has its probe.
+  const failed: string[] = [];
+  for (const one of plan) {
+    if (one.pending !== null) {
+      out.stdout(`${one.seat}: probe ${one.pending} is waiting for its ack\n`);
       continue;
     }
-    const placed = placeChannelProbe({ home, root, session, seat: gap.seat, now });
+    const placed = placeChannelProbe({ home, root, session, seat: one.seat, now });
     if (!placed.ok) {
-      out.stderr(`  ${gap.seat}: no probe: ${placed.reason}\n`);
-      failed = true;
+      failed.push(`  ${one.seat}: not placed: ${placed.reason}; its queue may keep a void entry for the attempt\n`);
       continue;
     }
-    out.stdout(`${gap.seat}: probe ${placed.id} placed; its channel is proven once the seat acks it with its offer\n`);
+    out.stdout(`${one.seat}: probe ${placed.id} placed; its channel is proven once the seat acks it with its offer\n`);
+  }
+  if (failed.length > 0) {
+    out.stderr(`team queues: probes partly placed: ${String(plan.length - failed.length)} of ${String(plan.length)} seats have one:\n`);
+    for (const line of failed) out.stderr(line);
+    // exit: queues.prove-partial
+    return 1;
   }
   // exit: queues.prove
-  return failed ? 1 : 0;
+  return 0;
 }
 
 /** activate and reader change what every seat of the root does: the owner's, or a lead's in

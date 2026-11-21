@@ -7,7 +7,7 @@
 // seat's ack with that token proves the channel and activation then passes. An ack without the
 // token settles the probe and proves nothing. Fixtures only: a synthetic root, home and launch line.
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runQueues } from '../src/commands/queues.ts';
@@ -15,7 +15,8 @@ import { listenerKeyOf, offerAcks } from '../src/comms/offer.ts';
 import { writeDaemonState } from '../src/daemon/state.ts';
 import { listenerPath, readListener } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
-import { CHANNEL_PROBE_BODY } from '../src/queue/channel-probe.ts';
+import { CHANNEL_PROBE_BODY, pendingProbe, placeChannelProbe } from '../src/queue/channel-probe.ts';
+import { takeCopyNumber } from '../src/queue/handover.ts';
 import { floorState } from '../src/queue/floor.ts';
 import { seatMailDirs } from '../src/queue/mail-tree.ts';
 import { registerAgent } from '../src/registry/agents.ts';
@@ -152,9 +153,9 @@ function binding(at: Place) {
   return { root: at.root, session: SESSION, seat: 'lead', key: key.key };
 }
 
-async function queues(at: Place, argv: string[]): Promise<{ code: number; out: string; err: string }> {
+async function queues(at: Place, argv: string[], owner: TypedPaneSources = paneOwner()): Promise<{ code: number; out: string; err: string }> {
   const io = testIo(at.root, { kind: 'owner' });
-  const code = await runQueues(argv, io, { home: at.home, paneOwner: paneOwner() });
+  const code = await runQueues(argv, io, { home: at.home, paneOwner: owner });
   return { code, out: io.out, err: io.err };
 }
 
@@ -242,6 +243,63 @@ describe('a protected seat with a live channel, before activation', () => {
       expect(proved.err).toContain('lead: no probe: no listener');
       expect(existsSync(seatMailDirs(at.root, SESSION, 'lead').stamped)).toBe(false);
     } finally {
+      at.cleanup();
+    }
+  });
+});
+
+/** Every file and folder under a tree, by relative name, with each file's bytes. */
+function tree(folder: string): string {
+  if (!existsSync(folder)) return '-';
+  return JSON.stringify(readdirSync(folder, { recursive: true }).map(String).sort().map((name) => {
+    try { return [name, readFileSync(join(folder, name), 'base64')]; } catch { return [name, 'folder']; }
+  }));
+}
+
+describe('review round 1: the probe binds to the listener incarnation and refuses before any write', () => {
+  test('an unoffered probe placed before the current listener started is not pending; one placed after it, or pushed by it, is', () => {
+    const at = place();
+    try {
+      const key = binding(at).key;
+      const now = new Date();
+      const placed = placeChannelProbe({ home: at.home, root: at.root, session: SESSION, seat: 'lead', now });
+      if (!placed.ok) throw new Error(placed.reason);
+      const ask = (listenerKey: string, listenerSinceMs: number) => pendingProbe({ root: at.root, session: SESSION, seat: 'lead', key, listenerKey, listenerSinceMs, nowMs: now.getTime() + 1_000, lead: 'lead' });
+      // The listener started before the probe was placed: its watch will offer it.
+      expect(ask('1@then', now.getTime() - 60_000)).toBe(placed.id);
+      // A replacement listener started after the placement primed past it and never offers it.
+      expect(ask('2@later', now.getTime() + 500)).toBeNull();
+      // Pushed by one listener: pending for that incarnation only.
+      expect(takeCopyNumber(seatMailDirs(at.root, SESSION, 'lead').stamped, placed.id, 'channel', Date.now(), { token: 'c'.repeat(32), listener: '1@then' })).not.toBeNull();
+      expect(ask('1@then', now.getTime() + 500)).toBe(placed.id);
+      expect(ask('2@later', now.getTime() - 60_000)).toBeNull();
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('one seat that cannot take a probe refuses the whole run and writes nothing for the other', async () => {
+    const { at, feed, running } = await served();
+    try {
+      const both: TypedPaneSources = {
+        ...paneOwner(),
+        agents: () => [{ name: 'lead', pane: 'pane-lead', session: 'session-of-lead' }, { name: 'worker', pane: 'pane-worker', session: 'session-of-worker' }],
+        // The worker's pane cannot be proven, so it has no pointer either: it blocks activation.
+        processes: (pane: string) => pane === 'pane-lead' ? { shell: 111, foreground: [222] } : null,
+      };
+      const agents = join(at.root, '.agents');
+      const before = [tree(join(agents, 'send-stamped')), tree(join(agents, 'queues'))];
+      const proved = await queues(at, ['prove'], both);
+      expect(proved.code).toBe(1);
+      expect(proved.err).toContain('nothing probed; the checkout is unchanged');
+      expect(proved.err).toContain('worker: no probe: no listener');
+      expect(proved.out).not.toContain('placed');
+      expect([tree(join(agents, 'send-stamped')), tree(join(agents, 'queues'))]).toEqual(before);
+      // The seat that can take one gets it when it is named alone.
+      expect(probeIdOf((await queues(at, ['prove', 'lead'], both)).out)).toMatch(/^[0-9a-f-]{36}$/);
+    } finally {
+      feed.end();
+      await running;
       at.cleanup();
     }
   });

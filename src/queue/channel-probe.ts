@@ -41,12 +41,14 @@ export function isChannelProbe(payload: Pick<RecordPayload, 'from' | 'from_id' |
 }
 
 /**
- * The seat's probe that can still prove the current listener: a verified probe, unsettled, placed
- * within `PROBE_PENDING_MS`, and either not yet pushed or pushed by this listener. Null when there
- * is none. A probe another (earlier) listener took is no longer pending for this one: a server
- * leaves mail already waiting at its start to `inbox_check`, so only a fresh probe reaches it.
+ * The seat's probe that can still prove the current listener incarnation: a verified probe,
+ * unsettled, placed within `PROBE_PENDING_MS`, and either pushed by this listener or placed after
+ * this listener started (`listenerSinceMs`, its marker's time) and not yet pushed. Null when there
+ * is none. A server primes its watch with the mail already waiting at its start and never pushes
+ * it, so a probe an earlier listener took, or one placed before this listener started and never
+ * offered, can no longer prove this one: a fresh probe is placed instead.
  */
-export function pendingProbe(input: { root: string; session: string; seat: string; key: KeyObject; listenerKey: string; nowMs: number; lead?: string }): string | null {
+export function pendingProbe(input: { root: string; session: string; seat: string; key: KeyObject; listenerKey: string; listenerSinceMs: number; nowMs: number; lead?: string }): string | null {
   const dropDir = seatDropDir(input.root, input.session, input.seat);
   const listing = stampedListing(dropDir);
   if (listing === null || listing === 'unreadable') return null;
@@ -67,7 +69,9 @@ export function pendingProbe(input: { root: string; session: string; seat: strin
     if (!isChannelProbe(payload) || payload.to !== input.seat || payload.session !== input.session) continue;
     if (stampedSettled(listing.folder, name, { to: input.seat, root: input.root, session: input.session, ...(input.lead === undefined ? {} : { lead: input.lead }) }, input.key)) continue;
     const copies = offeringListeners(listing.folder, name);
-    if (copies.length === 0 || copies.includes(input.listenerKey)) return name;
+    if (copies.includes(input.listenerKey)) return name;
+    const placedAt = Date.parse(payload.at);
+    if (copies.length === 0 && arrived > input.listenerSinceMs && Number.isFinite(placedAt) && placedAt > input.listenerSinceMs) return name;
   }
   return null;
 }
@@ -75,6 +79,10 @@ export function pendingProbe(input: { root: string; session: string; seat: strin
 /**
  * Places one probe for the seat: a signed record stamped at the delivery level, written into the
  * seat's stamped folder through the queue's commit, as every stamped record is. Returns its id.
+ * The boundary: a refusal before the commit (an unresolvable checkout, no message key) writes
+ * nothing; once the commit begins, a failed record write can leave the queue's own void entry
+ * for the attempt (src/queue/append.ts), never a record. The caller checks every seat before
+ * the first placement, so only a write fault reaches this second case.
  */
 export function placeChannelProbe(input: { home: string; root: string; session: string; seat: string; now: Date }): { ok: true; id: string } | { ok: false; reason: string } {
   let root: string;

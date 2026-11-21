@@ -18,6 +18,7 @@ import { canShowModel, modelDiffers, runningModel, seatModel, type Running } fro
 import { ownStartFolderProblem } from '../worktree/place.ts';
 import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { writeCursorCommandDeny } from './grok-command-deny.ts';
+import { readWithPs } from '../caller.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { paneInOwnWorktree, restoreProof, type RestoreWorktree } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -249,6 +250,9 @@ export type Host = {
    * told from the same shell. Absent: the run reads the process table itself.
    */
   processStartOf?(pid: number): number | null;
+  /** One process's parent and command name (`ps -o ppid=,comm=`), read at the idle prompt to
+   *  verify which recorded pid is the CLI itself (`cli_anchor`). Absent: the run reads `ps`. */
+  readProcess?(pid: number): { ppid: number; name: string } | null;
   sleep(ms: number): Promise<void>;
   now(): number;
   /** Null when this seat may launch. A string is the reason it may not. */
@@ -1039,7 +1043,7 @@ export async function executePlan(
     const stored = host.seatStates?.(session)?.[seat]?.launched;
     if (stored?.cli_start === undefined || stored.shell !== next.shell || stored.cli.length !== next.cli.length
       || !stored.cli.every((pid, at) => next.cli[at] === pid)) return patch;
-    return { ...patch, launched: { ...next, cli_start: [...stored.cli_start] } };
+    return { ...patch, launched: { ...next, cli_start: [...stored.cli_start], ...(stored.cli_anchor === undefined ? {} : { cli_anchor: stored.cli_anchor }) } };
   };
   const recordSeat = (seat: string, patch: Parameters<Host['record']>[1], proved = false): void => {
     // `proved`: the adoption's re-tie, written only after its own fresh proof that the recorded
@@ -1952,7 +1956,7 @@ export async function executePlan(
           // The seat's own process, read now that its idle prompt is on the screen: the pane's
           // shell and the pids in front of it that are not the shell. Nothing is recorded when
           // herdr can't tell: a seat without the record keeps today's behaviour.
-          const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null, host.processStartOf ?? processStartOf);
+          const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null, host.processStartOf ?? processStartOf, { processNames, read: host.readProcess ?? readWithPs });
           if (identity) {
             identities.set(op.seat, identity);
             // A same-pane relaunch skips workspace creation. Refresh its shell anchor beside
