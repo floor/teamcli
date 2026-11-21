@@ -1,6 +1,6 @@
 import { hostedCommit } from './host/request-scope.ts';
 import { traceChildStep } from './diagnostics/child-steps.ts';
-import { herdrDirect, sessionAnswersNow } from './herdr-direct.ts';
+import { directSocketOf, herdrDirect, sessionAnswersNow } from './herdr-direct.ts';
 import { traceBeatWork } from './diagnostics/beat-work.ts';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -83,13 +83,21 @@ export function endHerdrSnapshot(id: number | null): void {
   }
 }
 
+/** The server a snapshot keeps a read under: the socket the read reaches when that is certain
+ *  (`directSocketOf`), so the caller's own server and the same session asked by name are one read;
+ *  the session's name otherwise. Read at call time: a hosted request's environment is its own. */
+function snapshotServer(session: string | undefined): string {
+  const socket = directSocketOf(session);
+  return socket === null ? `name:${session ?? ''}` : `socket:${socket}`;
+}
+
 /** A mutation guard must not reuse the planning pass's cached agent list. */
 export function evictHerdrAgentList(session?: string): void {
-  activeSnapshot?.agents.delete(session ?? '');
+  activeSnapshot?.agents.delete(snapshotServer(session));
 }
 
 export function evictHerdrPaneProcessInfo(pane: string, session?: string): void {
-  activeSnapshot?.processInfo.delete(`${session ?? ''}\0${pane}`);
+  activeSnapshot?.processInfo.delete(`${snapshotServer(session)}\0${pane}`);
 }
 
 /** The raw stdout of one `herdr` call, or null when the call failed or printed nothing. Tests
@@ -193,7 +201,7 @@ function agentsOf(result: unknown): HerdrAgent[] | null {
 
 // The agents herdr lists, or null when herdr can't be reached.
 export function agentList(session?: string): HerdrAgent[] | null {
-  const key = session ?? '';
+  const key = snapshotServer(session);
   if (activeSnapshot !== null && activeSnapshot.agents.has(key)) {
     return activeSnapshot.agents.get(key) ?? null;
   }
@@ -310,7 +318,7 @@ export function paneProcesses(pane: string, session?: string): PaneProcesses | n
  * foreground names are read from, so a pass asks the terminal host once for the pane.
  */
 export function paneProcessInfo(pane: string, session?: string): unknown | null {
-  const key = `${session ?? ''}\0${pane}`;
+  const key = `${snapshotServer(session)}\0${pane}`;
   if (activeSnapshot !== null && activeSnapshot.processInfo.has(key)) {
     return activeSnapshot.processInfo.get(key) ?? null;
   }

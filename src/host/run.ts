@@ -9,7 +9,7 @@
 // and placement caches are the request's for its duration and the host's again after it.
 import { inspect } from 'node:util';
 import { callerOf, resetCallerCaches } from '../caller.ts';
-import { activeHerdrSnapshotId } from '../herdr.ts';
+import { activeHerdrSnapshotId, beginHerdrSnapshot, endHerdrSnapshot } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import {
@@ -157,12 +157,16 @@ export async function runHostedLine(request: HostRequest, peer: HostPeer, deps: 
   let first: string | null = null;
   let lateCallbacks = 0;
   let stopped: HostedStoppedAfterEffect | null = null;
+  // One terminal-host snapshot for the whole request: the admission's placement and the line's
+  // own read the caller's pane once (the command's own snapshot joins this one).
+  let snapshot: number | null = null;
   try {
     replaceEnv(request.env);
     process.chdir(request.cwd);
     process.argv = [savedArgv[0] ?? 'bun', deps.cliEntry, ...request.argv];
     captureOutput(captured);
     resetCallerCaches();
+    snapshot = beginHerdrSnapshot();
     const io: Io = {
       stdout: (text) => void captured.stdout.push(text),
       stderr: (text) => void captured.stderr.push(text),
@@ -194,6 +198,7 @@ export async function runHostedLine(request: HostRequest, peer: HostPeer, deps: 
   } catch (error) {
     thrown = error;
   } finally {
+    endHerdrSnapshot(snapshot);
     const guard = disarmHostedGuard();
     stopped = guard.stopped ?? null;
     process.stdout.write = savedOut;
