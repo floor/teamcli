@@ -37,6 +37,7 @@ import { publishRecordRead } from '../send/read-receipt.ts';
 
 import { alreadyReadSentence, DELIVERY_LEVEL, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
 import { attributedBody, renderedIdentity } from '../send/sender-claim.ts';
+import { registryIdentityView } from '../comms/identity.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, replyLine, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, readStateShared, type SeatState, type State } from '../state.ts';
@@ -415,7 +416,10 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   // nested headers are literal message text, including a worker quoting the owner's header.
   // The sender's one identity (src/comms/identity.ts): the record's signed one, else the
   // registry's by id. No other name is handed to the renderer.
-  const identity = renderedIdentity(payload.from, { record: payload, home: serving.home });
+  // One registry view for the whole render, seeded with the team just read: each render built its
+  // own (a team file load and the seat overrides apiece), three per push, ~30 ms on a live registry.
+  const view = registryIdentityView(serving.home, { root: serving.root, team });
+  const identity = renderedIdentity(payload.from, { record: payload, home: serving.home, view });
   const leadingClaim = /^from ([^\n]*?) — admitted by: ([^\n]*)\n\n?/;
   const envelope = leadingClaim.exec(payload.body);
   const knownEnvelope = envelope !== null
@@ -428,6 +432,7 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
     home: serving.home,
     root: serving.root,
     rule: admitted.rule,
+    view,
   }) + body;
   if (content.trim() === '') return null;
   // The reader line every socket frame ends with: the record's id, as `team reply` and `team ack`
