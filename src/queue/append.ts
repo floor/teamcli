@@ -474,7 +474,7 @@ function commit(locked: Locked, seq: number, msgId: string, opKey: string, diges
 }
 
 /** Recovery under the lock: cut a torn tail, settle every reserved intent, rebuild missing id files. */
-function recover(locked: Locked): void {
+function recover(locked: Locked, healIds: boolean): void {
   const { generation, target, options } = locked;
   const expected = { root: target.root, session: target.session, seat: target.seat, generation: generation.name };
   for (const [seq, last] of [...locked.folded.last].sort((a, b) => a[0] - b[0])) {
@@ -509,7 +509,7 @@ function recover(locked: Locked): void {
         writeJournal(locked, line(locked, seq, last.msg_id, last.op_key, 'void', { reason }));
         locked.log(`queue ${target.session}/${target.seat}: seq ${String(seq)} void: ${reason}`);
       }
-    } else if (last.state === 'committed' && readNoFollow(join(generation.folder, 'ids', last.msg_id)) !== `${String(seq)}\n`) {
+    } else if (healIds && last.state === 'committed' && readNoFollow(join(generation.folder, 'ids', last.msg_id)) !== `${String(seq)}\n`) {
       writeDurable(join(generation.folder, 'ids', last.msg_id), `${String(seq)}\n`);
     }
   }
@@ -531,7 +531,10 @@ function takeQueueLock(base: string, options: QueueOptions): ReturnType<typeof a
 
 /** Takes the receiver's lock and opens its current generation, recovered. Null when the queue
  *  cannot be used: the reason is logged, and the caller writes as before. */
-function open(dropDir: string, target: Omit<Target, 'dropDir'>, options: QueueOptions): { locked: Locked; release: () => void } | { skipped: string } {
+/** `healIds` rebuilds the id file of every committed seq: one read per message the seat ever had.
+ *  A delivery's own append leaves that to the reconcile passes (`appendRecovered`,
+ *  `recoverSessionQueues`); its commit writes the id file before the committed line. */
+function open(dropDir: string, target: Omit<Target, 'dropDir'>, options: QueueOptions, healIds = true): { locked: Locked; release: () => void } | { skipped: string } {
   const log = options.log ?? (() => {});
   const now = options.now ?? (() => new Date());
   const base = queueBaseOf(dropDir);
@@ -580,7 +583,7 @@ function open(dropDir: string, target: Omit<Target, 'dropDir'>, options: QueueOp
     const locked: Locked = {
       base, target: { dropDir, ...target }, generation, journalPath, folded: fold(journal.lines), options, log, now,
     };
-    recover(locked);
+    recover(locked, healIds);
     // The next holder of the lock drains the seat's pending dual writes once it lets the lock go
     // (a drain proves each placement under the lock again, so it never runs while this one holds).
     return { locked, release: () => { lock.release(); drainAfterRelease(dropDir, options); } };
@@ -645,7 +648,7 @@ export async function appendDelivery<T>(input: AppendInput, write: () => Promise
   const log = options.log ?? (() => {});
   let opened: ReturnType<typeof open>;
   try {
-    opened = open(input.dropDir, targetOf(input.record), options);
+    opened = open(input.dropDir, targetOf(input.record), options, false);
   } catch (error) {
     opened = { skipped: `the queue could not be opened (${(error as Error).message})` };
   }
@@ -696,7 +699,7 @@ export function appendDeliverySync<T>(input: AppendInput, write: () => WriteOutc
   const log = options.log ?? (() => {});
   let opened: ReturnType<typeof open>;
   try {
-    opened = open(input.dropDir, targetOf(input.record), options);
+    opened = open(input.dropDir, targetOf(input.record), options, false);
   } catch (error) {
     opened = { skipped: `the queue could not be opened (${(error as Error).message})` };
   }
