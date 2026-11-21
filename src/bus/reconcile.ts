@@ -627,8 +627,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   }
   // Deferred appends belong to the previous pass's async retry; a new pass starts its own list.
   state.deferred = [];
-  // The queue's recovery on start (rfc-event-comms §1, E4): the bus's first pass settles every
-  // seat queue a crashed writer left mid-commit, before any record is looked at.
+  // The queue's open on start (rfc-event-comms §1, E4): the bus's first pass opens every seat
+  // queue once, folding an earlier build's journal into entry names, before any record is looked at.
   // It never waits for a queue lock: a held or unusable queue leaves recovery pending, and every
   // later pass tries again until every seat queue has been opened once.
   if (!state.queuesRecovered && options.queueOrphans !== false) {

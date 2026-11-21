@@ -1,18 +1,18 @@
-// rfc-event-comms §1, step E4: the receiver's queue, written in shadow by every ingress.
-// The gates: a writer killed at each step boundary (reserve, record, entry, mark) leaves a state the
-// next lock holder settles from the record; a torn journal tail is cut back; concurrent writers and
-// repairers never share a seq; the orphan scan appends a record no writer indexed; a legacy read in
-// the gap sees the record once and the queue exposes nothing; a queue that cannot be used never
-// changes the write.
+// rfc-event-comms §1, step E4: the receiver's queue, written in shadow by every ingress. The
+// index is one entry NAME per seq (`entries/<seq>.<msg_id>`). The gates: a writer killed at each
+// step boundary (record, entry) leaves a state the orphan source settles from the record; an
+// earlier build's journal is folded into entry names; concurrent writers never share a seq; the
+// orphan scan appends a record no writer indexed; a legacy read in the gap sees the record once and
+// the queue exposes nothing; a queue that cannot be used never changes the write.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
 import { messageKeyPath } from '../src/store/keys.ts';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendDeliverySync, appendRecovered, currentGenerationName, entriesOf, journalOf, queueBaseOf, queuedHint, recoverSessionQueues } from '../src/queue/append.ts';
+import { appendDeliverySync, appendRecovered, currentGenerationName, entriesOf, queueBaseOf, queuedHint, queuePlaceOf, recoverSessionQueues, verifiedQueuePlaceOf } from '../src/queue/append.ts';
 import { listDrops } from '../src/commands/drops.ts';
 import { signRecord, writeRecord, type SignedRecord } from '../src/send/record.ts';
 
@@ -62,10 +62,10 @@ function crashAt(s: { root: string; home: string; dropDir: string }, msgId: stri
   return ran.status ?? -1;
 }
 
-function lastStates(dropDir: string): Map<number, string> {
-  const states = new Map<number, string>();
-  for (const line of journalOf(dropDir).lines) states.set(line.seq, line.state);
-  return states;
+const TARGET = (s: { root: string }) => ({ root: s.root, session: SESSION, seat: SEAT });
+
+function recovered(s: { root: string; home: string; dropDir: string }, msgId: string) {
+  return appendRecovered(s.dropDir, TARGET(s), msgId, { home: s.home });
 }
 
 describe('appendDelivery: the commit', () => {
@@ -81,96 +81,89 @@ describe('appendDelivery: the commit', () => {
     expect(entriesOf(s.dropDir)).toEqual([1, 2]);
   });
 
-  test('a write that fails voids its reserved seq; the seq is never reused', () => {
+  test('a write that fails takes no seq', () => {
     const s = scene();
     const record = recordOf(s.root, s.home, id(1));
     const failed = appendDeliverySync({ dropDir: s.dropDir, record }, () => ({ ok: false, value: 'refused' }), { home: s.home });
     expect(failed.value).toBe('refused');
-    expect(failed.queue).toMatchObject({ kind: 'void', seq: 1 });
-    expect(append(s, id(1)).queue).toMatchObject({ kind: 'committed', seq: 2 });
-    expect(lastStates(s.dropDir)).toEqual(new Map([[1, 'void'], [2, 'committed']]));
+    expect(failed.queue).toMatchObject({ kind: 'void' });
+    expect(entriesOf(s.dropDir)).toEqual([]);
+    expect(append(s, id(1)).queue).toMatchObject({ kind: 'committed', seq: 1 });
+  });
+
+  test('one append writes one entry name and nothing else in the queue', () => {
+    const s = scene();
+    append(s, id(1));
+    const generation = join(queueBaseOf(s.dropDir)!, currentGenerationName(s.dropDir)!);
+    expect(readdirSync(generation)).toEqual(['entries']);
+    expect(readdirSync(join(generation, 'entries'))).toEqual([`000000000001.${id(1)}`]);
+    expect(readFileSync(join(generation, 'entries', `000000000001.${id(1)}`), 'utf8')).toBe('');
   });
 });
 
 describe('appendDelivery: a writer killed at each step boundary', () => {
-  test('killed after the reserve (no record): the next holder voids the seq', () => {
-    const s = scene();
-    expect(crashAt(s, id(1), 'reserve')).toBe(9);
-    expect(existsSync(join(s.dropDir, id(1)))).toBe(false);
-    expect(append(s, id(2)).queue).toMatchObject({ kind: 'committed', seq: 2 });
-    expect(lastStates(s.dropDir).get(1)).toBe('void');
-  });
-
-  test('killed after the record (no entry): the next holder commits it at its reserved seq', () => {
+  test('killed after the record (no entry): the next append takes the next seq, the orphan source appends the record after it', () => {
     const s = scene();
     expect(crashAt(s, id(1), 'record')).toBe(9);
     expect(existsSync(join(s.dropDir, id(1)))).toBe(true);
+    expect(append(s, id(2)).queue).toMatchObject({ kind: 'committed', seq: 1 });
+    expect(queuedHint(s.dropDir, id(1))).toBe(false);
+    expect(recovered(s, id(1))).toMatchObject({ kind: 'committed', seq: 2, recovered: true });
+    expect(entriesOf(s.dropDir)).toEqual([1, 2]);
+  });
+
+  test('killed after the entry (lock never released): the dead holder\'s lock is taken over', () => {
+    const s = scene();
+    expect(crashAt(s, id(1), 'entry')).toBe(9);
     expect(append(s, id(2)).queue).toMatchObject({ kind: 'committed', seq: 2 });
-    expect(lastStates(s.dropDir)).toEqual(new Map([[1, 'committed'], [2, 'committed']]));
     expect(entriesOf(s.dropDir)).toEqual([1, 2]);
     expect(queuedHint(s.dropDir, id(1))).toBe(true);
   });
 
-  test('killed after the entry (not marked): the next holder marks it committed', () => {
+  test('a record at its name that does not verify is never placed', () => {
     const s = scene();
-    expect(crashAt(s, id(1), 'entry')).toBe(9);
-    expect(append(s, id(2)).queue).toMatchObject({ kind: 'committed', seq: 2 });
-    expect(lastStates(s.dropDir).get(1)).toBe('committed');
-    expect(entriesOf(s.dropDir)).toEqual([1, 2]);
-  });
-
-  test('killed after the mark (lock never released): the dead holder\'s lock is taken over', () => {
-    const s = scene();
-    expect(crashAt(s, id(1), 'mark')).toBe(9);
-    expect(append(s, id(2)).queue).toMatchObject({ kind: 'committed', seq: 2 });
-    expect(lastStates(s.dropDir)).toEqual(new Map([[1, 'committed'], [2, 'committed']]));
-  });
-
-  test('a record at a reserved name that does not verify voids the seq as corrupt', () => {
-    const s = scene();
-    expect(crashAt(s, id(1), 'reserve')).toBe(9);
-    writeFileSync(join(s.dropDir, id(1)), '{"payload":{},"signature":"00"}\n');
     append(s, id(2));
-    const line = journalOf(s.dropDir).lines.find((one) => one.seq === 1 && one.state === 'void');
-    expect(line?.reason).toContain('does not verify');
+    writeFileSync(join(s.dropDir, id(1)), '{"payload":{},"signature":"00"}\n');
+    expect(recovered(s, id(1))).toMatchObject({ kind: 'skipped', reason: 'the record does not verify for this seat' });
+    expect(queuedHint(s.dropDir, id(1))).toBe(false);
   });
 });
 
-describe('recovery on daemon start', () => {
-  test('the bus\'s first pass settles a hole a dead writer left, with no new append', () => {
+describe('read old, write new: an earlier build\'s journal', () => {
+  function legacy(s: { root: string; home: string; dropDir: string }, lines: object[]): string {
+    const queue = queueBaseOf(s.dropDir)!;
+    const folder = join(queue, 'g00000000000000aa');
+    mkdirSync(join(folder, 'entries'), { recursive: true });
+    mkdirSync(join(folder, 'ids'), { recursive: true });
+    writeFileSync(join(queue, 'current'), 'g00000000000000aa\n');
+    writeFileSync(join(folder, 'journal.jsonl'), lines.map((line) => `${JSON.stringify({ v: 1, op_key: 'k', at: 'x', ...line })}\n`).join(''));
+    writeFileSync(join(folder, 'entries', '000000000001'), '{}\n');
+    return folder;
+  }
+
+  test('the first lock holder folds committed lines into entry names; a reserved one is left to its record; nothing is numbered twice', () => {
     const s = scene();
-    expect(crashAt(s, id(1), 'record')).toBe(9);
-    expect(lastStates(s.dropDir).get(1)).toBe('reserved');
+    for (const n of [1, 2, 3]) writeRecord(s.dropDir, recordOf(s.root, s.home, id(n)));
+    const folder = legacy(s, [
+      { seq: 1, msg_id: id(1), state: 'reserved' }, { seq: 1, msg_id: id(1), state: 'committed' },
+      { seq: 2, msg_id: id(2), state: 'reserved' },
+      { seq: 3, msg_id: id(3), state: 'committed' },
+    ]);
     expect(recoverSessionQueues(s.root, SESSION, { home: s.home })).toEqual([]);
-    expect(lastStates(s.dropDir).get(1)).toBe('committed');
-    expect(entriesOf(s.dropDir)).toEqual([1]);
-  });
-});
-
-describe('the journal', () => {
-  test('a torn tail is cut back to the last whole line, and appends continue', () => {
-    const s = scene();
-    append(s, id(1));
-    const { generation } = journalOf(s.dropDir);
-    const path = join(queueBaseOf(s.dropDir)!, generation!, 'journal.jsonl');
-    appendFileSync(path, '{"v":1,"seq":2,"msg_id":"half');
-    expect(append(s, id(2)).queue).toMatchObject({ kind: 'committed', seq: 2 });
-    const text = readFileSync(path, 'utf8');
-    expect(text.endsWith('\n')).toBe(true);
-    expect(text).not.toContain('half');
-  });
-
-  test('a corrupt line before the tail starts a new generation; the old one is left as it was', () => {
-    const s = scene();
-    append(s, id(1));
-    const before = journalOf(s.dropDir).generation!;
-    const path = join(queueBaseOf(s.dropDir)!, before, 'journal.jsonl');
-    writeFileSync(path, `not json\n${readFileSync(path, 'utf8')}`);
-    const after = append(s, id(2)).queue;
-    expect(after.kind).toBe('committed');
-    const now = journalOf(s.dropDir).generation!;
-    expect(now).not.toBe(before);
-    expect(existsSync(path)).toBe(true);
+    expect(existsSync(join(folder, 'journal.jsonl'))).toBe(false);
+    expect(entriesOf(s.dropDir)).toEqual([1, 3]);
+    expect(verifiedQueuePlaceOf(s.dropDir, id(1), TARGET(s), s.home)).toEqual({ generation: 'g00000000000000aa', seq: 1 });
+    expect(queuedHint(s.dropDir, id(2))).toBe(false);
+    expect(append(s, id(4)).queue).toMatchObject({ kind: 'committed', seq: 4 });
+    expect(recovered(s, id(2))).toMatchObject({ kind: 'committed', seq: 5 });
+    // An older build that wrote its journal again over the folded generation: a seq or an id
+    // already named is never named twice; the record is the orphan source's.
+    writeRecord(s.dropDir, recordOf(s.root, s.home, id(6)));
+    writeFileSync(join(folder, 'journal.jsonl'), `${JSON.stringify({ v: 1, seq: 1, msg_id: id(6), op_key: 'k', state: 'committed', at: 'x' })}\n${JSON.stringify({ v: 1, seq: 9, msg_id: id(1), op_key: 'k', state: 'committed', at: 'x' })}\nnot json\n`);
+    expect(append(s, id(7)).queue).toMatchObject({ kind: 'committed', seq: 6 });
+    expect(queuePlaceOf(s.dropDir, id(6))).toBe(null);
+    expect(queuePlaceOf(s.dropDir, id(1))?.seq).toBe(1);
+    expect(existsSync(join(folder, 'journal.jsonl'))).toBe(false);
   });
 });
 
@@ -183,13 +176,11 @@ describe('concurrent writers', () => {
       child.on('exit', (code) => resolve(code ?? -1));
     }));
     expect(await Promise.all(runs)).toEqual(Array(8).fill(0));
-    const lines = journalOf(s.dropDir).lines.filter((line) => line.state === 'committed');
-    const seqs = lines.map((line) => line.seq).sort((a, b) => a - b);
-    expect(seqs).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(new Set(lines.map((line) => line.msg_id)).size).toBe(8);
+    expect(entriesOf(s.dropDir)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(new Set(Array.from({ length: 8 }, (_, n) => queuePlaceOf(s.dropDir, id(n + 1))?.seq)).size).toBe(8);
   });
 
-  test('two repairers after a crash settle the hole once', async () => {
+  test('two writers after a crash share no seq; the crashed record is appended once after them', async () => {
     const s = scene();
     expect(crashAt(s, id(1), 'record')).toBe(9);
     const runs = [2, 3].map((n) => new Promise<number>((resolve) => {
@@ -197,9 +188,9 @@ describe('concurrent writers', () => {
       child.on('exit', (code) => resolve(code ?? -1));
     }));
     expect(await Promise.all(runs)).toEqual([0, 0]);
-    const committed = journalOf(s.dropDir).lines.filter((line) => line.state === 'committed');
-    expect(committed.filter((line) => line.seq === 1)).toHaveLength(1);
-    expect(entriesOf(s.dropDir)).toEqual([1, 2, 3]);
+    expect(entriesOf(s.dropDir)).toEqual([1, 2]);
+    expect(recovered(s, id(1))).toMatchObject({ kind: 'committed', seq: 3 });
+    expect(recovered(s, id(1))).toMatchObject({ kind: 'existing', seq: 3 });
   });
 });
 
@@ -266,39 +257,32 @@ function genFolder(dropDir: string): string {
   return join(queueBaseOf(dropDir)!, currentGenerationName(dropDir)!);
 }
 
-describe('round 1: recovery proves the record even when the entry was written', () => {
+describe('round 1: a proof reads the record even when the entry was written', () => {
   for (const [label, damage] of [
     ['removed', (s: { dropDir: string }) => unlinkSync(join(s.dropDir, id(1)))],
     ['corrupt', (s: { dropDir: string }) => writeFileSync(join(s.dropDir, id(1)), 'not json\n')],
-    ['replaced by another signed body', (s: { root: string; home: string; dropDir: string }) => {
-      const other = signRecord({
-        kind: 'message', id: id(1), to: SEAT, to_id: null, root: s.root, session: SESSION, at: '2026-11-17T22:00:00.000Z',
-        body: 'a different body', from: 'tester', from_id: null, rule: 'test', thread: id(1),
-      }, s.home);
-      writeFileSync(join(s.dropDir, id(1)), `${JSON.stringify(other, null, 2)}\n`);
-    }],
+    // A record replaced by another body this checkout signed for the same id and seat IS the
+    // record now (`writeRecordOver`): the name proves the place, the record proves the body.
   ] as const) {
-    test(`killed after the entry, record then ${label}: no committed outcome`, () => {
+    test(`killed after the entry, record then ${label}: no proved placement`, () => {
       const s = scene();
       expect(crashAt(s, id(1), 'entry')).toBe(9);
       damage(s);
       append(s, id(2));
-      expect(lastStates(s.dropDir).get(1)).toBe('void');
-      expect(queuedHint(s.dropDir, id(1))).toBe(false);
+      expect(verifiedQueuePlaceOf(s.dropDir, id(1), TARGET(s), s.home)).toBe(null);
     });
   }
 });
 
-describe('round 1: an unreadable or linked journal is never treated as empty', () => {
-  test('a journal replaced by a link: the queue is skipped, the record is written once, no seq is reused, the link target is untouched', () => {
+describe('round 1: an unreadable or linked index is never treated as empty', () => {
+  test('entries replaced by a link: the queue is skipped, the record is written once, the link target is untouched', () => {
     const s = scene();
     append(s, id(1));
     const folder = genFolder(s.dropDir);
-    const journal = join(folder, 'journal.jsonl');
-    const outside = join(base, 'outside.jsonl');
-    renameSync(journal, outside);
-    symlinkSync(outside, journal);
-    const before = readFileSync(outside, 'utf8');
+    const outside = join(base, 'outside');
+    renameSync(join(folder, 'entries'), outside);
+    symlinkSync(outside, join(folder, 'entries'));
+    const before = readdirSync(outside);
     let writes = 0;
     const record = recordOf(s.root, s.home, id(2));
     const out = appendDeliverySync({ dropDir: s.dropDir, record }, () => {
@@ -308,9 +292,8 @@ describe('round 1: an unreadable or linked journal is never treated as empty', (
     }, { home: s.home });
     expect(writes).toBe(1);
     expect(out.value.ok).toBe(true);
-    expect(out.queue).toEqual({ kind: 'skipped', reason: 'the journal cannot be read' });
-    expect(readFileSync(outside, 'utf8')).toBe(before);
-    expect(readdirSync(join(folder, 'entries'))).toEqual(['000000000001']);
+    expect(out.queue).toEqual({ kind: 'skipped', reason: 'the queue entries cannot be listed' });
+    expect(readdirSync(outside)).toEqual(before);
   });
 });
 
@@ -323,10 +306,10 @@ describe('round 1: the record is durable before the entry names it', () => {
       const result = writeRecord(s.dropDir, record);
       return { ok: result.ok, value: result };
     }, { home: s.home, trace: (point) => points.push(point) });
-    expect(points).toEqual(['record-fsync', 'record-folder-fsync', 'entry', 'committed']);
+    expect(points).toEqual(['record-fsync', 'record-folder-fsync', 'entry']);
   });
 
-  test('a record flush that fails leaves the seq reserved and the write as it was; the next holder commits it', () => {
+  test('a record flush that fails names no entry and leaves the write as it was; the orphan source appends it', () => {
     const s = scene();
     const record = recordOf(s.root, s.home, id(1));
     const out = appendDeliverySync({ dropDir: s.dropDir, record }, () => {
@@ -335,10 +318,9 @@ describe('round 1: the record is durable before the entry names it', () => {
     }, { home: s.home, syncRecord: () => { throw new Error('EIO'); } });
     expect(out.value.ok).toBe(true);
     expect(out.queue.kind).toBe('skipped');
-    expect(lastStates(s.dropDir).get(1)).toBe('reserved');
     expect(entriesOf(s.dropDir)).toEqual([]);
-    append(s, id(2));
-    expect(lastStates(s.dropDir)).toEqual(new Map([[1, 'committed'], [2, 'committed']]));
+    expect(append(s, id(2)).queue).toMatchObject({ kind: 'committed', seq: 1 });
+    expect(recovered(s, id(1))).toMatchObject({ kind: 'committed', seq: 2 });
   });
 });
 
@@ -346,29 +328,15 @@ describe('round 1: the orphan source through the bus\'s own reconcile pass', () 
   const pass = (s: { root: string; home: string }, state = createReconcileState()) =>
     reconcilePass({ project: SESSION, root: s.root, session: SESSION, home: s.home, state });
 
-  test('an existing queue and a new raw record: the pass indexes it; a removed id file is rebuilt', () => {
+  test('an existing queue and a new raw record: the pass indexes it; a removed entry name is placed again', () => {
     const s = scene();
     append(s, id(1));
     writeRecord(s.dropDir, recordOf(s.root, s.home, id(2)));
     pass(s);
-    expect(queuedHint(s.dropDir, id(2))).toBe(true);
-    expect(journalOf(s.dropDir).lines.find((line) => line.msg_id === id(2) && line.state === 'committed')?.recovered).toBe(true);
-    unlinkSync(join(genFolder(s.dropDir), 'ids', id(1)));
+    expect(queuePlaceOf(s.dropDir, id(2))?.seq).toBe(2);
+    unlinkSync(join(genFolder(s.dropDir), 'entries', `000000000001.${id(1)}`));
     pass(s);
-    expect(queuedHint(s.dropDir, id(1))).toBe(true);
-  });
-
-  test('a delivery append does not re-read every committed id file; the reconcile pass still rebuilds a removed one', () => {
-    const s = scene();
-    append(s, id(1));
-    append(s, id(2));
-    unlinkSync(join(genFolder(s.dropDir), 'ids', id(1)));
-    // The send's own append is O(1) in the seat's history: it leaves the old id file alone.
-    append(s, id(3));
-    expect(existsSync(join(genFolder(s.dropDir), 'ids', id(1)))).toBe(false);
-    expect(queuedHint(s.dropDir, id(3))).toBe(true);
-    pass(s);
-    expect(queuedHint(s.dropDir, id(1))).toBe(true);
+    expect(queuePlaceOf(s.dropDir, id(1))?.seq).toBe(3);
   });
 
   test('the cache is bound to the generation: after a replacement both records are indexed once in the new one', () => {
@@ -377,14 +345,13 @@ describe('round 1: the orphan source through the bus\'s own reconcile pass', () 
     writeRecord(s.dropDir, recordOf(s.root, s.home, id(1)));
     pass(s, state);
     const first = currentGenerationName(s.dropDir)!;
-    const journal = join(genFolder(s.dropDir), 'journal.jsonl');
-    writeFileSync(journal, `not json\n${readFileSync(journal, 'utf8')}`);
+    writeFileSync(join(queueBaseOf(s.dropDir)!, 'current'), 'names no generation\n');
     append(s, id(2));
     const second = currentGenerationName(s.dropDir)!;
     expect(second).not.toBe(first);
     pass(s, state);
-    const committed = journalOf(s.dropDir).lines.filter((line) => line.state === 'committed').map((line) => line.msg_id).sort();
-    expect(committed).toEqual([id(1), id(2)]);
+    expect(entriesOf(s.dropDir)).toEqual([1, 2]);
+    expect([queuedHint(s.dropDir, id(1)), queuedHint(s.dropDir, id(2))]).toEqual([true, true]);
   });
 
   test('a held queue lock: the pass does not wait, and indexes the record on a later pass', () => {
@@ -425,35 +392,30 @@ describe('round 1: the orphan source through the bus\'s own reconcile pass', () 
   });
 });
 
-describe('round 2: uncertainty stays reserved, then commits at its own seq', () => {
-  test('a stat failure that is not ENOENT leaves the seq reserved; after repair it commits at seq 1', () => {
+describe('round 2: uncertainty places nothing, then the record is appended', () => {
+  test('a stat failure that is not ENOENT places nothing; after repair it is appended at seq 1', () => {
     const s = scene();
     expect(crashAt(s, id(1), 'record')).toBe(9);
     const aside = join(base, 'drops-aside');
     renameSync(s.dropDir, aside);
     writeFileSync(s.dropDir, 'a file where the folder was');
-    recoverSessionQueues(s.root, SESSION, { home: s.home });
-    expect(lastStates(s.dropDir).get(1)).toBe('reserved');
+    expect(recovered(s, id(1)).kind).toBe('skipped');
     unlinkSync(s.dropDir);
     renameSync(aside, s.dropDir);
-    recoverSessionQueues(s.root, SESSION, { home: s.home });
-    expect(lastStates(s.dropDir).get(1)).toBe('committed');
-    expect(entriesOf(s.dropDir)).toEqual([1]);
+    expect(recovered(s, id(1))).toMatchObject({ kind: 'committed', seq: 1 });
   });
 
-  test('no verification key: the seq stays reserved and no key is made; with the key back it commits at seq 1', () => {
+  test('no verification key: nothing is placed and no key is made; with the key back it is appended at seq 1', () => {
     const s = scene();
     expect(crashAt(s, id(1), 'record')).toBe(9);
     const keyPath = messageKeyPath(s.home);
     expect(existsSync(keyPath)).toBe(true);
     const aside = join(base, 'key-aside.json');
     renameSync(keyPath, aside);
-    recoverSessionQueues(s.root, SESSION, { home: s.home });
-    expect(lastStates(s.dropDir).get(1)).toBe('reserved');
+    expect(recovered(s, id(1)).kind).toBe('skipped');
     expect(existsSync(keyPath)).toBe(false);
     renameSync(aside, keyPath);
-    recoverSessionQueues(s.root, SESSION, { home: s.home });
-    expect(lastStates(s.dropDir).get(1)).toBe('committed');
+    expect(recovered(s, id(1))).toMatchObject({ kind: 'committed', seq: 1 });
   });
 });
 
@@ -462,22 +424,6 @@ describe('round 3: a metadata fault on the queue\'s own files is never read as m
     if (path === target) throw Object.assign(new Error('EIO'), { code: 'EIO' });
     return lstatSync(path);
   };
-
-  test('journal: a stat EIO skips the queue, the record is written once, no seq is reused; the next open goes on at seq 2', () => {
-    const s = scene();
-    append(s, id(1));
-    const journal = join(genFolder(s.dropDir), 'journal.jsonl');
-    let writes = 0;
-    const record = recordOf(s.root, s.home, id(2));
-    const out = appendDeliverySync({ dropDir: s.dropDir, record }, () => {
-      writes += 1;
-      const result = writeRecord(s.dropDir, record);
-      return { ok: result.ok, value: result };
-    }, { home: s.home, stat: eio(journal) });
-    expect(writes).toBe(1);
-    expect(out.queue).toEqual({ kind: 'skipped', reason: 'the journal cannot be read' });
-    expect(append(s, id(3)).queue).toMatchObject({ kind: 'committed', seq: 2 });
-  });
 
   test('pointer: a stat EIO skips the queue and never starts a new generation', () => {
     const s = scene();

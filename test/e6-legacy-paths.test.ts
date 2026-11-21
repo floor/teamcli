@@ -178,17 +178,6 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(exposeBody(leg(at, M1), 'channel', at.home).kind).toBe('pointer');
   });
 
-  test('a committed line followed by a torn or corrupt journal is not proved', () => {
-    for (const tail of ['{"seq":9,"state":"res', 'not json\n']) {
-      const at = place();
-      message(at, M1);
-      const generation = currentGenerationName(at.dropDir)!;
-      const journal = join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'journal.jsonl');
-      writeFileSync(journal, readFileSync(journal, 'utf8') + tail);
-      expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
-    }
-  });
-
   test('a reader at the pre-fsync boundary (the writer holds the queue lock) proves nothing, then proves once it is released', () => {
     const at = place();
     message(at, M1);
@@ -198,46 +187,6 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
     if ('release' in writer) writer.release();
     expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).not.toBe(null);
-  });
-
-  test('a malformed interior journal line (the corruption branch) proves nothing', () => {
-    const at = place();
-    message(at, M1);
-    message(at, M2);
-    const generation = currentGenerationName(at.dropDir)!;
-    const journal = join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'journal.jsonl');
-    const lines = readFileSync(journal, 'utf8').trimEnd().split('\n');
-    const afterM1 = lines.findIndex(l => l.includes(M1) && l.includes('"committed"')) + 1;
-    writeFileSync(journal, `${[...lines.slice(0, afterM1), 'not json', ...lines.slice(afterM1)].join('\n')}\n`);
-    // M1's committed line sits in the valid prefix: only the corruption guard keeps it unproved.
-    expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
-  });
-
-  test('a failed commit flush poisons the journal: no proof until a later holder flushes it, and a failing flush keeps it poisoned', () => {
-    const at = place();
-    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
-    const record = signRecord({
-      kind: 'message', id: M1, to: 'lead', to_id: null, root: at.root, session: SESSION,
-      at: '2026-11-18T00:00:00.000Z', body: 'b', from: 'worker', from_id: null, rule: 'the owner', thread: M1,
-    }, at.home);
-    let calls = 0;
-    // The reserve line flushes; the committed line is written whole and its flush fails.
-    const failCommit = () => { calls += 1; if (calls >= 2) throw new Error('EIO'); };
-    appendDeliverySync({ dropDir: at.dropDir, record }, () => {
-      writeFileSync(join(at.dropDir, M1), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-      return { ok: true, value: true };
-    }, { home: at.home, syncJournal: failCommit });
-    const generation = currentGenerationName(at.dropDir)!;
-    const marker = join(base, generation, 'poisoned');
-    expect(existsSync(marker)).toBe(true);
-    expect(readFileSync(join(base, generation, 'journal.jsonl'), 'utf8')).toContain('"committed"');
-    // The next opener whose flush fails too stays out and leaves the journal poisoned.
-    const second = appendRecovered(at.dropDir, { root: at.root, session: SESSION, seat: 'lead' }, M1, { home: at.home, syncJournal: () => { throw new Error('EIO'); } });
-    expect(second.kind).toBe('skipped');
-    expect(existsSync(marker)).toBe(true);
-    // A holder whose flush succeeds establishes durability, removes the marker, then proves.
-    expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).not.toBe(null);
-    expect(existsSync(marker)).toBe(false);
   });
 
   test('a pending dual write an earlier build left while the queue lock was held is drained to exactly one receipt', () => {
@@ -322,16 +271,6 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
   });
 
-  test('a placement whose journal line is only reserved is not proved', () => {
-    const at = place();
-    message(at, M1);
-    const generation = currentGenerationName(at.dropDir)!;
-    const journal = join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'journal.jsonl');
-    const lines = readFileSync(journal, 'utf8').trim().split('\n').filter(l => !l.includes('"committed"'));
-    writeFileSync(journal, `${lines.join('\n')}\n`);
-    expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
-  });
-
   test('a pointer enqueue never writes a read receipt (the first claim faulted, the leg carried a pointer)', () => {
     const at = place();
     message(at, M2);
@@ -355,13 +294,14 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(readMessage(target(at), M1, at.home).ok).toBe(true);
   });
 
-  test('a stale id index is not a proved placement', () => {
+  test('two entry names at one seq prove neither placement', () => {
     const at = place();
     message(at, M1);
     message(at, M2);
     const generation = currentGenerationName(at.dropDir)!;
-    // A stale id index pointing M2 at seq 1 is not a proved placement.
-    writeFileSync(join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'ids', M2), '1\n');
+    // A second name claiming M1's seq for M2 (M2 also holds seq 2): no placement of either is proved.
+    writeFileSync(join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'entries', `000000000001.${M2}`), '');
+    expect(verifiedQueuePlaceOf(at.dropDir, M1, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
     expect(verifiedQueuePlaceOf(at.dropDir, M2, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
   });
 });

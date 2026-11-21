@@ -19,9 +19,8 @@
 //
 // A listing carries each message's seq only when, at read time: READER verifies, the floor is
 // ACTIVE at >= READER_LEVEL, and ONE proof taken under the seat's queue lock (the current
-// generation pointer read under that lock, the journal durable and whole, every listed message's
-// committed entry verified for this root, session, seat and generation, no reserved hole at or
-// below the highest listed seq) holds. Anything unknown, missing, held or contradictory answers
+// generation pointer read under that lock, every listed message's one entry name in that
+// generation, and the record it names verified for this root, session and seat) holds. Anything unknown, missing, held or contradictory answers
 // `legacy` with the reason. The listing's set and order are the legacy ones for every consumer
 // (the drops batch, wake ages, the wake picker keep their own time criteria); only the
 // model-facing inbox listing is offered in seq order (`inQueueOrder`). So a fallback can delay
