@@ -88,7 +88,7 @@ import {
 import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
-import { channelAckLine, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { channelAckLine, liveChannelCopy, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { channelLaunchFallback, claudeChannelSeat } from './launch-config.ts';
 import { readClientThreadGrant } from '../client/records.ts';
 import { channelOfferStartedGivenUp, channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
@@ -933,12 +933,15 @@ function watchChannel(
     const declared = team.seats.find((one) => one.name === serving.seat);
     // The Claude adapter (§2.3): on an active root this server re-sends nothing of its own pushes.
     // Its push of each new arrival is the channel offer; an offer that stays unsettled for 90 s
-    // makes the seat unproven, and the next attempt is the watch's pointer. The one exception is
-    // an offer that never left: a send's channel leg that gave up before any push. That is
-    // re-offered here on the channel, numbered, on the ordinary backoff (`givenUpOnly`).
+    // makes the seat unproven, and the next attempt is the watch's pointer. The exception is an
+    // offer that never reached this listener: a send's channel leg that gave up before any push,
+    // or a push an earlier listener made (a restarted or fresh session never saw it). That is
+    // re-offered here on the channel, numbered, on the ordinary backoff (`notOfferedHere`).
     if (claudeAdapterRoot(declared?.cli ?? 'claude-code', serving.root, serving.home, declared?.webhook !== undefined)) return 'given-up';
     return channelOwnsSeat({ dropDir: serving.dropDir, root: serving.root, session: serving.session, seat: serving.seat, walkTakesChannel: legs.channel });
   };
+  const notOfferedHere = (folder: string, id: string): boolean => channelOfferStartedGivenUp(folder, id)
+    || liveChannelCopy(folder, id)?.listener !== serving.listenerKey;
   const redeliverPass = (): void => {
     if (halted() || resending) return;
     const keyNow = messageKeyState(serving.home);
@@ -948,7 +951,7 @@ function watchChannel(
     void (async () => {
       const owned = await ownsSeat();
       if (owned === false) return;
-      const seat = owned === 'given-up' ? { ...base, admit: channelOfferStartedGivenUp } : base;
+      const seat = owned === 'given-up' ? { ...base, admit: notOfferedHere } : base;
       if (resendCandidates(seat, Date.now()).length === 0) return;
       await resendPass(seat, Date.now(), async (name) => {
         const folder = seatFolderOf(serving.dropDir, name);
