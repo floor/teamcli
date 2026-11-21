@@ -394,20 +394,22 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   if (auth.kind !== 'ok' || auth.value.payload.id !== id) return null;
   const payload = auth.value.payload;
   if (payload.to !== serving.seat || payload.session !== serving.session || !sameFolder(payload.root, serving.root)) return null;
-  // A record a client wrote, and the seat's own general brief, are never channel messages: the
-  // brief is served at the turn start under its claim, and an ack here would hold the receipt
-  // name that reader needs.
-  if (payload.from_client !== undefined || isGeneralBriefRecord(payload)) return null;
+  // The seat's own general brief is never a channel message: it is served at the turn start under
+  // its claim, and an ack here would hold the receipt name that reader needs.
+  if (isGeneralBriefRecord(payload)) return null;
   const team = serving.loadTeam();
   if (team === null) return null;
-  const admitted = admitChannelDelivery({
+  // A client's record was judged under its grant when it was signed; the push asks only that the
+  // grant still verifies for that client, as the ack does (the client walk's first leg).
+  const origin = payload.from_client === undefined ? null : readClientThreadGrant(serving.home, payload.from_client.grant_id);
+  const admitted = origin === null ? admitChannelDelivery({
     payload,
     home: serving.home,
     root: serving.root,
     session: serving.session,
     seat: serving.seat,
     team,
-  });
+  }) : { ok: origin.ok && origin.grant.clientId === payload.from_client?.client_id, rule: payload.rule };
   if (!admitted.ok) return null;
   // Render authority independently of content. Only one known stored envelope may be folded:
   // nested headers are literal message text, including a worker quoting the owner's header.
