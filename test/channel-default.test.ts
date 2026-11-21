@@ -316,3 +316,46 @@ test('legacy trust launches in the project without the channel and warns once', 
   expect(readFileSync(settingsPath, 'utf8')).toBe(settingsBefore);
   expect(existsSync(join(w.lobby, 'glm'))).toBe(false);
 });
+
+test('a restore guard that refuses at the pre-launch record leaves the seat out, even when the original pane reappears before the command', async () => {
+  const w = world(0o775);
+  const steps = upPlan({
+    root: w.root, session: SESSION, sessionRunning: true, home: w.home, team: w.team,
+    seats: [{ ...planned('tree', 'claude --model claude-opus-5-5'), cwd: 'wt' }],
+    briefEpochs: { tree: EPOCH },
+    startWatch: false, watchLabel: 'Synthetic watch',
+  });
+  const ran: string[] = [];
+  // The guard rereads the original pane: it is back when the pre-launch record asks, and gone
+  // again at every later check (the synthetic case of the fix-check).
+  let recording = false;
+  let refused = 0;
+  const restoreGuard = (_seat: string): string | null => {
+    if (recording && refused === 0) {
+      refused += 1;
+      return 'its original pane is back';
+    }
+    return null;
+  };
+  const host: Host = {
+    startServer: () => true, sessionUp: () => true,
+    createWorkspace: () => ({ pane: 'pane-tree', workspace: 'workspace-tree' }),
+    paneRun: (_session, _pane, command) => { ran.push(command); return true; },
+    registerInbox: () => null,
+    typeLine: () => false, renameAgent: () => true, closeWorkspace: () => true, stopSession: () => true,
+    kill: () => true, agentPanes: () => [], classify: () => 'idle', sleep: async () => {}, now: () => 0,
+    allow: () => null, record: () => {}, running: () => {}, drop: () => {},
+    // Read only by the pre-launch record, immediately before it writes.
+    seatStates: () => { recording = true; return {}; },
+    say: () => {}, log: () => {},
+  };
+  const report = await executePlan(
+    steps.filter((step) => step.do?.do === 'create' || step.do?.do === 'launch'),
+    SESSION,
+    host,
+    { restoreGuard },
+  );
+  expect(refused).toBe(1);
+  expect(report.dropped).toContain('tree');
+  expect(ran).toEqual([]);
+});

@@ -1047,12 +1047,15 @@ export async function executePlan(
       || !stored.cli.every((pid, at) => next.cli[at] === pid)) return patch;
     return { ...patch, launched: { ...next, cli_start: [...stored.cli_start], ...(stored.cli_anchor === undefined ? {} : { cli_anchor: stored.cli_anchor }) } };
   };
-  const recordSeat = (seat: string, patch: Parameters<Host['record']>[1], proved = false): void => {
+  /** Writes the seat's record; false when the restore guard refused the seat, which leaves it
+   *  out: a caller about to run a command stops there. */
+  const recordSeat = (seat: string, patch: Parameters<Host['record']>[1], proved = false): boolean => {
     // `proved`: the adoption's re-tie, written only after its own fresh proof that the recorded
     // pane holds this seat's own process; it touches no pane, so the restore guard does not hold it.
-    if (!proved && !guardRestore(seat)) return;
+    if (!proved && !guardRestore(seat)) return false;
     const line = recordLines.get(seat);
     host.record(seat, line === undefined || patch.launch_line !== undefined ? keptStarts(seat, patch) : { ...keptStarts(seat, patch), launch_line: line });
+    return true;
   };
   // The seats this run launched: only a launch carries rules; a seat already running is never
   // typed into to give it them.
@@ -1861,8 +1864,12 @@ export async function executePlan(
         // that fell back (a refused pair, a lease lost) never advertises one its client lacks.
         if (op.cli === 'claude-code') {
           const stage = host.seatStates?.(session)?.[op.seat]?.stage;
-          recordSeat(op.seat, { stage: stage === 'ready' || stage === 'named' ? stage : 'launched', channel_launch: channelLaunchEnabled(launch.command) });
+          // A refusal here left the seat out: its command is never sent.
+          if (!recordSeat(op.seat, { stage: stage === 'ready' || stage === 'named' ? stage : 'launched', channel_launch: channelLaunchEnabled(launch.command) })) break;
         }
+        // The last check before the command is sent: a refusal stands for the rest of this run
+        // (`invalidStart`), so a pane that reappears after it never takes the line.
+        if (!guardRestore(op.seat)) break;
         // Each way the line can fail to run is named: one sentence for three causes hid which
         // one a stale pane hit (the Kimi and DeepSeek testers, 2026-11-12).
         const notRun = !here
