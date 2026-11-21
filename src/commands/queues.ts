@@ -6,13 +6,16 @@ import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
-import { listUnread } from '../mcp/inbox.ts';
+import { inboxLive, listUnread } from '../mcp/inbox.ts';
 import { activate, deactivate, floorState, seatDropFoldersStrict } from '../queue/floor.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { readerSwitch, seatQueueCheck, setReaderSwitch, type SeatBinding } from '../queue/reader.ts';
 import { buildIdentity } from '../version.ts';
 import { seatDropDir } from '../queue/mail-tree.ts';
-import { channelUnproven } from '../queue/resend.ts';
+import { channelUnproven, type ChannelUnproven } from '../queue/resend.ts';
+import { pendingProbe, placeChannelProbe } from '../queue/channel-probe.ts';
+import { listenerKeyOf } from '../comms/offer.ts';
+import type { TeamFile } from '../file/types.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState } from '../state.ts';
 import { typedPaneProof, type TypedPaneSources } from '../launch/identity.ts';
@@ -21,6 +24,7 @@ import { permittedEventLegs } from './send.ts';
 
 export const USAGE = `Usage: team queues status
        team queues activate
+       team queues prove [<seat>]
        team queues deactivate
        team queues reader on|off
 
@@ -35,6 +39,11 @@ activate    turns on at-least-once delivery for this team, once every live TeamC
             process appears later, the daemon rolls the team back to dark on its next pass.
             Messages sent while the team was active keep the guarantee after a rollback. Not
             covered: an older TeamCLI process started outside TeamCLI's own launch.
+prove       places one channel proof probe for each running Claude Code seat that activate
+            refuses as unproven since launch (a live channel, no proving ack yet), or for the
+            one seat named. The seat's channel server pushes it with an offer token; the seat's
+            ack with that offer proves the channel, and activate then counts it. A seat whose
+            pane is protected has no other proof before activation. Nothing is activated.
 deactivate  the rollback to dark, in one command; it resumes a cut-off rollback.
 reader      turns the reader switch on (seats read their mail in queue order, once every seat
             queue is complete) or off (every reader is back on the legacy listing at once).
@@ -67,9 +76,9 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
   if (args.error) return invocation(out, args.error);
   const [verb, value, extra] = args.rest;
   if (verb === undefined || extra !== undefined) return invocation(out, verb === undefined ? 'a verb is required' : `unexpected "${extra}"`);
-  if (verb !== 'status' && verb !== 'activate' && verb !== 'deactivate' && verb !== 'reader') return invocation(out, `unknown verb "${verb}"`);
+  if (verb !== 'status' && verb !== 'activate' && verb !== 'deactivate' && verb !== 'reader' && verb !== 'prove') return invocation(out, `unknown verb "${verb}"`);
   if (verb === 'reader' && value !== 'on' && value !== 'off') return invocation(out, 'reader takes on or off');
-  if (verb !== 'reader' && value !== undefined) return invocation(out, `unexpected "${value}"`);
+  if (verb !== 'reader' && verb !== 'prove' && value !== undefined) return invocation(out, `unexpected "${value}"`);
   const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     out.stderr('team queues: this folder is not a team checkout\n');
@@ -103,49 +112,22 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
     // exit: queues.not-owner
     return 1;
   }
-  if (verb === 'activate') {
+  if (verb === 'activate' || verb === 'prove') {
     // Check before activate creates its folder, takes a lock or recovers a cut-off publication:
     // a refused activation must leave the root and the machine folder exactly as they were.
-    const key = messageKeyState(home);
-    const nowMs = (sources.now?.() ?? new Date()).getTime();
-    const session = loaded.team.session;
-    let recorded: Record<string, SeatState>;
-    try {
-      recorded = readState(join(root, '.agents')).sessions[session]?.seats ?? {};
-    } catch {
-      out.stderr('team queues: activation refused: recorded seat state cannot be read\n');
+    const gaps = channelGaps(root, home, loaded.team, lead, sources);
+    if (gaps === 'unreadable') {
+      out.stderr(`team queues: ${verb === 'prove' ? 'nothing probed' : 'activation refused'}: recorded seat state cannot be read\n`);
       for (const seat of loaded.team.seats) if (seat.cli === 'claude-code' && !seat.stopped) out.stderr(`  ${seat.name}: seat state cannot be read\n`);
       return 1;
     }
-    const owner = sources.paneOwner ?? realWatchSources.keyOwner;
-    let agents: ReturnType<TypedPaneSources['agents']> = null;
-    try { agents = owner?.agents(session) ?? null; } catch { /* Unreadable is not a positive proof. */ }
-    // Only this root's running roster is considered. An entity orchestrator in another root
-    // has no local recorded pane here; its protected pane cannot block this root's activation.
-    const unproven = loaded.team.seats.filter(seat => seat.cli === 'claude-code' && !seat.stopped).flatMap(seat => {
-      const held = recorded[seat.name];
-      if (held?.pane === undefined) return [];
-      if (agents !== null && !agents.some(agent => agent.pane === held.pane)) return [];
-      const why = key.kind !== 'key' ? 'no message key' : channelUnproven({
-        dropDir: seatDropDir(root, session, seat.name), root, session, seat: seat.name,
-        context: { to: seat.name, root, session, ...(lead === undefined ? {} : { lead }) },
-        key: key.key, nowMs,
-      });
-      if (why === null) return [];
-      let pointerWhy = 'the typed pointer is protected or its settings cannot be read';
-      try {
-        const legs = permittedEventLegs({ dir: join(root, '.agents'), root, home, session, seat: seat.name, team: loaded.team, now: () => new Date(nowMs) });
-        if (legs.pointer === true && owner !== undefined) {
-          const proof = typedPaneProof(held, seat.name, held.pane, session, owner, true);
-          if (proof.ok) return [];
-          pointerWhy = proof.why;
-        }
-      } catch { /* No unreadable setting permits typing. */ }
-      return [{ seat: seat.name, why: `${why}; ${pointerWhy}` }];
-    });
-    if (unproven.length > 0) {
+    if (verb === 'prove') return proveSeats(out, root, home, loaded.team.session, lead, gaps, value, sources);
+    if (gaps.length > 0) {
       out.stderr('team queues: activation refused: running Claude Code seats have no proven channel and no typed pointer proof\n');
-      for (const seat of unproven) out.stderr(`  ${seat.seat}: ${seat.why}\n`);
+      for (const seat of gaps) out.stderr(`  ${seat.seat}: ${seat.why}\n`);
+      if (gaps.some(seat => seat.channel === 'unproven since launch')) {
+        out.stderr('a seat unproven since launch with a live channel can prove it now: team queues prove, then its ack, then team queues activate again\n');
+      }
       return 1;
     }
     const outcome = activate(root, {
@@ -189,6 +171,101 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
   if (outcome.kind === 'refused' && outcome.seats) for (const seat of outcome.seats) out.stderr(`  ${seat.dropDir}: ${seat.why}\n`);
   // exit: queues.reader-refused
   return 1;
+}
+
+/** One running Claude Code seat that blocks activation: why, and the channel's own reason. */
+type ChannelGap = { seat: string; why: string; channel: ChannelUnproven | 'no message key' };
+
+/**
+ * The running Claude Code seats of this root with neither a proven channel nor a permitted,
+ * positively proved typed pointer: the activation check, read-only. `unreadable` when the
+ * recorded seat state cannot be read (never a positive proof).
+ */
+function channelGaps(root: string, home: string, team: TeamFile, lead: string | undefined, sources: QueuesSources): ChannelGap[] | 'unreadable' {
+  const key = messageKeyState(home);
+  const nowMs = (sources.now?.() ?? new Date()).getTime();
+  const session = team.session;
+  let recorded: Record<string, SeatState>;
+  try {
+    recorded = readState(join(root, '.agents')).sessions[session]?.seats ?? {};
+  } catch {
+    return 'unreadable';
+  }
+  const owner = sources.paneOwner ?? realWatchSources.keyOwner;
+  let agents: ReturnType<TypedPaneSources['agents']> = null;
+  try { agents = owner?.agents(session) ?? null; } catch { /* Unreadable is not a positive proof. */ }
+  // Only this root's running roster is considered. An entity orchestrator in another root
+  // has no local recorded pane here; its protected pane cannot block this root's activation.
+  return team.seats.filter(seat => seat.cli === 'claude-code' && !seat.stopped).flatMap(seat => {
+    const held = recorded[seat.name];
+    if (held?.pane === undefined) return [];
+    if (agents !== null && !agents.some(agent => agent.pane === held.pane)) return [];
+    const why = key.kind !== 'key' ? 'no message key' as const : channelUnproven({
+      dropDir: seatDropDir(root, session, seat.name), root, session, seat: seat.name,
+      context: { to: seat.name, root, session, ...(lead === undefined ? {} : { lead }) },
+      key: key.key, nowMs,
+    });
+    if (why === null) return [];
+    let pointerWhy = 'the typed pointer is protected or its settings cannot be read';
+    try {
+      const legs = permittedEventLegs({ dir: join(root, '.agents'), root, home, session, seat: seat.name, team, now: () => new Date(nowMs) });
+      if (legs.pointer === true && owner !== undefined) {
+        const proof = typedPaneProof(held, seat.name, held.pane, session, owner, true);
+        if (proof.ok) return [];
+        pointerWhy = proof.why;
+      }
+    } catch { /* No unreadable setting permits typing. */ }
+    return [{ seat: seat.name, why: `${why}; ${pointerWhy}`, channel: why }];
+  });
+}
+
+/**
+ * `team queues prove [<seat>]`: one channel proof probe (src/queue/channel-probe.ts) for each seat
+ * the activation check refuses as unproven since launch, which is exactly a seat with a live
+ * channel listener of this level and no proving ack yet. The seat's own channel server pushes the
+ * probe with an offer token; the seat's ack with it proves the channel, and the next activation
+ * reads that proof. A seat refused for any other reason is named and gets nothing. A probe still
+ * pending for the seat's current listener is not placed twice. Nothing is activated here.
+ */
+function proveSeats(out: Io, root: string, home: string, session: string, lead: string | undefined, gaps: ChannelGap[], only: string | undefined, sources: QueuesSources): number {
+  const now = sources.now?.() ?? new Date();
+  const chosen = only === undefined ? gaps : gaps.filter(gap => gap.seat === only);
+  if (chosen.length === 0) {
+    out.stdout(only === undefined ? 'nothing to prove: no running Claude Code seat is refused by the activation check\n' : `${only}: nothing to prove: the activation check does not refuse it\n`);
+    // exit: queues.prove-nothing
+    return 0;
+  }
+  const key = messageKeyState(home);
+  let failed = false;
+  for (const gap of chosen) {
+    if (gap.channel !== 'unproven since launch' || key.kind !== 'key') {
+      out.stderr(`  ${gap.seat}: no probe: ${gap.why}\n`);
+      failed = true;
+      continue;
+    }
+    const dropDir = seatDropDir(root, session, gap.seat);
+    const live = inboxLive(dropDir, root, session, gap.seat);
+    if (!live.live) {
+      out.stderr(`  ${gap.seat}: no probe: its listener is gone\n`);
+      failed = true;
+      continue;
+    }
+    const listenerKey = listenerKeyOf(live.listener);
+    const pending = pendingProbe({ root, session, seat: gap.seat, key: key.key, listenerKey, nowMs: now.getTime(), ...(lead === undefined ? {} : { lead }) });
+    if (pending !== null) {
+      out.stdout(`${gap.seat}: probe ${pending} is waiting for its ack\n`);
+      continue;
+    }
+    const placed = placeChannelProbe({ home, root, session, seat: gap.seat, now });
+    if (!placed.ok) {
+      out.stderr(`  ${gap.seat}: no probe: ${placed.reason}\n`);
+      failed = true;
+      continue;
+    }
+    out.stdout(`${gap.seat}: probe ${placed.id} placed; its channel is proven once the seat acks it with its offer\n`);
+  }
+  // exit: queues.prove
+  return failed ? 1 : 0;
 }
 
 /** activate and reader change what every seat of the root does: the owner's, or a lead's in

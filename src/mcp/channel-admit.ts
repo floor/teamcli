@@ -23,6 +23,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { parseYaml, toValue } from '../yaml.ts';
 import { seatDropDir, sessionMailDir } from '../queue/mail-tree.ts';
 import { seatFolderOf } from '../send/drop-folder.ts';
+import { isChannelProbe } from '../queue/channel-probe.ts';
 
 export type ChannelAdmission = { ok: true; rule: string } | { ok: false; why: string };
 
@@ -69,6 +70,10 @@ export function admitChannelDelivery(input: {
   ) {
     return { ok: true, rule: GENERAL_BRIEF_RULE };
   }
+  // The channel proof probe (src/queue/channel-probe.ts): the runtime's one record, addressed to
+  // this seat, carrying nothing but the request to ack it. Its ack proves the channel only by the
+  // offer token, as every other ack does.
+  if (isChannelProbe(input.payload)) return { ok: true, rule: input.payload.rule };
   if (input.payload.from_id === null) {
     return { ok: false, why: `the signed record names no agent id for ${JSON.stringify(input.payload.from)}` };
   }
@@ -153,7 +158,8 @@ function receivingSide(
   const holder = currentHolderOf(input.home, receivingId, input.seat);
   const named = input.payload.to_id;
   const reserved = (input.payload.from === OWNER_MAILBOX && input.payload.from_id === null)
-    || (input.payload.from === GENERAL_BRIEF_FROM && input.payload.from_id === null && input.payload.rule === GENERAL_BRIEF_RULE);
+    || (input.payload.from === GENERAL_BRIEF_FROM && input.payload.from_id === null && input.payload.rule === GENERAL_BRIEF_RULE)
+    || isChannelProbe(input.payload);
   if (!reserved && (typeof named !== 'string' || !isAgentId(named))) {
     return { ok: false, why: 'an ordinary channel record must name its recipient agent id' };
   }
