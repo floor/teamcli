@@ -262,7 +262,7 @@ export type WatchSources = {
    *  and watch resyncs from records. `reason` is `'retention'` when retained drop records declare
    *  the missing window. */
   onBusGap?(oldestSeq: number, newestSeq: number, reason?: 'retention'): void;
-  /** Optional herdr status-event source (`herdr wait agent-status` per seat). */
+  /** Optional herdr status-event source (`herdr agent wait` per seat). */
   statusSource?: StatusSource;
   /**
    * The direct route to an idle seat with takeable work (the dispatcher's `pushWork`). Absent,
@@ -1464,7 +1464,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             statusWaitersKey = nextPanesKey;
             statusWaiters = nextPanesKey === ''
               ? undefined
-              : statusEngine.startWaiters(panesBySeat, { timeoutMs: Math.min(9_000, inForce.interval * 1000) });
+              // One client per seat waits for any other state, so a change lands at once and the
+              // timeout only bounds the process: a minute keeps idle spawns near zero. The pass
+              // still observes every seat, so a failing wait only backs off.
+              : statusEngine.startWaiters(panesBySeat, { timeoutMs: 60_000, errorBackoffMs: 5_000 });
           }
         }
         // The check commands run here, outside the pass, at most every `check_every` (§ 5): the

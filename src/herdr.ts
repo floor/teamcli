@@ -2010,10 +2010,11 @@ export function setHerdrWaitExec(exec: HerdrWaitExec | null): void {
   waitExec = exec ?? shellWaitExec;
 }
 
-/** Parses one `herdr wait agent-status` exit and output into a structured wait outcome.
- *  Probed against herdr 0.7.1:
- *  - match exits 0 and prints `{"event":"pane.agent_status_changed","data":{"pane_id":"...","workspace_id":"...","agent_status":"done",...}}`
- *  - timeout exits 1 and prints `timed out waiting for agent status change`
+/** Parses one `herdr agent wait` exit and output into a structured wait outcome.
+ *  Probed against herdr 0.9.5 (`herdr wait agent-status`, the 0.7.1 form, is gone there):
+ *  - match exits 0 and prints `{"result":{"agent":{"pane_id":"...","workspace_id":"...","agent_status":"done",...}}}`
+ *    (0.7.1 printed the same fields under `data`, and both are read)
+ *  - timeout exits 1 and prints `timed out waiting for agent status` (0.7.1 added ` change`)
  *  - invalid pane / unreachable daemon exits non-zero with a JSON error envelope or message. */
 export function parseWaitAgentStatusOutput(
   code: number | null,
@@ -2025,34 +2026,28 @@ export function parseWaitAgentStatusOutput(
   const trimmedOut = stdout.trim();
   const trimmedErr = stderr.trim();
   const combined = `${trimmedOut}\n${trimmedErr}`.toLowerCase();
-  if (code !== 0 && combined.includes('timed out waiting for agent status change')) {
+  if (code !== 0 && combined.includes('timed out waiting for agent status')) {
     return { outcome: 'timeout' };
   }
   if (code === 0) {
     if (trimmedOut !== '') {
       try {
-        const body = JSON.parse(trimmedOut) as HerdrEnvelope & {
-          event?: unknown;
-          data?: {
-            pane_id?: unknown;
-            workspace_id?: unknown;
-            agent_status?: unknown;
-            agent?: unknown;
-          };
-        };
+        type WaitData = { pane_id?: unknown; workspace_id?: unknown; agent_status?: unknown; agent?: unknown };
+        const body = JSON.parse(trimmedOut) as HerdrEnvelope & { event?: unknown; data?: WaitData; result?: { agent?: WaitData } };
         if (isHerdrError(body)) {
           return { outcome: 'error', message: trimmedOut };
         }
-        const rawStatus = body.data?.agent_status;
+        const data = body.data ?? body.result?.agent;
+        const rawStatus = data?.agent_status;
         const status = isHerdrAgentStatus(rawStatus) ? rawStatus : requestedStatus;
-        const pane = typeof body.data?.pane_id === 'string' && body.data.pane_id !== ''
-          ? body.data.pane_id
+        const pane = typeof data?.pane_id === 'string' && data.pane_id !== ''
+          ? data.pane_id
           : fallbackPane;
-        const workspace = typeof body.data?.workspace_id === 'string' && body.data.workspace_id !== ''
-          ? body.data.workspace_id
+        const workspace = typeof data?.workspace_id === 'string' && data.workspace_id !== ''
+          ? data.workspace_id
           : undefined;
-        const agent = typeof body.data?.agent === 'string' && body.data.agent !== ''
-          ? body.data.agent
+        const agent = typeof data?.agent === 'string' && data.agent !== ''
+          ? data.agent
           : undefined;
         return {
           outcome: 'changed',
@@ -2073,28 +2068,28 @@ export function parseWaitAgentStatusOutput(
   };
 }
 
-/** Waits for `pane`'s agent status in `herdr` to reach `status` within `timeoutMs`.
+/** Waits for `pane`'s agent status in `herdr` to reach `status` (or any of them) within `timeoutMs`.
  *  Read-only: never types or sends a key into any pane. */
 export async function waitAgentStatus(
   pane: string,
-  status: HerdrAgentStatus,
+  status: HerdrAgentStatus | readonly HerdrAgentStatus[],
   timeoutMs = 30_000,
   session?: string,
   signal?: AbortSignal,
 ): Promise<HerdrWaitOutcome> {
+  const statuses = typeof status === 'string' ? [status] : status;
   const args = [
     ...(session && session !== 'default' ? ['--session', session] : []),
+    'agent',
     'wait',
-    'agent-status',
     pane,
-    '--status',
-    status,
+    ...statuses.flatMap((one) => ['--until', one]),
     '--timeout',
     String(Math.max(1, Math.round(timeoutMs))),
   ];
   try {
     const { code, stdout, stderr } = await waitExec(args, signal);
-    return parseWaitAgentStatusOutput(code, stdout, stderr, pane, status);
+    return parseWaitAgentStatusOutput(code, stdout, stderr, pane, statuses[0]!);
   } catch (error) {
     return {
       outcome: 'error',

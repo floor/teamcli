@@ -42,7 +42,7 @@ export const READS: Record<string, string> = {
   'src/herdr.ts#paneRead runner.paneExec(full)': 'herdr pane read',
   'src/herdr.ts#paneReadAsync runner.execText(\'herdr\')': 'herdr pane read',
   'src/herdr.ts#paneReadAsync runner.execText(? --format)': 'herdr pane read',
-  'src/herdr.ts#shellWaitExec node:child_process.spawn': 'herdr wait agent-status: waits for a state, changes nothing',
+  'src/herdr.ts#shellWaitExec node:child_process.spawn': 'herdr agent wait: waits for a state, changes nothing',
   'src/launch/grok-sandbox.ts#gitAnswer node:child_process.execFileSync': 'git rev-parse',
   'src/placement/confined.ts#agentDirs node:child_process.execFileSync': 'placement read',
   'src/placement/confined.ts#unlockedOnDarwin node:child_process.execFileSync': 'placement read',
