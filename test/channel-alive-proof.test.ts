@@ -201,8 +201,8 @@ async function served(active: boolean) {
 
 const IDS = Array.from({ length: 6 }, (_, i) => `dddddddd-0000-4000-8000-${String(i).padStart(12, '0')}`);
 
-function stateText(leadPane: string): string {
-  return `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { lead: { stage: 'ready', pane: leadPane }, worker: { stage: 'ready', pane: 'pane-worker' } }, worktrees: {} } } })}\n`;
+function stateText(leadPane: string, lead: Record<string, unknown> = {}, session: Record<string, unknown> = {}): string {
+  return `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { lead: { stage: 'ready', pane: leadPane, ...lead }, worker: { stage: 'ready', pane: 'pane-worker' } }, worktrees: {}, ...session } } })}\n`;
 }
 
 async function servedCounting() {
@@ -250,7 +250,7 @@ describe('the seat proof a push makes', () => {
     }
   });
 
-  test('a state rewritten in place (a restart on the same pane) proves again and still pushes', async () => {
+  test('a state rewritten for fields the proof does not read keeps it; a restart on the same pane proves again and still pushes', async () => {
     const { at, feed, running, placed } = await servedCounting();
     try {
       stamped(at, IDS[0]!);
@@ -258,10 +258,17 @@ describe('the seat proof a push makes', () => {
       expect(await pushed(feed, 2)).toBe(2);
       const proved = placed.count;
       const path = join(at.root, '.agents', 'team.state.json');
-      writeFileSync(`${path}.tmp`, stateText('pane-lead'));
+      // A heartbeat and a presence stamp: the file is replaced, the proof's words are not.
+      writeFileSync(`${path}.tmp`, stateText('pane-lead', { last_active: '2026-11-21T15:00:00.000Z' }, { watch: { heartbeat: '2026-11-21T15:00:00.000Z' } }));
       renameSync(`${path}.tmp`, path);
       stamped(at, IDS[2]!);
       expect(await pushed(feed, 3)).toBe(3);
+      expect(placed.count).toBe(proved);
+      // A restart on the same pane records its new launch: the proof runs again.
+      writeFileSync(`${path}.tmp`, stateText('pane-lead', { launched: { cli: [424242] } }));
+      renameSync(`${path}.tmp`, path);
+      stamped(at, IDS[3]!);
+      expect(await pushed(feed, 4)).toBe(4);
       expect(placed.count).toBeGreaterThan(proved);
     } finally {
       feed.end();

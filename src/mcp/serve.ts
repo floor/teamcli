@@ -39,7 +39,7 @@ import { alreadyReadSentence, DELIVERY_LEVEL, readSealedRecord, recordAuthOfSeal
 import { attributedBody, renderedIdentity } from '../send/sender-claim.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, replyLine, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
-import { readState, STATE_FILE, type SeatState, type State } from '../state.ts';
+import { readState, readStateShared, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
 import { agentList, paneProcesses, paneRootPid } from '../herdr.ts';
 import { profileFor } from '../profiles/profile.ts';
@@ -1947,20 +1947,37 @@ export async function runMcpServe(
     }
   };
   const brief: BriefRead = { claim: claimOf, ...(boundEpoch === undefined ? {} : { epoch: boundEpoch }) };
-  // The files the seat's proof reads, and the pane this process names: a seat restart or a moved
-  // pane rewrites the state (atomically: a new inode), a stop or an edited declaration the team
-  // file. Any change, or a file that cannot be stated, proves again.
+  // What the seat's proof reads, and the pane this process names: the state's own words for the
+  // session (each seat's pane and launch, this seat's brief claim), the team file it read, and the
+  // pane in the environment. A seat restart or a moved pane changes those words, a stop or an
+  // edited declaration the team file. The state file itself is rewritten every few seconds for
+  // fields the proof never reads (heartbeats, presence), so its stat is not the witness: that made
+  // nearly every push re-prove (a placement walk with process and herdr reads, 100-300 ms under
+  // load). Any change, or a file that cannot be read, proves again.
   let proven: string | null = null;
   let provenTeamAt: string | null = null;
-  const witness = (): string => [join(stateDir, STATE_FILE), provenTeamAt].map((path) => {
-    if (path === null) return 'none';
+  const witness = (): string => {
+    let words: string;
     try {
-      const stat = statSync(path);
-      return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      const held = readStateShared(stateDir).sessions[team.session];
+      words = JSON.stringify(held === undefined ? null : [
+        Object.entries(held.seats ?? {}).map(([name, one]) => [name, one.pane, one.pane_shell, one.pane_shell_start, one.launched]),
+        held.briefs?.[seat.name],
+      ]);
     } catch {
-      return 'none';
+      words = `unreadable:${String(performance.now())}`;
     }
-  }).join('|') + `|${io.env.HERDR_PANE_ID ?? ''}`;
+    let teamAt = 'none';
+    if (provenTeamAt !== null) {
+      try {
+        const stat = statSync(provenTeamAt);
+        teamAt = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      } catch {
+        // A team file that cannot be stated proves again.
+      }
+    }
+    return `${words}|${teamAt}|${io.env.HERDR_PANE_ID ?? ''}`;
+  };
   const proveAlive = (): string | null => {
     const now = placementOf(io, stateDir, team.session, seat.name);
     if (!now.ok) return now.why;
