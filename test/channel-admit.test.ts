@@ -10,7 +10,7 @@
 // - Before-exposure stream control: refused records emit no channel notification, write no push
 //   marker and write no consumer read receipt, while a valid push writes only `.channel-push.json`
 //   and leaves `.read.json` absent until consumer acknowledgment.
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,6 +20,7 @@ import { admitChannelDelivery } from '../src/mcp/channel-admit.ts';
 import { channelPushPath } from '../src/mcp/channel.ts';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
+import * as registryAgents from '../src/registry/agents.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { readTeams, setTeamProjectMembership, teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
@@ -684,4 +685,29 @@ describe('same-team sender and projected-roster uniqueness', () => {
 });
 
 describe('channel stream refusal before exposure', () => {
+});
+
+describe('one registry read per admission', () => {
+  test('an admission reads each agent record once, however many roster seats it checks', () => {
+    const { base, home } = createHome();
+    const local = createTeam(base, home, 'alpha', 'org');
+    createTeam(base, home, 'beta', 'org');
+    const files = 4;
+    const reads = spyOn(registryAgents, 'getAgent');
+    try {
+      const admitted = admitChannelDelivery({
+        payload: { from: 'worker', from_id: local.worker.id, to: 'lead', to_id: local.lead.id, rule: "a seat to its own team's orchestrator" },
+        home,
+        root: local.root,
+        session: local.session,
+        seat: 'lead',
+        team: local.team,
+      });
+      expect(admitted.ok).toBe(true);
+      // The sender's own record once, and the registry scan once: never once per roster seat.
+      expect(reads.mock.calls.length).toBeLessThanOrEqual(files + 1);
+    } finally {
+      reads.mockRestore();
+    }
+  });
 });
