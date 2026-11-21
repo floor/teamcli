@@ -381,4 +381,20 @@ describe('a seat whose channel flag the launch places serves the channel', () =>
       at.cleanup();
     }
   });
+
+  test('the launch\'s recorded word decides: a launch that fell back advertises no channel, whatever the roster allows', async () => {
+    const at = place();
+    try {
+      const stateFile = join(at.root, '.agents', 'team.state.json');
+      const state = JSON.parse(readFileSync(stateFile, 'utf8')) as { sessions: Record<string, { seats: Record<string, Record<string, unknown>> }> };
+      state.sessions[SESSION]!.seats.worker!.channel_launch = false;
+      writeFileSync(stateFile, `${JSON.stringify(state)}\n`);
+      expect((await workerListener(at)).channel).toBeUndefined();
+      state.sessions[SESSION]!.seats.worker!.channel_launch = true;
+      writeFileSync(stateFile, `${JSON.stringify(state)}\n`);
+      expect((await workerListener(at)).channel).toBe(true);
+    } finally {
+      at.cleanup();
+    }
+  });
 });

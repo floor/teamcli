@@ -77,7 +77,9 @@ export function hostedWatchSources(
     // The loop's waits are the host's own: a sleep ends at the next tick at or after its due
     // instant, and a stop ends both at once.
     sleep: (ms) => loop.wait(ms).then(() => undefined),
-    wait: (seconds) => loop.wait(seconds * 1000),
+    // The loop's wait between passes is the one a nudge may end (`HostedLoop.nudge`); every
+    // sleep inside a pass, the typing path's included, runs its full time.
+    wait: (seconds) => loop.wait(seconds * 1000, { between: true }),
     pushWork,
     ...(presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy }),
     ...(presenceChannelReason === undefined ? {} : { presenceChannelReason }),

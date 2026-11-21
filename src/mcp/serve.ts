@@ -1624,7 +1624,16 @@ function generationOf(stateDir: string, session: string, name: string): Generati
  * left the server of every seat whose flag the launch placed (a launcher seat, a plain line
  * without the words) with no channel: Claude Code loaded the channel, and no listener served it.
  */
-function seatTakesChannel(team: TeamFile, seat: TeamFile['seats'][number], root: string, home: string): boolean {
+function seatTakesChannel(team: TeamFile, seat: TeamFile['seats'][number], root: string, home: string, stateDir: string): boolean {
+  // The launch's own word first: the command this seat's latest launch ran, recorded just before
+  // it ran. A launch that fell back to no channel advertises none, whatever the roster allows.
+  let launched: boolean | undefined;
+  try {
+    launched = readState(stateDir).sessions[team.session]?.seats[seat.name]?.channel_launch;
+  } catch {
+    return false;
+  }
+  if (launched !== undefined) return launched;
   if (channelLaunchEnabled(seat.launch)) return true;
   return claudeChannelSeat(seat) && channelLaunchFallback(team, seat, root, home) === undefined;
 }
@@ -1804,7 +1813,7 @@ export async function runMcpServe(
     firstRead = readOnce();
   }
   const declaredFirst = firstRead.ok ? firstRead.team.seats.find((one) => one.name === seatName) : undefined;
-  const pendingChannel = declaredFirst === undefined || !firstRead.ok ? false : seatTakesChannel(firstRead.team, declaredFirst, firstRead.root, host.home);
+  const pendingChannel = declaredFirst === undefined || !firstRead.ok ? false : seatTakesChannel(firstRead.team, declaredFirst, firstRead.root, host.home, dirname(firstRead.path));
   let unplacedWhy = 'the start has not been read yet';
   const pendingTeam: TeamFile | null = firstRead.ok ? firstRead.team : null;
   const pending: Serving = {
@@ -1842,7 +1851,7 @@ export async function runMcpServe(
   // this server. Nothing on the command line turns it on separately, and a marker without it is
   // an ordinary inbox the send walks past.
   // A channel the handshake did not declare is never started: the client was told of none.
-  const channel = pendingChannel && seatTakesChannel(team, seat, loaded.root, host.home);
+  const channel = pendingChannel && seatTakesChannel(team, seat, loaded.root, host.home, dirname(loaded.path));
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
   if (dropDir === null) {
     return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');

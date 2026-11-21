@@ -279,6 +279,8 @@ export type Host = {
       version?: string;
       effort?: string | null;
       launch_line?: string;
+      /** Whether the command about to run carries the team's development channel. */
+      channel_launch?: boolean;
       /** A waiting record to write, or null to remove the seat's waiting field. */
       waiting?: WaitingRecord | null;
       /** A Grok launch whose frames said the sandbox was not applied. */
@@ -1854,6 +1856,13 @@ export async function executePlan(
         let channelCurrent = true;
         try { if (channel?.ok) channel.lease.check(); } catch { channelCurrent = false; }
         if (!guardRestore(op.seat)) break;
+        // The channel this launch's command really carries, recorded before it runs: the seat's
+        // inbox server, started by the CLI, advertises the channel only on this word, so a launch
+        // that fell back (a refused pair, a lease lost) never advertises one its client lacks.
+        if (op.cli === 'claude-code') {
+          const stage = host.seatStates?.(session)?.[op.seat]?.stage;
+          recordSeat(op.seat, { stage: stage === 'ready' || stage === 'named' ? stage : 'launched', channel_launch: channelLaunchEnabled(launch.command) });
+        }
         // Each way the line can fail to run is named: one sentence for three causes hid which
         // one a stale pane hit (the Kimi and DeepSeek testers, 2026-11-12).
         const notRun = !here
