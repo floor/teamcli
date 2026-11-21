@@ -85,6 +85,7 @@ import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { channelAckLine, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { channelLaunchFallback, claudeChannelSeat } from './launch-config.ts';
+import { readClientThreadGrant } from '../client/records.ts';
 import { channelOfferStartedGivenUp, channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
@@ -967,7 +968,14 @@ function ackTool(args: unknown, serving: Serving): unknown {
   if (payload.to !== serving.seat || payload.session !== serving.session || !sameFolder(payload.root, serving.root)) {
     return toolError(`message ${id} is not addressed to this inbox`);
   }
-  if (payload.from_client !== undefined) return toolError(`message ${id} was written by a client; its read belongs to the client inbox`);
+  // A client's record on a plain grant is acknowledged by the seat it is addressed to (checked
+  // above), as any message is: the receipt is that seat's own read and grants the client nothing.
+  // A bundle grant's ack is the command's (`team ack`), under its grant's own checks.
+  if (payload.from_client !== undefined) {
+    const origin = readClientThreadGrant(serving.home, payload.from_client.grant_id);
+    if (!origin.ok) return toolError(`message ${id}: its client grant does not verify: ${origin.why}`);
+    if (origin.kind !== 'grant') return toolError(`message ${id} was written under a client bundle grant; acknowledge it with team ack ${id}`);
+  }
   if (isGeneralBriefRecord(payload)) return toolError(`message ${id} is the general seat brief; it is read by the seat's own turn-start reader`);
   // The record is verified now; the declaration is looked at again immediately before the receipt
   // is written, so a seat stopped while its record was being read acknowledges nothing.

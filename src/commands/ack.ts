@@ -228,20 +228,25 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   const acknowledged = found.record.payload;
   const resolvedId = acknowledged.id;
 
-  // A record a client wrote carries the grant that opened its thread. A plain grant's read
-  // belongs to the client inbox, as it always has. A bundle grant whose signed op list carries
-  // `ack` admits this command for its own client's opening record, in the one team and session
-  // the grant signs, addressed to the seat the team places: the same binding a reply to that
-  // thread is admitted by, checked against the grant's signed client, its team and the registry.
+  // A record a client wrote carries the grant that opened its thread. A plain grant's record is
+  // acknowledged by the seat it is addressed to, as any message is: the receipt records that
+  // seat's own read and grants the client nothing (on an E7b-active root a stamped message settles
+  // only by its recipient's ack, so a refusal here left every client message re-delivered for
+  // good). The client's own inbox, the replies it reads, is not touched, and no other caller
+  // acknowledges the record. A bundle grant whose signed op list carries `ack` admits this command
+  // for its own client's opening record, in the one team and session the grant signs, addressed
+  // to the seat the team places: the same binding a reply to that thread is admitted by, checked
+  // against the grant's signed client, its team and the registry.
   let clientOrigin: { grant: ClientUpGrantRecord; signature: string } | null = null;
-  if (acknowledged.from_client !== undefined) {
-    const origin = readClientThreadGrant(host.home, acknowledged.from_client.grant_id);
-    if (!origin.ok) {
-      return refused(io, json, `the record's originating grant ${acknowledged.from_client.grant_id} does not verify in the canonical store: ${origin.why}; nothing was written`);
+  const origin = acknowledged.from_client === undefined ? null : readClientThreadGrant(host.home, acknowledged.from_client.grant_id);
+  if (origin !== null && acknowledged.from_client !== undefined && !origin.ok) {
+    return refused(io, json, `the record's originating grant ${acknowledged.from_client.grant_id} does not verify in the canonical store: ${origin.why}; nothing was written`);
+  }
+  if (origin !== null && origin.ok && origin.kind === 'grant') {
+    if (me !== acknowledged.to) {
+      return refused(io, json, `record ${resolvedId} was written by a client to ${acknowledged.to}; only ${acknowledged.to} acknowledges it; nothing was written`);
     }
-    if (origin.kind === 'grant') {
-      return refused(io, json, `record ${resolvedId} was written by a client; its read belongs to the client inbox, not to this command`);
-    }
+  } else if (origin !== null && origin.ok && acknowledged.from_client !== undefined) {
     const grant = origin.grant;
     if (grant.clientId !== acknowledged.from_client.client_id) {
       return refused(io, json, `this record names client "${acknowledged.from_client.client_id}" and its grant names "${grant.clientId}"; nothing was written`);

@@ -11,6 +11,7 @@
 import { shadowQueueReceipt } from '../queue/receipt-store.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { type KeyObject } from 'node:crypto';
+import { dirname } from 'node:path';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
 import { ackedFile, clearedFile, COPY_READ_BY, isLeadAckReadBy, leadAckActorOf, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
@@ -103,7 +104,7 @@ function publish(input: RecordReadInput): RecordReadOutcome {
           const standingIntent = readVerifiedReceipt(cleared, id, 'read', context, key);
           if (standingIntent === null || !isLeadAckReadBy(standingIntent.payload.read_by)) return { kind: 'held', status: 'read', entry: 'file' };
           ackAt = standingIntent.payload.at;
-        } else if (!flushReceipt(cleared, dropDir)) {
+        } else if (!flushReceipt(cleared, dirname(cleared))) {
           return { kind: 'unwritten', reason: 'durable' };
         }
       }
@@ -111,7 +112,7 @@ function publish(input: RecordReadInput): RecordReadOutcome {
       const made = publishReadReceipt(acked, `${JSON.stringify(signReceiptPayload(receipt, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
       if (made === 'failed') return { kind: 'unwritten', reason: 'write' };
       if (made === 'exists') return stampedSettled(dropDir, id, context, key) ? { kind: 'served' } : { kind: 'held', status: 'read', entry: 'file' };
-      if (!flushReceipt(acked, dropDir)) return { kind: 'unwritten', reason: 'durable' };
+      if (!flushReceipt(acked, dirname(acked))) return { kind: 'unwritten', reason: 'durable' };
       return { kind: 'published' };
     }
   }
@@ -153,6 +154,6 @@ function publish(input: RecordReadInput): RecordReadOutcome {
   if (published === 'failed') return { kind: 'unwritten', reason: 'write' };
   // The receipt must survive a crash before any body is shown. A receipt that cannot be flushed is
   // not proof: the id stays spent, and the caller shows nothing.
-  if (!flushReceipt(readName, dropDir)) return { kind: 'unwritten', reason: 'durable' };
+  if (!flushReceipt(readName, dirname(readName))) return { kind: 'unwritten', reason: 'durable' };
   return { kind: 'published' };
 }
