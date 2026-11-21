@@ -20,7 +20,7 @@ import { agentPromptAsync, paneReadAsync, pressEnterAsync, sendKeyAsync, typeTex
 import { boxHoldsText } from '../launch/deliver.ts';
 import { captureDraft, dropPathOf, keepDraft, keepSeatDraft } from './deliver.ts';
 import { profileFor, WAKE_IDLE_SETTLE_FLOOR_MS, WAKE_IDLE_SETTLE_MS } from '../profiles/profile.ts';
-import { classifyComposer, readScreen, screenData } from '../watch/screen.ts';
+import { classifyComposer, readBox, readScreen, screenData } from '../watch/screen.ts';
 import { POLL_MS } from './native.ts';
 
 /** The wake keeps the eight-row cluster. A close, relaunch, or skip reads a working phrase anywhere. */
@@ -431,7 +431,59 @@ export async function deliverTypedWake(
   const fenced = options.beforeFirstKey === undefined && options.beforeEachKey === undefined ? host : keyFenced(host, options.beforeFirstKey, options.beforeEachKey);
   const result = await walkTypedWake(fenced, pane, line, cli, options, marks);
   const { lineWritten, ...rest } = marks;
-  return { ...result, ...rest, ...(options.reportLine === true && lineWritten === true ? { lineWritten } : {}) };
+  // The watch never leaves its own text in a composer: a line this wake wrote and did not see
+  // submitted (or a receipt that came while it still sat) is taken back out of the box.
+  const back = lineWritten === true && (!result.delivered || result.reason === RECEIPT_REASON)
+    ? await withdrawLine(fenced, pane, cli, line, options.enterSettleMs ?? WAKE_ENTER_SETTLE_MS)
+    : null;
+  const written = lineWritten === true && (result.delivered || back?.removed !== true);
+  return {
+    ...result,
+    ...(back === null ? {} : { reason: `${result.reason}; ${back.note}` }),
+    ...rest,
+    ...(options.reportLine === true && written ? { lineWritten: true as const } : {}),
+  };
+}
+
+const RECEIPT_REASON = 'the drop read receipt is there';
+
+/** The most clear presses one take-back sends: a mid-turn clear removes about one row per press. */
+const MAX_WITHDRAW_PRESSES = 8;
+
+/**
+ * Takes the wake's own unsubmitted line back out of the box. A key goes only while the box shows
+ * exactly the line or, after a press, a leading part of it: other text, a dialog or an unreadable
+ * screen gets no key. The turn's own clear keys are used whenever the profile measured them (they
+ * never stop a running turn); the idle keys only on a screen that does not read working. Null when
+ * there is nothing to do: no measured clear keys or no key surface, or the line is already gone.
+ */
+async function withdrawLine(
+  host: TypedWakeHost,
+  pane: string,
+  cli: string,
+  line: string,
+  settleMs: number,
+): Promise<{ removed: boolean; note: string } | null> {
+  const input = profileFor(cli)?.input ?? null;
+  if (input === null || host.key === undefined) return null;
+  const flat = (text: string): string => text.replace(/\s+/g, '');
+  for (let pressed = 0; ; pressed += 1) {
+    const screen = await host.read(pane);
+    if (screen === null) return { removed: false, note: 'the box could not be read, so the line may still be in it' };
+    if (emptyBox(cli, screen)) return pressed === 0 ? null : { removed: true, note: 'the line was taken back out of the box' };
+    const box = pressed === 0 ? null : readBox(cli, screen);
+    const rest = box === null ? '' : flat([box.first, ...box.rows].join(''));
+    const ours = pressed === 0 ? boxHoldsText(cli, line, screen) : rest !== '' && flat(line).startsWith(rest);
+    if (!ours) return { removed: false, note: 'the box holds other text than the line, so it was left as it is' };
+    if (pressed >= MAX_WITHDRAW_PRESSES) return { removed: false, note: `the line stayed in the box through ${String(pressed)} clear presses` };
+    const working = readScreen(cli, screen).kind === 'working' || readScreen(cli, screen, WAKE_SCREEN).kind === 'working';
+    const keys = input.clearWorking ?? (working ? null : input.clear);
+    if (keys === null || keys.length === 0) return { removed: false, note: 'no key is measured to clear the box on this screen; the line was left in it' };
+    for (const key of keys) {
+      if (!(await host.key(pane, key))) return { removed: false, note: 'the pane did not take the clear key; the line may still be in the box' };
+    }
+    await host.wait(settleMs);
+  }
 }
 
 /** The host with every key path behind two gates: `each` is asked before every key of any kind,
