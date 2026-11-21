@@ -566,6 +566,8 @@ async function runAuthoritativeHost(
       cycled(at) {
         loop.cycled(at);
       },
+      // A nudge ends the wait early; the wait above still asks the authority before the pass.
+      ...(loop.nudge === undefined ? {} : { nudge: () => loop.nudge?.() }),
       standby(why) {
         // A standing-down watch emits nothing from here on.
         setEffects('blocked');

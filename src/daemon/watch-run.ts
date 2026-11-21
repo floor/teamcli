@@ -8,6 +8,7 @@ import { activateDeadPaneWatchAsync, realWatchSources, runWatch, type WatchSourc
 import type { WorkPush } from '../watch/dispatch.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import type { HostedRoute } from './routes.ts';
+import { startArrivalWake } from '../watch/arrival-wake.ts';
 
 export type HostedWatchRunInput = {
   route: HostedRoute;
@@ -114,6 +115,16 @@ export function hostedWatchRun(input: HostedWatchRunInput): (loop: HostedLoop) =
     // A dead pane watch is released before the loop, so the hosted watch runs as the active
     // one. A live pane watch is left recorded and the loop stands by for it. No pane is started.
     await activateDeadPaneWatchAsync(input.route.root, input.route.session, sources);
-    return runWatch([], io, sources);
+    // A stamped message for a Claude seat no proven channel reaches starts the next pass now
+    // (src/watch/arrival-wake.ts); the pass keeps every typed-key check it always runs.
+    const nudge = loop.nudge;
+    const closeWake = nudge === undefined || base.home === undefined
+      ? null
+      : startArrivalWake({ root: input.route.root, session: input.route.session, home: base.home, nudge: () => nudge.call(loop) });
+    try {
+      return await runWatch([], io, sources);
+    } finally {
+      closeWake?.();
+    }
   };
 }
