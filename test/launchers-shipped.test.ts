@@ -65,6 +65,7 @@ test('claude-code builds the Anthropic model id from the seat and skips the CLI 
   expect(reviewer).not.toContain('--dangerously-skip-permissions');
   expect(reviewer.join(' ')).toContain('--permission-mode dontAsk');
   expect(reviewer[reviewer.indexOf('--disallowedTools') + 1]).toContain('Bash(git *)');
+  expect(reviewer[reviewer.indexOf('--allowedTools') + 1]?.split(',')).toContain('mcp__team-inbox');
   expect(reviewer).not.toContain('--settings');
   const settings = shippedClaudeSettings('claude-code', 'tester') as { sandbox: { enabled: boolean; excludedCommands: string[] }; permissions: { deny: string[] } };
   expect(settings.sandbox.enabled).toBe(true);
