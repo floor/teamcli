@@ -15,4 +15,4 @@ export const ACK_FLAG_OPTIONS = ['json'] as const;
 
 /** `team drops`: the names that take a value, and the flags. */
 export const DROPS_VALUED_OPTIONS = ['seat', 'session', 'epoch', 'id'] as const;
-export const DROPS_FLAG_OPTIONS = ['follow', 'json', 'read', 'dry-run', 'unread'] as const;
+export const DROPS_FLAG_OPTIONS = ['follow', 'json', 'read', 'dry-run', 'unread', 'due'] as const;

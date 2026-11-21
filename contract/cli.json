@@ -2970,6 +2970,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--due",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--epoch",
           "repeatable": false,
           "takesValue": true

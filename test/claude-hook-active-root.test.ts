@@ -8,13 +8,14 @@
 // home and caller.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runDrops } from '../src/commands/drops.ts';
 import { activate, type FloorActor } from '../src/queue/floor.ts';
-import { copyHistory } from '../src/queue/handover.ts';
+import { copyHistory, EXPOSURES } from '../src/queue/handover.ts';
+import { cliHookSettings } from '../src/launch/cli-hook.ts';
 import { seatMailDirs } from '../src/queue/mail-tree.ts';
 import { isRead, signRecord, stampedPayload, stampedSettled, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { messageKeyOf, messageKeyState } from '../src/store/keys.ts';
@@ -134,5 +135,45 @@ describe('F7: mixed-era mail at an active root, and a hook that dies before its 
       brief_sha256: 'a'.repeat(64), incarnation: 'inc-1',
     };
     expect(stampedPayload(brief, home).lvl).toBeUndefined();
+  });
+});
+
+describe('the hook re-shows a stamped message only when its ladder step is due', () => {
+  /** The hook's own read, `--due`, as the seat on its pane. */
+  async function dueRead(): Promise<string> {
+    const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: SESSION });
+    expect(await runDrops(['--read', '--due', '--seat', 'lead', '--session', SESSION], io, { home })).toBe(0);
+    return io.out;
+  }
+  /** Moves every copy of the record `ms` into the past. */
+  function age(id: string, ms: number): void {
+    const history = join(seatMailDirs(root, SESSION, 'lead').stamped, EXPOSURES, id);
+    const then = new Date(Date.now() - ms);
+    for (const name of readdirSync(history)) if (/^\d+$/.test(name)) utimesSync(join(history, name), then, then);
+  }
+
+  test('a run of prompts inside a minute numbers one copy; the next is shown once 60 s pass, the one after waits 120 s', async () => {
+    expect(activate(root, { home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+    record('lead', STAMPED_ID, 'the stamped note');
+    const stamped = seatMailDirs(root, SESSION, 'lead').stamped;
+    expect(await dueRead()).toContain(`message ${STAMPED_ID} · delivery 1`);
+    for (let prompt = 0; prompt < 5; prompt += 1) expect(await dueRead()).not.toContain('the stamped note');
+    expect(copyHistory(stamped, STAMPED_ID)).toMatchObject({ copies: 1 });
+    age(STAMPED_ID, 61_000);
+    expect(await dueRead()).toContain(`message ${STAMPED_ID} · delivery 2`);
+    age(STAMPED_ID, 61_000);
+    expect(await dueRead()).not.toContain('the stamped note');
+    age(STAMPED_ID, 121_000);
+    expect(await dueRead()).toContain(`message ${STAMPED_ID} · delivery 3`);
+    expect(copyHistory(stamped, STAMPED_ID)).toMatchObject({ copies: 3 });
+    // A plain read without --due is unchanged: it hands the message over every time.
+    const plain = await hookRead('lead', 'w1:p1');
+    expect(plain.out).toContain(`message ${STAMPED_ID} · delivery 4`);
+    expect(stampedSettled(stamped, STAMPED_ID, context('lead'), keyOf())).toBe(false);
+  });
+
+  test('the turn-start hook reads with --due', () => {
+    const settings = cliHookSettings('/state', { seat: 'lead', session: SESSION }, undefined, undefined, undefined, 'team');
+    expect(settings).toContain('drops --read --due --seat');
   });
 });
