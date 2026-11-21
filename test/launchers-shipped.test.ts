@@ -223,3 +223,88 @@ seats:
     expect(planWith(null)).toContain(`lead: would refuse: its provider key cannot be read: ${NO_SECRET_STORE}`);
   });
 });
+
+describe('a Claude Code seat on a launcher takes the channel flag on its resolved line', () => {
+  const made: string[] = [];
+  afterEach(() => discardFixtures(made.splice(0)));
+  const FLAG = '--dangerously-load-development-channels server:team-inbox';
+
+  const TEAM = `format: 1
+project: acme
+entity: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+  - role: tester
+    name: tester-claude
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Haiku
+    version: "5.5"
+    launch: claude
+    launcher: claude-code
+  - role: tester
+    name: tester-deepseek
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "4.0"
+    launch: claude
+    launcher: claude-code
+  - role: tester
+    name: tester-quiet
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Haiku
+    version: "5.5"
+    launch: claude
+    launcher: claude-code
+    channel: off
+`;
+
+  function seat(name: string, vendor: string, model: string, version: string): UpSeat {
+    return {
+      name, cli: 'claude-code', launch: 'claude', launcher: 'claude-code', vendor, role: 'tester', model, version, cwd: name,
+      label: `${name} · tester`, displayAgent: `${model} ${version} default`,
+      repairLine: '`team down` then `team up` (to restart the whole team)', stopped: false, rules: '',
+    };
+  }
+
+  test('the shipped claude-code launcher, on Anthropic and on another provider\'s endpoint, carries the flag; channel: off does not', () => {
+    const home = mkdtempSync(join(tmpdir(), 'shipped-channel-plan-'));
+    made.push(home);
+    const entity = join(home, '.config', 'team', 'entities', 'acme');
+    mkdirSync(entity, { recursive: true });
+    writeFileSync(join(entity, 'accounts.yaml'), [
+      'accounts:',
+      '  deepseek:',
+      '    provider: deepseek',
+      '    endpoint: https://api.deepseek.com/anthropic',
+      '    keychain: deepseek-api-key',
+      '    default_model: deepseek-flash',
+      '',
+    ].join('\n'), { mode: 0o600 });
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error(`refused: ${JSON.stringify(checked.errors)}`);
+    const store: SecretStore = { read: async () => ({ ok: false, reason: 'not read in a plan' }), lookupCommand: () => ({ ok: true, command: 'fixture-store print deepseek-api-key' }) };
+    const lines = formatPlan(upPlan({
+      root: '/work/acme', session: 'acme', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · acme',
+      seats: [seat('tester-claude', 'anthropic', 'Claude Haiku', '5.5'), seat('tester-deepseek', 'deepseek', 'DeepSeek Flash', '4.0'), { ...seat('tester-quiet', 'anthropic', 'Claude Haiku', '5.5') }],
+      home, team: checked.team, secretStore: store,
+    })).split('\n');
+    const lineOf = (name: string) => lines.filter((line) => line.includes(name) && / claude( |$)/.test(line)).join('\n');
+    expect(lineOf('tester-claude')).toContain(FLAG);
+    expect(lineOf('tester-deepseek')).toContain('ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic');
+    expect(lineOf('tester-deepseek')).toContain(FLAG);
+    expect(lineOf('tester-quiet')).not.toContain('development-channels');
+  });
+});

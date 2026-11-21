@@ -1714,6 +1714,19 @@ export function upPlan(input: UpInput): Step[] {
       baseLine = envWords.length === 0 ? decided.command : `${envWords.join(' ')} ${decided.command}`;
       fromResolver = true;
       shippedLaunch = shipped !== null;
+      // The resolver's line replaces the declared one, so the channel flag placed on the declared
+      // line above never reaches it: a Claude Code seat on a launcher (a shipped one, on another
+      // provider's endpoint included) takes the flag on the resolved line itself, under the same
+      // rule and the same refusal as a plain line.
+      if (channelFallback === undefined && claudeChannelSeat(asChannel) && !channelLaunchEnabled(baseLine)) {
+        try {
+          baseLine = channelOnLaunch(baseLine);
+        } catch (error) {
+          const why = error instanceof Error ? error.message : 'the launch flag cannot be placed safely on this launch line';
+          steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`, do: { do: 'refuse', seat: seat.name, why } });
+          continue;
+        }
+      }
     }
     // A provider key the seat's own line names (`NAME={secret:<entry>}`, the profile's vendor
     // word a swap wrote) is filled with the machine's secret store's lookup here, before any
