@@ -1,5 +1,5 @@
 // The daemon's presence ingester: one instance per canonical route, created and driven by the
-// machine daemon after it owns its lock (the host owns the shared 250 ms timer, the one-in-flight
+// machine daemon after it owns its lock (the host owns the shared 500 ms timer, the one-in-flight
 // guard per route and cleanup). This module never starts a timer, a service or a second daemon.
 //
 // One step is a bounded asynchronous batch: a spool folder is listed, at most `maxRecords`

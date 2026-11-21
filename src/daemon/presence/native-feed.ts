@@ -11,7 +11,7 @@ import { appendEvent, type EventAppendInput } from '../../bus/log.ts';
 import { currentBriefClaim } from '../../launch/general-brief.ts';
 import { placementOf } from '../../mcp/serve.ts';
 import type { Io } from '../../io.ts';
-import { readState } from '../../state.ts';
+import { readStateShared } from '../../state.ts';
 import { adaptClaudeHook } from '../../status/claude-hook-adapter.ts';
 import { adaptCodexFrame } from '../../status/codex-event-adapter.ts';
 import { establishContext, initialNativeCandidate, reduceNativeObservation, type LogicalContext, type NativeCandidateState } from '../../status/native-observation.ts';
@@ -54,7 +54,7 @@ function shape(value: unknown, keys: readonly string[]): value is Record<string,
 
 function launch(identity: Identity): { binding: string; epoch: string | null } | null {
   try {
-    const state = readState(identity.stateDir).sessions[identity.session];
+    const state = readStateShared(identity.stateDir).sessions[identity.session];
     const seat = state?.seats[identity.seat];
     if (!isPresenceBinding(seat?.presence_binding) || seat.presence_binding !== identity.binding) return null;
     return { binding: seat.presence_binding, epoch: currentBriefClaim(state?.briefs?.[identity.seat])?.epoch ?? null };
@@ -145,6 +145,9 @@ export type NativeFeed = { step(): void; codexFrame(identity: Identity, text: st
 export const STATUS_REJECTED_CAP = 64;
 const STATUS_SPOOL_SWEEP_CAP = 1_024;
 const STATUS_STAGING_KEEP_MS = 5 * 60_000;
+/** How long a written marker vouches, and the time left at which a pass writes it again. */
+const MARKER_VALID_MS = 3_000;
+const MARKER_REFRESH_MS = 2_000;
 const spoolSweepResume = new Map<string, string>();
 
 function rejectedDroppedPath(root: string): string {
@@ -279,7 +282,7 @@ export function createNativeFeed(input: {
   };
   const current = (seat: string): Identity | null => {
     try {
-      const binding = readState(input.stateDir).sessions[input.session]?.seats[seat]?.presence_binding;
+      const binding = readStateShared(input.stateDir).sessions[input.session]?.seats[seat]?.presence_binding;
       return isPresenceBinding(binding) ? { stateDir: input.stateDir, session: input.session, seat, binding } : null;
     } catch { return null; }
   };
@@ -314,10 +317,9 @@ export function createNativeFeed(input: {
     step() {
       if (closed) return;
       for (const seat of input.seats) {
-        // Remove predecessors before writing a marker for this pass's managed launch.
-        removeMarker(seat);
         const identity = current(seat);
         if (identity === null) {
+          removeMarker(seat);
           owned.delete(seat); candidates.delete(seat);
           const stale = paths({ ...input, seat });
           if (stale !== null) spoolSweepResume.delete(stale.spool);
@@ -326,11 +328,20 @@ export function createNativeFeed(input: {
         candidateOf(identity);
         const one = paths(identity);
         const held = launch(identity);
-        if (one === null || held === null) continue;
+        if (one === null || held === null) { removeMarker(seat); continue; }
         try {
-          mkdirSync(one.root, { recursive: true, mode: 0o700 });
-          const marker: Marker = { v: 1, ...held, owner, daemon: input.daemonOwner, expires: Date.now() + 3000 };
-          atomicJson(one.marker, marker);
+          // The marker is rewritten only when it would say something else or nears its 3 s
+          // expiry; the rename replaces any predecessor's marker whole.
+          let standing: Partial<Marker> | null = null;
+          try { standing = boundedJson(one.marker) as Partial<Marker>; } catch { /* absent: written below */ }
+          if (standing?.v !== 1 || standing.binding !== held.binding || standing.epoch !== held.epoch
+            || standing.owner !== owner || standing.daemon !== input.daemonOwner
+            || typeof standing.expires !== 'number' || standing.expires - Date.now() < MARKER_REFRESH_MS
+            || standing.expires - Date.now() > MARKER_VALID_MS) {
+            mkdirSync(one.root, { recursive: true, mode: 0o700 });
+            const marker: Marker = { v: 1, ...held, owner, daemon: input.daemonOwner, expires: Date.now() + MARKER_VALID_MS };
+            atomicJson(one.marker, marker);
+          }
           owned.set(seat, identity.binding);
           const cursorPath = join(one.root, `status-cursor-${identity.binding}.json`);
           let cursor: Cursor = { seq: 0, last: null, pending: null };

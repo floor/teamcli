@@ -6692,7 +6692,7 @@ const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending sessi
  *
  * A taken frame ends the sender's work at once — the frame was taken, so the send reports
  * `delivered (socket)` and returns. The pane is never read here: whether the receiving session
- * held the frame at its held-message dialog is the daemon's held step to see on its own 250 ms
+ * held the frame at its held-message dialog is the daemon's held step to see on its own 500 ms
  * beat (`src/daemon/presence/held.ts`), which raises `held` and marks the socket until the
  * seat's declaration is re-confirmed. A person's command must not wait a second on another
  * seat's screen.
