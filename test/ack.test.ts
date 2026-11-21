@@ -113,9 +113,10 @@ describe('team ack marks one message read without printing it', () => {
     expect(signed).not.toBeNull();
     expect(verifyReceipt(signed!, messageKeyOf(home))).toBe(true);
     // The signed writer provenance names this build and this process beside the receipt's own
-    // fields; everything else is exactly what the receipt always carried.
+    // fields; the receipt names the ack as its reader, and it is the one file the ack writes.
     const { writer, ...fields } = signed!.payload;
-    expect(fields).toEqual({ kind: 'receipt', status: 'read', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO });
+    expect(fields).toEqual({ kind: 'receipt', status: 'read', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO, read_by: 'ack' });
+    expect(existsSync(join(recordDir(root, 'acme', 'owner'), `${SENT}.ack.json`))).toBe(false);
     expect(writer).toEqual({ version: version(), pid: process.pid });
     // The message is no longer waiting, and the next read serves no body.
     expect(listUnread(recordDir(root, 'acme', 'owner'), { to: 'owner', root, session: 'acme' }, home)).toEqual([]);

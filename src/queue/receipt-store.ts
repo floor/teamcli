@@ -1,8 +1,9 @@
 // The per-seat receipt store (rfc-event-comms §2, step E6).
 //
-// Receipts stay signed records; E6 writes them in shadow beside today's file receipts and the
-// event log, which the readers still use. One file per receipt, created exclusively and never
-// replaced, so concurrent writers cannot roll each other back:
+// Receipts stay signed records. No read writes here any more: a read writes its one signed
+// `<id>.read.json`, which every reader uses. Only the drain still settles the pending markers an
+// earlier build left (its E6 shadow write), so the reader switch's completeness check can pass.
+// One file per receipt, created exclusively and never replaced:
 //   .agents/receipts/<session>/<seat>/<generation>/<seq>.<kind>
 // The binding: root, session, recipient seat, queue generation, seq and msg_id. A receipt copied
 // to another seat, root, generation or seq fails its binding and is ignored.
@@ -15,8 +16,6 @@ import { join } from 'node:path';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { createExclusive, ensureFolder, fsyncFolder, readFence, removeDurable, type DurableFaults } from './durable.ts';
 import { renameSync } from '../host/guarded-fs.ts';
-import { randomBytes } from 'node:crypto';
-import { lstatSync } from 'node:fs';
 import { queueBaseOf, verifiedQueuePlaceOf } from './append.ts';
 
 export const QUEUE_RECEIPT_DOMAIN = 'team-queue-receipt-v1\n';
@@ -173,12 +172,8 @@ export function derivedProgress(receipts: VerifiedReceipt[]): { prefix: number; 
   return { prefix, sparse };
 }
 
-/**
- * The E6 dual write: once a legacy receipt is durable, the same decision is written to the
- * per-seat store, bound to the message's queue place. Shadow only: no reader uses the store yet,
- * and a message with no queue place, or any fault, changes nothing about the legacy receipt.
- */
-export function shadowQueueReceipt(input: {
+/** A pending decision as a marker records it (written by builds before the one-receipt read). */
+type PendingInput = {
   dropDir: string;
   root: string;
   session: string;
@@ -187,26 +182,7 @@ export function shadowQueueReceipt(input: {
   kind: QueueReceiptKind;
   actor: { kind: ReceiptActorKind; name: string };
   home: string;
-  /** Fault seam: runs before the reuse path's folder flush (a throw is a failed flush). */
-  faults?: { reuseFlush?: () => void };
-}): WriteReceiptOutcome | 'unplaced' | 'pending' {
-  try {
-    const written = placeAndWrite(input);
-    if (written !== 'unplaced') return written;
-    // The placement cannot be proved right now: the queue lock is held, the journal is not yet
-    // proved durable, or the record is published but not yet indexed (the append's record-to-index
-    // window). The decision is never skipped: a signed, durable pending marker keyed by the record
-    // id records it, and the next holder of the lock (or the reconcile pass) drains it once the
-    // entry is placed, writing the receipt exactly once (`drainPendingReceipts`). A seat with no
-    // queue at all has nothing to dual-write to.
-    if (pendingFolder(input.dropDir) === null || !queueExists(input.dropDir)) return 'unplaced';
-    return writePending(input) ? 'pending' : 'failed';
-  } catch {
-    return 'failed';
-  }
-}
-
-type PendingInput = Parameters<typeof shadowQueueReceipt>[0];
+};
 
 function placeAndWrite(input: PendingInput): WriteReceiptOutcome | 'unplaced' {
   // Only a proved placement is signed: a committed, verifying entry holding this msg_id.
@@ -240,64 +216,6 @@ type PendingPayload = {
   receipt: QueueReceiptKind;
   actor: { kind: ReceiptActorKind; name: string };
 };
-
-function queueExists(dropDir: string): boolean {
-  const base = queueBaseOf(dropDir);
-  if (base === null) return false;
-  try {
-    return lstatSync(base).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-/** The pending decision, signed with the home's message key (the same key a receipt is signed
- *  with) and bound to the recipient, message, kind and actor. Nothing unsigned is ever replayed. */
-function writePending(input: PendingInput): boolean {
-  const folder = pendingFolder(input.dropDir);
-  if (folder === null || !NAME.test(input.msgId) || !NAME.test(input.session) || !NAME.test(input.seat)) return false;
-  if (!actorMay(input.kind, input.actor.kind)) return false;
-  // One marker per decision: a second contention finds the same decision standing. The check reads
-  // each marker's verified signed content (record id, kind and actor, signed with this home's
-  // key), never its file name, so an unverifiable file can never stand in for a real decision.
-  const key = messageKeyState(input.home);
-  // E7b (R6 parity gate): an unlistable pending folder dedupes against nothing and the exclusive
-  // write is still tried, exactly as E6 did (a folder can deny enumeration and permit creation).
-  // The strict listing (null is never empty) stays in the completeness check (`pendingMarkers`).
-  const standingNames = listPending(folder) ?? [];
-  if (key.kind === 'key' && standingNames.some((name) => {
-    const text = readFence(join(folder, name));
-    const standing = text === null ? null : verifiedPending(text, name, key.key);
-    return standing !== null && standing.msg_id === input.msgId && standing.receipt === input.kind
-      && standing.actor.kind === input.actor.kind && standing.actor.name === input.actor.name
-      && standing.root === input.root && standing.session === input.session && standing.seat === input.seat;
-  })) {
-    // A matching marker proves the decision stands, not that it is durable: its creator may be
-    // between link and folder fsync, or its fsync may have failed. Re-flush the folder now; only a
-    // flush that succeeds lets this call report the decision as durably pending (E7 gate 1).
-    try {
-      input.faults?.reuseFlush?.();
-      fsyncFolder(folder);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  const payload: PendingPayload = {
-    v: 1, kind: 'queue-pending', root: input.root, session: input.session, seat: input.seat,
-    msg_id: input.msgId, receipt: input.kind, actor: input.actor,
-  };
-  let signature: string;
-  try {
-    signature = signDomain(QUEUE_PENDING_DOMAIN, payload as unknown as Json, messageKeyOf(input.home));
-  } catch {
-    return false;
-  }
-  // A fresh name (time, then a random nonce): only this call's own exclusive create counts. A name
-  // that already stood (`exists`) proves nothing about this decision, so it is not success.
-  const name = `${String(Date.now()).padStart(13, '0')}.${randomBytes(6).toString('hex')}.${input.msgId}.${input.kind}.json`;
-  return createExclusive(join(folder, name), `${JSON.stringify({ payload, signature })}\n`) === 'created';
-}
 
 /** The pending markers, oldest first. `null` when the folder cannot be listed: an unreadable
  *  folder is never read as an empty one (absent is the only empty). */

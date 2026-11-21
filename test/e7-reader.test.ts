@@ -1,4 +1,4 @@
-// rfc-event-comms E7: the entry gates (pending reuse durability, unknown drain listings, the
+// rfc-event-comms E7: the entry gates (unknown drain listings, the
 // activation publication window, the managed launch boundary, the bounded journal flush) and the
 // reader switch itself (queue order behind a signed per-root flag, rollback mid-traffic,
 // mixed-version refusal, completeness, and its fault grid).
@@ -15,11 +15,11 @@ import { signRecord } from '../src/send/record.ts';
 import { appendDeliverySync, lockedQueueOrder, queueBaseOf } from '../src/queue/append.ts';
 import { activate, fencesEnforced, floorState, mayCreateFence, queuesFolder, seatDropFoldersStrict, type FloorActor } from '../src/queue/floor.ts';
 import { exposeBody } from '../src/queue/exposure.ts';
-import { drainPendingReceiptsChecked, pendingMarkers, shadowQueueReceipt } from '../src/queue/receipt-store.ts';
+import { drainPendingReceiptsChecked, pendingMarkers, QUEUE_PENDING_DOMAIN } from '../src/queue/receipt-store.ts';
 import { readerOrder, readerSwitch, seatQueueCheck, setReaderSwitch } from '../src/queue/reader.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
 import { runQueues } from '../src/commands/queues.ts';
-import { messageKeyOf } from '../src/store/keys.ts';
+import { messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
 import type { DurableStep } from '../src/queue/durable.ts';
 
 const SESSION = 'acme';
@@ -61,6 +61,15 @@ function orphan(at: At, id: string, when: string): void {
   writeFileSync(join(at.dropDir, id), `${JSON.stringify(record(at, id, when), null, 2)}\n`, { mode: 0o600 });
 }
 
+/** A signed pending dual write, as a build before the one-receipt read left it beside a queue. */
+function plantPending(at: At, msgId: string): void {
+  const folder = join(queueBaseOf(at.dropDir) as string, 'pending-receipts');
+  mkdirSync(folder, { recursive: true });
+  const payload = { v: 1, kind: 'queue-pending', root: at.root, session: SESSION, seat: 'lead', msg_id: msgId, receipt: 'read', actor: { kind: 'recipient', name: 'lead' } };
+  const signature = signDomain(QUEUE_PENDING_DOMAIN, payload as unknown as Json, messageKeyOf(at.home));
+  writeFileSync(join(folder, `0000000000001.aaaaaaaaaaaa.${msgId}.read.json`), `${JSON.stringify({ payload, signature })}\n`);
+}
+
 const context = (at: At) => ({ to: 'lead', root: at.root, session: SESSION });
 const binding = (at: At) => ({ root: at.root, session: SESSION, seat: 'lead' });
 const listed = (at: At) => inQueueOrder(listUnread(at.dropDir, context(at), at.home)).map(m => [m.id, m.seq ?? null]);
@@ -80,19 +89,6 @@ const LATER = '2026-11-18T00:00:02.000Z';
 const EARLIER = '2026-11-18T00:00:01.000Z';
 
 describe('E7 entry gates', () => {
-  test('gate 1: a reused pending marker counts only after its folder flush succeeds', () => {
-    const at = place();
-    message(at, M1, EARLIER);
-    orphan(at, M2, EARLIER); // published, not indexed: the receipt's placement cannot be proved
-    const input = { dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: M2, kind: 'read' as const, actor: { kind: 'recipient' as const, name: 'lead' }, home: at.home };
-    expect(shadowQueueReceipt(input)).toBe('pending');
-    // A second caller finds the same signed decision: success only once the folder flush holds.
-    expect(shadowQueueReceipt({ ...input, faults: { reuseFlush: () => { throw new Error('fsync failed'); } } })).toBe('failed');
-    expect(shadowQueueReceipt(input)).toBe('pending');
-    const pending = join(queueBaseOf(at.dropDir) as string, 'pending-receipts');
-    expect(readdirSync(pending).filter(name => name.endsWith('.json'))).toHaveLength(1);
-  });
-
   test('gate 4: a pending folder that cannot be listed is unknown, never zero, and blocks completeness', () => {
     const at = place();
     message(at, M1, EARLIER);
@@ -302,14 +298,8 @@ describe('E7 round 2', () => {
     const at = place();
     message(at, M1, EARLIER);
     const base = queueBaseOf(at.dropDir) as string;
-    // A read decided while another holder has the queue lock: a pending marker a drain could settle.
-    const held = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
-    expect('release' in held).toBe(true);
-    try {
-      expect(shadowQueueReceipt({ dropDir: at.dropDir, root: at.root, session: SESSION, seat: 'lead', msgId: M1, kind: 'read', actor: { kind: 'recipient', name: 'lead' }, home: at.home })).toBe('pending');
-    } finally {
-      if ('release' in held) held.release();
-    }
+    // A pending marker an earlier build left: one a drain could settle.
+    plantPending(at, M1);
     const snapshot = () => JSON.stringify([readdirSync(join(base, 'pending-receipts')).sort(), existsSync(join(at.root, '.agents', 'receipts')) ? readdirSync(join(at.root, '.agents', 'receipts'), { recursive: true }).sort() : []]);
     const before = snapshot();
     expect(seatQueueCheck(at.dropDir, binding(at), [M1], at.home)).toMatchObject({ kind: 'incomplete' });

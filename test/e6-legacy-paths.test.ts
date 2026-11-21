@@ -1,6 +1,7 @@
 // rfc-event-comms E6 on the legacy paths: the inbox read (and `team drops --read`, the same
 // function) honours the exposure claim on an active root, a leg's own delivery record continues its
-// claim, the read is dual-written to the per-seat store, and a pre-E6 inbox server (a listener
+// claim, a read writes its one receipt and nothing in the per-seat store (the pending markers an
+// earlier build's dual write left are still drained), and a pre-E6 inbox server (a listener
 // marker with no level, as 85f8d5351 writes it) blocks activation.
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
@@ -17,9 +18,9 @@ import { legBody, recordDeliveredBody, settleLegBody } from '../src/send/readabl
 import { receiptPath } from '../src/mcp/inbox.ts';
 import { appendRecovered, entryMsgIdAt, verifiedQueuePlaceOf } from '../src/queue/append.ts';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { derivedProgress, drainPendingReceipts, readQueueReceipts } from '../src/queue/receipt-store.ts';
+import { derivedProgress, drainPendingReceipts, QUEUE_PENDING_DOMAIN, readQueueReceipts } from '../src/queue/receipt-store.ts';
 import { currentGenerationName } from '../src/queue/append.ts';
-import { messageKeyOf } from '../src/store/keys.ts';
+import { messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
 import { LEAD_ACK_PREFIX } from '../src/send/record.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { acquireLockAt } from '../src/launch/seat-lock.ts';
@@ -72,6 +73,16 @@ function message(at: { root: string; home: string; dropDir: string }, id: string
     writeFileSync(join(at.dropDir, id), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     return { ok: true, value: true };
   }, { home: at.home });
+}
+
+/** A signed pending dual write, as a build before the one-receipt read left it beside a queue. */
+function plantPending(at: { root: string; home: string; dropDir: string }, msgId: string, nonce = 'aaaaaaaaaaaa'): string {
+  const folder = join(at.root, '.agents', 'queues', SESSION, 'lead', 'pending-receipts');
+  mkdirSync(folder, { recursive: true });
+  const payload = { v: 1, kind: 'queue-pending', root: at.root, session: SESSION, seat: 'lead', msg_id: msgId, receipt: 'read', actor: { kind: 'recipient', name: 'lead' } };
+  const signature = signDomain(QUEUE_PENDING_DOMAIN, payload as unknown as Json, messageKeyOf(at.home));
+  writeFileSync(join(folder, `0000000000005.${nonce}.${msgId}.read.json`), `${JSON.stringify({ payload, signature })}\n`);
+  return folder;
 }
 
 function recordOf(at: { dropDir: string }, id: string) {
@@ -229,16 +240,13 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  test('a read published while another holder has the queue lock leaves a pending dual write, drained to exactly one receipt', () => {
+  test('a pending dual write an earlier build left while the queue lock was held is drained to exactly one receipt', () => {
     const at = place();
     message(at, M1);
     const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
     const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
     expect('release' in holder).toBe(true);
-    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
-    expect(existsSync(receiptPath(at.dropDir, M1))).toBe(true);
-    const pending = join(base, 'pending-receipts');
-    expect(readdirSync(pending).length).toBe(1);
+    const pending = plantPending(at, M1);
     const generation = currentGenerationName(at.dropDir)!;
     const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
     const binding = { root: at.root, session: SESSION, seat: 'lead', generation };
@@ -252,26 +260,16 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(receipts.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
   });
 
-  test('a read in the record-to-index window leaves a signed marker, drained to exactly one receipt after the commit', () => {
+  test('a read writes one receipt: no per-seat store file and no pending marker, even with the queue lock held', () => {
     const at = place();
-    const record = signRecord({
-      kind: 'message', id: M1, to: 'lead', to_id: null, root: at.root, session: SESSION,
-      at: '2026-11-18T00:00:00.000Z', body: 'b', from: 'worker', from_id: null, rule: 'the owner', thread: M1,
-    }, at.home);
-    let readInWindow = false;
-    appendDeliverySync({ dropDir: at.dropDir, record }, () => {
-      writeFileSync(join(at.dropDir, M1), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-      // The canonical record is published; its entry and id index are not written yet.
-      readInWindow = readMessage(target(at), M1, at.home).ok;
-      return { ok: true, value: true };
-    }, { home: at.home });
-    expect(readInWindow).toBe(true);
+    message(at, M1);
     const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
-    // The writer's release drained the marker once the entry was placed.
-    expect(readdirSync(join(base, 'pending-receipts')).length).toBe(0);
-    const generation = currentGenerationName(at.dropDir)!;
-    const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
-    expect(readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
+    const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
+    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
+    if ('release' in holder) holder.release();
+    expect(existsSync(receiptPath(at.dropDir, M1))).toBe(true);
+    expect(existsSync(join(base, 'pending-receipts'))).toBe(false);
+    expect(existsSync(join(at.root, '.agents', 'receipts'))).toBe(false);
   });
 
   test('a forged or modified pending marker signs no receipt and is dropped', () => {
@@ -294,13 +292,8 @@ describe('E6 body hand-over on the E5 read claim', () => {
   test('a non-verifying marker already standing for the same message never suppresses a genuine decision', () => {
     const at = place();
     message(at, M1);
-    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
-    const folder = join(base, 'pending-receipts');
-    mkdirSync(folder, { recursive: true });
+    const folder = plantPending(at, M1);
     writeFileSync(join(folder, `0000000000001.cccccccccccc.${M1}.read.json`), 'damaged\n');
-    const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
-    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
-    if ('release' in holder) holder.release();
     expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 1 });
     const generation = currentGenerationName(at.dropDir)!;
     const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
@@ -312,11 +305,7 @@ describe('E6 body hand-over on the E5 read claim', () => {
   test('a malformed marker sorted first (JSON null) never stops the drain: the valid one settles on the same pass', () => {
     const at = place();
     message(at, M1);
-    const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
-    const folder = join(base, 'pending-receipts');
-    const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
-    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
-    if ('release' in holder) holder.release();
+    const folder = plantPending(at, M1);
     writeFileSync(join(folder, `0000000000000.dddddddddddd.${M1}.read.json`), 'null\n');
     expect(drainPendingReceipts(at.dropDir, at.home)).toEqual({ written: 1, left: 0, dropped: 1 });
   });
@@ -325,9 +314,7 @@ describe('E6 body hand-over on the E5 read claim', () => {
     const at = place();
     message(at, M1);
     const base = join(at.root, '.agents', 'queues', SESSION, 'lead');
-    const holder = acquireLockAt(join(base, 'lock'), base, undefined, { waitMs: 0, pollMs: 10 });
-    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
-    if ('release' in holder) holder.release();
+    plantPending(at, M1);
     message(at, M2);
     expect(readdirSync(join(base, 'pending-receipts')).length).toBe(0);
     const generation = currentGenerationName(at.dropDir)!;
@@ -368,17 +355,12 @@ describe('E6 body hand-over on the E5 read claim', () => {
     expect(readMessage(target(at), M1, at.home).ok).toBe(true);
   });
 
-  test('a read is dual-written to the per-seat store only at a proved placement', () => {
+  test('a stale id index is not a proved placement', () => {
     const at = place();
     message(at, M1);
     message(at, M2);
-    expect(readMessage(target(at), M1, at.home).ok).toBe(true);
     const generation = currentGenerationName(at.dropDir)!;
-    const entryAt = (seq: number) => entryMsgIdAt(at.dropDir, generation, seq, { root: at.root, session: SESSION, seat: 'lead' }, at.home);
-    const receipts = readQueueReceipts({ root: at.root, session: SESSION, seat: 'lead', generation }, at.home, entryAt)!;
-    expect(receipts.map(r => [r.seq, r.kind])).toEqual([[1, 'read']]);
-    expect(derivedProgress(receipts).prefix).toBe(1);
-    // A stale id index pointing M2 at seq 1 is not a proved placement: nothing is signed for it.
+    // A stale id index pointing M2 at seq 1 is not a proved placement.
     writeFileSync(join(at.root, '.agents', 'queues', SESSION, 'lead', generation, 'ids', M2), '1\n');
     expect(verifiedQueuePlaceOf(at.dropDir, M2, { root: at.root, session: SESSION, seat: 'lead' }, at.home)).toBe(null);
   });

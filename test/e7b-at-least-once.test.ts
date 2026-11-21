@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readMessage } from '../src/mcp/inbox.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
-import { ackedFile, isRead, isStampedPayload, recordAuthOf, recordStampAt, signRecord, stampedPayload, writeRecord, type RecordPayload } from '../src/send/record.ts';
+import { ackedFile, isRead, isStampedPayload, receiptFile, recordAuthOf, recordStampAt, signReceiptPayload, signRecord, stampedPayload, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { activate, checkActors, deactivate, floorState, queuesFolder, type FloorActor } from '../src/queue/floor.ts';
 import { backoffMs, copyHistory, deliveryHeader, resendDue, takeCopyNumber, unwrapCopy, wrapCopy, EXPOSURES } from '../src/queue/handover.ts';
 import { seatMailDirIn } from '../src/queue/mail-tree.ts';
@@ -109,13 +109,28 @@ describe('the stamp, decided at signing (decision 3: stamp unless proven dark)',
 });
 
 describe('settlement: only the recipient settles a stamped record (R3.1, R4.3)', () => {
-  test('a writer-side read does not settle; the ack does', () => {
+  test('a writer-side read does not settle and writes no receipt; the ack writes the one receipt', () => {
     const at = place();
     activateRoot(at);
     write(at, M1);
     expect(read(at, M1).kind).toBe('published');
+    expect(existsSync(receiptFile(at.dropDir, M1, 'read'))).toBe(false);
     expect(isRead(at.dropDir, M1, context(at), key(at))).toBe(false);
-    // The ack finds the read name taken by the unconfirmed read: it writes the acked name.
+    expect(read(at, M1, 'ack').kind).toBe('published');
+    expect(existsSync(ackedFile(at.dropDir, M1))).toBe(false);
+    expect(readdirSync(at.dropDir).filter((name) => name.startsWith(`${M1}.`))).toEqual([`${M1}.read.json`]);
+    expect(isRead(at.dropDir, M1, context(at), key(at))).toBe(true);
+    expect(read(at, M1, 'ack').kind).toBe('served');
+  });
+
+  test('a copy receipt an earlier build wrote does not settle; the ack is the note beside it', () => {
+    const at = place();
+    activateRoot(at);
+    write(at, M1);
+    const copy = signReceiptPayload({ kind: 'receipt', status: 'read', id: M1, to: 'lead', root: at.root, session: SESSION, at: new Date().toISOString(), read_by: 'copy' }, at.home);
+    writeFileSync(receiptFile(at.dropDir, M1, 'read'), `${JSON.stringify(copy, null, 2)}\n`);
+    expect(takeCopyNumber(at.dropDir, M1, 'read')).toBe(1);
+    expect(isRead(at.dropDir, M1, context(at), key(at))).toBe(false);
     expect(read(at, M1, 'ack').kind).toBe('published');
     expect(existsSync(ackedFile(at.dropDir, M1))).toBe(true);
     expect(isRead(at.dropDir, M1, context(at), key(at))).toBe(true);
