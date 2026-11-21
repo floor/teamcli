@@ -40,7 +40,6 @@ import {
   verifyRecord,
   type StatusContext,
 } from './record.ts';
-import { clearUnread } from './unread-hint.ts';
 import { archiveLegacySeat, daemonServesRoot, legacySeatFolders } from './legacy-inbox-retention.ts';
 import { identityDirOf, mailTreeOf, type MailTree } from '../queue/mail-tree.ts';
 
@@ -414,7 +413,6 @@ function moveFamily(dropDir: string, planned: InboxArchiveMove): string | null {
     const problem = releaseLive(join(dropDir, name), join(destDir, name));
     if (problem !== null) return `${planned.id}: ${name} ${problem}`;
   }
-  clearUnread(dropDir, planned.id);
   return null;
 }
 
@@ -499,7 +497,6 @@ function finishSidecar(dropDir: string, name: string): string | null {
   const to = join(monthDir, name);
   if (placeFile(from, to) !== null) return null;
   if (releaseLive(from, to) !== null) return null;
-  clearUnread(dropDir, id);
   return id;
 }
 
@@ -611,7 +608,6 @@ function finishOrphans(dropDir: string, limit = Number.POSITIVE_INFINITY): SeatR
     const to = join(monthDir, name);
     if (placeFile(from, to) !== null) continue;
     if (releaseLive(from, to) !== null) continue;
-    clearUnread(dropDir, id);
     done.add(id);
   }
   return { finished: [...done], used: limit - budget.left, more: budget.more };

@@ -27,8 +27,6 @@
 // 4. Within each family, the record and non-receipt sidecars move first and the read/replied
 //    receipts move last. If the pass stops at a slice boundary or fails on a later family, every
 //    family that left the live folder is recorded in a signed manifest and named in the report.
-// 5. `.unread.json` stays in the live seat folder: unread ids stay untouched, and any stale entry
-//    naming a drop that was just archived is pruned atomically.
 import { createHash, type KeyObject } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, opendirSync, readdirSync, readFileSync } from 'node:fs';
 import { fchmodSync, openSync, writeSync } from '../host/guarded-fs.ts';
@@ -942,8 +940,8 @@ export function verifyDropArchive(raw: unknown, key: KeyObject): DropArchivePayl
 }
 
 /** The fixed names TeamCLI writes in a seat's drop folder that are not a message's family, each
- *  from its writer: the inbox listener (src/mcp/inbox.ts LISTENER_FILE), the unread hint
- *  (src/send/unread-hint.ts), the wake retry's line record (src/watch/unread.ts
+ *  from its writer: the inbox listener (src/mcp/inbox.ts LISTENER_FILE), the unread hint an
+ *  earlier build wrote (`.unread.json`, no longer written), the wake retry's line record (src/watch/unread.ts
  *  `wakeLinesPath`), the stuck-episode marker (src/watch/mail-pass.ts STUCK_MARKER), and
  *  Finder's folder file. test/drop-retention.test.ts holds this list to the writers. */
 export const SEAT_DROP_FIXED_FILES: readonly string[] = ['.inbox-listener', '.unread.json', '.wake-lines.json', '.stuck', '.DS_Store'];
@@ -1140,62 +1138,6 @@ type CandidateFamily = {
   newestMs: number;
 };
 
-/** Removes archived message ids from `.unread.json` in `seatHeld` while keeping all unread ids intact. */
-function pruneArchivedFromUnreadHint(
-  atFfi: RelativeDirOps,
-  baseHeld: HeldDir,
-  seatHeld: HeldDir,
-  archivedIds: ReadonlySet<string>,
-): string | null {
-  if (archivedIds.size === 0) return null;
-  const chainProblem = verifyHeldDirChain(atFfi, baseHeld, seatHeld);
-  if (chainProblem !== null) return chainProblem;
-  const hintPath = join(seatHeld.path, '.unread.json');
-  const held = heldAt(hintPath);
-  if (held.kind === 'missing') return null;
-  if (held.kind === 'link') return `${hintPath}: a symbolic link was found and not followed`;
-  if (held.kind !== 'file') return `${hintPath}: unexpected ${held.kind} at .unread.json`;
-  if (process.getuid !== undefined && held.uid !== process.getuid()) {
-    return `${hintPath}: another user's file`;
-  }
-  let parsed: unknown;
-  try {
-    const data = readRegularNoFollowInDir(atFfi, seatHeld, '.unread.json');
-    parsed = JSON.parse(data.toString('utf8')) as unknown;
-  } catch {
-    // An unreadable hint is left untouched as it stands.
-    return null;
-  }
-  if (!isRecord(parsed) || parsed.v !== 1 || !isRecord(parsed.unread)) return null;
-  const unread = parsed.unread as Record<string, unknown>;
-  const nextUnread: Record<string, { entries: { id: string; at: string }[] }> = {};
-  let changed = false;
-  for (const [peer, rawEntry] of Object.entries(unread)) {
-    if (!isRecord(rawEntry) || !Array.isArray(rawEntry.entries)) continue;
-    const kept: { id: string; at: string }[] = [];
-    for (const item of rawEntry.entries) {
-      if (!isRecord(item) || typeof item.id !== 'string' || typeof item.at !== 'string') continue;
-      if (archivedIds.has(item.id)) {
-        changed = true;
-        continue;
-      }
-      kept.push({ id: item.id, at: item.at });
-    }
-    if (kept.length > 0) nextUnread[peer] = { entries: kept };
-  }
-  if (!changed) return null;
-  const tmpName = `.unread.json.${String(process.pid)}.tmp`;
-  const bytes = Buffer.from(`${JSON.stringify({ v: 1, unread: nextUnread }, null, 2)}\n`, 'utf8');
-  const wrote = writeNewFileInHeldDir(atFfi, baseHeld, seatHeld, tmpName, bytes);
-  if (!wrote.ok) return null;
-  const moved = atFfi.renameatReplace(seatHeld.fd, tmpName, seatHeld.fd, '.unread.json');
-  if (!moved.ok) {
-    // Clean up the temporary file and leave the existing hint intact if the atomic swap failed.
-    unlinkInHeldDir(atFfi, seatHeld, tmpName);
-  }
-  return null;
-}
-
 function writeArchiveManifestInHeldDir(
   atFfi: RelativeDirOps,
   baseHeld: HeldDir,
@@ -1283,7 +1225,6 @@ export function* dropRetirementSteps(
   const archived: DropArchiveFamily[] = [];
   const reclaimed: DropArchiveFamily[] = [];
   const movedRecords: { srcHeld: HeldDir; destHeld: HeldDir; files: string[] }[] = [];
-  const archivedBySeatDir = new Map<string, { seatHeld: HeldDir; ids: Set<string> }>();
   let manifestPath: string | null = null;
   let scanned = 0;
   let stayed = 0;
@@ -1345,7 +1286,6 @@ export function* dropRetirementSteps(
     }
     movedRecords.length = 0;
     archived.length = 0;
-    archivedBySeatDir.clear();
   };
 
   const finalizeMoved = (): void => {
@@ -1365,7 +1305,7 @@ export function* dropRetirementSteps(
       return;
     }
 
-    // Before writing `.unread.json` updates or the signed manifest, verify that `.archive/<date>`
+    // Before writing the signed manifest, verify that `.archive/<date>`
     // and every moved family's destination folder still resolve inside `send-drops` without any
     // symbolic link. If any archive parent was swapped for a link, roll back all moved files so no
     // family escapes or sits without a manifest.
@@ -1384,11 +1324,6 @@ export function* dropRetirementSteps(
         snapshot();
         return;
       }
-    }
-
-    for (const { seatHeld, ids } of archivedBySeatDir.values()) {
-      const problem = pruneArchivedFromUnreadHint(atFfi, sendDropsHeld, seatHeld, ids);
-      if (problem !== null && refused === null) refused = problem;
     }
 
     const wrote = writeArchiveManifestInHeldDir(
@@ -1798,8 +1733,7 @@ export function* dropRetirementSteps(
 
       // Phase 3: Move each family relative to the held `seatHeld.fd` and `destHeld.fd` descriptors
       // (record and non-receipt sidecars first, receipts last). If the pass stops at a slice boundary
-      // or fails on a later family, `finalizeMoved()` in `finally` updates `.unread.json` and writes
-      // the signed manifest for every family that completed its move.
+      // or fails on a later family, `finalizeMoved()` in `finally` writes the signed manifest for every family that completed its move.
       for (const item of prepared) {
         yield;
         const { candidate, destHeld, hashed } = item;
@@ -1849,12 +1783,6 @@ export function* dropRetirementSteps(
           id: candidate.id,
           files: movedFiles,
         });
-        let seatEntry = archivedBySeatDir.get(candidate.seatHeld.path);
-        if (seatEntry === undefined) {
-          seatEntry = { seatHeld: candidate.seatHeld, ids: new Set<string>() };
-          archivedBySeatDir.set(candidate.seatHeld.path, seatEntry);
-        }
-        seatEntry.ids.add(candidate.id);
         snapshot();
       }
 

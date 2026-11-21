@@ -15,7 +15,6 @@ import { dirname } from 'node:path';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
 import { ackedFile, clearedFile, COPY_READ_BY, isLeadAckReadBy, leadAckActorOf, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
-import { clearUnread } from './unread-hint.ts';
 
 /** The message whose read is being recorded: its folder, its id, the seat it was addressed to,
  *  and the binding the receipt carries. `root` and `session` are the record's own — a message a
@@ -49,11 +48,6 @@ export type RecordReadOutcome =
 
 export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
   const outcome = publish(input);
-  // The message is read, however the receipt got there: its sender's entry in the recipient's
-  // unread index can no longer be the newest unread record, so it is cleared here, at the one
-  // sink every reader passes. A hint that cannot be cleared is settled by the sweep it feeds:
-  // the sweep verifies the record it names and marks nothing when it is already read.
-  if (outcome.kind === 'published' || outcome.kind === 'served') clearUnread(input.dropDir, input.id);
   // rfc-event-comms §2 (E6): the per-seat receipt store is written in shadow beside this receipt.
   if (outcome.kind === 'published') {
     shadowQueueReceipt({

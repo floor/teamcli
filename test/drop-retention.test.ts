@@ -4,7 +4,7 @@
 // 2. Never follows a symbolic link, never leaves `<root>/.agents/send-drops`, and refuses the whole
 //    pass on any unexpected file type or name before moving anything.
 // 3. Runs only in the chores child, sliced, never on the daemon loop.
-// 4. Keeps `.unread.json` consistent and proves an unread drop is never moved.
+// 4. Leaves a `.unread.json` an earlier build wrote as it is and proves an unread drop is never moved.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -223,7 +223,7 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
     ]);
   });
 
-  test('.unread.json stays consistent and an unread drop is never moved', async () => {
+  test('a leftover .unread.json is left as it is and an unread drop is never moved', async () => {
     plant('worker', READ_ID_1, OLD_ISO);
     markRead('worker', READ_ID_1, OLD_ISO);
     ageFamily('worker', READ_ID_1, OLD);
@@ -252,6 +252,7 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
       { mode: 0o600 },
     );
     utimesSync(unreadPath, OLD, OLD);
+    const hintBefore = readFileSync(unreadPath, 'utf8');
 
     const report = await retireDropsSliced({
       root,
@@ -268,13 +269,8 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
     expect(existsSync(livePath('worker', UNREAD_ID))).toBe(true);
     expect(existsSync(join(archiveSeatDir('worker'), UNREAD_ID))).toBe(false);
 
-    // .unread.json remains in the live seat folder, retains UNREAD_ID, and drops the archived READ_ID_1.
-    expect(existsSync(unreadPath)).toBe(true);
-    const updatedHint = JSON.parse(readFileSync(unreadPath, 'utf8')) as {
-      v: number;
-      unread: Record<string, { entries: { id: string; at: string }[] }>;
-    };
-    expect(updatedHint.unread.lead?.entries).toEqual([{ id: UNREAD_ID, at: OLD_ISO }]);
+    // The leftover hint stays in the live seat folder, unread and unwritten.
+    expect(readFileSync(unreadPath, 'utf8')).toBe(hintBefore);
   });
 
   test('general briefs, pending/taken drops, active fallback markers, and recent drops stay', async () => {
@@ -350,28 +346,6 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
     markRead('worker', READ_ID_2, OLD_ISO);
     plant('worker', UNREAD_ID, OLD_ISO);
 
-    const unreadPath = livePath('worker', '.unread.json');
-    writeFileSync(
-      unreadPath,
-      `${JSON.stringify(
-        {
-          v: 1,
-          unread: {
-            lead: {
-              entries: [
-                { id: UNREAD_ID, at: OLD_ISO },
-                { id: READ_ID_1, at: OLD_ISO },
-                { id: READ_ID_2, at: OLD_ISO },
-              ],
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      { mode: 0o600 },
-    );
-
     let tickA = 0;
     let stopNow = false;
     const stopReport = await retireDropsSliced({
@@ -412,10 +386,6 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
     expect(stopManifest).not.toBeNull();
     expect(stopManifest?.families.map((f) => f.id)).toEqual([READ_ID_1]);
 
-    const hintAfterStop = JSON.parse(readFileSync(unreadPath, 'utf8')) as {
-      unread: Record<string, { entries: { id: string; at: string }[] }>;
-    };
-    expect(hintAfterStop.unread.lead?.entries.map((e) => e.id)).toEqual([UNREAD_ID, READ_ID_2]);
 
     // Scene B: pass fails on a later family (READ_ID_3 fails on its receipt rename after READ_ID_2 moved).
     const readId3 = '11111111-2222-4333-8444-555555555553';

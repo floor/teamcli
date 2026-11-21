@@ -2,11 +2,9 @@
 //
 // A seat's `team send` settles the newest message its recipient delivered to it. Finding that
 // message by reading every record in the session's tree made every send wait tens of seconds on a
-// large tree. The recipient folder now carries an unread index — one small file naming, per
-// sending seat, that seat's newest few staged records — and the send reads and verifies them
-// newest first until one holds. These scenes hold that cost to a bound on a 40,000-file tree, and
-// hold the ways an index can be wrong: absent, and naming a record that no longer qualifies. Both
-// mark nothing, and neither sends the sweep back to the tree.
+// large tree. The send now lists only the seat's own folder, reads and verifies the records with
+// no receipt beside them newest first, and marks the first that holds. These scenes hold the ways
+// a waiting record does not qualify: read, missing, another sender's, or delivered late.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -141,8 +139,7 @@ function readReceiptExists(w: World, seat: string, id: string): boolean {
   return existsSync(join(recordDir(w.root, 'acme', seat), `${id}.read.json`));
 }
 
-/** One signed record in a seat's folder, written the way a send writes it but with no unread
- *  index entry beside it — the tree an older build, or a lost hint, leaves. */
+/** One signed record in a seat's folder, written by hand the way a send writes it. */
 function deliveredWithoutIndex(w: World, seat: string, id: string, fields: { from: string; at: string }): void {
   const signed = signRecord(
     {
@@ -175,9 +172,9 @@ function filler(seatDir: string, count: number): void {
   }
 }
 
-describe('the unread index is what a send reads, and a big tree is never walked', () => {
+describe('a send reads its own folder, and a big tree is never walked', () => {
 
-  test('an absent index marks nothing and never falls back to the tree', () => {
+  test('a waiting record from the recipient is found in the folder and marked', () => {
     const w = makeWorld();
     deliveredWithoutIndex(w, 'lead', ASK_LEAD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
     line(w, ASK_LEAD, 'worker', 'lead', 'socket', '2026-11-03T09:00:01.000Z');
@@ -193,15 +190,15 @@ describe('the unread index is what a send reads, and a big tree is never walked'
       at: NOW_ISO,
     });
 
-    expect(outcome).toEqual({ kind: 'none' });
-    expect(readReceiptExists(w, 'lead', ASK_LEAD)).toBe(false);
+    expect(outcome).toEqual({ kind: 'marked', id: ASK_LEAD });
+    expect(readReceiptExists(w, 'lead', ASK_LEAD)).toBe(true);
   });
 
-  test('an index naming a read, missing, foreign or late record marks nothing', () => {
+  test('a read, missing, foreign or late record marks nothing', () => {
     const w = makeWorld();
     const leadDir = recordDir(w.root, 'acme', 'lead');
 
-    // (a) The index still names a message that is already read: the clear was lost.
+    // (a) A message that is already read.
     delivered(w, 'lead', READ_ALREADY, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
     line(w, READ_ALREADY, 'worker', 'lead', 'socket', '2026-11-03T09:00:01.000Z');
     const key = messageKeyState(w.home);
@@ -209,20 +206,15 @@ describe('the unread index is what a send reads, and a big tree is never walked'
     publishRecordRead({ dropDir: leadDir, id: READ_ALREADY, to: 'lead', root: w.root, session: 'acme', home: w.home, key: key.key, at: NOW_ISO });
     expect(readReceiptExists(w, 'lead', READ_ALREADY)).toBe(true);
 
-    // (b) The index names an id no file holds.
-    // (c) The index names a record another sender wrote.
+    // (b) A record another sender wrote.
     delivered(w, 'lead', OTHER_SENDER, { from: 'helper', at: '2026-11-03T09:20:00.000Z' });
     line(w, OTHER_SENDER, 'helper', 'lead', 'socket', '2026-11-03T09:20:01.000Z');
-    // (d) The index names a record delivered after this send's own instant.
+    // (c) A record delivered after this send's own instant.
     delivered(w, 'lead', LATE, { from: 'worker', at: '2026-11-03T11:30:00.000Z' });
     line(w, LATE, 'worker', 'lead', 'socket', '2026-11-03T12:00:01.000Z');
 
-    const sweep = (id: string): ReturnType<typeof markAnsweredBySend> => {
-      writeFileSync(
-        join(leadDir, '.unread.json'),
-        `${JSON.stringify({ v: 1, unread: { worker: { entries: [{ id, at: NOW_ISO }] } } })}\n`,
-      );
-      return markAnsweredBySend({
+    const sweep = (): ReturnType<typeof markAnsweredBySend> =>
+      markAnsweredBySend({
         seat: 'lead',
         sender: 'worker',
         senderId: null,
@@ -232,30 +224,11 @@ describe('the unread index is what a send reads, and a big tree is never walked'
         home: w.home,
         at: NOW_ISO,
       });
-    };
 
-    expect(sweep(READ_ALREADY)).toEqual({ kind: 'none' });
-    expect(sweep(MISSING)).toEqual({ kind: 'none' });
-    expect(sweep(OTHER_SENDER)).toEqual({ kind: 'none' });
-    expect(sweep(LATE)).toEqual({ kind: 'none' });
-    // None of the four was marked by any of the four sweeps.
+    expect(sweep()).toEqual({ kind: 'none' });
+    // None was marked.
     expect(readReceiptExists(w, 'lead', LATE)).toBe(false);
     expect(readReceiptExists(w, 'lead', OTHER_SENDER)).toBe(false);
     expect(readReceiptExists(w, 'lead', MISSING)).toBe(false);
-  });
-
-  test('a read clears the sender entry the index holds', () => {
-    const w = makeWorld();
-    const leadDir = recordDir(w.root, 'acme', 'lead');
-    delivered(w, 'lead', ASK_LEAD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
-    const readIndex = (): { unread?: Record<string, { entries: { id: string }[] }> } =>
-      JSON.parse(readFileSync(join(leadDir, '.unread.json'), 'utf8')) as { unread?: Record<string, { entries: { id: string }[] }> };
-    expect(readIndex().unread?.worker?.entries.map((entry) => entry.id)).toEqual([ASK_LEAD]);
-
-    const key = messageKeyState(w.home);
-    if (key.kind !== 'key') throw new Error(key.kind);
-    publishRecordRead({ dropDir: leadDir, id: ASK_LEAD, to: 'lead', root: w.root, session: 'acme', home: w.home, key: key.key, at: NOW_ISO });
-
-    expect(readIndex().unread?.worker).toBeUndefined();
   });
 });

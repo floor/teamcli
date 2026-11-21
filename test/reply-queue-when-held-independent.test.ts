@@ -3,7 +3,6 @@
 // Coverage:
 // 1. Queued arm writes everything the held path must without disturbing the holder's lock:
 //    - Signed reply record written at recordDir(root, session, targetSeat);
-//    - Unread hint (.unread.json) written via noteUnread best-effort path;
 //    - Answered message's read and replied receipts written and verified in the replier's folder;
 //    - The live holder's seat lock file remains intact across runReply's finally block.
 // 2. Lock state discrimination and --close guard:
@@ -37,7 +36,6 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { readHistory } from '../src/send/history.ts';
 import { closeFile, receiptAuthOf, statusOf } from '../src/send/record.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
-import { readUnreadHint } from '../src/send/unread-hint.ts';
 import type { Live } from '../src/status/compare.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
@@ -119,7 +117,7 @@ function seedQuestion(toSeat: string, id: string, fromSeat = 'worker'): string {
 }
 
 describe('1. queued arm artifacts and holder lock preservation', () => {
-  test('a reply to a live-held seat writes the signed record, unread hint, and read + replied receipts without releasing the holder lock', async () => {
+  test('a reply to a live-held seat writes the signed record and read + replied receipts without releasing the holder lock', async () => {
     seedQuestion('owner', MSG_ID, 'worker');
     const key = messageKeyOf(home);
 
@@ -161,11 +159,7 @@ describe('1. queued arm artifacts and holder lock preservation', () => {
       expect(replyRec.payload.thread).toBe(MSG_ID);
       expect(replyRec.payload.body).toContain('queued answer body');
 
-      // 2. Unread hint (.unread.json) in worker's folder recorded the queued reply via best-effort write.
-      const hints = readUnreadHint(workerFolder, 'owner');
-      expect(hints).toEqual([{ id: REPLY_ID, at: NOW_ISO }]);
-
-      // 3. Both .read.json and .replied.json receipts exist and verify in the replier's folder.
+      // 2. Both .read.json and .replied.json receipts exist and verify in the replier's folder.
       const ownerFolder = recordDir(root, 'acme', 'owner');
       const readRec = receiptAuthOf(JSON.parse(readFileSync(join(ownerFolder, `${MSG_ID}.read.json`), 'utf8')), key);
       expect(readRec.kind).toBe('ok');
@@ -176,7 +170,7 @@ describe('1. queued arm artifacts and holder lock preservation', () => {
       expect(repliedRec.kind).toBe('ok');
       expect(statusOf(ownerFolder, MSG_ID, { to: 'owner', root, session: 'acme' }, key)).toBe('replied');
 
-      // 4. The live holder's seat lock file was NOT released or overwritten by runReply.
+      // 3. The live holder's seat lock file was NOT released or overwritten by runReply.
       expect(existsSync(lockFile)).toBe(true);
       expect(readFileSync(lockFile, 'utf8')).toBe(tokenBefore);
     } finally {
@@ -203,7 +197,6 @@ describe('2. lock state discrimination: stale takeover, unreadable token, and --
 
     const workerFolder = recordDir(root, 'acme', 'worker');
     expect(recordAt(join(workerFolder, REPLY_ID)).payload.id).toBe(REPLY_ID);
-    expect(readUnreadHint(workerFolder, 'owner')).toEqual([{ id: REPLY_ID, at: NOW_ISO }]);
     // Because acquireSeatLock took over the stale token, runReply held the lock and released it in finally.
     expect(existsSync(lockFile)).toBe(false);
   });
@@ -222,7 +215,6 @@ describe('2. lock state discrimination: stale takeover, unreadable token, and --
 
     const workerFolder = recordDir(root, 'acme', 'worker');
     expect(recordAt(join(workerFolder, REPLY_ID)).payload.id).toBe(REPLY_ID);
-    expect(readUnreadHint(workerFolder, 'owner')).toEqual([{ id: REPLY_ID, at: NOW_ISO }]);
     // Unreadable token is not owned by runReply, so finally leaves it untouched.
     expect(existsSync(lockFile)).toBe(true);
     expect(readFileSync(lockFile, 'utf8')).toBe('unreadable-token-payload\n');
@@ -347,7 +339,6 @@ delivery_order: [typed, drop]
 
     const museFolder = recordDir(root, 'acme', 'muse');
     expect(recordAt(join(museFolder, REPLY_ID)).payload.id).toBe(REPLY_ID);
-    expect(readUnreadHint(museFolder, 'owner')).toEqual([{ id: REPLY_ID, at: NOW_ISO }]);
 
     const historyEntries = () => {
       const h = readHistory('acme', root, home);
