@@ -18,7 +18,7 @@ import { carriedPointer, carrierDeliveryOf, recordDeliveredBody } from '../send/
 import { listenerKeyOf, newOfferToken, proveOffer } from '../comms/offer.ts';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { lstatSync, readdirSync, realpathSync, watch, type FSWatcher } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -39,7 +39,7 @@ import { alreadyReadSentence, DELIVERY_LEVEL, readSealedRecord, recordAuthOfSeal
 import { attributedBody, renderedIdentity } from '../send/sender-claim.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, replyLine, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
-import { readState, type SeatState, type State } from '../state.ts';
+import { readState, STATE_FILE, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
 import { agentList, paneProcesses, paneRootPid } from '../herdr.ts';
 import { profileFor } from '../profiles/profile.ts';
@@ -1921,6 +1921,42 @@ export async function runMcpServe(
     }
   };
   const brief: BriefRead = { claim: claimOf, ...(boundEpoch === undefined ? {} : { epoch: boundEpoch }) };
+  // The files the seat's proof reads, and the pane this process names: a seat restart or a moved
+  // pane rewrites the state (atomically: a new inode), a stop or an edited declaration the team
+  // file. Any change, or a file that cannot be stated, proves again.
+  let proven: string | null = null;
+  let provenTeamAt: string | null = null;
+  const witness = (): string => [join(stateDir, STATE_FILE), provenTeamAt].map((path) => {
+    if (path === null) return 'none';
+    try {
+      const stat = statSync(path);
+      return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    } catch {
+      return 'none';
+    }
+  }).join('|') + `|${io.env.HERDR_PANE_ID ?? ''}`;
+  const proveAlive = (): string | null => {
+    const now = placementOf(io, stateDir, team.session, seat.name);
+    if (!now.ok) return now.why;
+    const generationNow = generationOf(stateDir, team.session, seat.name);
+    // A server that bound no claim (it started before its launch wrote one) takes its own
+    // launch's first claim, once that launch is proven to be its own; any other claim stays a
+    // refusal, and a binding once taken is kept for the life of the process.
+    if (boundEpoch === undefined && generationNow.kind === 'claim' && !replacement
+      && ownsCurrentLaunch(io, stateDir, team.session, seat.name) === true) {
+      boundEpoch = generationNow.epoch;
+      brief.epoch = generationNow.epoch;
+      writeListener(dropDir, { ...listener, epoch: generationNow.epoch });
+    }
+    const staleLaunchNow = staleLaunch(generationNow, boundEpoch, seat.name);
+    if (staleLaunchNow !== null) return staleLaunchNow;
+    const file = readTeam();
+    if (!file.ok) {
+      return `the team file cannot be read now, so this server cannot prove its seat is still declared: ${file.errors[0]?.message ?? 'the team file could not be read'}`;
+    }
+    provenTeamAt = file.path;
+    return declarationRefusal(file.team, team.session, seat.name);
+  };
   const serving: Serving = {
     project: team.project,
     seat: seat.name,
@@ -1941,27 +1977,16 @@ export async function runMcpServe(
     // while this process lives, and a launcher-written config that names it again must not make
     // the old process a reader of the new seat. The team file itself is read again: the
     // declaration this server serves is the file's current one, and a seat it has stopped or
-    // dropped is no longer a seat this server may serve.
+    // dropped is no longer a seat this server may serve. A proof that passed stands until a file
+    // it read changes (`witness`): the check is the same, only how often it runs.
     alive: () => {
-      const now = placementOf(io, stateDir, team.session, seat.name);
-      if (!now.ok) return now.why;
-      const generationNow = generationOf(stateDir, team.session, seat.name);
-      // A server that bound no claim (it started before its launch wrote one) takes its own
-      // launch's first claim, once that launch is proven to be its own; any other claim stays a
-      // refusal, and a binding once taken is kept for the life of the process.
-      if (boundEpoch === undefined && generationNow.kind === 'claim' && !replacement
-        && ownsCurrentLaunch(io, stateDir, team.session, seat.name) === true) {
-        boundEpoch = generationNow.epoch;
-        brief.epoch = generationNow.epoch;
-        writeListener(dropDir, { ...listener, epoch: generationNow.epoch });
-      }
-      const staleLaunchNow = staleLaunch(generationNow, boundEpoch, seat.name);
-      if (staleLaunchNow !== null) return staleLaunchNow;
-      const file = readTeam();
-      if (!file.ok) {
-        return `the team file cannot be read now, so this server cannot prove its seat is still declared: ${file.errors[0]?.message ?? 'the team file could not be read'}`;
-      }
-      return declarationRefusal(file.team, team.session, seat.name);
+      const before = witness();
+      if (proven !== null && proven === before) return null;
+      proven = null;
+      const why = proveAlive();
+      // Kept only when the files it read are the ones witnessed before it ran.
+      if (why === null && provenTeamAt !== null && before === witness()) proven = before;
+      return why;
     },
   };
   // Every push re-reads the team and re-proves the seat, and each read asks git for the root. The
