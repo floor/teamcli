@@ -680,9 +680,11 @@ function ownPlainFile(path: string, folder: string): boolean {
   }
 }
 
-/** Re-arms every lead-alarm clock in the seat's drop folder that has not climbed: the clock
- *  restarts at `nowMs`. A folder or marker that cannot be read or written is left as it is. */
-export function rearmLeadEpisodes(dropDir: string, nowMs: number): void {
+/** Tends the lead-alarm clocks in the seat's drop folder. With `waiting` (the ids this pass read
+ *  as still unread), an episode whose message is settled (read, cleared, archived) is removed.
+ *  With `nowMs`, every clock still running restarts at `nowMs`; one already there is not written.
+ *  Only this seat's own plain files are touched; one that cannot be read or written stays. */
+export function rearmLeadEpisodes(dropDir: string, nowMs: number | null, waiting?: ReadonlySet<string>): void {
   let names: string[];
   let folder: string;
   try {
@@ -693,13 +695,17 @@ export function rearmLeadEpisodes(dropDir: string, nowMs: number): void {
   }
   for (const name of names) {
     const path = join(dropDir, name);
-    // Only a plain file that is this seat's own: a link (to another seat's episode or anywhere
-    // else) or any other kind of entry is left untouched, and so is a file whose real path is not
-    // directly inside the seat's own folder.
+    // A link (to another seat's episode or anywhere else), any other kind of entry, or a file
+    // whose real path is not directly inside the seat's own folder is left untouched.
     if (!ownPlainFile(path, folder)) continue;
     try {
+      if (waiting !== undefined && !waiting.has(name.slice(0, -'.lead-episode'.length))) {
+        unlinkSync(path);
+        continue;
+      }
+      if (nowMs === null) continue;
       const parsed = JSON.parse(readEpisode(path)) as { at?: unknown; climbed?: unknown };
-      if (parsed.climbed === true || typeof parsed.at !== 'number') continue;
+      if (parsed.climbed === true || typeof parsed.at !== 'number' || parsed.at === nowMs) continue;
       replaceEpisode(path, `${JSON.stringify({ at: nowMs, climbed: false })}\n`);
     } catch {
       // Unreadable or unwritable: the marker stays as it is.
@@ -971,7 +977,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // from the wake before it. Other holds (a person wait, a gone or untrusted projection) keep
       // the legacy clock. Nothing else happens for a held seat: no wake, no reservation, no key.
       if (isLeadSeat(scene, seat.name) && scene.nativeWorking?.has(seat.name) === true) {
-        rearmLeadEpisodes(seatMailDirIn(scene.dir, scene.session, seat.name), scene.now.getTime());
+        rearmLeadEpisodes(seatMailDirIn(scene.dir, scene.session, seat.name), scene.now.getTime(), mail.waitingIds(seat.name));
       }
       continue;
     }
@@ -1049,12 +1055,14 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // this pass has not read yet (the pass's reader answers the others), and it runs for every
     // seat: an empty list, or a list the webhook empties, is no reason not to see a late message.
     const fresh = listUnread(dropDir, context, home, mail.recordAt);
+    // A lead is woken from unread mail whatever its delivery order is, including drop only.
+    const leadSeat = isLeadSeat(scene, seat.name);
+    // A lead's clocks for messages settled since are removed, so no pass tends them again.
+    const waiting = leadSeat ? mail.waitingIds(seat.name) : undefined;
+    if (waiting !== undefined) rearmLeadEpisodes(dropDir, null, new Set([...waiting, ...fresh.map((one) => one.id)]));
     if (unread.length === 0 && fresh.length === 0) continue;
     // The seat's class is read only for a seat something waits at: the window is the one its
     // delivery class earns, and a seat with nothing unread costs no read.
-    // A lead is woken from unread mail whatever its delivery order is, including drop only.
-    const leadSeat = (scene.team.orchestrator !== '' && seat.name === scene.team.orchestrator)
-      || (scene.team.operator !== '' && seat.name === scene.team.operator);
     const leadWindow = scene.team.watch.leadUnreadAfter;
     const unreadAfter = leadSeat && typeof leadWindow === 'number' ? leadWindow : windowForSeat(options, seat);
     // RFC event-comms E2: the seat's current launch brief, once its claim says the seat is ready,
