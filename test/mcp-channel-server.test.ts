@@ -350,7 +350,7 @@ describe('the push', () => {
       // The record's checks read the key under the memo; the commit (the seat re-proof, the
       // marker, the frame) runs outside it.
       expect(memoAtKey[0]).toBe(true);
-      expect(memoInCommit).toBe(false);
+      expect(memoInCommit as boolean | null).toBe(false);
       expect(currentRunMemo()).toBeNull();
       feed.end();
       expect(await running).toBe(0);

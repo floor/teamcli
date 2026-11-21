@@ -98,7 +98,7 @@ import { bindPane, deliverTrigger, draftNote, showsTranscriptToken, TRIGGER_TAKE
 import { clearEndpointBlocked, endpointBlockedLine, writeEndpointBlockedNotice, writeRuntimeNotice } from '../send/endpoint-notice.ts';
 import { dropMessage, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
-import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
+import { claimBindingIn, inboxLive, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
 import { channelLaunchEnabled, channelNotified, recordChannelHeld, reserveChannelFallback, CHANNEL_HELD_RECEIPT, CHANNEL_LOOK_MS, CHANNEL_PUSH_GRACE_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
@@ -3020,17 +3020,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
           if (wait) {
             return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'native', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
           }
-          // The queue took the pointer; a read is only what the seat's own signed receipt says.
-          // The receipt check is the same central one every leg uses, bounded by the same grace.
-          const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-          if (await awaitReceipt(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home, grace, claimBindingIn(to.root, to.session, to.seat, msgId))) {
-            clearPending(dropDir, msgId);
-            logLine(dir, 'send', who, `${to.seat}: delivered (read) (drop ${String(body.length)} characters, native queue receipt)`, host.now());
-            appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'native', ...failed });
-            return delivered(io, to.seat, report, 'read', 'native');
-          }
+          // The queue took the pointer: that ends the send, as a channel push does. A read is only
+          // the seat's own signed receipt, which a model writes seconds later; the watch settles it.
           const ms = host.now().getTime() - startedAt;
-          logLine(dir, 'send', who, `${to.seat}: queued to its native runtime (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
+          logLine(dir, 'send', who, `${to.seat}: queued to its native runtime (drop ${String(body.length)} characters)`, host.now());
           appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'native', ...failed });
           return sentUnconfirmed(io, to.seat, report, ms, 'native');
         }
@@ -3167,15 +3160,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'headless-resume', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
         }
-        const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-        if (await awaitReceipt(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home, grace, claimBindingIn(to.root, to.session, to.seat, msgId))) {
-          clearPending(dropDir, msgId);
-          logLine(dir, 'send', who, `${to.seat}: delivered (read) (drop ${String(body.length)} characters, headless-resume receipt)`, host.now());
-          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'headless-resume', ...failed });
-          return delivered(io, to.seat, report, 'read', 'headless-resume');
-        }
         const ms = host.now().getTime() - startedAt;
-        logLine(dir, 'send', who, `${to.seat}: resumed headlessly (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
+        logLine(dir, 'send', who, `${to.seat}: resumed headlessly (drop ${String(body.length)} characters)`, host.now());
         appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'headless-resume', ...failed });
         return sentUnconfirmed(io, to.seat, report, ms, 'headless-resume');
       }
@@ -6443,15 +6429,11 @@ export async function walkReplyDelivery(input: {
         if (attempt.outcome === 'enqueue') {
           settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined, via: 'native' });
           clearEndpointBlocked(input.root, input.session, seatName);
-          const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
-          if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
-            return ended({ via: 'native', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, native queue receipt)` });
-          }
           return ended({
             via: 'native',
             walked: true,
             unconfirmed: true,
-            summary: `${seatName}: queued to its native runtime (drop ${String(input.payload.body.length)} characters); no receipt within ${String(grace)} ms`,
+            summary: `${seatName}: queued to its native runtime (drop ${String(input.payload.body.length)} characters)`,
           });
         }
         failures.push(`native: ${attempt.reason}`);
@@ -6524,15 +6506,11 @@ export async function walkReplyDelivery(input: {
       if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
         settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined, via: 'headless-resume' });
-        const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
-        if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
-          return ended({ via: 'headless-resume', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, headless-resume receipt)` });
-        }
         return ended({
           via: 'headless-resume',
           walked: true,
           unconfirmed: true,
-          summary: `${seatName}: resumed headlessly (drop ${String(input.payload.body.length)} characters); no receipt within ${String(grace)} ms`,
+          summary: `${seatName}: resumed headlessly (drop ${String(input.payload.body.length)} characters)`,
         });
       }
       failures.push(`headless-resume: ${attempt.reason}`);
