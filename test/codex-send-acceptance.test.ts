@@ -370,7 +370,9 @@ function hostFor(scene: Scene): SendHost {
     now: () => NOW,
     home: scene.home,
     sendId: () => MESSAGE_ID,
-    inboxGraceMs: 20,
+    // A queue acceptance ends the send at once: no receipt wait follows it. A grace this long
+    // would time every enqueue test out if one did.
+    inboxGraceMs: 60_000,
   };
 }
 
