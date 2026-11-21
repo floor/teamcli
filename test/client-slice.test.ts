@@ -34,7 +34,11 @@ import {
   type ClientGrantRecord,
 } from '../src/client/records.ts';
 import { claimClientRequest } from '../src/client/replay.ts';
-import { resolveClientTarget, runClientSend } from '../src/client/send.ts';
+import { resolveClientTarget, runClientSend, writeClientDrop } from '../src/client/send.ts';
+import { runMcpServe } from '../src/mcp/serve.ts';
+import { CHANNEL_HELD_RECEIPT, reserveChannelFallback } from '../src/mcp/channel.ts';
+import { seatFolderOf } from '../src/send/drop-folder.ts';
+import { activate } from '../src/queue/floor.ts';
 import { insideTeamPane } from '../src/client/pane-guard.ts';
 import { runClient } from '../src/commands/client.ts';
 import { clientSentStatuses, runClientMessages, sentTeamsOf } from '../src/client/inbox.ts';
@@ -1494,5 +1498,82 @@ describe('carried start folders that do not read', () => {
     }
     expect(carriedStartFolderProblem({ ...emptySession(), retained_start_cwd: { worker: 0 } }, 'floor', '/x')).toBeNull();
     expect(carriedStartFolderProblem(undefined, 'floor', '/x')).toBeNull();
+  });
+});
+
+// Live finding (2026-11-21, floor): a client's message to the orchestrator waited 2000 ms for the
+// channel push, got none, and nothing re-offered it for 17 minutes. The channel server refused
+// every client record, so the client walk's first leg could never be taken and every channel
+// re-offer the scheduler reserved for it pushed nothing. The seat's own channel server now pushes
+// a client's signed record whose originating grant verifies.
+describe('a client drop on the coordinator seat\'s own channel', () => {
+  const FLAG = '--dangerously-load-development-channels server:team-inbox';
+
+  function feed(): { lines: AsyncIterable<string>; write(line: string): void; end(): void; replies: string[] } {
+    let wake: (() => void) | null = null;
+    let ended = false;
+    const replies: string[] = [];
+    const lines = (async function* () {
+      while (!ended) await new Promise<void>((resolve) => { wake = resolve; });
+    })();
+    return { lines, write: (line) => replies.push(line), end: () => { ended = true; const resume = wake; wake = null; resume?.(); }, replies };
+  }
+
+  const notices = (replies: readonly string[]): string[] => replies
+    .map((line) => JSON.parse(line) as { method?: string; params?: { content?: unknown } })
+    .filter((one) => one.method === 'notifications/claude/channel')
+    .map((one) => String(one.params?.content));
+
+  test('the channel server pushes the client\'s signed drop when it lands', async () => {
+    const w = walkFixture('channel-push');
+    const teamFile = join(w.dir, 'team.yaml');
+    writeFileSync(teamFile, readFileSync(teamFile, 'utf8').replace('    launch: claude\n', `    launch: claude ${FLAG}\n`));
+    writeFileSync(join(w.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { floor: { seats: { orchestrator: { stage: 'ready', pane: 'pane-orchestrator' } }, worktrees: {} } } })}\n`);
+    const target = resolveClientTarget(w.home, 'orchestrator@floor', w.grant);
+    if (!target.ok) throw new Error(target.why);
+    const stream = feed();
+    const io = testIo(w.teamRoot, { kind: 'seat', name: 'orchestrator', pane: 'pane-orchestrator', session: 'floor' });
+    const running = runMcpServe({ seat: 'orchestrator', session: 'floor' }, io, stream, { home: w.home });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const drop = writeClientDrop({ home: w.home, grant: { clientId: CLIENT_ID, grantId: w.grant.grantId }, target: target.target, body: 'hello from the console', now: new Date() });
+      if (!drop.ok) throw new Error(drop.why);
+      for (let at = 0; at < 400 && notices(stream.replies).length === 0; at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(notices(stream.replies)).toHaveLength(1);
+      expect(notices(stream.replies)[0]).toContain('hello from the console');
+    } finally {
+      stream.end();
+      await running;
+    }
+  });
+
+  test('a stamped client drop whose send gave the channel up is re-offered on the channel, numbered', async () => {
+    const w = walkFixture('channel-reoffer');
+    const teamFile = join(w.dir, 'team.yaml');
+    writeFileSync(teamFile, readFileSync(teamFile, 'utf8').replace('    launch: claude\n', `    launch: claude ${FLAG}\n`));
+    writeFileSync(join(w.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { floor: { seats: { orchestrator: { stage: 'ready', pane: 'pane-orchestrator' } }, worktrees: {} } } })}\n`);
+    expect(activate(w.teamRoot, { home: w.home, build: 'b', actors: () => [{ kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 }] }).kind).toBe('activated');
+    const target = resolveClientTarget(w.home, 'orchestrator@floor', w.grant);
+    if (!target.ok) throw new Error(target.why);
+    const drop = writeClientDrop({ home: w.home, grant: { clientId: CLIENT_ID, grantId: w.grant.grantId }, target: target.target, body: 'held off once', now: new Date() });
+    if (!drop.ok) throw new Error(drop.why);
+    expect(drop.record.lvl).toBe(3);
+    // The send's channel leg missed its grace: its abort and held marker stand, no push did.
+    const folder = seatFolderOf(target.target.dropDir, drop.id);
+    expect(reserveChannelFallback(folder, { v: 1, kind: CHANNEL_HELD_RECEIPT, id: drop.id, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' })).toBe('held');
+    const then = new Date(Date.now() - 2 * 60_000);
+    utimesSync(join(folder, drop.id), then, then);
+    const stream = feed();
+    const io = testIo(w.teamRoot, { kind: 'seat', name: 'orchestrator', pane: 'pane-orchestrator', session: 'floor' });
+    const running = runMcpServe({ seat: 'orchestrator', session: 'floor', redeliverMs: 20 }, io, stream, { home: w.home });
+    try {
+      for (let at = 0; at < 400 && notices(stream.replies).length === 0; at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(notices(stream.replies)).toHaveLength(1);
+      expect(notices(stream.replies)[0]!.split('\n')[0]).toBe(`message ${drop.id} · delivery 1`);
+      expect(notices(stream.replies)[0]).toContain('held off once');
+    } finally {
+      stream.end();
+      await running;
+    }
   });
 });
