@@ -70,7 +70,9 @@ function claudePermissions(role: string | undefined, access?: 'read' | 'write'):
   if (!readsOnly(role, access)) return ['--dangerously-skip-permissions'];
   return [
     '--permission-mode', 'dontAsk',
-    '--allowedTools', 'Read,Glob,Grep,Bash(team *)',
+    // `mcp__team-inbox`: the seat's own channel tools (ack, inbox check and read). Without them
+    // a channel message cannot be acknowledged and comes back on every redelivery.
+    '--allowedTools', 'Read,Glob,Grep,Bash(team *),mcp__team-inbox',
     '--disallowedTools', 'Write,Edit,NotebookEdit,Bash(git *),Bash(bun *)',
     // The tool denials alone leave a shell redirection free to write a file (measured
     // 2026-11-11: Write refused, `probe.txt` still written through Bash). Claude Code's sandbox
