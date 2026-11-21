@@ -352,3 +352,33 @@ describe('review round 1: the probe binds to the listener incarnation and refuse
     }
   });
 });
+
+describe('a seat whose channel flag the launch places serves the channel', () => {
+  /** The worker's server, whose declared line is plain `claude`: the launch places the flag. */
+  async function workerListener(at: Place): Promise<InboxListener> {
+    const feed = queue();
+    const dropDir = join(at.root, '.agents', 'send-drops', SESSION, 'worker');
+    const running = runMcpServe({ seat: 'worker', session: SESSION }, testIo(at.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: SESSION }), feed, { home: at.home });
+    try {
+      await until(() => existsSync(listenerPath(dropDir)));
+      const listener = readListener(dropDir);
+      if (listener === null) throw new Error('no listener');
+      return listener;
+    } finally {
+      feed.end();
+      await running;
+    }
+  }
+
+  test('a Claude Code seat with no flag on its declared line declares the channel; channel: off does not', async () => {
+    const at = place();
+    try {
+      expect((await workerListener(at)).channel).toBe(true);
+      const file = join(at.root, '.agents', 'team.yaml');
+      writeFileSync(file, readFileSync(file, 'utf8').replace('    launch: claude\n', '    launch: claude\n    channel: off\n'));
+      expect((await workerListener(at)).channel).toBeUndefined();
+    } finally {
+      at.cleanup();
+    }
+  });
+});

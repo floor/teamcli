@@ -84,6 +84,7 @@ import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { channelAckLine, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { channelLaunchFallback, claudeChannelSeat } from './launch-config.ts';
 import { channelOfferStartedGivenUp, channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
@@ -1615,6 +1616,19 @@ function generationOf(stateDir: string, session: string, name: string): Generati
   }
 }
 
+/**
+ * Whether this seat's launch carries the channel: its declared line names the flag, or the launch
+ * places it there — every Claude Code seat that does not opt out (`channel: off`, a person's pane,
+ * stopped) and has no channel fallback (src/launch/plan.ts places the flag on the declared line,
+ * and on a launcher's resolved line, under exactly this rule). Reading the declared line alone
+ * left the server of every seat whose flag the launch placed (a launcher seat, a plain line
+ * without the words) with no channel: Claude Code loaded the channel, and no listener served it.
+ */
+function seatTakesChannel(team: TeamFile, seat: TeamFile['seats'][number], root: string, home: string): boolean {
+  if (channelLaunchEnabled(seat.launch)) return true;
+  return claudeChannelSeat(seat) && channelLaunchFallback(team, seat, root, home) === undefined;
+}
+
 /** Why a server bound to `epoch` no longer belongs to the seat's launch, or null while it does.
  *  A claim with no launch epoch is served: the seat still gets its inbox. A server that bound
  *  no epoch serves only while the seat has no current claim: the claim a relaunch writes makes
@@ -1790,7 +1804,7 @@ export async function runMcpServe(
     firstRead = readOnce();
   }
   const declaredFirst = firstRead.ok ? firstRead.team.seats.find((one) => one.name === seatName) : undefined;
-  const pendingChannel = declaredFirst === undefined ? false : channelLaunchEnabled(declaredFirst.launch);
+  const pendingChannel = declaredFirst === undefined || !firstRead.ok ? false : seatTakesChannel(firstRead.team, declaredFirst, firstRead.root, host.home);
   let unplacedWhy = 'the start has not been read yet';
   const pendingTeam: TeamFile | null = firstRead.ok ? firstRead.team : null;
   const pending: Serving = {
@@ -1828,7 +1842,7 @@ export async function runMcpServe(
   // this server. Nothing on the command line turns it on separately, and a marker without it is
   // an ordinary inbox the send walks past.
   // A channel the handshake did not declare is never started: the client was told of none.
-  const channel = pendingChannel && channelLaunchEnabled(seat.launch);
+  const channel = pendingChannel && seatTakesChannel(team, seat, loaded.root, host.home);
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
   if (dropDir === null) {
     return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');

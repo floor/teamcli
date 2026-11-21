@@ -637,6 +637,20 @@ function identityFindings(team: TeamFile, dir: string, session: string, sources?
 // retained daemon runtime copy or pins an `--epoch`, a lead with no pair in its folder, a launch
 // line that pins `--resume`. A lead restarts the listed seats. A person's pane takes no
 // keys: it is named as waiting. A dark root has nothing here.
+/** Whether every `--resume` on the line names the seat's own recorded conversation (the state's
+ *  `agent_session`): the resume TeamCLI writes at a restart, never a pin. Unreadable: a pin. */
+export function resumesRecordedConversation(launch: string, dir: string, session: string, seat: string): boolean {
+  let recorded: string | undefined;
+  try {
+    recorded = readState(dir).sessions[session]?.seats[seat]?.agent_session;
+  } catch {
+    return false;
+  }
+  if (recorded === undefined || recorded === '') return false;
+  const named = [...launch.matchAll(/(?:^|\s)--resume(?:=|\s+)(\S+)/g)].map((match) => match[1]!.replace(/^["']|["']$/g, ''));
+  return named.length > 0 && named.every((id) => id === recorded);
+}
+
 function claudeChannelFindings(team: TeamFile, dir: string, root: string, session: string, home: string, now: Date): Finding[] {
   const findings: Finding[] = [];
   if (!socketSuppressed(root, home)) return findings;
@@ -658,8 +672,10 @@ function claudeChannelFindings(team: TeamFile, dir: string, root: string, sessio
         if (channelPairPinsEpoch(folder)) reasons.push('stale pair (a pinned --epoch)');
       }
     }
-    // The file's own launch line: a resume a restart adds to the running line is not a pin.
-    if (/(^|\s)--resume(\s|=|$)/.test(seat.launch)) reasons.push('a pinned --resume on the launch line');
+    // The file's own launch line: a resume a restart adds to the running line is not a pin. A
+    // registry-held team file carries the line the last launch ran, so a `--resume` naming the
+    // seat's own recorded conversation is TeamCLI's, not the owner's pin.
+    if (/(^|\s)--resume(\s|=|$)/.test(seat.launch) && !resumesRecordedConversation(seat.launch, dir, session, seat.name)) reasons.push('a pinned --resume on the launch line');
     if (reasons.length === 0) continue;
     // A protected pane takes no pointer: a person's pane, or one whose declared order leaves the
     // `typed` word out (the same answer the watch asks, src/commands/send.ts permittedEventLegs).

@@ -22,6 +22,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { signRecord, stampedPayload, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { messageKeyOf, messageKeyState } from '../src/store/keys.ts';
+import { updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 
 const SESSION = 'acme';
@@ -150,6 +151,17 @@ describe('team doctor on an active root: unproven Claude seats and stale pairs',
   test('a launch line that pins --resume', async () => {
     activateRoot();
     expect(await doctor(teamText('claude --resume 00000000-0000-4000-8000-000000000000'))).toContain('a pinned --resume on the launch line');
+  });
+
+  test('a --resume naming the seat\'s own recorded conversation is TeamCLI\'s, not a pin', async () => {
+    activateRoot();
+    const own = '00000000-0000-4000-8000-0000000000aa';
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions[SESSION] = { seats: { lead: { stage: 'ready' as const, agent_session: own } }, worktrees: {} } as never;
+    });
+    expect(await doctor(teamText(`claude --resume ${own}`))).not.toContain('a pinned --resume');
+    // Another conversation is still a pin.
+    expect(await doctor(teamText('claude --resume 00000000-0000-4000-8000-0000000000bb'))).toContain('a pinned --resume on the launch line');
   });
 
   test('a proven seat with a good pair draws nothing', async () => {
