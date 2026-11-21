@@ -1849,8 +1849,9 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   let recipientDrift: ModelDrift | undefined;
   let repairedRecipient: string | undefined;
   let repairedObservation: SeatModelObservation | undefined;
+  const targetTeamId = teamIdOf(to.root);
   let registeredTarget = readAgents(host.home).find((agent) =>
-    agent.reach.team === teamIdOf(to.root) && agent.reach.seat === to.seat &&
+    agent.reach.team === targetTeamId && agent.reach.seat === to.seat &&
     agent.reach.session === to.session && agent.lifecycle !== 'retired'
   );
   // The seat's CLI reports its own model (Claude Code's SessionStart and PostModelSwitch hooks,

@@ -13,7 +13,7 @@ import { traceChildStep } from '../diagnostics/child-steps.ts';
 // (src/send/admit.ts).
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { isSeatId, updateState, withLock, type SeatState } from '../state.ts';
@@ -189,23 +189,53 @@ function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Ag
     return [];
   }
   touchCachedHome(home);
+  const dir = agentsDir(home);
+  names = names.filter((name) => name.endsWith('.yaml') && isAgentId(name.slice(0, -'.yaml'.length))).sort();
+  // The whole scan stands while every file it read stands as it was by stat: no file is read.
+  const stamp = agentFolderStamp(dir, names);
+  const kept = keptScans.get(home);
+  if (stamp !== null && kept !== undefined && kept.stamp === stamp) {
+    memo?.agents.set(home, kept.agents);
+    return cloneAgents(kept.agents);
+  }
   const agents: Agent[] = [];
   const seen = new Set<string>();
-  for (const name of names.sort()) {
-    if (!name.endsWith('.yaml')) continue;
-    const id = name.slice(0, -'.yaml'.length);
-    if (!isAgentId(id)) continue;
-    const path = join(agentsDir(home), name);
+  for (const name of names) {
+    const path = join(dir, name);
     seen.add(path);
-    const agent = readAgentFileCached(path, id);
+    const agent = readAgentFileCached(path, name.slice(0, -'.yaml'.length));
     if (agent) agents.push(agent);
   }
   // A file gone from the folder leaves the cache with it.
   for (const path of parsedAgentFiles.keys()) {
-    if (path.startsWith(`${agentsDir(home)}/`) && !seen.has(path)) parsedAgentFiles.delete(path);
+    if (path.startsWith(`${dir}/`) && !seen.has(path)) parsedAgentFiles.delete(path);
   }
+  // Kept only when the folder stood still across the read: a write during it is read again.
+  if (stamp !== null && agentFolderStamp(dir, names) === stamp) keptScans.set(home, { stamp, agents: cloneAgents(agents) });
+  else keptScans.delete(home);
   memo?.agents.set(home, cloneAgents(agents));
   return agents;
+}
+
+/** What a scan of the agents folder depends on, by stat only: the folder's own inode and mtime,
+ *  and each agent file's name, inode, size, mtime and ctime (a mode change moves only the ctime).
+ *  Null when the folder cannot be read. */
+export function agentFolderStamp(dir: string, names: readonly string[]): string | null {
+  try {
+    const folder = statSync(dir);
+    let stamp = `${String(folder.ino)}:${String(folder.mtimeMs)}:${String(names.length)}`;
+    for (const name of names) {
+      try {
+        const one = lstatSync(join(dir, name));
+        stamp += `|${name}:${String(one.ino)}:${String(one.size)}:${String(one.mtimeMs)}:${String(one.ctimeMs)}`;
+      } catch (error) {
+        stamp += `|${name}:${(error as NodeJS.ErrnoException).code ?? 'error'}`;
+      }
+    }
+    return stamp;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -249,6 +279,10 @@ export function readAgentsComplete(home: string): Agent[] | null {
  *  own copy. */
 const parsedAgentFiles = new Map<string, { text: string; agent: Agent | null }>();
 
+/** Each cached home's last whole scan, with the stat stamp it was read under (`agentFolderStamp`).
+ *  Its records are never handed out: every reader gets its own copy. */
+const keptScans = new Map<string, { stamp: string; agents: Agent[] }>();
+
 /** The homes whose files the cache holds, most recently read last; at most `CACHED_HOMES`. */
 const cachedHomes: string[] = [];
 const CACHED_HOMES = 4;
@@ -257,6 +291,7 @@ const CACHED_HOMES = 4;
 function forgetCachedHome(home: string): void {
   const prefix = `${agentsDir(home)}/`;
   for (const path of [...parsedAgentFiles.keys()]) if (path.startsWith(prefix)) parsedAgentFiles.delete(path);
+  keptScans.delete(home);
   const at = cachedHomes.indexOf(home);
   if (at !== -1) cachedHomes.splice(at, 1);
 }
