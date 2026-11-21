@@ -46,7 +46,6 @@ import {
   isReadOrCleared,
   isStampedPayload,
   readVerifiedReceipt,
-  COPY_READ_BY,
   stampedSettled,
   keyPrintForCache,
   leadAckReceiptAt,
@@ -67,7 +66,6 @@ import { messageKeyState } from '../store/keys.ts';
 import type { BuildIdentity } from '../version.ts';
 import { flushReceipt, publishReadReceipt } from './inbox-admission.ts';
 import { exposurePointer, isExposeOwner } from '../queue/exposure.ts';
-import { shadowQueueReceipt } from '../queue/receipt-store.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { readerOrder } from '../queue/reader.ts';
 import { seatMailParts, stampedListing } from '../queue/mail-tree.ts';
@@ -870,7 +868,8 @@ export function readMessage(
   if (receiptHeldNow()) return alreadyServed();
   const atRead = heldAt(readName);
   // E7b: a stamped record is settled only by its recipient. A verifying writer-side read that
-  // already holds the read name (an earlier copy) is reused: the body is served again, numbered.
+  // already holds the read name (a copy receipt an earlier build wrote) is passed over: the body
+  // is served again, numbered.
   const reuse = stampedRecord && atRead.kind === 'file' && readVerifiedReceipt(readName, id, 'read', context, key, binding) !== null;
   if (atRead.kind === 'file' && !reuse) return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
   if (atRead.kind !== 'missing' && !reuse) {
@@ -912,8 +911,6 @@ export function readMessage(
     root: target.root,
     session: target.session,
     at: new Date().toISOString(),
-    // E7b: a stamped record's read is an unconfirmed copy; only its recipient's ack settles it.
-    ...(stampedRecord ? { read_by: COPY_READ_BY } : {}),
     ...(binding === undefined ? {} : {
       brief_sha256: binding.sha256,
       incarnation: binding.incarnation,
@@ -939,7 +936,9 @@ export function readMessage(
   // body first and seals only after the hand-over returns, so a hand-over that throws leaves the
   // message unread.
   const publish = (): InboxRead | true => {
-    if (reuse) return true;
+    // E7b: a stamped record's read is an unconfirmed copy: its copy number is its trace, and only
+    // its recipient's confirmation writes a receipt (one receipt per read).
+    if (reuse || stampedRecord) return true;
     const published = publishReadReceipt(readName, `${JSON.stringify(signedReceipt, null, 2)}\n`);
     if (published === 'exists') {
       // A rival won the name between the check and this link. Its receipt is the single serving of
@@ -953,11 +952,6 @@ export function readMessage(
     if (!flushReceipt(readName, target.dropDir)) {
       return { ok: false, reason: 'the receipt could not be made durable, so the message is not returned' };
     }
-    // rfc-event-comms §2 (E6): the per-seat receipt store, written in shadow once this is durable.
-    shadowQueueReceipt({
-      dropDir: target.dropDir, root: target.root, session: target.session, seat: target.seat, msgId: id,
-      kind: 'read', actor: { kind: handover?.owner === undefined ? 'recipient' : 'relay', name: handover?.owner ?? target.seat }, home,
-    });
     return true;
   };
   // E7b: every copy of a stamped record names its message and its delivery number, taken durably

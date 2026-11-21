@@ -42,7 +42,7 @@ import { appendHistory } from '../send/history.ts';
 import { parseDuration, scanAckSeat, seatClearTargetStatus } from '../send/message-archive.ts';
 import { LEAD_ACK_PREFIX, recordNameOk } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { writeExplicitAck } from '../send/inbox-retention.ts';
+import { EXPLICIT_ACK_READ_BY, writeExplicitAck } from '../send/inbox-retention.ts';
 import { messageKeyState } from '../store/keys.ts';
 import {
   findRecord,
@@ -290,6 +290,8 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   }
 
   const at = host.now().toISOString();
+  // One ack writes one file: the signed read receipt, carrying `read_by: ack`, which every reader
+  // takes as the acknowledgement (settlement, retention, the sender's outcome).
   const publish = () => publishRecordRead({
     dropDir: recordDir(root, session, found.seat),
     id: resolvedId,
@@ -299,6 +301,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     home: host.home,
     key,
     at,
+    readBy: EXPLICIT_ACK_READ_BY,
     lead: team.orchestrator,
   });
   let outcome: ReturnType<typeof publishRecordRead>;
@@ -362,7 +365,10 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     return refused(io, json, `${resolvedId}: not marked read: the read receipt could not be made durable; leave it in place, it already records this read`);
   }
 
-  const noted = writeExplicitAck({
+  // A message another reader already read (a channel read, an inbox read) is acknowledged by the
+  // note beside its receipt: that receipt is never rewritten, and retention moves acknowledged
+  // mail at once.
+  const noted = outcome.kind !== 'served' || writeExplicitAck({
     folder: dirname(found.path),
     id: resolvedId,
     to: found.seat,

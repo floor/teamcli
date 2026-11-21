@@ -72,8 +72,8 @@ describe('revision 3: the stamped tree (this build)', () => {
     expect(listUnread(at.legacy, context(at), at.home).map((message) => message.id)).toEqual([ID]);
     const got = readMessage(target(at), ID, at.home);
     expect(got.ok).toBe(true);
-    // The read receipt sits beside the record, in the stamped tree.
-    expect(existsSync(join(at.stamped, `${ID}.read.json`))).toBe(true);
+    // The read is an unconfirmed copy: it writes no receipt, and nothing lands in the legacy folder.
+    expect(existsSync(join(at.stamped, `${ID}.read.json`))).toBe(false);
     expect(readdirSync(at.legacy).filter((name) => name.startsWith(ID))).toEqual([]);
   });
 });
@@ -83,7 +83,7 @@ describe('revision 3: settlement and marks follow the record into the stamped tr
     const at = stampedRoot();
     const state = messageKeyState(at.home);
     if (state.kind !== 'key') throw new Error('no key');
-    const published = publishRecordRead({ dropDir: at.legacy, id: ID, to: 'lead', root: at.root, session: SESSION, home: at.home, key: state.key, at: new Date().toISOString() });
+    const published = publishRecordRead({ dropDir: at.legacy, id: ID, to: 'lead', root: at.root, session: SESSION, home: at.home, key: state.key, at: new Date().toISOString(), readBy: 'ack' });
     expect(published.kind).toBe('published');
     expect(existsSync(join(at.stamped, `${ID}.read.json`))).toBe(true);
     expect(readdirSync(at.legacy).filter((name) => name.startsWith(ID))).toEqual([]);

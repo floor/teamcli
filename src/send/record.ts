@@ -210,10 +210,10 @@ export function recordStampAt(dropDir: string, id: string): boolean | 'unknown' 
   return value;
 }
 
-/** The `read_by` a writer-side read of a stamped record carries (E7b): a copy was handed over and
- *  nobody has confirmed it. It never settles the message; only the recipient's ack (the note at
- *  `<id>.ack.json`, `read_by: ack`), a reply or a lead's clearance does. An older build cannot
- *  read a stamped record at all, so every read of one is this build's and carries this word. */
+/** The `read_by` a writer-side read of a stamped record carried before one read wrote one receipt
+ *  (E7b): a copy was handed over and nobody had confirmed it. It never settles the message; only
+ *  the recipient's ack, a reply or a lead's clearance does. This build writes no copy receipt (the
+ *  copy number is the copy's trace) and still reads one an earlier build left. */
 export const COPY_READ_BY = 'copy';
 
 /** The `read_by` on the `delivered` receipt a carrier writes (a socket frame, a runtime queue, a
@@ -232,9 +232,10 @@ export function carrierLegOf(readBy: string | undefined): string | null {
   return readBy !== undefined && readBy.startsWith(`${CARRIER_DELIVERED_BY}:`) ? readBy.slice(CARRIER_DELIVERED_BY.length + 1) : null;
 }
 
-/** The acknowledgement note beside the record (`<id>.ack.json`, `read_by: ack`): the one `team ack`
- *  writes, and where a stamped record's acknowledgement goes when an unconfirmed copy's receipt
- *  already holds the read name (E7b). */
+/** The acknowledgement note beside the record (`<id>.ack.json`, `read_by: ack`): written only when
+ *  the read name is already held — by another reader's read, for `team ack` (retention moves
+ *  acknowledged mail at once), or by a copy receipt an earlier build wrote, for a stamped record's
+ *  confirmation (E7b). An ack whose read name is free is the read receipt itself. */
 export function ackedFile(dropDir: string, id: string): string {
   return join(folderOfDrop(dropDir, id), `${id}.ack.json`);
 }

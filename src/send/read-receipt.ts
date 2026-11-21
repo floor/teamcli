@@ -1,20 +1,20 @@
 // Publishing the signed `read` receipt for one message record, without printing it.
 //
-// The receipt is the per-id gate every reader shares — `team messages`, `team drops --read`,
-// `inbox_read`, and `team ack`, which marks a message read without serving its body. It is
-// published with `link` — exclusive and no-clobber — and flushed before any body is shown, so at
-// most one reader wins the name and the receipt that proves the exposure survives a crash that
-// follows it. This module holds only that ordered act and returns what happened, in words the
-// callers turn into their own refusals: `team messages` says a body was not shown, `team ack` says
-// the message was not marked read. A `replied` receipt is the read that came before an answer and
-// serves the id exactly as a `read` receipt does.
-import { shadowQueueReceipt } from '../queue/receipt-store.ts';
-import { queuePlaceOf } from '../queue/append.ts';
+// One read writes one file: the signed `<id>.read.json`. It is the per-id gate every reader
+// shares — `team messages`, `team drops --read`, `inbox_read`, and `team ack`, which marks a
+// message read without serving its body. It is published with `link` — exclusive and no-clobber —
+// and flushed before any body is shown, so at most one reader wins the name and the receipt that
+// proves the exposure survives a crash that follows it. A stamped record (E7b) is settled only by
+// its recipient's confirmation, so only a confirming read (an ack, a reply, a clearance) writes
+// its receipt; a writer-side read of one is an unconfirmed copy, whose trace is its copy number in
+// the delivery history, and writes none. This module holds only that ordered act and returns what
+// happened, in words the callers turn into their own refusals. A `replied` receipt is the read
+// that came before an answer and serves the id exactly as a `read` receipt does.
 import { type KeyObject } from 'node:crypto';
 import { dirname } from 'node:path';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
-import { ackedFile, clearedFile, COPY_READ_BY, isLeadAckReadBy, leadAckActorOf, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
+import { ackedFile, clearedFile, isLeadAckReadBy, leadAckActorOf, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
 
 /** The message whose read is being recorded: its folder, its id, the seat it was addressed to,
  *  and the binding the receipt carries. `root` and `session` are the record's own — a message a
@@ -47,18 +47,6 @@ export type RecordReadOutcome =
   | { kind: 'unwritten'; reason: 'changed' | 'write' | 'durable' };
 
 export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
-  const outcome = publish(input);
-  // rfc-event-comms §2 (E6): the per-seat receipt store is written in shadow beside this receipt.
-  if (outcome.kind === 'published') {
-    shadowQueueReceipt({
-      dropDir: input.dropDir, root: input.root, session: input.session, seat: input.to, msgId: input.id,
-      kind: 'read', actor: { kind: 'recipient', name: input.readBy ?? input.to }, home: input.home,
-    });
-  }
-  return outcome;
-}
-
-function publish(input: RecordReadInput): RecordReadOutcome {
   const { dropDir, id, to, root, session, home, key, at, readBy, epoch, lead } = input;
   const context = { to, root, session, ...(lead === undefined ? {} : { lead }) };
   const servedNow = (): boolean => isRead(dropDir, id, context, key);
@@ -68,25 +56,27 @@ function publish(input: RecordReadInput): RecordReadOutcome {
   // A stamped record is served only on a positively confirming receipt (the strict rule); a
   // legacy record keeps the hot predicate.
   if (stamped ? stampedSettled(dropDir, id, context, key) : servedNow()) return { kind: 'served' };
-  // rfc-event-comms E7b: a stamped record is settled only by its recipient (`isRead` above). A
-  // writer-side read of one is an unconfirmed copy: it is published with `read_by: copy`, or reuses
-  // the copy receipt already standing, so the body can be served again, numbered. A confirming read
-  // (an ack, a reply, a clearance) whose read name a copy's receipt already holds is published as
-  // the acknowledgement note instead.
-  const confirming = isConfirmedReadBy(readBy);
+  // rfc-event-comms E7b: a stamped record is settled only by its recipient (`stampedSettled`
+  // above). A writer-side read of one is an unconfirmed copy: no receipt is written (its copy
+  // number is its trace), so the body can be served again, numbered.
+  if (stamped && !isConfirmedReadBy(readBy)) return { kind: 'published' };
+  // A lead's or the owner's clearance (the Claude adapter §3): its authority is checked before
+  // anything is written, so a clearer without it never holds the read name.
+  const clearing = isLeadAckReadBy(readBy) ? leadAckActorOf(readBy) : null;
+  if (stamped && clearing !== null && clearing !== 'owner' && clearing !== lead) return { kind: 'held', status: 'read', entry: 'file' };
   if (stamped) {
+    // Before this build a copy wrote `read_by: copy` at the read name. A confirmation that finds
+    // one standing is published as the acknowledgement note beside it, as that build did, so an
+    // old copy receipt never blocks the one confirming write.
     const standing = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
-    if (standing !== null && !confirming) return { kind: 'published' };
     if (standing !== null) {
       const acked = ackedFile(dropDir, id);
-      // A lead's or the owner's clearance (the Claude adapter §3): its authority is checked first.
-      // Its intent, the clearance note with the actor, is written and made durable before the ack
-      // note every level-3 reader settles by (`ack`), and the ack takes the intent's own time, so
-      // a reader never sees the ack without the actor, and accepts the note only beside that exact
-      // ack (`leadAckReceiptAt`). A retry finds the intent and finishes the same pair; an ack name
-      // another act already holds (the recipient's own ack) is never claimed for the clearer.
-      const clearing = isLeadAckReadBy(readBy) ? leadAckActorOf(readBy) : null;
-      if (clearing !== null && clearing !== 'owner' && clearing !== lead) return { kind: 'held', status: 'read', entry: 'file' };
+      // A clearance's intent, the clearance note with the actor, is written and made durable
+      // before the ack note every level-3 reader settles by (`ack`), and the ack takes the
+      // intent's own time, so a reader never sees the ack without the actor, and accepts the note
+      // only beside that exact ack (`leadAckReceiptAt`). A retry finds the intent and finishes the
+      // same pair; an ack name another act already holds (the recipient's own ack) is never
+      // claimed for the clearer.
       let ackAt = at;
       if (clearing !== null) {
         const cleared = clearedFile(dropDir, id);
@@ -110,7 +100,6 @@ function publish(input: RecordReadInput): RecordReadOutcome {
       return { kind: 'published' };
     }
   }
-  const shownBy = stamped && !confirming ? COPY_READ_BY : readBy;
   // A lead already cleared this message: its receipt holds the one read name, and the message is
   // settled for the seat. A second sweep, or the seat's own later ack, finds the id served; the
   // clearance is never rewritten as the seat's own read.
@@ -134,7 +123,7 @@ function publish(input: RecordReadInput): RecordReadOutcome {
     root,
     session,
     at,
-    ...(shownBy === undefined ? {} : { read_by: shownBy }),
+    ...(readBy === undefined ? {} : { read_by: readBy }),
   };
   const published = publishReadReceipt(readName, `${JSON.stringify(signReceiptPayload(receipt, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
   if (published === 'exists') {

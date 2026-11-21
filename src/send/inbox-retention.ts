@@ -697,8 +697,10 @@ export function archiveSeatInbox(input: {
   return { dryRun: false, move: moved, markRead: marked, partial, refused: null, ...seen };
 }
 
-/** Writes the acknowledgement note beside the record. A read receipt already there is left as
- *  it is, including a channel read. The note is the evidence a later archive pass looks for. */
+/** Writes the acknowledgement note beside a record another reader already read. That read
+ *  receipt is left as it is, including a channel read; a receipt that is itself the ack (`team
+ *  ack`'s own, `read_by: ack`) needs no note. The note is the evidence a later archive pass
+ *  looks for. */
 export function writeExplicitAck(input: {
   folder: string;
   id: string;
@@ -712,6 +714,8 @@ export function writeExplicitAck(input: {
   hostedCommit('writeExplicitAck');
   const path = ackNotePath(input.folder, input.id);
   const context: StatusContext = { to: input.to, root: input.root, session: input.session };
+  const standing = readVerifiedReceipt(join(input.folder, `${input.id}.read.json`), input.id, 'read', context, input.key);
+  if (standing !== null && standing.payload.read_by === EXPLICIT_ACK_READ_BY) return true;
   const existing = readVerifiedReceipt(path, input.id, 'read', context, input.key);
   if (existing !== null && existing.payload.read_by === EXPLICIT_ACK_READ_BY) return true;
   if (heldAt(path).kind !== 'missing') return false;
