@@ -182,7 +182,32 @@ export function typedPaneProof(held: TypedPaneRecord | undefined, seat: string, 
       return { ok: true };
     }
     if (starts.length !== held.launched.cli.length) return no('the recorded CLI starts are incomplete');
-    if (!held.launched.cli.every((pid, at) => processes.foreground.includes(pid) && owner.processStart(pid) === starts[at])) return no('a recorded CLI process or its birth no longer matches');
+    // Every recorded pid still in front must be the launch's own, at its recorded birth.
+    const front = held.launched.cli.flatMap((pid, at) => processes.foreground.includes(pid) ? [{ pid, start: starts[at] }] : []);
+    if (front.length === 0 || !front.every(one => owner.processStart(one.pid) === one.start)) return no('a recorded CLI process or its birth no longer matches');
+    if (front.length < held.launched.cli.length) {
+      // The record does not say which pid is the CLI, so a missing member fails closed: a helper
+      // left in front alone is not the seat. The one exception is a Claude pointer, whose launch
+      // reading at the idle prompt can hold short-lived children Claude Code starts in its own
+      // process group and that exit afterwards. There the recorded member still in front must
+      // include the launch itself, the one direct child of the recorded shell at its recorded
+      // birth, and every other process in front must descend from it, birth-checked.
+      if (!claudePointer) return no('a recorded CLI process or its birth no longer matches');
+      const read = owner.processParent;
+      if (read === undefined) return no('a recorded CLI process or its birth no longer matches');
+      const launches = front.filter(one => read(one.pid)?.ppid === processes.shell);
+      if (launches.length !== 1) return no('a recorded CLI process or its birth no longer matches');
+      const launch = launches[0]!.pid;
+      const rest = processes.foreground.filter(pid => pid !== processes.shell && pid !== launch);
+      const descendants = descendantProof([launch], rest, processes.shell, owner);
+      if (!descendants.ok) return descendants;
+      const current = owner.processes(pane, session);
+      if (current === null || current.shell !== processes.shell
+        || current.foreground.length !== processes.foreground.length
+        || !current.foreground.every(pid => processes.foreground.includes(pid))) return no('the foreground process set changed during the proof');
+      if (!front.every(one => owner.processStart(one.pid) === one.start)) return no('a recorded CLI process or its birth no longer matches');
+      return { ok: true };
+    }
     if (extra.length > 0) {
       if (!claudePointer) return no('an unrecorded process is in front of the shell');
       const descendants = descendantProof(held.launched.cli, extra, processes.shell, owner);
