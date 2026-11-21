@@ -358,6 +358,19 @@ describe('round 1: the orphan source through the bus\'s own reconcile pass', () 
     expect(queuedHint(s.dropDir, id(1))).toBe(true);
   });
 
+  test('a delivery append does not re-read every committed id file; the reconcile pass still rebuilds a removed one', () => {
+    const s = scene();
+    append(s, id(1));
+    append(s, id(2));
+    unlinkSync(join(genFolder(s.dropDir), 'ids', id(1)));
+    // The send's own append is O(1) in the seat's history: it leaves the old id file alone.
+    append(s, id(3));
+    expect(existsSync(join(genFolder(s.dropDir), 'ids', id(1)))).toBe(false);
+    expect(queuedHint(s.dropDir, id(3))).toBe(true);
+    pass(s);
+    expect(queuedHint(s.dropDir, id(1))).toBe(true);
+  });
+
   test('the cache is bound to the generation: after a replacement both records are indexed once in the new one', () => {
     const s = scene();
     const state = createReconcileState();
