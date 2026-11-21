@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveSeatOverrides, seatOverridesOf } from '../src/config/apply.ts';
+import { resolveSeatOverrides, seatNicknameReader, seatOverridesOf } from '../src/config/apply.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import type { ConfigKey, ConfigValue } from '../src/config/registry.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
@@ -35,15 +35,15 @@ afterEach(() => {
 });
 
 /** One agent record reaching this root, as `up` would leave it. */
-function registered(): string {
+function registered(seat = SEAT): string {
   return registerAgent(home, {
-    name: 'Builder One',
+    name: `Builder ${seat}`,
     signing: { model: 'Test', version: '1', role: 'builder' },
     lab: 'test-lab',
     cli: 'antigravity',
     launcher: null,
     launch: 'zsh -lc "agy --model claude-sonnet-5-5-high"',
-    reach: { team: teamIdOf(root), seat: SEAT, session: 'acme', pane: 'w36:p1', address: null },
+    reach: { team: teamIdOf(root), seat, session: 'acme', pane: 'w36:p1', address: null },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -102,5 +102,23 @@ describe('seatOverridesOf', () => {
     // A seat declared but never launched has no record to sign a word; the declaration stands.
     expect(seatOverridesOf({ home, root, seat: 'someone-else' })).toEqual({});
     expect(resolveSeatOverrides({ home, root, seat: 'someone-else' })).toEqual({ ok: true, overrides: {} });
+  });
+});
+
+describe('seatNicknameReader', () => {
+  test('one reader answers each seat as seatOverridesOf does: signed, unsigned, tampered, unknown', () => {
+    const signed = registered();
+    registered('builder-2');
+    const tampered = registered('builder-3');
+    sign(signed, [{ key: 'nickname', value: 'wren' }]);
+    sign(tampered, [{ key: 'nickname', value: 'heron' }]);
+    const doc = join(agentsDir(home), `${tampered}.yaml`);
+    writeFileSync(doc, readFileSync(doc, 'utf8').replace('heron', 'crow'));
+    const read = seatNicknameReader(home);
+    for (const seat of [SEAT, 'builder-2', 'builder-3', 'someone-else']) {
+      expect(read(root, seat)).toBe(seatOverridesOf({ home, root, seat }).nickname ?? null);
+    }
+    expect(read(root, SEAT)).toBe('wren');
+    expect(read(root, 'builder-3')).toBeNull();
   });
 });

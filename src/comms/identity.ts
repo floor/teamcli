@@ -14,7 +14,7 @@
 import { readTeamConfig } from '../file/team-config.ts';
 import { labelPersona } from '../file/sections/seats.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { seatOverridesOf } from '../config/apply.ts';
+import { seatNicknameReader } from '../config/apply.ts';
 import { getAgent, type Agent } from '../registry/agents.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
 
@@ -220,6 +220,7 @@ export function registryIdentityView(home: string, known?: { root: string; team:
   // A caller that has just read a root's team file hands it in: the same read is not done again.
   const files = new Map<string, TeamFile | null>(known === undefined ? [] : [[known.root, known.team]]);
   const signed = new Map<string, string | null>();
+  let nicknames: ReturnType<typeof seatNicknameReader> | null = null;
   const teamsOf = (): Readonly<Record<string, TeamRecord>> => {
     if (teams === null) {
       try {
@@ -246,12 +247,8 @@ export function registryIdentityView(home: string, known?: { root: string; team:
   const signedNicknameOf = (root: string, seat: string): string | null => {
     const key = `${root}\u0000${seat}`;
     if (!signed.has(key)) {
-      let nickname: string | null = null;
-      try {
-        nickname = seatOverridesOf({ home, root, seat }).nickname ?? null;
-      } catch {
-        nickname = null;
-      }
+      nicknames ??= seatNicknameReader(home);
+      const nickname = nicknames(root, seat);
       signed.set(key, nickname);
     }
     return signed.get(key) ?? null;

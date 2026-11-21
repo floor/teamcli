@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { directRequestOf, directSocketOf, herdrDirect, herdrDirectBound, sessionAnswersNow } from '../src/herdr-direct.ts';
 import { homedir } from 'node:os';
-import { fallbackBudgetMs, paneProcessInfo, setHerdrSyncReadLimitForTests } from '../src/herdr.ts';
+import { fallbackBudgetMs, paneProcessInfo, paneRead, setHerdrSyncReadLimitForTests } from '../src/herdr.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
 
@@ -17,6 +17,20 @@ describe('the calls answered over the socket', () => {
     expect(directRequestOf(['pane', 'process-info', '--pane', 'w1:p1'])).toEqual({ method: 'pane.process_info', params: { pane_id: 'w1:p1' } });
     expect(directRequestOf(['pane', 'get', 'w1:p1'])).toEqual({ method: 'pane.get', params: { pane_id: 'w1:p1' } });
     expect(directRequestOf(['pane', 'list', '--workspace', 'w1'])).toEqual({ method: 'pane.list', params: { workspace_id: 'w1' } });
+  });
+
+  test("the styled screen read maps to pane.read; its plain retry and any other shape keep the CLI", () => {
+    expect(directRequestOf(['pane', 'read', 'w1:p1', '--source', 'visible', '--lines', '40', '--format', 'ansi']))
+      .toEqual({ method: 'pane.read', params: { pane_id: 'w1:p1', source: 'visible', lines: 40, format: 'ansi' } });
+    for (const args of [
+      ['pane', 'read', 'w1:p1', '--source', 'visible', '--lines', '40'],
+      ['pane', 'read', 'w1:p1', '--source', 'recent', '--lines', '40', '--format', 'ansi'],
+      ['pane', 'read', 'w1:p1', '--source', 'visible', '--lines', 'many', '--format', 'ansi'],
+      ['pane', 'read', 'w1:p1', '--source', 'visible', '--lines', '40', '--format', 'text'],
+      ['pane', 'read', '--x', '--source', 'visible', '--lines', '40', '--format', 'ansi'],
+    ]) {
+      expect(directRequestOf(args)).toBeNull();
+    }
   });
 
   test('every other call, and any other shape of these, keeps the CLI', () => {
@@ -130,6 +144,7 @@ createServer((socket) => {
     if (pane === 'close') { socket.end(); return; }
     if (pane === 'err') { socket.end(JSON.stringify({ id: req.id, error: { code: 'pane_not_found', message: 'pane err not found' } }) + '\\n'); return; }
     if (pane === 'other-id') { socket.end(JSON.stringify({ id: 'x', result: {} }) + '\\n'); return; }
+    if (req.method === 'pane.read') { socket.end(JSON.stringify({ id: req.id, result: { type: 'pane_read', read: { pane_id: pane, text: 'line one\\r\\n\\u001b[2mhint\\u001b[0m' } } }) + '\\n'); return; }
     if (pane === 'big') { socket.end(JSON.stringify({ id: req.id, result: { text: 'y'.repeat(300000) } }) + '\\n'); return; }
     socket.end(JSON.stringify({ id: req.id, result: { method: req.method, params: req.params } }) + '\\n');
   });
@@ -192,6 +207,10 @@ esac
   test('an answer for another request, or a closed connection, goes back to the CLI', () => {
     expect(herdrDirect(['pane', 'get', 'other-id'], 'fixture')).toBeUndefined();
     expect(herdrDirect(['pane', 'get', 'close'], 'fixture')).toBeUndefined();
+  });
+
+  test("a styled screen read comes back as the CLI's stdout, folded as paneRead folds it", () => {
+    expect(paneRead('w1:p1', 40, 'fixture')).toBe('line one\n\u001b[2mhint\u001b[0m');
   });
 
   test('no socket for the session, or a call not answered here, goes back to the CLI', () => {

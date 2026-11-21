@@ -1744,8 +1744,16 @@ export function sessionCleared(stdout: string, name: string): boolean {
 // The process call behind paneRead, injectable for tests: it returns the call's stdout and
 // throws when herdr refuses an option or the call times out. The real one shells out.
 export type PaneExec = (args: string[]) => string;
-const shellPaneExec: PaneExec = (args) =>
-  traceBeatWork('terminal-host pane read (sync)', () => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }));
+// The styled read goes over the host's socket when the CLI's own socket is certain
+// (src/herdr-direct.ts): the same text, without a process start per read. An error answer throws
+// as the CLI's exit does; any other miss starts the CLI.
+const shellPaneExec: PaneExec = (args) => {
+  const session = args[0] === '--session' ? args[1] : undefined;
+  const direct = herdrDirect(session === undefined ? args : args.slice(2), session);
+  const text = (direct?.result as { read?: { text?: unknown } } | undefined)?.read?.text;
+  if (typeof text === 'string') return text;
+  return traceBeatWork('terminal-host pane read (sync)', () => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }));
+};
 let paneExec: PaneExec = shellPaneExec;
 
 /** Swaps the process call paneRead makes; null restores the real one. */

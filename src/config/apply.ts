@@ -10,10 +10,20 @@
 // listings and headers that may degrade with a truthful name; they are never the reading an
 // acting caller takes.
 
+import { readAgents, type Agent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import type { DeliveryLeg } from '../settings/inherit.ts';
-import { agentIdOf } from './read.ts';
-import { readConfigSources, resolveConfigChain, type ConfigChainResult } from './sources.ts';
+import { agentIdOf, seatAgentOf, teamContextOf, type TeamContext } from './read.ts';
+import {
+  readConfigSources,
+  readEntityConfigSource,
+  readProjectConfigSource,
+  readSeatConfigSource,
+  readTeamConfigSource,
+  resolveConfigChain,
+  type ConfigChainResult,
+  type ConfigChainSources,
+} from './sources.ts';
 
 /** The signed words a runtime consumer takes from a seat's chain; absent means the chain holds
  *  no such record and the caller keeps reading the source it read before. */
@@ -124,4 +134,56 @@ export function seatSettingsOf(input: {
 export function seatOverridesOf(input: { home: string | null; root: string; seat: string }): SeatOverrides {
   const read = resolveSeatOverrides(input);
   return read.ok ? read.overrides : {};
+}
+
+/**
+ * A seat's signed nickname (`seatOverridesOf(...).nickname`) for many seats in one pass: a header's
+ * persona guard reads every seat of every team. Each team's context and its entity, project and
+ * team records are read once per reader, not once per seat, and the chain resolves as
+ * `seatOverridesOf` resolves it. The nickname is a seat-level word only, so a seat whose agent
+ * record (as the registry's own cached scan parsed it) holds no settings signs none, and its file
+ * is not read and parsed a second time; a record with settings, or one the scan did not parse, is
+ * read as before. A reader is one pass: it keeps what it read for its own life.
+ */
+export function seatNicknameReader(home: string): (root: string, seat: string) => string | null {
+  const teams = new Map<string, TeamContext>();
+  const uppers = new Map<string, Omit<ConfigChainSources, 'seat'>>();
+  let agents: Map<string, Agent> | null = null;
+  return (root, seat) => {
+    try {
+      let team = teams.get(root);
+      if (team === undefined) {
+        team = teamContextOf(home, root);
+        teams.set(root, team);
+      }
+      const found = seatAgentOf(home, team, seat);
+      if (found.agentId === null) return null;
+      const key = `${found.entity ?? ''}\u0000${found.projectId ?? ''}\u0000${team.teamId}`;
+      let upper = uppers.get(key);
+      if (upper === undefined) {
+        upper = {
+          entity: found.entity ? readEntityConfigSource(home, found.entity) : null,
+          project: found.projectId ? readProjectConfigSource(home, found.projectId) : null,
+          team: team.teamId ? readTeamConfigSource(home, team.teamId) : null,
+        };
+        uppers.set(key, upper);
+      }
+      if (agents === null) {
+        try {
+          agents = new Map(readAgents(home).map((agent) => [agent.id, agent]));
+        } catch {
+          // A registry scan that throws spares no read: every seat's own file is read.
+          agents = new Map();
+        }
+      }
+      const agent = agents.get(found.agentId);
+      const own = agent !== undefined && agent.settings === undefined
+        ? { ok: true as const, level: 'seat' as const, target: found.agentId, settings: [] }
+        : readSeatConfigSource(home, found.agentId, seat);
+      const chain = resolveConfigChain({ ...upper, seat: own });
+      return chain.ok ? overridesOf(chain).nickname ?? null : null;
+    } catch {
+      return null;
+    }
+  };
 }
