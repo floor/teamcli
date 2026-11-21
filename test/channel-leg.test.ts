@@ -331,7 +331,7 @@ describe('the channel leg', () => {
     };
     expect(await runSend(['lead', TRIGGER], owner(made.root), host)).toBe(0);
     expect(waited.slice(0, 3)).toEqual([CHANNEL_LOOK_MS, CHANNEL_LOOK_MS, CHANNEL_LOOK_MS]);
-    expect(CHANNEL_LOOK_MS).toBeLessThanOrEqual(10);
+    expect(CHANNEL_LOOK_MS).toBeLessThanOrEqual(2);
   });
 
   test('a live channel walks ahead of a socket the team opted in to (comms roadmap, 2026-11-17)', async () => {
