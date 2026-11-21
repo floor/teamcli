@@ -905,7 +905,9 @@ function needsTeam(spec: string): string {
  * teams' roots, and the receiving team's file is loaded and read in its place; a bare name has
  * no team to resolve in and is refused with `needsTeam`'s sentence.
  */
-function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
+/** `first` is the resolution this run already made of the same spec (`sendCharterTargets`): it is
+ *  used as it stands rather than resolved again. */
+function prologue(io: Io, host: SendHost, seatName: string, first?: ResolvedTarget): Prologue | Ended {
   // The pane places the sender before the folder does. A seat whose shell sits in another
   // team's bound root is still that seat; an unnamed pane leaves the folder to decide.
   const placed = placedCallerTeam(host.home, io);
@@ -915,7 +917,7 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
       const parsed = parseSpec(seatName);
       if ('error' in parsed) return { ended: 'configuration', message: parsed.error };
       if (parsed.kind === 'seat') return { ended: 'configuration', message: needsTeam(seatName) };
-      return homeless(io, host, seatName);
+      return homeless(io, host, seatName, first);
     }
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return { ended: 'configuration', message: message || 'the team file cannot be read' };
@@ -942,7 +944,7 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   const { caller } = judged;
   const who = logTag(caller);
   const from = senderLabelOf(caller);
-  const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
+  const resolved = first ?? resolveTarget(host.home, seatName, io, (session) => host.agents(session));
   // A settings record that exists and does not verify refuses the send: the address it may
   // stand for cannot be decided from a record the store disowns.
   if ('error' in resolved && resolved.kind === 'configuration') return { ended: 'configuration', message: resolved.error };
@@ -975,7 +977,7 @@ export function selfAddressed(caller: Caller, seatName: string, to: { seat: stri
  * every other caller is judged by its team's file and there is none here — stands in it for the
  * read. Every refusal this path writes has no team log to write to: it is reported, not logged.
  */
-function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
+function homeless(io: Io, host: SendHost, seatName: string, first?: ResolvedTarget): Prologue | Ended {
   const caller = callerOf(io);
   if (caller.kind !== 'owner') {
     // An unplaced caller is most often a seat team could not place by its pane (no folder of its
@@ -985,7 +987,7 @@ function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
       : 'a send from outside a team\'s folder is the owner\'s; run it inside a team\'s folder';
     return { ended: 'refused', dir: null, who: describeCaller(caller), reason };
   }
-  const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
+  const resolved = first ?? resolveTarget(host.home, seatName, io, (session) => host.agents(session));
   if ('error' in resolved) {
     if (resolved.kind === 'configuration') return { ended: 'configuration', message: resolved.error };
     return { ended: 'refused', dir: null, who: 'owner', reason: resolved.error };
@@ -1516,14 +1518,17 @@ function sendTeamSession(io: Io, home: string): string | undefined {
   return session;
 }
 
+type ResolvedTarget = ReturnType<typeof resolveTarget>;
+
 /** The folder the charter judges for this send: the recipient team's root, or this checkout for a
  *  read that names no recipient. A spec that names a team the registry cannot place is no
  *  admission. */
-function sendCharterTargets(home: string, seatName: string | undefined, args: { flags: { has(name: string): boolean }; values: { confirm?: string; record?: string } }, io: Io, host: SendHost): string[] {
+function sendCharterTargets(home: string, seatName: string | undefined, args: { flags: { has(name: string): boolean }; values: { confirm?: string; record?: string } }, io: Io, host: SendHost, keep: (resolved: ResolvedTarget) => void): string[] {
   if (seatName === undefined || args.flags.has('list') || args.values.confirm !== undefined || args.values.record !== undefined) {
     return [charterTargetOf(io.cwd)];
   }
   const resolved = resolveTarget(home, seatName, io, (session) => host.agents(session));
+  keep(resolved);
   if (!('error' in resolved)) return [resolved.team.root];
   const parsed = parseSpec(seatName);
   if (!('error' in parsed) && parsed.kind === 'at') {
@@ -1569,7 +1574,9 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // principals are established by their internal entries with their own proof, so neither asks
   // the owner seat and neither can be handed an owner answer.
   const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
-  const sendTargets = sendCharterTargets(host.home, seatName, args, io, host);
+  // The spec is resolved once per run: the charter's answer is the one the prologue uses.
+  let firstTarget: ResolvedTarget | undefined;
+  const sendTargets = sendCharterTargets(host.home, seatName, args, io, host, (resolved) => { firstTarget = resolved; });
   let seatApproved = false;
   // The default rule lifts the owner gate and leaves the sender as the seat. An owner-seat
   // signature still admits the run as the owner, because the owner seat signed it.
@@ -1690,7 +1697,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     timeoutS = seconds;
   }
 
-  const pro = prologue(io, host, seatName);
+  const pro = prologue(io, host, seatName, firstTarget);
   if ('ended' in pro) {
     if (pro.ended === 'configuration') return configuration(io, pro.message, report);
     return refuse(io, pro.dir, pro.who, pro.reason, host, report);
