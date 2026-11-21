@@ -316,6 +316,8 @@ describe('the channel leg', () => {
       outcome: 'sent (channel)',
       ms: 0,
       via: 'channel',
+      // The admission rule rides on a first-leg delivery's line: `team trace` reads its staging there.
+      rule: 'the owner',
       failed: [`typed: ${NO_PANE_MESSAGING}`],
     });
   });
