@@ -1,5 +1,5 @@
 // Every path and transport in these scenes is synthetic; no live inbox or endpoint is used.
-import { afterEach, expect, spyOn, test } from 'bun:test';
+import { afterEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,7 +8,6 @@ import { appendStateFile, createStateFile, FileWriteRefusal, readStateFile, stat
 import { postArrivalWebhook } from '../src/bus/webhook.ts';
 import { deferredNotePathOf, fallbackKeyOf, noteTransportSoon, type TransportFact } from '../src/send/fallback-events.ts';
 import { historyPath } from '../src/send/history.ts';
-import { clearUnread, noteUnread, readUnreadHint } from '../src/send/unread-hint.ts';
 import { signRecord } from '../src/send/record.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 
@@ -70,11 +69,6 @@ for (const dangling of [false, true]) {
     expect((await post(at)).kind).toBe('posted'); unchanged();
     expect(lstatSync(join(at.drop, 'record.posted')).isFile()).toBe(true);
   });
-  test(`A5 unread hint leaves a planted old temporary alone (${dangling ? 'dangling' : 'live'})`, () => {
-    const at = fixture(); const unchanged = planted(at.base, join(at.drop, `.unread.json.${process.pid}.tmp`), dangling);
-    noteUnread(at.drop, 'lead', 'record', '2026-11-07T00:00:00.000Z', { held: true });
-    unchanged(); expect(readUnreadHint(at.drop, 'lead').map(entry => entry.id)).toEqual(['record']);
-  });
   test(`A6 deferred note leaves a planted old temporary alone (${dangling ? 'dangling' : 'live'})`, () => {
     const at = fixture(); const { path, fact, ctx } = deferred(at);
     const unchanged = planted(at.base, `${path}.${process.pid}.tmp`, dangling);
@@ -97,11 +91,6 @@ for (const dangling of [false, true]) {
       unchanged = planted(at.base, join(at.drop, 'record.posted'), dangling);
     });
     expect(unchanged).toBeDefined(); unchanged!();
-  });
-  test(`A5 hint refuses a planted final leaf (${dangling ? 'dangling' : 'live'})`, () => {
-    const at = fixture(); const unchanged = planted(at.base, join(at.drop, '.unread.json'), dangling);
-    noteUnread(at.drop, 'lead', 'record', '2026-11-07T00:00:00.000Z', { held: true });
-    unchanged(); expect(readUnreadHint(at.drop, 'lead')).toEqual([]);
   });
 }
 test('the publisher and reader refuse linked leaves, hard links, and linked parents', () => {
@@ -144,17 +133,6 @@ test('an explicit root accepts an alias only above it and refuses links at or be
   symlinkSync(outside, join(root, 'linked-child'));
   expect(() => writeStateFile(join(root, 'linked-child', 'nested', 'record'), 'refused', { root })).toThrow();
   expect(existsSync(join(outside, 'nested', 'record'))).toBe(false);
-});
-test('unread writes report one refusal and return its visible outcome', () => {
-  const at = fixture(); const unchanged = planted(at.base, join(at.drop, '.unread.json'), false);
-  const say = spyOn(process.stderr, 'write').mockImplementation(() => true);
-  try {
-    for (let n = 0; n < 2; n++) {
-      expect(noteUnread(at.drop, 'lead', 'record', '2026-11-07T00:00:00.000Z', { held: true })).toEqual({ ok: false, kind: 'refused', reason: 'the unread hint could not be written safely' });
-      expect(clearUnread(at.drop, 'record')).toEqual({ ok: false, kind: 'refused', reason: 'the unread hint could not be written safely' });
-    }
-    expect(say).toHaveBeenCalledTimes(1); expect(String(say.mock.calls[0]?.[0])).toContain('unread hint'); unchanged();
-  } finally { say.mockRestore(); }
 });
 
 

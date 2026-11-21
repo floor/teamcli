@@ -225,7 +225,6 @@ const MUTABLE: Record<string, string> = {
   'src/send/record.ts: keyPrintMemo': 'content',
   'src/send/record.ts: KNOWN_READER': 'constant',
   'src/send/record.ts: UNNAMED_READER': 'constant',
-  'src/send/unread-hint.ts: reported': 'process',
   'src/session-names.ts: INHERITED_SESSION_NAMES': 'constant',
   'src/state.ts: readStateCalls': 'process',
   'src/watch/screen-core.ts: SCREEN_KINDS': 'constant',

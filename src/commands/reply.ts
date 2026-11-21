@@ -89,7 +89,6 @@ import {
 } from '../send/record.ts';
 import { messageKeyOf, messageKeyState } from '../store/keys.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { noteUnread } from '../send/unread-hint.ts';
 import { recordDir } from './messages.ts';
 import { reportedConversationProblem, admissionOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
 import { seatDropDir, seatListingDirs, sessionMailDir } from '../queue/mail-tree.ts';
@@ -1086,13 +1085,10 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
 
   let landed = false;
   // A held seat is a queue, not a refusal, exactly as a send's own drop and typed legs say it:
-  // the record is a file, not a keystroke — its id names the file, the seal is idempotent, and
-  // the hint's write is atomic and lock-optional on its own — so it is written without the lock,
-  // and the seat's watcher delivers the answer when the seat is free. Only a live holder reaches
-  // this arm: a dead pid, or a live process the token's start does not name, is stale and is
-  // taken over by `acquireSeatLock`. The unread hint is the one piece that can race the holder,
-  // and its own write is atomic: the worst a race costs is one hint, which the sweep settles by
-  // verifying the folder.
+  // the record is a file, not a keystroke — its id names the file and the seal is idempotent —
+  // so it is written without the lock, and the seat's watcher delivers the answer when the seat
+  // is free. Only a live holder reaches this arm: a dead pid, or a live process the token's start
+  // does not name, is stale and is taken over by `acquireSeatLock`.
   const lock = acquireSeatLock(toDir, toSession, targetSeat);
   try {
     try {
@@ -1113,10 +1109,6 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
       return { ok: result.ok, value: result };
     }, { home: host.home, log: queueLog(folder) });
     if (!written.ok) return refused(io, json, `${targetSeat}: the record could not be written (${written.reason}); nothing was written`);
-    // The recipient's unread index names this record as its sender's newest. A caller that holds
-    // the lock writes the hint inside it; a queued write hands the hint its own best-effort lock,
-    // which the holder refuses without costing the entry.
-    noteUnread(folder, me, replyId, at, 'release' in lock ? { held: true } : {});
     // The word the report will use is decided here, by the reader's own checks: the record at the
     // path `team messages` and the seat's inbox server scan, its name the id, bound to that tree's
     // root and session, addressed to that seat, its signature verifying. Only a record that passes

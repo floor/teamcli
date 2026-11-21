@@ -72,7 +72,6 @@ import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
-import { noteUnread } from '../send/unread-hint.ts';
 import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, stampedSettlement, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
@@ -124,7 +123,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 import { modelDiffers, positiveModelObservation, signedSeatModel, signedSeatModelObservation, type SeatModelObservation } from '../status/statusline.ts';
 import { clearPreflightReports, reportHeldSend } from '../send/held-reports.ts';
-import { NO_STAMPED_FOLDER, identityDirOf, mailTreeIn, recordFolderFor, seatMailDirIn, sessionMailDir } from '../queue/mail-tree.ts';
+import { NO_STAMPED_FOLDER, mailTreeIn, recordFolderFor, seatMailDirIn, sessionMailDir } from '../queue/mail-tree.ts';
 import { liveRecordPath } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -2363,11 +2362,16 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   // The direct-only hook fires once, when a route's ending closes the walk.
   let directEnded = false;
   const installNote = (begun: FallbackWalk | null): void => {
+    // The episode (marker and attempt ledger) opens with the walk's first fact that is not a
+    // first-leg delivery: a fresh record the channel, the native queue or the socket took at once
+    // had no fallback to record. A record already there keeps its episode.
+    let episode = false;
     note = (attempt) => {
       if (!attempt.liveRoutesRemain) ended = true;
+      episode ||= !(attempt.outcome === 'delivered' && FIRST_LEGS.includes(attempt.route) && stagedWalk?.ok === true && stagedWalk.existing !== true);
       // The record is durable before the first note, so a busy episode's key never holds the
       // sender's line: the fact is written beside the record and the next drain pass records it.
-      if (begun !== null) {
+      if (begun !== null && episode) {
         const noted = begun.noteSoon(attempt);
         if (!noted.ok) logLine(dir, 'send', who, `${to.seat}: the fallback attempt was not recorded (${noted.reason})`, host.now());
       }
@@ -3708,6 +3712,9 @@ export async function sendDirect(
  *  staged. The recorder's own refusal is logged by the caller and never changes the walk. */
 type WalkNote = (attempt: WalkAttempt) => void;
 
+/** The legs whose delivery as a walk's first fact opens no fallback episode. */
+const FIRST_LEGS: readonly string[] = ['channel', 'native', 'socket'];
+
 /** The attempt shape the walk records, measured from the run's own clock. */
 function walkAttempt(
   route: string,
@@ -4008,11 +4015,6 @@ export async function stageSendRecord(
     return { ok: true, path: held.path, existing: true, record, signed };
   }
   stagedStep(fields(payload.at));
-  // The recipient's unread index names this record as its sender's newest. It is a hint the
-  // receiver's sweep verifies against the record itself, never a second source of truth, and a
-  // hint that cannot be written never changes what this send did.
-  // The hint is the seat's own (body-free: an id and a time): it stays in the identity folder.
-  noteUnread(identityDirOf(dropDir), payload.from, payload.id, payload.at);
   return { ok: true, path: staged.receipt.copy ?? join(recordDir ?? dropDir, payload.id), record, signed };
 }
 

@@ -75,7 +75,6 @@ import {
   type SignedRecord,
 } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { noteUnread } from '../send/unread-hint.ts';
 import { attributedBody, attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
 import { seatDropDir, seatMailParts, sessionMailDir, type MailTree } from '../queue/mail-tree.ts';
 
@@ -493,9 +492,6 @@ export function plantRecord(
   mkdirSync(dir, { recursive: true });
   const path = recordFile(dir, id);
   writeAtomic(path, `${JSON.stringify(record, null, 2)}\n`);
-  // The helper writes what a send writes: the record and the recipient's unread index entry
-  // naming it, so a fixture reads exactly as a landed drop does.
-  noteUnread(dir, payload.from, id, at);
   return path;
 }
 

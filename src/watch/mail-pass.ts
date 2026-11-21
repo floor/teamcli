@@ -87,6 +87,13 @@ export class MailPass {
     return listed;
   }
 
+  /** The ids still waiting in `seat`'s folder, or undefined when the folder could not be listed
+   *  (then nothing is known settled). */
+  waitingIds(seat: string): ReadonlySet<string> | undefined {
+    const unread = this.unread(seat);
+    return this.listedBySeat.has(seat) ? new Set(unread.map((one) => one.id)) : undefined;
+  }
+
   /** Whether this pass's listing of `seat`'s folder showed the stuck-episode marker. The folder
    *  is the one `unread` already lists: a marker the listing does not show is never opened, and
    *  a folder that could not be listed shows none. The caller reads the marker itself, once. */

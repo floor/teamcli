@@ -549,7 +549,7 @@ const RECORD_NAME_MAX = 255;
 const RECORD_SIDECAR_SUFFIXES = ['.pending', '.taken', '.read', '.wake', '.woken', '.reported', '.json', '.new', '.channel-emitted', '.channel-abort'];
 
 /** A message id as a record's own file name: a UUID, or the `unread-<uuid>` an earlier build wrote. */
-const RECORD_STEM = /^(?:unread-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const RECORD_STEM = /^(?:unread-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Watcher, receipt and private publication sidecars are never message candidates: a name with a
  *  known sidecar suffix, or any `<record id>.<anything>` — a record's own name never has a dot, so

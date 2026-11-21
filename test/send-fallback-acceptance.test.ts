@@ -35,7 +35,6 @@ import {
   escalateDue,
   markerPathOf,
   type CanonicalRecipient,
-  type FallbackMarker,
 } from '../src/send/fallback-events.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
 import { readTriggerLine } from '../src/send/native.ts';
@@ -141,25 +140,10 @@ test('a socket frame taken into a held dialog is the delivery: the walk stops th
   expect(recordBody(join(dir, id))).toBe(filed('hello'));
 
   const recipient: CanonicalRecipient = { team: 'acme', seat: 'lead', toId: null, session: 'acme', root: made.root };
-  const marker = JSON.parse(readFileSync(markerPathOf(recipient, id), 'utf8')) as FallbackMarker;
-  // The one live route took the frame: the episode is delivered, no escalation is scheduled, and
-  // the walk made no second attempt.
-  expect(marker).toMatchObject({ format: 1, messageId: id, status: 'delivered', sender: 'owner' });
-  expect(marker.recipient).toEqual(recipient);
-  expect(marker.dueAt).toBeUndefined();
-  expect(marker.attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome, receipt: attempt.receipt }))).toEqual([
-    { route: 'socket', outcome: 'delivered', receipt: { kind: 'unknown' } },
-  ]);
-
-  // The durable ledger keeps every attempt in the order the walk made them: the socket's one.
-  const ledger = join(dirname(historyPath('acme', made.root, made.home)), attemptLedgerFileName(recipient, id));
-  const attempts = readFileSync(ledger, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as { route: string; outcome: string });
-  expect(attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome }))).toEqual([
-    { route: 'socket', outcome: 'delivered' },
-  ]);
+  // The one live route took the frame at the walk's first leg: there was no fallback, so no
+  // episode opened (no marker, no attempt ledger) and no escalation can be scheduled.
+  expect(existsSync(markerPathOf(recipient, id))).toBe(false);
+  expect(existsSync(join(dirname(historyPath('acme', made.root, made.home)), attemptLedgerFileName(recipient, id)))).toBe(false);
 
   // The history records the taken frame as the delivery: the record stays unread for the seat's
   // own receipt, and the presence pass is where a dialog becomes `held`.
