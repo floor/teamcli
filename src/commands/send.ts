@@ -3242,7 +3242,6 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         note(walkAttempt('session', 'delivered', false, host.now(), startedAt, { reason: `session ${attempt.session} created` }));
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
         const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
-        logLine(dir, 'send', who, `${to.seat}: delivered (session ${attempt.session}) (drop ${String(body.length)} characters)`, host.now());
         appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered', ms, via: 'session', session: attempt.session, ...failed });
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'session', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
