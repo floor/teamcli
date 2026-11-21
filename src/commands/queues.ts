@@ -14,6 +14,7 @@ import { buildIdentity } from '../version.ts';
 import { seatDropDir } from '../queue/mail-tree.ts';
 import { channelUnproven, type ChannelUnproven } from '../queue/resend.ts';
 import { pendingProbe, placeChannelProbe } from '../queue/channel-probe.ts';
+import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { listenerKeyOf } from '../comms/offer.ts';
 import type { TeamFile } from '../file/types.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -238,7 +239,7 @@ function proveSeats(out: Io, root: string, home: string, session: string, lead: 
   const key = messageKeyState(home);
   // Every check comes first, for every chosen seat, before anything is written: a refusal here
   // leaves the checkout exactly as it was, whatever the other seats would have taken.
-  const plan: { seat: string; pending: string | null }[] = [];
+  const plan: { seat: string; listenerKey: string; pending: string | null }[] = [];
   const refused: string[] = [];
   for (const gap of chosen) {
     if (gap.channel !== 'unproven since launch' || key.kind !== 'key') {
@@ -246,13 +247,19 @@ function proveSeats(out: Io, root: string, home: string, session: string, lead: 
       continue;
     }
     const dropDir = seatDropDir(root, session, gap.seat);
+    // The one listener read the placement binds to: it must still be a channel server of this
+    // level, the only kind that pushes a stamped copy with an offer token.
     const live = inboxLive(dropDir, root, session, gap.seat);
-    const since = live.live ? Date.parse(live.listener.ts) : Number.NaN;
-    if (!live.live || !Number.isFinite(since)) {
+    if (!live.live) {
       refused.push(`  ${gap.seat}: no probe: its listener is gone\n`);
       continue;
     }
-    plan.push({ seat: gap.seat, pending: pendingProbe({ root, session, seat: gap.seat, key: key.key, listenerKey: listenerKeyOf(live.listener), listenerSinceMs: since, nowMs: now.getTime(), ...(lead === undefined ? {} : { lead }) }) });
+    if (live.listener.channel !== true || (live.listener.level ?? 0) < ACTOR_LEVEL) {
+      refused.push(`  ${gap.seat}: no probe: its listener is not a channel server of this level\n`);
+      continue;
+    }
+    const listenerKey = listenerKeyOf(live.listener);
+    plan.push({ seat: gap.seat, listenerKey, pending: pendingProbe({ root, session, seat: gap.seat, key: key.key, listenerKey, nowMs: now.getTime(), ...(lead === undefined ? {} : { lead }) }) });
   }
   if (refused.length > 0) {
     out.stderr('team queues: nothing probed; the checkout is unchanged:\n');
@@ -269,7 +276,7 @@ function proveSeats(out: Io, root: string, home: string, session: string, lead: 
       out.stdout(`${one.seat}: probe ${one.pending} is waiting for its ack\n`);
       continue;
     }
-    const placed = placeChannelProbe({ home, root, session, seat: one.seat, now });
+    const placed = placeChannelProbe({ home, root, session, seat: one.seat, listenerKey: one.listenerKey, now });
     if (!placed.ok) {
       failed.push(`  ${one.seat}: not placed: ${placed.reason}; its queue may keep a void entry for the attempt\n`);
       continue;

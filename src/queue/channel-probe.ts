@@ -35,6 +35,11 @@ export const PROBE_PENDING_MS = 10 * 60_000;
 /** The probe's whole body: what it is, and the one thing it asks. */
 export const CHANNEL_PROBE_BODY = 'TeamCLI channel proof probe. Acknowledge it with the ack tool, passing the id and offer from this notification\'s meta. Nothing else to do.';
 
+/** The signed subject that binds a probe to the one listener incarnation chosen at placement. */
+export function probeSubject(listenerKey: string): string {
+  return `channel proof probe for listener ${listenerKey}`;
+}
+
 /** Whether a verified payload is a channel probe. */
 export function isChannelProbe(payload: Pick<RecordPayload, 'from' | 'from_id' | 'rule'>): boolean {
   return payload.from === CHANNEL_PROBE_FROM && payload.from_id === null && payload.rule === CHANNEL_PROBE_RULE;
@@ -42,13 +47,14 @@ export function isChannelProbe(payload: Pick<RecordPayload, 'from' | 'from_id' |
 
 /**
  * The seat's probe that can still prove the current listener incarnation: a verified probe,
- * unsettled, placed within `PROBE_PENDING_MS`, and either pushed by this listener or placed after
- * this listener started (`listenerSinceMs`, its marker's time) and not yet pushed. Null when there
- * is none. A server primes its watch with the mail already waiting at its start and never pushes
- * it, so a probe an earlier listener took, or one placed before this listener started and never
- * offered, can no longer prove this one: a fresh probe is placed instead.
+ * unsettled, placed within `PROBE_PENDING_MS` for exactly this listener (its signed subject names
+ * the listener key read at placement), and either pushed by this listener or not yet pushed. A
+ * listener publishes its marker only after its watch is primed, so a probe placed for that marker
+ * is one its watch will see. A probe placed for another incarnation, offered or not, can never
+ * prove this one: the server primes over mail already waiting at its start. Null when there is
+ * none.
  */
-export function pendingProbe(input: { root: string; session: string; seat: string; key: KeyObject; listenerKey: string; listenerSinceMs: number; nowMs: number; lead?: string }): string | null {
+export function pendingProbe(input: { root: string; session: string; seat: string; key: KeyObject; listenerKey: string; nowMs: number; lead?: string }): string | null {
   const dropDir = seatDropDir(input.root, input.session, input.seat);
   const listing = stampedListing(dropDir);
   if (listing === null || listing === 'unreadable') return null;
@@ -68,10 +74,9 @@ export function pendingProbe(input: { root: string; session: string; seat: strin
     const payload = read.record.payload;
     if (!isChannelProbe(payload) || payload.to !== input.seat || payload.session !== input.session) continue;
     if (stampedSettled(listing.folder, name, { to: input.seat, root: input.root, session: input.session, ...(input.lead === undefined ? {} : { lead: input.lead }) }, input.key)) continue;
+    if (payload.subject !== probeSubject(input.listenerKey)) continue;
     const copies = offeringListeners(listing.folder, name);
-    if (copies.includes(input.listenerKey)) return name;
-    const placedAt = Date.parse(payload.at);
-    if (copies.length === 0 && arrived > input.listenerSinceMs && Number.isFinite(placedAt) && placedAt > input.listenerSinceMs) return name;
+    if (copies.length === 0 || copies.includes(input.listenerKey)) return name;
   }
   return null;
 }
@@ -84,7 +89,7 @@ export function pendingProbe(input: { root: string; session: string; seat: strin
  * for the attempt (src/queue/append.ts), never a record. The caller checks every seat before
  * the first placement, so only a write fault reaches this second case.
  */
-export function placeChannelProbe(input: { home: string; root: string; session: string; seat: string; now: Date }): { ok: true; id: string } | { ok: false; reason: string } {
+export function placeChannelProbe(input: { home: string; root: string; session: string; seat: string; listenerKey: string; now: Date }): { ok: true; id: string } | { ok: false; reason: string } {
   let root: string;
   try {
     root = realpathSync(input.root);
@@ -95,7 +100,7 @@ export function placeChannelProbe(input: { home: string; root: string; session: 
   const payload: RecordPayload = {
     kind: 'message', id, to: input.seat, to_id: null, root, session: input.session, at: input.now.toISOString(),
     body: CHANNEL_PROBE_BODY, from: CHANNEL_PROBE_FROM, from_id: null, rule: CHANNEL_PROBE_RULE, thread: id,
-    lvl: DELIVERY_LEVEL,
+    subject: probeSubject(input.listenerKey), lvl: DELIVERY_LEVEL,
   };
   let signed;
   try {

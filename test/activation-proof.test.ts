@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { runQueues } from '../src/commands/queues.ts';
 import { listenerKeyOf, offerAcks } from '../src/comms/offer.ts';
 import { writeDaemonState } from '../src/daemon/state.ts';
-import { listenerPath, readListener } from '../src/mcp/inbox.ts';
+import { listenerPath, readListener, writeListener, type InboxListener } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { CHANNEL_PROBE_BODY, pendingProbe, placeChannelProbe } from '../src/queue/channel-probe.ts';
 import { takeCopyNumber } from '../src/queue/handover.ts';
@@ -261,22 +261,66 @@ function tree(folder: string): string {
 }
 
 describe('review round 1: the probe binds to the listener incarnation and refuses before any write', () => {
-  test('an unoffered probe placed before the current listener started is not pending; one placed after it, or pushed by it, is', () => {
+  test('a probe is pending only for the listener incarnation it was placed for, offered or not', () => {
     const at = place();
     try {
       const key = binding(at).key;
       const now = new Date();
-      const placed = placeChannelProbe({ home: at.home, root: at.root, session: SESSION, seat: 'lead', now });
+      const placed = placeChannelProbe({ home: at.home, root: at.root, session: SESSION, seat: 'lead', listenerKey: '1@then', now });
       if (!placed.ok) throw new Error(placed.reason);
-      const ask = (listenerKey: string, listenerSinceMs: number) => pendingProbe({ root: at.root, session: SESSION, seat: 'lead', key, listenerKey, listenerSinceMs, nowMs: now.getTime() + 1_000, lead: 'lead' });
-      // The listener started before the probe was placed: its watch will offer it.
-      expect(ask('1@then', now.getTime() - 60_000)).toBe(placed.id);
-      // A replacement listener started after the placement primed past it and never offers it.
-      expect(ask('2@later', now.getTime() + 500)).toBeNull();
-      // Pushed by one listener: pending for that incarnation only.
+      const ask = (listenerKey: string) => pendingProbe({ root: at.root, session: SESSION, seat: 'lead', key, listenerKey, nowMs: now.getTime() + 1_000, lead: 'lead' });
+      // Unoffered: pending for the incarnation chosen at placement, never for another.
+      expect(ask('1@then')).toBe(placed.id);
+      expect(ask('2@later')).toBeNull();
+      // Pushed by its own listener: still pending for it only.
       expect(takeCopyNumber(seatMailDirs(at.root, SESSION, 'lead').stamped, placed.id, 'channel', Date.now(), { token: 'c'.repeat(32), listener: '1@then' })).not.toBeNull();
-      expect(ask('1@then', now.getTime() + 500)).toBe(placed.id);
-      expect(ask('2@later', now.getTime() - 60_000)).toBeNull();
+      expect(ask('1@then')).toBe(placed.id);
+      expect(ask('2@later')).toBeNull();
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('round 2: placed for the predecessor between the replacement\'s timestamp and its prime, the probe is not pending for the replacement', async () => {
+    const at = place();
+    try {
+      const dropDir = seatMailDirs(at.root, SESSION, 'lead').legacy;
+      mkdirSync(dropDir, { recursive: true, mode: 0o700 });
+      const marker = (pid: number, ts: string): InboxListener => ({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid, ts, channel: true, level: 3 });
+      expect(writeListener(dropDir, marker(process.pid, new Date(Date.now() - 60_000).toISOString()))).toBe(true);
+      // The replacement captured its timestamp before this placement; its marker lands after it.
+      const successorTs = new Date(Date.now() - 1_000).toISOString();
+      const first = probeIdOf((await queues(at, ['prove'])).out);
+      expect(writeListener(dropDir, marker(process.ppid, successorTs))).toBe(true);
+      const again = await queues(at, ['prove']);
+      expect(again.code).toBe(0);
+      expect(again.out).not.toContain('is waiting for its ack');
+      expect(probeIdOf(again.out)).not.toBe(first);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('round 2: a listener replaced by one that cannot offer a token between the two reads gets no probe', async () => {
+    const at = place();
+    try {
+      const dropDir = seatMailDirs(at.root, SESSION, 'lead').legacy;
+      mkdirSync(dropDir, { recursive: true, mode: 0o700 });
+      const marker = (channel: boolean, level: number): InboxListener => ({ v: 1, seat: 'lead', session: SESSION, root: at.root, cli: 'claude-code', pid: process.pid, ts: new Date().toISOString(), level, ...(channel ? { channel: true as const } : {}) });
+      for (const [channel, level] of [[false, 3], [true, 2]] as const) {
+        expect(writeListener(dropDir, marker(true, 3))).toBe(true);
+        let calls = 0;
+        const io = testIo(at.root, { kind: 'owner' });
+        // The activation check reads the clock first; the placement read follows the second read.
+        const code = await runQueues(['prove'], io, { home: at.home, paneOwner: paneOwner(), now: () => {
+          calls += 1;
+          if (calls === 2) expect(writeListener(dropDir, marker(channel, level))).toBe(true);
+          return new Date();
+        } });
+        expect(code).toBe(1);
+        expect(io.err).toContain('lead: no probe: its listener is not a channel server of this level');
+        expect(existsSync(seatMailDirs(at.root, SESSION, 'lead').stamped)).toBe(false);
+      }
     } finally {
       at.cleanup();
     }
