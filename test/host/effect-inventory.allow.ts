@@ -91,7 +91,7 @@ export const DYNAMIC: Record<string, string> = {
 export const FFI: Record<string, string> = {
   'src/process-kernel.ts': 'proc_pidinfo/sysctl/sandbox_check: kernel process reads',
   'src/host/peer.ts': 'getsockopt/proc_pidinfo/sandbox_check: socket peer and process reads',
-  'src/herdr-direct.ts': 'socket/connect/write/read to herdr for the read methods directRequestOf admits only (agent list, workspace list, pane process-info, pane get, pane list)',
+  'src/herdr-direct.ts': 'socket/connect/write/read to herdr for the read methods directRequestOf admits only (agent list, workspace list, pane process-info, pane get, pane list, the styled pane read)',
   'src/bus/relative-read.ts': 'openat with O_RDONLY only: a link-free read walk',
   'src/lock/flock.ts': 'flock on a descriptor its caller opened; a lock file opened for writing passes the guard at its open',
   'src/send/drop-retention.ts': 'openat/mkdirat/renameat/unlinkat: every changing call and every writing openat passes hostedCommit in guardedDirOps',

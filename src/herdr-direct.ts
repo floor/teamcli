@@ -20,7 +20,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-type Request = { method: string; params: Record<string, string> };
+type Request = { method: string; params: Record<string, string | number> };
 
 /** The CLI argument shapes answered directly, and the API request each one sends. */
 export function directRequestOf(args: readonly string[]): Request | null {
@@ -35,6 +35,14 @@ export function directRequestOf(args: readonly string[]): Request | null {
   }
   if (args.length === 4 && a === 'pane' && b === 'list' && c === '--workspace' && typeof d === 'string' && d !== '') {
     return { method: 'pane.list', params: { workspace_id: d } };
+  }
+  // The styled screen read (`paneRead`): its `result.read.text` is the CLI's stdout byte for byte
+  // (herdr 0.9.5, compared on a live pane 2026-11-21). Only this exact shape; the plain retry
+  // without `--format` keeps the CLI.
+  const [, , , , e, f, g, h, i] = args;
+  if (args.length === 9 && a === 'pane' && b === 'read' && typeof c === 'string' && c !== '' && !c.startsWith('-')
+    && d === '--source' && e === 'visible' && f === '--lines' && /^[0-9]{1,6}$/.test(g ?? '') && h === '--format' && i === 'ansi') {
+    return { method: 'pane.read', params: { pane_id: c, source: 'visible', lines: Number(g), format: 'ansi' } };
   }
   return null;
 }
