@@ -40,6 +40,7 @@ export function followBus(
   let down = false;
   let first = true;
   let buffer = '';
+  let next: BusFollow | null = null;
   const socket: Socket = connect(busSocket(root));
   const fail = (why: string): void => {
     if (closed || down) return;
@@ -62,7 +63,19 @@ export function followBus(
       const parsed = parseBusAnswer(line);
       if (!parsed) return fail('the bus answered something this build cannot read');
       if (!parsed.ok) return fail(parsed.message);
-      if (parsed.kind === 'gap') return fail('the bus no longer holds this cursor');
+      if (parsed.kind === 'gap') {
+        // A follower that skips its backlog asked for no history, so a backlog too long for one
+        // answer (a long-lived team's log at cursor 0) is no missed event: it dials once more
+        // from the bus's newest record. Without this a seat's server never came up on a live bus
+        // and every push waited for the folder watch (2026-11-21: 63-98 ms instead of ~10 ms).
+        if (first && request.skipBacklog === true && (request.cursor ?? 0) < parsed.newest_seq) {
+          down = true;
+          socket.destroy();
+          if (!closed) next = followBus(root, { ...request, cursor: parsed.newest_seq }, handlers);
+          return;
+        }
+        return fail('the bus no longer holds this cursor');
+      }
       if (parsed.kind === 'events') {
         const backlog = first && request.skipBacklog === true;
         first = false;
@@ -83,6 +96,7 @@ export function followBus(
     close: () => {
       closed = true;
       socket.destroy();
+      next?.close();
     },
   };
 }

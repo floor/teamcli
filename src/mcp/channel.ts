@@ -50,9 +50,11 @@ export const CHANNEL_HELD_RECEIPT = 'channel-held';
  *  on `CHANNEL_LOOK_MS`. */
 export const CHANNEL_PUSH_GRACE_MS = 2_000;
 
-/** How often a sender looks for the push marker it is waiting on: one stat per look. The server
- *  pushes within milliseconds of the record, so a coarse look was most of a channel send's time. */
-export const CHANNEL_LOOK_MS = 10;
+/** How often a sender looks for the push marker it is waiting on: one marker read and one
+ *  listing per look. The server pushes about 10 ms after the bus hears of the record, so a 10 ms
+ *  look added up to half the push again; a 2 ms look costs a few small reads per send. A folder
+ *  watch is no faster here: Bun on macOS holds back an event that follows another by ~50 ms. */
+export const CHANNEL_LOOK_MS = 2;
 
 /** How often a serving inbox lists its folder by name, for a record its watch did not name. */
 export const CHANNEL_TICK_MS = 250;
