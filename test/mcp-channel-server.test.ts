@@ -7,7 +7,7 @@
 // A launch without the flag is the ordinary inbox server: no capability, no instructions, no
 // push, no ack. Fixtures only: synthetic folders, a synthetic home, and a launch line this test
 // writes; no live session is touched.
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,7 +22,10 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { markPending, readPending } from '../src/send/pending.ts';
 import { signRecord, verifyReceipt, type RecordPayload, type SignedReceipt } from '../src/send/record.ts';
+import * as keys from '../src/store/keys.ts';
 import { messageKeyState } from '../src/store/keys.ts';
+import { currentRunMemo } from '../src/run-memo.ts';
+import { markChannelNotified } from '../src/mcp/channel.ts';
 import { retryHeldDrops, type RetryScene } from '../src/watch/retry.ts';
 import { paneShell, testIo } from './helpers.ts';
 
@@ -314,6 +317,45 @@ describe('the push', () => {
       feed.end();
       expect(await running).toBe(0);
     } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a push reads its inputs under one run memo, and its commit re-proves the seat on fresh reads', async () => {
+    const at = place();
+    let memoInCommit: boolean | null = null;
+    const original = keys.messageKeyState;
+    const memoAtKey: boolean[] = [];
+    let armed = false;
+    const keySpy = spyOn(keys, 'messageKeyState').mockImplementation((home?: string) => {
+      if (armed) memoAtKey.push(currentRunMemo() !== null);
+      return original(home);
+    });
+    try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, {
+        home: at.home,
+        channelMark: (dir, id) => {
+          memoInCommit = currentRunMemo() !== null;
+          return markChannelNotified(dir, id);
+        },
+      });
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      expect(currentRunMemo()).toBeNull();
+      signed(at, PUSHED_ID, 'from a worker — admitted by: the owner\n\nmemo');
+      armed = true;
+      await until(() => notice(feed.replies).length >= 1);
+      expect(notice(feed.replies)).toHaveLength(1);
+      // The record's checks read the key under the memo; the commit (the seat re-proof, the
+      // marker, the frame) runs outside it.
+      expect(memoAtKey[0]).toBe(true);
+      expect(memoInCommit).toBe(false);
+      expect(currentRunMemo()).toBeNull();
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
+      keySpy.mockRestore();
       at.cleanup();
     }
   });
