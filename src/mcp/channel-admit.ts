@@ -9,7 +9,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
-import { readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import { getAgent, isAgentId, type Agent } from '../registry/agents.ts';
@@ -407,6 +407,29 @@ function currentHolderOf(holders: AgentScan, team: string, seat: string): Holder
  *  that could not be read, `null` one that is not a valid agent. */
 type AgentScan = () => { kind: 'records'; records: { path: string; agent: Agent | null | undefined }[] } | { kind: 'none' } | { kind: 'unreadable' };
 
+/** The last whole scan of a registry folder, per home, with the stat words it was read under. */
+const keptScans = new Map<string, { stamp: string; scan: Extract<ReturnType<AgentScan>, { kind: 'records' }> }>();
+
+/** What a scan of the folder depends on, by stat only: the folder's own inode and mtime, and each
+ *  agent file's name, inode, size, mtime and ctime (a mode change moves only the ctime). */
+function agentFolderStamp(dir: string, names: readonly string[]): string | null {
+  try {
+    const folder = statSync(dir);
+    let stamp = `${String(folder.ino)}:${String(folder.mtimeMs)}:${String(names.length)}`;
+    for (const name of names) {
+      try {
+        const one = lstatSync(join(dir, name));
+        stamp += `|${name}:${String(one.ino)}:${String(one.size)}:${String(one.mtimeMs)}:${String(one.ctimeMs)}`;
+      } catch (error) {
+        stamp += `|${name}:${(error as NodeJS.ErrnoException).code ?? 'error'}`;
+      }
+    }
+    return stamp;
+  } catch {
+    return null;
+  }
+}
+
 function agentScan(home: string): AgentScan {
   let scan: ReturnType<AgentScan> | null = null;
   return () => {
@@ -419,11 +442,19 @@ function agentScan(home: string): AgentScan {
       scan = (error as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'none' } : { kind: 'unreadable' };
       return scan;
     }
+    names = names.filter((name) => name.endsWith('.yaml') && isAgentId(name.slice(0, -'.yaml'.length))).sort();
+    // A server pushes many records under one registry: the whole scan (every record parsed, the
+    // invalid and unreadable ones kept as they were read) stands while no file it read has
+    // changed by stat. Any change, addition or removal reads the folder whole again.
+    const stamp = agentFolderStamp(dir, names);
+    const kept = keptScans.get(home);
+    if (stamp !== null && kept !== undefined && kept.stamp === stamp) {
+      scan = kept.scan;
+      return scan;
+    }
     const records: { path: string; agent: Agent | null | undefined }[] = [];
-    for (const name of names.sort()) {
-      if (!name.endsWith('.yaml')) continue;
+    for (const name of names) {
       const id = name.slice(0, -'.yaml'.length);
-      if (!isAgentId(id)) continue;
       let agent: Agent | null | undefined;
       try {
         agent = getAgent(home, id);
@@ -432,7 +463,11 @@ function agentScan(home: string): AgentScan {
       }
       records.push({ path: join(dir, name), agent });
     }
-    scan = { kind: 'records', records };
+    const read = { kind: 'records' as const, records };
+    scan = read;
+    // Kept only when the folder stood still across the read: a write during it is read again.
+    if (stamp !== null && agentFolderStamp(dir, names) === stamp) keptScans.set(home, { stamp, scan: read });
+    else keptScans.delete(home);
     return scan;
   };
 }

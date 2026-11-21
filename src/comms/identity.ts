@@ -215,9 +215,10 @@ function signedModelOf(agent: Agent): string | null {
  * for the seat's label and display. Every read is lazy and kept for the life of the view, and a
  * read that fails is no answer, never an exception out of a display.
  */
-export function registryIdentityView(home: string): IdentityView {
+export function registryIdentityView(home: string, known?: { root: string; team: TeamFile }): IdentityView {
   let teams: Readonly<Record<string, TeamRecord>> | null = null;
-  const files = new Map<string, TeamFile | null>();
+  // A caller that has just read a root's team file hands it in: the same read is not done again.
+  const files = new Map<string, TeamFile | null>(known === undefined ? [] : [[known.root, known.team]]);
   const signed = new Map<string, string | null>();
   const teamsOf = (): Readonly<Record<string, TeamRecord>> => {
     if (teams === null) {

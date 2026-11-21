@@ -20,7 +20,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { lstatSync, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { followBus, followBusRetrying, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
@@ -32,11 +32,17 @@ import type { LoadResult, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
-import { registeredRootOf } from '../registry/teams.ts';
+import { registeredRootOf, teamIdOf, teamsFile } from '../registry/teams.ts';
+import { projectsFile } from '../registry/projects.ts';
+import { teamConfigRecordPath } from '../registry/team-config-store.ts';
+import { entitiesPath } from '../entities.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
+import { machineSettingsPath } from '../settings/declared.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 
 import { alreadyReadSentence, DELIVERY_LEVEL, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
 import { attributedBody, renderedIdentity } from '../send/sender-claim.ts';
+import { registryIdentityView } from '../comms/identity.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, replyLine, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, readStateShared, type SeatState, type State } from '../state.ts';
@@ -415,7 +421,10 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   // nested headers are literal message text, including a worker quoting the owner's header.
   // The sender's one identity (src/comms/identity.ts): the record's signed one, else the
   // registry's by id. No other name is handed to the renderer.
-  const identity = renderedIdentity(payload.from, { record: payload, home: serving.home });
+  // One registry view for the whole render, seeded with the team just read: each render built its
+  // own (a team file load and the seat overrides apiece), three per push, ~30 ms on a live registry.
+  const view = registryIdentityView(serving.home, { root: serving.root, team });
+  const identity = renderedIdentity(payload.from, { record: payload, home: serving.home, view });
   const leadingClaim = /^from ([^\n]*?) — admitted by: ([^\n]*)\n\n?/;
   const envelope = leadingClaim.exec(payload.body);
   const knownEnvelope = envelope !== null
@@ -428,6 +437,7 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
     home: serving.home,
     root: serving.root,
     rule: admitted.rule,
+    view,
   }) + body;
   if (content.trim() === '') return null;
   // The reader line every socket frame ends with: the record's id, as `team reply` and `team ack`
@@ -1756,10 +1766,22 @@ export async function runMcpServe(
   // registry's record for this seat: the folder the server starts in is a lobby for most seats,
   // and reading a team file from it would be reading the checkout's folder, not the seat's team.
   let registeredAt: string | null = null;
-  const readTeam = (): LoadResult => readTeamConfig(registeredAt ?? io.cwd, {
+  const readTeamFresh = (): LoadResult => readTeamConfig(registeredAt ?? io.cwd, {
     ...(options.file === undefined ? {} : { file: options.file }),
     home: host.home,
   });
+  // Every push reads the team (its proof, its admission, its lead): ~10 ms a read on a live
+  // registry. A passing read is kept while every file it depends on stands as it was by stat.
+  let keptTeam: { witness: string; loaded: Extract<LoadResult, { ok: true }> } | null = null;
+  const readTeam = (): LoadResult => {
+    const before = keptTeam === null ? null : teamReadWitness(keptTeam.loaded, host.home);
+    if (keptTeam !== null && before === keptTeam.witness) return structuredClone(keptTeam.loaded);
+    const loaded = readTeamFresh();
+    // Kept only when the files the earlier read named stood still across this one.
+    const after = loaded.ok ? teamReadWitness(loaded, host.home) : null;
+    keptTeam = loaded.ok && after !== null && (before === null || before === after) ? { witness: after, loaded: structuredClone(loaded) } : null;
+    return loaded;
+  };
   type Admitted = {
     loaded: Extract<LoadResult, { ok: true }>;
     team: TeamFile;
@@ -2083,4 +2105,62 @@ export async function runMcpServe(
 /** The installed identity a pinned build stands for: its version and packed commit. */
 function installIdentityOf(build: BuildIdentity): InstallIdentity {
   return { version: build.version, head: build.head };
+}
+
+/**
+ * What one read of a team depends on, by stat: the registry's record of the team, the team file
+ * beside it (the leftover the read compares, or the file it read), the registry files and the
+ * machine setting the read consults (teams, projects, entities: the session, lobby, project and
+ * policy chain), the root's own landing, and every landing the placement checks walk (the lobby,
+ * each trust entry, each seat's cwd, the workspace path) with each of their parent folders. Null
+ * when the record's name cannot be formed: such a read is never kept.
+ */
+export function teamReadWitness(loaded: Extract<LoadResult, { ok: true }>, home: string): string | null {
+  const paths = new Set<string>();
+  const root = loaded.root;
+  try {
+    paths.add(teamConfigRecordPath(home, teamIdOf(root)));
+  } catch {
+    return null;
+  }
+  for (const one of [loaded.path, join(root, '.agents', 'team.yaml'), teamsFile(home), projectsFile(home), entitiesPath(home), machineSettingsPath(home)]) {
+    if (one !== undefined) paths.add(one);
+  }
+  const team = loaded.team;
+  const landings: string[] = [root];
+  try {
+    landings.push(lobbyOf(home, root, team));
+  } catch {
+    return null;
+  }
+  for (const entry of team.trust ?? []) {
+    if (typeof entry === 'string') landings.push(resolve(entry.replace(/^~(?=$|\/)/, home)));
+  }
+  for (const seat of team.seats) landings.push(resolve(root, seat.cwd));
+  if (team.workspace.path) landings.push(resolve(root, team.workspace.path.replaceAll('{repo}', team.project).replace('{task}', 'task')));
+  // A landing is judged by what it is (a folder, a link) and which one, never by its contents:
+  // its inode and mode only, so a folder whose entries change keeps the read.
+  const folders = new Set<string>();
+  for (let at of landings) {
+    while (!folders.has(at)) {
+      folders.add(at);
+      const up = dirname(at);
+      if (up === at) break;
+      at = up;
+    }
+  }
+  let words = '';
+  const say = (one: string, whole: boolean): void => {
+    try {
+      const stat = lstatSync(one);
+      words += whole
+        ? `${one}:${String(stat.ino)}:${String(stat.mode)}:${String(stat.size)}:${String(stat.mtimeMs)}:${String(stat.ctimeMs)}\n`
+        : `${one}:${String(stat.ino)}:${String(stat.mode)}\n`;
+    } catch (error) {
+      words += `${one}:${(error as NodeJS.ErrnoException).code ?? 'error'}\n`;
+    }
+  };
+  for (const one of [...paths].sort()) say(one, true);
+  for (const one of [...folders].sort()) say(one, false);
+  return words;
 }
