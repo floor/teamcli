@@ -70,6 +70,7 @@ import { alreadyReadSentence, fileStatStamp, isRecordSidecarName, isReadOrCleare
 import { messageKeyState } from '../store/keys.ts';
 import { LEGACY_TREE, seatMailDirIn, seatMailParts, stampedListing } from '../queue/mail-tree.ts';
 import { rereadDue } from '../queue/handover.ts';
+import { channelEmitted } from '../mcp/channel.ts';
 import { seatFolderOf } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
@@ -930,7 +931,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       // step, so a run of prompts does not hand it over, and number a copy, at every prompt.
       if (due && !peek) {
         const folder = seatFolderOf(dropDir, message.id);
-        if (recordStampAt(folder, message.id) === true && !rereadDue(folder, message.id, Date.now())) {
+        if (recordStampAt(folder, message.id) === true && !rereadDue(folder, message.id, Date.now(), channelEmitted(folder, message.id))) {
           continue;
         }
       }

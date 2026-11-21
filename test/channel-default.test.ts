@@ -252,6 +252,9 @@ test('a group-writable worktree warns and still launches without the channel', a
   const ran = { command: '' };
   const said: string[] = [];
   const logged: string[] = [];
+  // The channel word the launch records for the seat's inbox server, and whether it was written
+  // before the command ran.
+  const words: { channel: boolean; beforeRun: boolean }[] = [];
   const host: Host = {
     startServer: () => true, sessionUp: () => true,
     createWorkspace: () => ({ pane: 'pane-tree', workspace: 'workspace-tree' }),
@@ -259,7 +262,9 @@ test('a group-writable worktree warns and still launches without the channel', a
     registerInbox: () => null,
     typeLine: () => false, renameAgent: () => true, closeWorkspace: () => true, stopSession: () => true,
     kill: () => true, agentPanes: () => [], classify: () => 'idle', sleep: async () => {}, now: () => 0,
-    allow: () => null, record: () => {}, running: () => {}, drop: () => {},
+    allow: () => null,
+    record: (_seat, patch) => { if (patch.channel_launch !== undefined) words.push({ channel: patch.channel_launch, beforeRun: ran.command === '' }); },
+    running: () => {}, drop: () => {},
     say: (line) => { said.push(line); }, log: (_who, line) => { logged.push(line); },
   };
   const report = await executePlan(
@@ -270,6 +275,9 @@ test('a group-writable worktree warns and still launches without the channel', a
   expect(report.dropped).toEqual([]);
   expect(ran.command).not.toContain(FLAG);
   expect(ran.command).not.toContain('server:team-inbox');
+  // The fallback is recorded as the launch's own word before its command runs: its inbox server
+  // advertises no channel, whatever the roster would allow.
+  expect(words).toEqual([{ channel: false, beforeRun: true }]);
   const warnings = said.filter((line) => line.includes('its channel was not prepared'));
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toContain('safe permissions');

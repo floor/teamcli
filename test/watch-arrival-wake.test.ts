@@ -126,6 +126,47 @@ describe('which arrivals wake the hosted watch', () => {
 });
 
 describe('the real folder watch', () => {
+  test('a record written with the tree, before the watch could attach, is caught up when it does', async () => {
+    const at = place();
+    let nudges = 0;
+    const close = startArrivalWake({ root: at.root, session: SESSION, home: at.home, nudge: () => { nudges += 1; }, rearmMs: 50 });
+    try {
+      // The first stamped write makes the tree and lands its record in one go.
+      const stamped = seatMailDirs(at.root, SESSION, 'tester').stamped;
+      mkdirSync(stamped, { recursive: true, mode: 0o700 });
+      writeFileSync(join(stamped, ID), '{}\n');
+      for (let wait = 0; wait < 100 && nudges === 0; wait += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(nudges).toBe(1);
+    } finally {
+      close();
+    }
+  });
+
+  test('a watch that errors is armed again, and what landed meanwhile is caught up', async () => {
+    const at = place();
+    const stamped = seatMailDirs(at.root, SESSION, 'tester').stamped;
+    mkdirSync(stamped, { recursive: true, mode: 0o700 });
+    let nudges = 0;
+    let arms = 0;
+    let fail: () => void = () => {};
+    const close = startArrivalWake({
+      root: at.root, session: SESSION, home: at.home, nudge: () => { nudges += 1; }, rearmMs: 50,
+      watchFolder: (_folder, _onName, onError) => { arms += 1; fail = onError; return { close: () => {} }; },
+    });
+    try {
+      expect(arms).toBe(1);
+      fail();
+      // Down: the record lands with no watch standing.
+      writeFileSync(join(stamped, ID), '{}\n');
+      for (let wait = 0; wait < 100 && (arms < 2 || nudges === 0); wait += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(arms).toBe(2);
+      expect(nudges).toBe(1);
+    } finally {
+      close();
+    }
+  });
+
+
   test('a record landing in the stamped tree, made after the wake started, nudges the loop', async () => {
     const at = place();
     let nudges = 0;
@@ -145,31 +186,43 @@ describe('the real folder watch', () => {
 });
 
 describe('the hosted loop\'s nudge', () => {
-  test('a nudge ends the current wait now; one between passes ends the next wait; a standby ignores it', async () => {
+  test('a nudge ends only the between-pass wait; a pass\'s own sleep runs its full time and the nudge waits for the pass\'s end', async () => {
     let loopOf: HostedLoop | null = null;
-    const outcomes: boolean[] = [];
+    const steps: string[] = [];
+    let inPassSettled = false;
     let release: () => void = () => {};
     const ended = new Promise<void>((resolve) => { release = resolve; });
     const watch = createHostedWatch({
       route: { root: '/work/acme', team: 'acme', session: SESSION } as never,
       run: async (loop) => {
         loopOf = loop;
-        // A wait far longer than any test: only the nudge can end it.
-        outcomes.push(await loop.wait(10 * 60_000));
-        // A nudge that lands between passes ends the next wait at once.
-        loop.nudge?.();
-        outcomes.push(await loop.wait(10 * 60_000));
+        // Between passes: only a nudge ends this wait.
+        steps.push(`between ${String(await loop.wait(10 * 60_000, { between: true }))}`);
+        // Inside a pass: a settle delay on the typing path. A nudge here must not end it.
+        const inPass = loop.wait(10 * 60_000).then((ok) => { inPassSettled = true; return ok; });
+        steps.push(`in-pass ${String(await inPass)}`);
+        // The nudge that landed during the pass ends the next between-pass wait at once.
+        steps.push(`between ${String(await loop.wait(10 * 60_000, { between: true }))}`);
         release();
         return await new Promise<number>(() => {});
       },
     });
     watch.tick(new Date());
     for (let at = 0; at < 200 && loopOf === null; at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(loopOf).not.toBeNull();
+    const loop = loopOf as unknown as HostedLoop;
     await new Promise((resolve) => setTimeout(resolve, 20));
-    (loopOf as unknown as HostedLoop).nudge?.();
+    loop.nudge?.();
+    for (let at = 0; at < 200 && steps.length === 0; at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(steps).toEqual(['between true']);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // An arrival during the pass: the in-pass sleep keeps running.
+    loop.nudge?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(inPassSettled).toBe(false);
+    // Its own time comes: the host's tick past its due ends it.
+    watch.tick(new Date(Date.now() + 11 * 60_000));
     await ended;
-    expect(outcomes).toEqual([true, true]);
+    expect(steps).toEqual(['between true', 'in-pass true', 'between true']);
     void watch.stop('the test ends');
   });
 });

@@ -210,6 +210,11 @@ export type SeatState = {
   effort?: string;
   /** The launch command of that idle record. Stored for the registry; reload does not compare it. */
   launch_line?: string;
+  /** Whether the command this seat's latest launch ran carried the team's development channel,
+   *  written immediately before that command runs: the one fact the seat's inbox server reads to
+   *  advertise the channel (a launch that fell back runs without it). Absent on records written
+   *  before the field: the server then follows the declaration's opt-in. */
+  channel_launch?: boolean;
   // `own_commits` is the home for a temporary seat whose end is `merged:` and that has no worktree.
   // A seat in a worktree keeps that record on the worktree instead.
   temporary?: { like: string; until: string; task?: string; own_commits?: boolean };
@@ -828,6 +833,7 @@ export function readState(dir: string): State {
       if (seat.version !== undefined && typeof seat.version !== 'string') delete seat.version;
       if (seat.effort !== undefined && typeof seat.effort !== 'string') delete seat.effort;
       if (seat.launch_line !== undefined && typeof seat.launch_line !== 'string') delete seat.launch_line;
+      if (seat.channel_launch !== undefined && typeof seat.channel_launch !== 'boolean') delete seat.channel_launch;
       if (seat.last_active !== undefined && typeof seat.last_active !== 'string') delete seat.last_active;
       // The presence fence and cursor enter from the file like every other value. The fence is
       // consumer evidence, so a malformed one is dropped whole — the consumer's answer is then

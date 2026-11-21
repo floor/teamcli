@@ -442,17 +442,55 @@ export function resendDue(dropDir: string, id: string, nowMs: number, arrivedMs:
   return nowMs - Math.max(...times) >= backoffMs(1 + ledger.attempts);
 }
 
+/** The legs whose copy hands the body over when its number is taken: a read (the hook,
+ *  `team drops --read`, `inbox_read`), and the legs that carry the body themselves. A pointer
+ *  names the message and carries no body; a channel copy carries it only once its push left
+ *  (`channelBodyLeft`). */
+const BODY_LEGS: readonly CopyLeg[] = ['read', 'typed', 'native', 'socket', 'webhook'];
+
 /**
- * Whether the turn-start hook may hand a stamped, unsettled record to the turn again now: no copy
- * of it was taken yet, or the newest copy (any leg's: a channel push, a pointer, an earlier read)
- * is older than the ladder's step for the copies taken so far, `backoffMs(copies)`: 60 s after the
- * first, doubling, capped at 30 minutes. A hook runs at every prompt; without this it numbered a
- * new copy each time. A history that cannot be read is due: the record is shown, never hidden.
+ * Whether the turn-start hook may hand a stamped, unsettled record to the turn again now. The
+ * ladder runs from the record's recorded body handoffs only: a read copy, a body-carrying leg's
+ * copy, and the newest channel copy when its push left (`channelBodyLeft`, the server's emitted
+ * marker). A pointer, or a channel number reserved for a push that never left, hands no body
+ * over and never delays the hook. With no handoff the record is due; otherwise it is due once the
+ * newest handoff is older than `backoffMs(handoffs)`: 60 s after the first, doubling, capped at
+ * 30 minutes. A history that cannot be read is due: the record is shown, never hidden.
  */
-export function rereadDue(dropDir: string, id: string, nowMs: number): boolean {
-  const seen = copyHistory(dropDir, id);
-  if (seen === 'unknown' || seen.copies === 0 || seen.lastMs === null) return true;
-  return nowMs - seen.lastMs >= backoffMs(seen.copies);
+export function rereadDue(dropDir: string, id: string, nowMs: number, channelBodyLeft = false): boolean {
+  const folder = historyFolder(dropDir, id);
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return true;
+  }
+  if (!historyChainReal(dropDir, id)) return true;
+  const copies: { n: number; leg: string; atMs: number }[] = [];
+  for (const name of names) {
+    const match = COPY_NAME.exec(name);
+    if (match === null) continue;
+    const text = readRegularNoFollow(join(folder, name));
+    if (text === null) return true;
+    let leg: unknown;
+    try {
+      leg = (JSON.parse(text) as { leg?: unknown }).leg;
+    } catch {
+      return true;
+    }
+    let atMs: number;
+    try {
+      atMs = statSync(join(folder, name)).mtimeMs;
+    } catch {
+      return true;
+    }
+    copies.push({ n: Number(match[1]), leg: typeof leg === 'string' ? leg : '', atMs });
+  }
+  const newestChannel = copies.filter((one) => one.leg === 'channel').sort((a, b) => b.n - a.n)[0];
+  const handoffs = copies.filter((one) => (BODY_LEGS as readonly string[]).includes(one.leg) || (channelBodyLeft && one === newestChannel));
+  if (handoffs.length === 0) return true;
+  const lastMs = Math.max(...handoffs.map((one) => one.atMs));
+  return nowMs - lastMs >= backoffMs(handoffs.length);
 }
 
 /** The header line every copy of a stamped record carries (R4.1). */

@@ -9,7 +9,7 @@
 // proof before every key, the idle screen, protected panes, the wake gate and its one pointer per
 // attempt). Nothing is typed here. A seat whose channel is proven is left to its channel push,
 // and a seat of any other CLI keeps its own window: neither wakes the watch.
-import { watch, type FSWatcher } from 'node:fs';
+import { lstatSync, readdirSync, watch, type FSWatcher } from 'node:fs';
 import { join, sep } from 'node:path';
 import { readTeamConfig } from '../file/team-config.ts';
 import { seatDropDir, sessionMailDir } from '../queue/mail-tree.ts';
@@ -32,12 +32,12 @@ export type ArrivalWakeInput = {
   nudge: () => void;
   now?: () => number;
   /** Test seam: the folder watch. */
-  watchFolder?: (folder: string, onName: (name: string) => void) => { close(): void } | null;
+  watchFolder?: (folder: string, onName: (name: string) => void, onError: () => void) => { close(): void } | null;
   /** Test seam: how long before an unwatchable tree is tried again. */
   rearmMs?: number;
 };
 
-function realWatchFolder(folder: string, onName: (name: string) => void): { close(): void } | null {
+function realWatchFolder(folder: string, onName: (name: string) => void, onError: () => void): { close(): void } | null {
   let watcher: FSWatcher;
   try {
     watcher = watch(folder, { recursive: true }, (_event, name) => {
@@ -48,6 +48,7 @@ function realWatchFolder(folder: string, onName: (name: string) => void): { clos
   }
   watcher.on('error', () => {
     try { watcher.close(); } catch { /* already closed */ }
+    onError();
   });
   return { close: () => { try { watcher.close(); } catch { /* already closed */ } } };
 }
@@ -105,19 +106,63 @@ export function startArrivalWake(input: ArrivalWakeInput): () => void {
   };
   let watcher: { close(): void } | null = null;
   let rearm: ReturnType<typeof setInterval> | null = null;
-  const arm = (): void => {
+  // Since when an arrival may have gone unseen: the start, or the moment the watch went down.
+  let unseenSince = now();
+  const startRearm = (): void => {
+    if (closed || rearm !== null) return;
+    rearm = setInterval(arm, input.rearmMs ?? ARRIVAL_REARM_MS);
+    (rearm as { unref?: () => void }).unref?.();
+  };
+  // A watch that errors is down: it is dropped, and armed again on the retry cadence.
+  const onError = (): void => {
+    watcher = null;
+    unseenSince = Math.min(unseenSince, now());
+    startRearm();
+  };
+  // Records that landed while no watch stood (the tree made by its first record, a watch that
+  // errored) are read once on attach, so the first one does not wait for the interval pass.
+  const catchUp = (since: number): void => {
+    let seats: string[];
+    try {
+      seats = readdirSync(folder);
+    } catch {
+      return;
+    }
+    for (const seat of seats) {
+      if (seat.startsWith('.')) continue;
+      let names: string[];
+      try {
+        names = readdirSync(join(folder, seat));
+      } catch {
+        continue;
+      }
+      for (const id of names) {
+        if (!RECORD_ID.test(id)) continue;
+        try {
+          if (lstatSync(join(folder, seat, id)).mtimeMs < since - 1_000) continue;
+        } catch {
+          continue;
+        }
+        onName(`${seat}/${id}`);
+      }
+    }
+  };
+  function arm(): void {
     if (closed || watcher !== null) return;
-    watcher = (input.watchFolder ?? realWatchFolder)(join(folder), onName);
-    if (watcher !== null && rearm !== null) {
+    const since = unseenSince;
+    watcher = (input.watchFolder ?? realWatchFolder)(join(folder), onName, onError);
+    if (watcher === null) {
+      startRearm();
+      return;
+    }
+    if (rearm !== null) {
       clearInterval(rearm);
       rearm = null;
     }
-  };
-  arm();
-  if (watcher === null) {
-    rearm = setInterval(arm, input.rearmMs ?? ARRIVAL_REARM_MS);
-    (rearm as { unref?: () => void }).unref?.();
+    unseenSince = Number.POSITIVE_INFINITY;
+    catchUp(since);
   }
+  arm();
   return () => {
     closed = true;
     if (trailing !== null) clearTimeout(trailing);

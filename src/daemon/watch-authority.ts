@@ -552,11 +552,11 @@ async function runAuthoritativeHost(
       // The run sees both ends: the authority lost, or the host stopped (a daemon shutdown). A
       // reader that only watches the signal (the outbox relay's tick) stops at either.
       signal: AbortSignal.any([loop.signal, loss.signal]),
-      async wait(ms) {
+      async wait(ms, options) {
         // A loss that happened during the pass must end the loop now: an aborted signal alone
         // never settles a wait registered after the abort.
         if (loss.signal.aborted) return false;
-        const ok = await loop.wait(ms);
+        const ok = await loop.wait(ms, options);
         if (!ok) return false;
         // Second gate before the next cycle: the beat that released this wait has already run,
         // and the captured authority must still be the record's. This is the liveness gate
