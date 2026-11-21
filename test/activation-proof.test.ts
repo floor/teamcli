@@ -190,6 +190,10 @@ describe('a protected seat with a live channel, before activation', () => {
       const pushed = notices(feed.replies).find((one) => one.params.meta.id === id)!;
       expect(pushed.params.meta.offer).toMatch(/^[0-9a-f]{32}$/);
       expect(pushed.params.content).toContain(CHANNEL_PROBE_BODY);
+      // The copy's one ack instruction is the ack tool with the offer: the act that proves.
+      expect(pushed.params.content).toContain(`Acknowledge it with the ack tool, passing id ${id} and the offer from this notification's meta`);
+      expect(pushed.params.content).not.toContain('team ack');
+      expect(pushed.params.content).not.toContain(pushed.params.meta.offer);
       expect(offerAcks(at.dropDir, key, binding(at))).toEqual([]);
 
       const answer = await tool(feed, 'ack-1', 'ack', { id, offer: pushed.params.meta.offer });

@@ -34,9 +34,9 @@ import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 
-import { alreadyReadSentence, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
+import { alreadyReadSentence, DELIVERY_LEVEL, readSealedRecord, recordAuthOfSealed, recordStampAt, settledReadOf, stampedSettled } from '../send/record.ts';
 import { attributedBody, renderedIdentity } from '../send/sender-claim.ts';
-import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
+import { bodyWithReaderLine, existingRecordIdsIn, replyLine, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
@@ -83,7 +83,7 @@ import {
 import { selfRunner } from './register.ts';
 import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { exposeBody, exposurePointer } from '../queue/exposure.ts';
-import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { channelAckLine, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { channelOfferStartedGivenUp, channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
@@ -431,7 +431,12 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   // take it. The meta carries the id too, but a client may show only the content, and a seat
   // that cannot see the id cannot answer on the thread.
   return {
-    content: takesReaderLine(payload, false) ? bodyWithReaderLine(content, id, existingRecordIdsIn(dropDir)) : content,
+    // A stamped copy this listener offers with a token ends with the ack tool's line
+    // (`channelAckLine`), so its reader line names only the reply: one ack instruction, the one
+    // that can prove the channel.
+    content: !takesReaderLine(payload, false) ? content
+      : payload.lvl === DELIVERY_LEVEL && serving.listenerKey !== undefined ? `${content}\n\n${replyLine(id, existingRecordIdsIn(dropDir))}`
+        : bodyWithReaderLine(content, id, existingRecordIdsIn(dropDir)),
     meta: { id, from: payload.from, seat: serving.seat, team: serving.project },
   };
 }
@@ -595,7 +600,7 @@ function watchChannel(
         offer = serving.listenerKey === undefined ? null : newOfferToken();
         const n = takeCopyNumber(dropDir, id, 'channel', Date.now(), offer === null || serving.listenerKey === undefined ? undefined : { token: offer, listener: serving.listenerKey });
         if (n === null) return 'skip' as const;
-        push.content = wrapCopy(push.content, id, n);
+        push.content = wrapCopy(push.content, id, n, offer === null ? undefined : channelAckLine(id));
       }
       const reserved = recordChannelPush(dropDir, {
         v: 1,
