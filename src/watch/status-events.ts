@@ -1,5 +1,5 @@
 // Seat status from herdr as events (workspace-adapters §6):
-// One `herdr wait agent-status` waiter per eligible seat turns herdr's status transitions into
+// One `herdr agent wait` waiter per eligible seat turns herdr's status transitions into
 // signed events in `.agents/events.jsonl`, replacing periodic screen polling where herdr's
 // status is reliable:
 // - `blocked` -> `seat.at-prompt` (reads the screen once via `promptKind` to classify the prompt;
@@ -17,7 +17,7 @@
 // Safety invariants:
 // 1. `human: true` seats are NEVER waited on and NEVER typed into.
 // 2. Profiles with `herdr_status: unreliable` (`jules`) keep the screen module as their status
-//    source and are never handed to `herdr wait agent-status`.
+//    source and are never handed to `herdr agent wait`.
 // 3. Status waiters are strictly read-only and never send text or keys into any pane.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -197,7 +197,7 @@ export function reconcileStatusWithScreen(
   return status;
 }
 
-/** Whether a seat is eligible for a `herdr wait agent-status` waiter:
+/** Whether a seat is eligible for a `herdr agent wait` waiter:
  *  - `human: true` seats are NEVER waited on and NEVER typed into;
  *  - `stopped: true` seats are not running;
  *  - `herdrUnreliable(cli)` seats (`jules`) keep the screen module as their status source. */
@@ -243,10 +243,9 @@ export type HerdrStatusSourceOptions = {
   screenOptions?: ScreenOptions;
 };
 
-/** Ordered candidate target states for `{ not: current }` single-client transition waiting.
- *  `herdr wait agent-status <pane> --status <s>` accepts a single status token per client and
- *  returns immediately (`exit 0`) when the pane is already at `<s>`, so cycling one waiter process
- *  per seat through likely target states keeps fleet process count at strictly 1 client per seat. */
+/** The target states for `{ not: current }`: one `herdr agent wait <pane> --until <s>...` client
+ *  per seat waits for all of them at once and returns immediately (`exit 0`) when the pane is
+ *  already at one, so a long timeout costs no latency and the fleet keeps 1 client per seat. */
 const WAIT_CANDIDATE_ORDER: Record<HerdrAgentStatus, readonly HerdrAgentStatus[]> = {
   working: ['blocked', 'done', 'idle'],
   idle: ['working', 'blocked', 'done'],
@@ -255,7 +254,7 @@ const WAIT_CANDIDATE_ORDER: Record<HerdrAgentStatus, readonly HerdrAgentStatus[]
   unknown: ['blocked', 'done', 'idle', 'working'],
 };
 
-/** Default `StatusSource` backed by `herdr wait agent-status` and `herdr pane read`. */
+/** Default `StatusSource` backed by `herdr agent wait` and `herdr pane read`. */
 export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): StatusSource {
   const now = options.now ?? (() => Date.now());
   const readPane = options.readPane ?? paneRead;
@@ -305,29 +304,16 @@ export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): Statu
         return { outcome: 'error', error: res.message, at };
       }
 
-      // `{ not: current }`: keep strictly ONE `herdr wait agent-status` client process per seat
-      // by cycling sequentially through the candidate target statuses across `timeoutMs`.
+      // `{ not: current }`: strictly ONE herdr client per seat, waiting for every other state.
       const candidates =
         WAIT_CANDIDATE_ORDER[target.not]
         ?? (['blocked', 'done', 'idle', 'working'] as const).filter((candidate) => candidate !== target.not);
-      const totalTimeoutMs = Math.max(1, Math.round(timeoutMs));
-      const sliceTimeoutMs = Math.max(1, Math.floor(totalTimeoutMs / candidates.length));
-
-      for (const candidate of candidates) {
-        if (signal?.aborted) {
-          return { outcome: 'timeout', at: now() };
-        }
-        const res = await waitFn(seat.pane, candidate, sliceTimeoutMs, session, signal);
-        const at = now();
-        if (res.outcome === 'changed') {
-          return { outcome: 'changed', status: res.status, at };
-        }
-        if (res.outcome === 'error') {
-          if (signal?.aborted) return { outcome: 'timeout', at };
-          return { outcome: 'error', error: res.message, at };
-        }
-      }
-      return { outcome: 'timeout', at: now() };
+      if (signal?.aborted) return { outcome: 'timeout', at: now() };
+      const res = await waitFn(seat.pane, candidates, Math.max(1, Math.round(timeoutMs)), session, signal);
+      const at = now();
+      if (res.outcome === 'changed') return { outcome: 'changed', status: res.status, at };
+      if (res.outcome === 'timeout' || signal?.aborted) return { outcome: 'timeout', at };
+      return { outcome: 'error', error: res.message, at };
     },
 
     promptKind(seat): PromptKind {
@@ -1463,7 +1449,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         waited = await source.waitStatus(target, waitTarget, timeoutMs, signal);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        input.onLog?.(seatName, `herdr wait agent-status failed: ${message}`);
+        input.onLog?.(seatName, `herdr agent wait failed: ${message}`);
         return {
           seat: seatName,
           outcome: 'error',
@@ -1500,7 +1486,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         };
       }
 
-      input.onLog?.(seatName, `herdr wait agent-status error: ${waited.error}`);
+      input.onLog?.(seatName, `herdr agent wait error: ${waited.error}`);
       return {
         seat: seatName,
         outcome: 'error',

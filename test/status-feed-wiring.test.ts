@@ -1,7 +1,7 @@
 // Synthetic files, placement and transport inputs only. No managed endpoint or CLI home.
 // Registered adapter/reducer scenes are a test seam, never production correlation proof.
 import { afterAll, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EVENT_KINDS, isPrivilegedKind } from '../src/bus/kinds.ts';
@@ -205,6 +205,22 @@ describe('default-off native feed', () => {
     w.feed.close(); expect(nativeHookEnabled(w.identity(), w.io())).toBe(true);
     w.feed.codexFrame(w.identity(), approval); expect(existsSync(join(w.path(), 'status-spool'))).toBe(false);
     successor.close(); expect(existsSync(w.marker())).toBe(false);
+  });
+  test('a pass leaves a current marker alone and rewrites it when its claim moves or expiry nears', () => {
+    const w = world(); w.feed.step();
+    const first = readFileSync(w.marker(), 'utf8');
+    const inode = statSync(w.marker()).ino;
+    w.feed.step();
+    expect(readFileSync(w.marker(), 'utf8')).toBe(first);
+    expect(statSync(w.marker()).ino).toBe(inode);
+    const near = JSON.parse(first); near.expires = Date.now() + 1_000;
+    writeFileSync(w.marker(), JSON.stringify(near));
+    w.feed.step();
+    expect(JSON.parse(readFileSync(w.marker(), 'utf8')).expires).toBeGreaterThan(Date.now() + 2_000);
+    w.state.sessions[session]!.seats.alpha.presence_binding = next; w.save(); w.feed.step();
+    expect(JSON.parse(readFileSync(w.marker(), 'utf8')).binding).toBe(next);
+    delete (w.state.sessions[session]!.seats as Record<string, unknown>).alpha; w.save(); w.feed.step();
+    expect(existsSync(w.marker())).toBe(false);
   });
 });
 

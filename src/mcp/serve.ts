@@ -18,7 +18,7 @@ import { carriedPointer, carrierDeliveryOf, recordDeliveredBody } from '../send/
 import { listenerKeyOf, newOfferToken, proveOffer } from '../comms/offer.ts';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { lstatSync, readdirSync, realpathSync, watch, type FSWatcher } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -786,24 +786,50 @@ function watchChannel(
   };
   /** Names only: a readdir, and a queue of each message name not already known or rejected.
    *  Seen names are not stated and not parsed. The reads happen one per turn. */
+  /** The folders' stamp at the last names pass that left no name waiting; see `namesPass`. */
+  let namesStamp: string | null = null;
   const namesPass = (): void => {
     if (halted() || !primed) return;
+    const folders = seatListingDirs(serving.dropDir);
+    // A folder whose inode and mtime stand as they were at a pass that left no name waiting
+    // holds no new name, and is not listed again. A stamp under a second old is never trusted:
+    // a coarse clock could hide an entry that landed after it.
+    let stamp: string | null = '';
+    for (const folder of folders) {
+      let stat;
+      try {
+        stat = statSync(folder);
+      } catch {
+        stamp += '-;';
+        continue;
+      }
+      if (Date.now() - stat.mtimeMs < 1_000) {
+        stamp = null;
+        break;
+      }
+      stamp += `${stat.ino}:${stat.mtimeMs};`;
+    }
+    if (stamp !== null && stamp === namesStamp) return;
     const names: string[] = [];
-    for (const folder of seatListingDirs(serving.dropDir)) {
+    for (const folder of folders) {
       try {
         names.push(...readdirSync(folder));
       } catch {
         // A folder that cannot be listed adds no name this pass.
       }
     }
+    let queuedAny = false;
     for (const name of names) {
-      if (known.has(name) || waiting.has(name)) continue;
+      if (known.has(name)) continue;
+      queuedAny = true;
+      if (waiting.has(name)) continue;
       if (!messageNameOk(name)) {
         known.set(name, 0);
         continue;
       }
       waiting.set(name, -1);
     }
+    namesStamp = queuedAny ? null : stamp;
     scheduleDrain();
   };
   /** One burst may list the folder once. The watcher stays open, so an event that names a file

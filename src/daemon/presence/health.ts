@@ -297,7 +297,7 @@ export function reconciledProofHolds(input: {
 }
 
 /**
- * How long a finished pass vouches for the channel. The production pass runs every 250 ms; eight
+ * How long a finished pass vouches for the channel. The production pass runs every 500 ms; four
  * missed passes mean a step is hung or the loop is not running, and the honest answer is no.
  */
 export const PRESENCE_HEALTH_GRACE_MS = 2_000;

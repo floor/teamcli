@@ -39,7 +39,7 @@ import { resolveCodexDaemonPolicy, type CodexDaemonResolution } from '../../poli
 import { findAgent } from '../../registry/agents.ts';
 import { recordedSeatSession } from '../../registry/resume.ts';
 import { teamIdOf } from '../../registry/teams.ts';
-import { readState } from '../../state.ts';
+import { readState, readStateShared } from '../../state.ts';
 import {
   isPresenceBinding,
   type PresenceEvent,
@@ -553,7 +553,7 @@ function stopAdmissions(input: Internals, reason: CodexPresenceReason): void {
 function bindingCurrent(input: Internals): boolean {
   let binding: unknown;
   try {
-    binding = readState(input.stateDir).sessions[input.target.session]?.seats[input.target.seat]?.presence_binding;
+    binding = readStateShared(input.stateDir).sessions[input.target.session]?.seats[input.target.seat]?.presence_binding;
   } catch {
     stopAdmissions(input, 'binding-changed');
     return false;

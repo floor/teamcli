@@ -30,7 +30,7 @@ import {
   type WorkspacePaneDisplay,
 } from '../../herdr.ts';
 import { sidebarPolicy } from '../../settings/sidebar-policy.ts';
-import { readState, type SeatState } from '../../state.ts';
+import { readStateShared, type SeatState } from '../../state.ts';
 import type { ChoresPass } from './child.ts';
 import { choresPolicyFor } from './policy.ts';
 import type { ChoresChildConfig } from './protocol.ts';
@@ -61,7 +61,7 @@ export type SidebarPassSources = {
 };
 
 function defaultReadSeats(stateDir: string, session: string): Record<string, SeatState> {
-  return readState(stateDir).sessions[session]?.seats ?? {};
+  return readStateShared(stateDir).sessions[session]?.seats ?? {};
 }
 
 function defaultReadTeam(

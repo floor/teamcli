@@ -25,7 +25,7 @@
 // the same batch is read again on the next. The batch per call is the reader's own bound (records
 // and bytes), so a long log is caught up over several beats, never in one pass.
 import { readdir } from 'node:fs/promises';
-import { LockBusyError, isSeatId, readState, updateState, type SeatState } from '../../state.ts';
+import { LockBusyError, isSeatId, readStateShared, updateState, type SeatState } from '../../state.ts';
 import { isPresenceBinding, type PresenceLogLine } from './contract.ts';
 import { readPresenceTransitions } from './read.ts';
 import { isPresenceSeatName, presenceSessionDir } from './spool.ts';
@@ -176,7 +176,7 @@ export function createPresenceActivity(input: PresenceActivityInput): PresenceAc
     const slices = options?.slices;
     let state;
     try {
-      state = readState(stateDir);
+      state = readStateShared(stateDir);
     } catch (error) {
       return { seats: [], failed: messageOf(error) };
     }

@@ -233,7 +233,7 @@ export type StartMachineDaemonInput = {
   brokerWork?: (route: HostedRoute) => BrokerWorkSource | undefined;
   /**
    * Whether each hosted route also runs the presence ingester, the activity reconciler and the
-   * publisher that copies applied transitions to the bus event log on the daemon's own 250 ms
+   * publisher that copies applied transitions to the bus event log on the daemon's own 500 ms
    * pass. Off by default: the integration lands closed, and a daemon started only to host
    * endpoints ingests nothing. Internal, like `watchHosting`; not a setting and not printed.
    */
@@ -302,7 +302,7 @@ export type StartMachineDaemonInput = {
    * terminal-host call. A reader that cannot answer returns null, the conservative rule.
    */
   paneProcesses?: (pane: string, session: string) => PaneProcesses | null | Promise<PaneProcesses | null>;
-  /** The presence pass interval; 250 ms in production. A test shortens it. */
+  /** The presence pass interval; 500 ms in production. A test shortens it. */
   presenceEveryMs?: number;
   /**
    * The daemon-start restore sweep: after the sockets, routes, state record and
@@ -407,7 +407,9 @@ const STUCK_MS = 10_000;
  *  The pass checks the boundary before each item, so a slice is one item long at most past this
  *  mark. */
 const FALLBACK_BEAT_SLICE_MS = 10;
-const PRESENCE_EVERY_MS = 250;
+/** Four passes inside the 2 s health grace (`PRESENCE_HEALTH_GRACE_MS`): one slow or skipped pass
+ *  never reads as a dead channel, and the idle cost is half the old 250 ms beat. */
+const PRESENCE_EVERY_MS = 500;
 /** How long a Codex seat whose attachment is not serving (unproven, stopped, or no managed session
  *  yet) waits before its target is resolved again. A binding change never waits for it. */
 export const PRESENCE_REBIND_RETRY_MS = 5_000;

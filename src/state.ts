@@ -733,6 +733,39 @@ export function resetReadStateCallCount(): void {
   readStateCalls = 0;
 }
 
+/** The last state each file held, by the file's identity: see `readStateShared`. */
+const sharedStates = new Map<string, { key: string; state: Readonly<State> }>();
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
+/** The state for a caller that only reads it, such as the presence pass polling every seat: one
+ *  frozen object, read again only when the file's inode, size or times move. Every writer replaces
+ *  the file by rename (`writeAtomic`), so each write is a new inode. A caller that edits the state
+ *  uses `readState` or `updateState`. */
+export function readStateShared(dir: string): Readonly<State> {
+  const path = join(dir, STATE_FILE);
+  let key = 'absent';
+  try {
+    const stat = statSync(path, { bigint: true });
+    key = `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const hit = sharedStates.get(path);
+  if (hit?.key === key) return hit.state;
+  // Stat before read: the text read is at least as new as the key, so a change after the stat
+  // only costs one more read on the next call.
+  const state = deepFreeze(readState(dir));
+  sharedStates.set(path, { key, state });
+  return state;
+}
+
 export function readState(dir: string): State {
   readStateCalls += 1;
   const path = join(dir, STATE_FILE);
