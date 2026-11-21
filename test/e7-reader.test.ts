@@ -312,21 +312,22 @@ describe('E7 round 2', () => {
 });
 
 describe('E7 round 3', () => {
-  test('P2 status observes: a poisoned journal with the switch on is reported, and no byte changes', () => {
+  test('P2 status observes: an entry name with no record is reported, and no byte changes', () => {
     const at = place();
     message(at, M1, LATER);
     expect(activateRoot(at).kind).toBe('activated');
     expect(on(at).kind).toBe('on');
     const base = queueBaseOf(at.dropDir) as string;
     const generation = readFileSync(join(base, 'current'), 'utf8').trim();
-    writeFileSync(join(base, generation, 'poisoned'), 'x\n');
+    // The name stands, the record it names does not verify: the placement is not proved.
+    writeFileSync(join(base, generation, 'entries', `000000000001.${M1}`), '');
+    writeFileSync(join(at.dropDir, M1), 'not json\n');
     const snapshot = () => JSON.stringify(readdirSync(base, { recursive: true }).map(String).sort().map(name => {
       try { return [name, readFileSync(join(base, name), 'utf8')]; } catch { return [name, 'dir']; }
     }));
     const before = snapshot();
     const unread = unreadOf(at.root, at.home, 'lead', at.dropDir, true);
-    expect(unread?.ids).toEqual([M1]);
-    expect(seatQueueCheck(at.dropDir, binding(at), unread?.ids ?? [], at.home)).toMatchObject({ kind: 'incomplete', why: expect.stringContaining('poisoned') });
+    expect(seatQueueCheck(at.dropDir, binding(at), [M1], at.home)).toMatchObject({ kind: 'incomplete', why: expect.stringContaining('does not verify') });
     expect(snapshot()).toBe(before);
   });
 });

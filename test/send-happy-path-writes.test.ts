@@ -1,7 +1,8 @@
 // The send path diet (step 2): a send whose first leg delivers writes no fallback episode (no
 // `<id>.fallback.json` marker, no `fallback-attempts-*.jsonl` ledger) and no `.unread.json` hint.
 // The episode starts only when a fallback leg does. Step 3: its one log line is the history line
-// (`messages.jsonl`): no step event in `events.jsonl` and no `team.log` line. Fixtures only: a synthetic team, a listener
+// (`messages.jsonl`): no step event in `events.jsonl` and no `team.log` line. Step 6: the queue
+// writes one empty entry name (`entries/<seq>.<id>`), nothing else. Fixtures only: a synthetic team, a listener
 // written by this test, and the push marker written where the seat's server would write it.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -87,6 +88,8 @@ describe('the happy path writes no fallback episode and no unread hint', () => {
     expect(written.some((path) => path.endsWith('.unread.json'))).toBe(false);
     expect(written.some((path) => path.endsWith(SEND_ID))).toBe(true);
     expect(written.filter((path) => /(messages|events)\.jsonl$|team\.log$/.test(path)).map((path) => path.split('/').at(-1))).toEqual(['messages.jsonl']);
+    // Step 6: the queue is one empty entry name per send; no journal, entry body or id file.
+    expect(written.filter((path) => path.includes('/queues/') && !path.endsWith('/current')).map((path) => path.split('/').slice(-2).join('/'))).toEqual([`entries/000000000001.${SEND_ID}`]);
   });
 });
 
