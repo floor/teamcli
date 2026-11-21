@@ -6,6 +6,7 @@ The per-seat delivery queues of a checkout (rfc-event-comms, steps E6, E7 and E7
 
     team queues status
     team queues activate
+    team queues prove [<seat>]
     team queues deactivate
     team queues reader on|off
 
@@ -15,6 +16,7 @@ The per-seat delivery queues of a checkout (rfc-event-comms, steps E6, E7 and E7
 | --- | --- | --- |
 | `status` | prints the root's floor state (`dark`, `active`, `fenced`, `unknown`), the reader switch, and each seat queue's check (`complete` or `incomplete` with the reason) | anyone |
 | `activate` | turns on at-least-once delivery for the team. It is refused while any live TeamCLI process of the team (the daemon, a seat's inbox server) reports a level below 3 or none. It writes PROTOCOL, the signed ACTIVATION record, and PUBLISHED once the record is durable | the owner, or a lead in development mode |
+| `prove [<seat>]` | places one channel proof probe for each running Claude Code seat that `activate` refuses as "unproven since launch" (a live channel listener, no proving ack yet), or for the named seat. The probe is a signed, stamped record from the runtime; the seat's channel server pushes it with an offer token, and the seat's ack with that offer writes the proof `activate` reads. An ack without the offer settles the probe and proves nothing. A probe still waiting for the current listener is not placed again. This is the only proof before activation for a seat whose pane is protected (the entity's main orchestrator). It activates nothing | the owner, or a lead in development mode |
 | `deactivate` | the rollback to dark, in one command. It removes the reader switch, the publication, the record and the marker in that order, each durably, behind a `DEACTIVATING` marker; a cut-off rollback is finished by running it again, and `activate` refuses while one is unfinished | the owner, or a lead in development mode |
 | `reader on` | on an active root at level 3 whose every seat queue is complete (no hole, every unread message placed, pending dual writes drained, quarantine empty), writes the signed READER switch: seats then read their mail in queue order, each message with its seq | the owner, or a lead in development mode |
 | `reader off` | removes the switch: every reader is back on the legacy listing at once | the owner, or a lead in development mode |

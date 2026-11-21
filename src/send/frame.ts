@@ -71,6 +71,12 @@ export function readerLine(msgId: string, existingIds: Iterable<string> = []): s
   return `↩ team reply ${prefix} "…" · team ack ${prefix}`;
 }
 
+/** The reply half of the reader line, for a channel copy whose own ack line names the ack tool
+ *  (`channelAckLine`): `↩ team reply <prefix> "…"`. */
+export function replyLine(msgId: string, existingIds: Iterable<string> = []): string {
+  return `↩ team reply ${shortIdPrefix(msgId, existingIds)} "…"`;
+}
+
 /**
  * A served body followed by its reader line: what every reader that hands a seat a message's body
  * (`team drops --read`, `inbox_read`, the channel, a typed wake carrying the body) ends with, so

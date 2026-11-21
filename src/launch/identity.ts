@@ -1,5 +1,6 @@
 import type { PaneProcesses } from '../herdr.ts';
 import type { ProcessParent } from '../process-parent-adapter.ts';
+import { processNameMatches } from '../clis.ts';
 
 // The process identity `team` records for a seat it launched: the pane's own shell process and
 // the pids of the foreground processes that are not the shell — the CLI, and any helper herdr
@@ -18,6 +19,10 @@ export type LaunchedIdentity = {
    *  typed path's proof that the CLI in front is the launch's, not a pid reused under the same
    *  shell. Absent on records written before it, or when a start could not be read. */
   cli_start?: number[];
+  /** The one pid of `cli` verified at launch as the CLI itself (`cliAnchorOf`): a direct child of
+   *  the shell under one of the CLI's process names. Absent when the launch could not tell. Only
+   *  a Claude pointer's partial match (`typedPaneProof`) asks it. */
+  cli_anchor?: number;
 };
 
 // What the recorded identity says of the pane today.
@@ -182,7 +187,34 @@ export function typedPaneProof(held: TypedPaneRecord | undefined, seat: string, 
       return { ok: true };
     }
     if (starts.length !== held.launched.cli.length) return no('the recorded CLI starts are incomplete');
-    if (!held.launched.cli.every((pid, at) => processes.foreground.includes(pid) && owner.processStart(pid) === starts[at])) return no('a recorded CLI process or its birth no longer matches');
+    // Every recorded pid still in front must be the launch's own, at its recorded birth.
+    const front = held.launched.cli.flatMap((pid, at) => processes.foreground.includes(pid) ? [{ pid, start: starts[at] }] : []);
+    if (front.length === 0 || !front.every(one => owner.processStart(one.pid) === one.start)) return no('a recorded CLI process or its birth no longer matches');
+    if (front.length < held.launched.cli.length) {
+      // A missing member fails closed: a helper left in front alone is not the seat. The one
+      // exception is a Claude pointer, whose launch reading at the idle prompt can hold
+      // short-lived children Claude Code starts in its own process group and that exit
+      // afterwards. There the recorded members still in front must include the CLI anchor the
+      // launch verified (`cli_anchor`), still a direct child of the recorded shell at its recorded
+      // birth, and every other process in front must descend from it, birth-checked. A record
+      // without an anchor keeps the whole-set rule.
+      if (!claudePointer) return no('a recorded CLI process or its birth no longer matches');
+      const read = owner.processParent;
+      if (read === undefined) return no('a recorded CLI process or its birth no longer matches');
+      // Only the anchor the launch verified as the CLI stands for it: a surviving sibling, even
+      // one the shell started, is not the CLI.
+      const launch = held.launched.cli_anchor;
+      if (launch === undefined || !front.some(one => one.pid === launch) || read(launch)?.ppid !== processes.shell) return no('a recorded CLI process or its birth no longer matches');
+      const rest = processes.foreground.filter(pid => pid !== processes.shell && pid !== launch);
+      const descendants = descendantProof([launch], rest, processes.shell, owner);
+      if (!descendants.ok) return descendants;
+      const current = owner.processes(pane, session);
+      if (current === null || current.shell !== processes.shell
+        || current.foreground.length !== processes.foreground.length
+        || !current.foreground.every(pid => processes.foreground.includes(pid))) return no('the foreground process set changed during the proof');
+      if (!front.every(one => owner.processStart(one.pid) === one.start)) return no('a recorded CLI process or its birth no longer matches');
+      return { ok: true };
+    }
     if (extra.length > 0) {
       if (!claudePointer) return no('an unrecorded process is in front of the shell');
       const descendants = descendantProof(held.launched.cli, extra, processes.shell, owner);
@@ -202,14 +234,30 @@ export function typedPaneProof(held: TypedPaneRecord | undefined, seat: string, 
 
 /** The identity to record from a pane reading, or null when herdr can't give one: no shell pid,
  *  or no foreground process beside it. A seat with no record keeps today's behaviour. */
-export function launchedIdentity(pane: PaneProcesses | null | undefined, startOf?: (pid: number) => number | null): LaunchedIdentity | null {
+export function launchedIdentity(
+  pane: PaneProcesses | null | undefined,
+  startOf?: (pid: number) => number | null,
+  anchor?: { processNames: readonly string[]; read: (pid: number) => { ppid: number; name: string } | null },
+): LaunchedIdentity | null {
   if (!pane) return null;
   const cli = pane.foreground.filter((pid) => pid !== pane.shell);
   if (cli.length === 0) return null;
   const starts = startOf === undefined ? null : cli.map((pid) => startOf(pid));
-  return starts === null || starts.some((one) => one === null)
-    ? { shell: pane.shell, cli }
-    : { shell: pane.shell, cli, cli_start: starts as number[] };
+  if (starts === null || starts.some((one) => one === null)) return { shell: pane.shell, cli };
+  const found = anchor === undefined ? null : cliAnchorOf(cli, pane.shell, anchor.processNames, anchor.read);
+  return { shell: pane.shell, cli, cli_start: starts as number[], ...(found === null ? {} : { cli_anchor: found }) };
+}
+
+/** The one recorded pid verified as the CLI at launch: a direct child of the pane's shell whose
+ *  command name is one the seat's CLI runs under. Null unless exactly one pid is both: a reading
+ *  that cannot tell the CLI from a sibling names no anchor. Names and parents only. */
+export function cliAnchorOf(cli: readonly number[], shell: number, processNames: readonly string[], read: (pid: number) => { ppid: number; name: string } | null): number | null {
+  if (processNames.length === 0) return null;
+  const matches = cli.filter((pid) => {
+    const node = read(pid);
+    return node !== null && node.ppid === shell && processNameMatches(node.name, processNames);
+  });
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 // What a `replaced` pane is, once the pid verdict is known. The pid comparison above is unchanged.

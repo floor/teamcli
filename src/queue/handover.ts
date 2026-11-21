@@ -454,9 +454,18 @@ export function ackLine(id: string): string {
   return `Acknowledge it with \`team ack ${id}\` once you have read it; until then it is delivered again.`;
 }
 
-/** One copy's text: the header, the text the leg carries, and the ack line. */
-export function wrapCopy(text: string, id: string, n: number): string {
-  return `${deliveryHeader(id, n)}\n\n${text}\n\n${ackLine(id)}`;
+/** The ack line of a channel copy that carries an offer token (the Claude adapter §2.2): the
+ *  channel's own ack tool with the id and the offer from the notification's meta, the one ack
+ *  that also proves the channel. `team ack` settles the message too, and proves nothing. The
+ *  token itself is never in the text. */
+export function channelAckLine(id: string): string {
+  return `Acknowledge it with the ack tool, passing id ${id} and the offer from this notification's meta, once you have read it; until then it is delivered again.`;
+}
+
+/** One copy's text: the header, the text the leg carries, and the ack line (the leg's own, when
+ *  it names one: a channel copy with an offer names the ack tool). */
+export function wrapCopy(text: string, id: string, n: number, ack: string = ackLine(id)): string {
+  return `${deliveryHeader(id, n)}\n\n${text}\n\n${ack}`;
 }
 
 /** The copy's text with its header and ack line taken off again, for a check that compares a

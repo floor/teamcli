@@ -211,6 +211,13 @@ describe('the offer token (active root)', () => {
       const meta = notice(feed.replies)[0]!.params.meta as Record<string, string>;
       expect(meta.id).toBe(FIRST);
       expect(meta.offer).toMatch(/^[0-9a-f]{32}$/);
+      // A copy offered with a token asks for the ack tool with the offer, never `team ack`
+      // (which settles and proves nothing); the reply line stays.
+      const content = notice(feed.replies)[0]!.params.content as string;
+      expect(content).toContain(`Acknowledge it with the ack tool, passing id ${FIRST} and the offer from this notification's meta`);
+      expect(content).toContain('↩ team reply ');
+      expect(content).not.toContain('team ack');
+      expect(content).not.toContain(meta.offer!);
       // The copy's history entry holds the same token and this listener's key.
       expect(offeredCopies(stampedDir(at), FIRST)).toEqual([expect.objectContaining({ n: 1, token: meta.offer, listener: key })]);
       // The push marker keeps no token.
