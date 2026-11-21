@@ -14,6 +14,7 @@ import {
   isSeatId,
   mintSeatId,
   readState,
+  readStateShared,
   storedWatchRecord,
   updateState,
   withLock,
@@ -299,6 +300,25 @@ describe('the state file', () => {
     writeAtomic(join(dir, 'x.json'), 'two');
     expect(readFileSync(join(dir, 'x.json'), 'utf8')).toBe('two');
     expect(readdirSync(dir)).toEqual(['x.json']);
+  });
+});
+
+describe('the shared read', () => {
+  test('one frozen object until a write replaces the file', () => {
+    expect(readStateShared(dir)).toEqual({ format: 1, sessions: {} });
+    updateState(dir, (state) => { state.sessions.one = { ...emptySession(), seats: { a: { stage: 'ready' } } }; });
+    const first = readStateShared(dir);
+    expect(first.sessions.one?.seats.a?.stage).toBe('ready');
+    expect(readStateShared(dir)).toBe(first);
+    expect(Object.isFrozen(first.sessions.one!.seats.a)).toBe(true);
+    expect(() => { (first.sessions.one!.seats.a as { stage: string }).stage = 'named'; }).toThrow();
+    updateState(dir, (state) => { state.sessions.one!.seats.a!.stage = 'named'; });
+    const second = readStateShared(dir);
+    expect(second).not.toBe(first);
+    expect(second.sessions.one?.seats.a?.stage).toBe('named');
+    // The editing door still hands out its own copy.
+    readState(dir).sessions.one!.seats.a!.stage = 'ready';
+    expect(readStateShared(dir)).toBe(second);
   });
 });
 

@@ -15,7 +15,7 @@
 // published, answered duplicate, or skipped as a non-applied or predecessor-binding line. If an
 // append fails, the cursor holds before that batch and the next attempt after a backoff re-reads
 // it; the lines already published answer duplicate, so nothing is lost and no success is
-// invented. The daemon's own 250 ms presence pass performs the retry: this module starts no timer
+// invented. The daemon's own 500 ms presence pass performs the retry: this module starts no timer
 // and keeps no queue.
 //
 // Honest crash window: the presence line is durable before publication. A crash or a write failure
@@ -29,7 +29,7 @@
 // result and logged by the host; it is never folded into the native channel's health.
 import { readdir } from 'node:fs/promises';
 import { appendEvent, type EventAppendInput } from '../../bus/log.ts';
-import { readState, type SeatState } from '../../state.ts';
+import { readStateShared, type SeatState } from '../../state.ts';
 import {
   PRESENCE_ACTIVITY_CHUNK_ENTRIES,
   PRESENCE_ACTIVITY_CHUNK_MS,
@@ -186,7 +186,7 @@ export function createPresencePublisher(input: PresencePublisherInput): Presence
   const currentBindingOf = (seat: string): BindingRead => {
     let record: SeatState | undefined;
     try {
-      record = readState(stateDir).sessions[session]?.seats?.[seat];
+      record = readStateShared(stateDir).sessions[session]?.seats?.[seat];
     } catch (error) {
       return { kind: 'bad', why: messageOf(error) };
     }
