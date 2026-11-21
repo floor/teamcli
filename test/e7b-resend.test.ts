@@ -10,7 +10,7 @@
 // not acknowledged got copy 1 on its native leg and no copy 2 in 11 minutes, because only the
 // Claude channel and socket ladders re-sent a stamped copy.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { CHANNEL_HELD_RECEIPT, reserveChannelFallback } from '../src/mcp/channel.ts';
+import { CHANNEL_HELD_RECEIPT, markChannelNotified, reserveChannelFallback } from '../src/mcp/channel.ts';
 import { seatFolderOf } from '../src/send/drop-folder.ts';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -994,6 +994,46 @@ seats:
       // The next re-offer waits its backoff: nothing more right away.
       await new Promise((resolve) => setTimeout(resolve, 200));
       expect(notices(stream.replies)).toHaveLength(1);
+    } finally {
+      stream.end();
+      await running;
+    }
+  });
+
+  test('a fresh listener re-offers on the channel what an earlier listener pushed and the seat never acked', async () => {
+    // A test seat, 2026-11-21: unread records pushed by the seat's previous channel server, then a
+    // fresh session. The new server's prime pushed nothing, its re-send pass admitted only
+    // given-up offers, and the watch's one pointer per pass drained one record every few minutes.
+    const at = channelPlace();
+    activateRoot(at);
+    mkdirSync(at.dropDir, { recursive: true, mode: 0o700 });
+    const write = (id: string): string => {
+      const payload: RecordPayload = {
+        kind: 'message', id, to: 'lead', to_id: at.leadId, root: at.root, session: SESSION, at: new Date().toISOString(),
+        body: `from a worker — admitted by: the owner\n\nunread ${id}`, from: 'worker', from_id: at.workerId, rule: 'the owner', thread: id,
+      };
+      expect(writeRecord(at.dropDir, signRecord(stampedPayload(payload, at.home), at.home)).ok).toBe(true);
+      const folder = seatFolderOf(at.dropDir, id);
+      // Copy 1 went out on the previous listener's channel, and its line left.
+      expect(takeCopyNumber(folder, id, 'channel', Date.now(), { token: 'a'.repeat(32), listener: '1@2026-11-21T00:00:00.000Z' })).toBe(1);
+      expect(markChannelNotified(folder, id)).toBe(true);
+      const then = new Date(Date.now() - 2 * MIN);
+      utimesSync(join(folder, id), then, then);
+      utimesSync(join(folder, EXPOSURES, id, '1'), then, then);
+      return folder;
+    };
+    write(ID);
+    write(ID2);
+    const io = testIo(at.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
+    const stream = feed();
+    const running = runMcpServe({ seat: 'lead', session: SESSION, redeliverMs: 20 }, io, stream, { home: at.home });
+    try {
+      await until(() => notices(stream.replies).length >= 2, 400);
+      const headers = notices(stream.replies).map((text) => headerOf(text).split(' — ')[0]).sort();
+      expect(headers).toEqual([`message ${ID} · delivery 2`, `message ${ID2} · delivery 2`]);
+      // This listener's own push is not re-offered by it again: the watch's pointer is next.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(notices(stream.replies)).toHaveLength(2);
     } finally {
       stream.end();
       await running;

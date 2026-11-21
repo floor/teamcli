@@ -108,8 +108,9 @@ export function takeCopyNumber(dropDir: string, id: string, leg: CopyLeg, nowMs:
 const RETIRED_NAME = /^c\d+\..+\.channel-retired\.([1-9][0-9]{0,8})$/;
 
 /** The record's live channel copy: its newest channel copy numbered after its last retired round,
- *  and whether its line left (`notified`). Null when none, or the history cannot be read. */
-export function liveChannelCopy(dropDir: string, id: string): { n: number; notified: boolean; path: string } | null {
+ *  whether its line left (`notified`), and the listener that offered it. Null when none, or the
+ *  history cannot be read. */
+export function liveChannelCopy(dropDir: string, id: string): { n: number; notified: boolean; path: string; listener?: string } | null {
   const folder = historyFolder(dropDir, id);
   let names: string[];
   try {
@@ -121,8 +122,8 @@ export function liveChannelCopy(dropDir: string, id: string): { n: number; notif
   for (const n of names.map((name) => Number(COPY_NAME.exec(name)?.[1] ?? 0)).filter((n) => n > retired).sort((a, b) => b - a)) {
     const path = join(folder, String(n));
     try {
-      const entry = JSON.parse(readRegularNoFollow(path) ?? '') as { leg?: unknown; notified?: unknown };
-      if (entry.leg === 'channel') return { n, notified: entry.notified === true, path };
+      const entry = JSON.parse(readRegularNoFollow(path) ?? '') as { leg?: unknown; notified?: unknown; listener?: unknown };
+      if (entry.leg === 'channel') return { n, notified: entry.notified === true, path, ...(typeof entry.listener === 'string' ? { listener: entry.listener } : {}) };
     } catch {
       continue;
     }
