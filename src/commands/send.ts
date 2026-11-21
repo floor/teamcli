@@ -99,7 +99,7 @@ import { clearEndpointBlocked, endpointBlockedLine, writeEndpointBlockedNotice, 
 import { dropMessage, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
-import { channelLaunchEnabled, channelNotified, recordChannelHeld, reserveChannelFallback, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
+import { channelLaunchEnabled, channelNotified, recordChannelHeld, reserveChannelFallback, CHANNEL_HELD_RECEIPT, CHANNEL_LOOK_MS, CHANNEL_PUSH_GRACE_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
@@ -5543,10 +5543,10 @@ async function stageChannelRecord(
  *  Only the server's own push ends the wait: a held marker the sender left for another leg is at
  *  the same name and is not a delivery. */
 async function awaitChannelPush(dropDir: string, id: string, graceMs: number, host: SendHost): Promise<boolean> {
-  const polls = Math.max(1, Math.ceil(Math.max(0, graceMs) / CHANNEL_TICK_MS));
+  const polls = Math.max(1, Math.ceil(Math.max(0, graceMs) / CHANNEL_LOOK_MS));
   for (let at = 0; at < polls; at += 1) {
     if (channelNotified(dropDir, id)) return true;
-    if (at + 1 < polls) await host.native.wait(CHANNEL_TICK_MS);
+    if (at + 1 < polls) await host.native.wait(CHANNEL_LOOK_MS);
   }
   return channelNotified(dropDir, id);
 }

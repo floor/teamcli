@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { CHANNEL_CONFIRM_MS, CHANNEL_UNCONFIRMED, channelCommitLockPath, channelPushPath } from '../src/mcp/channel.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
-import { loadTeamFile } from '../src/file/load.ts';
+import { gitRootReadCount, loadTeamFile } from '../src/file/load.ts';
 import { runReply } from '../src/commands/reply.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
@@ -289,6 +289,28 @@ describe('the push', () => {
       expect(raw).not.toContain('"key"');
       const params = (JSON.parse(raw) as Record<string, any>).params;
       expect(Object.keys(params)).toEqual(['content', 'meta']);
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a serving seat holds git\'s root answer: later pushes start no git', async () => {
+    const at = place();
+    try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      signed(at, PUSHED_ID, 'from a worker — admitted by: the owner\n\nfirst');
+      await until(() => notice(feed.replies).length >= 1);
+      const reads = gitRootReadCount();
+      signed(at, ACKED_ID, 'from a worker — admitted by: the owner\n\nsecond');
+      signed(at, IDLE_ID, 'from a worker — admitted by: the owner\n\nthird');
+      await until(() => notice(feed.replies).length >= 3);
+      expect(notice(feed.replies)).toHaveLength(3);
+      expect(gitRootReadCount()).toBe(reads);
       feed.end();
       expect(await running).toBe(0);
     } finally {

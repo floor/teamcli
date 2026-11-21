@@ -46,12 +46,14 @@ export const CHANNEL_HELD_RECEIPT = 'channel-held';
 
 /** How long a send waits for the server's push marker. The server pushes when the drop folder
  *  changes, so this still covers a watch event that was missed, and the sender's own steps stay
- *  on `CHANNEL_TICK_MS`. */
+ *  on `CHANNEL_LOOK_MS`. */
 export const CHANNEL_PUSH_GRACE_MS = 2_000;
 
-/** How often a sender looks for the push marker it is waiting on. The serving inbox does not
- *  poll on this interval: a folder watch delivers a new record, and `CHANNEL_IDLE_MS` is the
- *  slow pass when that watch is quiet or down. */
+/** How often a sender looks for the push marker it is waiting on: one stat per look. The server
+ *  pushes within milliseconds of the record, so a coarse look was most of a channel send's time. */
+export const CHANNEL_LOOK_MS = 10;
+
+/** How often a serving inbox lists its folder by name, for a record its watch did not name. */
 export const CHANNEL_TICK_MS = 250;
 
 /** How often a serving inbox with no bus still reads its folder whole. A few seconds, so an

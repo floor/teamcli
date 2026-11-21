@@ -26,6 +26,7 @@ import { createInterface } from 'node:readline';
 import { followBus, followBusRetrying, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { callerAncestors, callerOf, callerVerdict, describeCaller, type SeatAtPane } from '../caller.ts';
+import { holdGitRoots } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { LoadResult, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
@@ -1959,6 +1960,10 @@ export async function runMcpServe(
       return declarationRefusal(file.team, team.session, seat.name);
     },
   };
+  // Every push re-reads the team and re-proves the seat, and each read asks git for the root. The
+  // daemon and the send host hold git's answer (bound to the folder's `.git` witness); a serving
+  // seat holds it too, or each push starts git several times (~1 s per push under load).
+  const releaseGitRoots = holdGitRoots();
   const stopChannel = channel
     ? watchChannel(serving, streams.write, notice, {
       ...(options.fallbackMs === undefined ? {} : { fallbackMs: options.fallbackMs }),
@@ -1970,6 +1975,7 @@ export async function runMcpServe(
   // and wait out the idle pass.
   if (!writeListener(dropDir, listener)) {
     stopChannel?.();
+    releaseGitRoots();
     return refuse('the inbox listener marker could not be written');
   }
   try {
@@ -1986,6 +1992,7 @@ export async function runMcpServe(
     }
   } finally {
     stopChannel?.();
+    releaseGitRoots();
     try {
       lines.return?.()?.catch(() => {
         // The input is closed below either way.

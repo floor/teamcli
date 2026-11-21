@@ -25,6 +25,7 @@ import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import {
   CHANNEL_CONFIRM_MS,
   CHANNEL_HELD_RECEIPT,
+  CHANNEL_LOOK_MS,
   CHANNEL_UNCONFIRMED,
   CHANNEL_UNCONFIRMED_REASON,
   channelPushHeld,
@@ -317,6 +318,24 @@ describe('the channel leg', () => {
       via: 'channel',
       failed: [`typed: ${NO_PANE_MESSAGING}`],
     });
+  });
+
+  test('the sender looks for the push marker every CHANNEL_LOOK_MS, not on the server\'s names tick', async () => {
+    const made = channelWorld();
+    const dir = listening(made);
+    const waited: number[] = [];
+    const host = senderHost(made, { typed: [], enters: [] }, false, { channelGraceMs: 2_000 });
+    host.native.wait = async (ms: number) => {
+      waited.push(ms);
+      // The server's push lands on the third look.
+      if (waited.length === 3) {
+        recordChannelPush(dir, pushMarker(made, SEND_ID));
+        markChannelNotified(dir, SEND_ID);
+      }
+    };
+    expect(await runSend(['lead', TRIGGER], owner(made.root), host)).toBe(0);
+    expect(waited.slice(0, 3)).toEqual([CHANNEL_LOOK_MS, CHANNEL_LOOK_MS, CHANNEL_LOOK_MS]);
+    expect(CHANNEL_LOOK_MS).toBeLessThanOrEqual(10);
   });
 
   test('a live channel walks ahead of a socket the team opted in to (comms roadmap, 2026-11-17)', async () => {
