@@ -784,18 +784,16 @@ describe('6. expired or revoked bundle grants refuse a reply; the seat still mar
   });
 });
 
-describe('7. plain client grants remain unchanged', () => {
-  test('an inbox-enabled plain grant still admits team reply and scanClientInbox, and is still refused by team ack', async () => {
+describe('7. plain client grants: the client inbox is unchanged, the addressee acknowledges its own read', () => {
+  test('an inbox-enabled plain grant still admits team reply and scanClientInbox, and its addressee acknowledges it', async () => {
     const f = makeFixture({ kind: 'plain', inbox: true });
     const sent1 = await sendFromClient(f, 'orchestrator', 'plain grant with inbox');
     expect(sent1.code).toBe(0);
 
-    // team ack still refuses every plain-grant client record.
+    // The addressed seat records its own read of the plain-grant record, as for any message.
     const acked = await ackFromSeat(f, 'orchestrator', sent1.id);
-    expect(acked.code).toBe(1);
-    expect(acked.doc.error.id).toBe('ack.refused');
-    expect(acked.doc.error.message).toContain('its read belongs to the client inbox, not to this command');
-    expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent1.id}.read.json`))).toBe(false);
+    expect(acked.code).toBe(0);
+    expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent1.id}.read.json`))).toBe(true);
 
     // team reply still delivers the answer to the plain-grant client inbox.
     const replied = await replyFromSeat(f, 'orchestrator', sent1.id, 'plain grant answer');
@@ -822,7 +820,7 @@ describe('7. plain client grants remain unchanged', () => {
     }
   });
 
-  test('a send-only plain grant is still refused by both team reply and team ack', async () => {
+  test('a send-only plain grant is still refused by team reply, and its addressee acknowledges it', async () => {
     const f = makeFixture({ kind: 'plain', inbox: false });
     const sent = await sendFromClient(f, 'orchestrator', 'plain send-only');
     expect(sent.code).toBe(0);
@@ -833,9 +831,10 @@ describe('7. plain client grants remain unchanged', () => {
     expect(replied.doc.error.message).toContain('is send-only; only a grant with send and messages opens a client thread a seat may answer');
     expect(listClientInboxFiles(f)).toEqual([]);
 
+    // A send-only client gets no answer, but its message settles: the addressee acknowledges it.
     const acked = await ackFromSeat(f, 'orchestrator', sent.id);
-    expect(acked.code).toBe(1);
-    expect(acked.doc.error.message).toContain('its read belongs to the client inbox, not to this command');
-    expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent.id}.read.json`))).toBe(false);
+    expect(acked.code).toBe(0);
+    expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent.id}.read.json`))).toBe(true);
+    expect(listClientInboxFiles(f)).toEqual([]);
   });
 });
