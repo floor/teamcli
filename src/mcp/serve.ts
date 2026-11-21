@@ -27,6 +27,7 @@ import { followBus, followBusRetrying, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { callerAncestors, callerOf, callerVerdict, describeCaller, type SeatAtPane } from '../caller.ts';
 import { holdGitRoots } from '../file/load.ts';
+import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { LoadResult, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
@@ -543,111 +544,126 @@ function watchChannel(
   const pushOne = (id: string): 'done' | 'retry' | 'rejected' => {
     if (seen.has(id)) return 'done';
     seen.add(id);
-    // E7b revision 3: everything about this record sits in the seat folder of its own tree.
-    const dropDir = seatFolderOf(serving.dropDir, id);
-    if (legacyDropAt(join(dropDir, id))) return 'done';
-    // An earlier server may have pushed this id before this one started, and a sender whose own
-    // walk takes the message leaves a held marker at the same name: either marker says this id
-    // is not to be pushed, and a second notification is a duplicate wake.
-    if (channelPushHeld(dropDir, id) || channelNotified(dropDir, id) || channelAborted(dropDir, id)) return 'done';
-    // A record the seat already read, or already replied to, is not a channel message again. A
-    // stamped record is settled only by its recipient's confirmation (E7b, the strict rule).
-    if (recordStampAt(dropDir, id) !== false) {
-      const keyNow = messageKeyState(serving.home);
-      if (keyNow.kind === 'key' && stampedSettled(dropDir, id, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, keyNow.key)) return 'done';
-    } else if (receiptHeld(
-      dropDir,
-      id,
-      { to: serving.seat, root: serving.root, session: serving.session },
-      serving.home,
-      claimBindingIn(serving.root, serving.session, serving.seat, id),
-    )) return 'done';
-    const push = channelPushOf(serving, id);
-    if (push === null) {
-      // Not this seat's signed record. Remember the name and mtime once; a later write changes
-      // the mtime and is read again. A busy lock is the case that must not be remembered.
-      seen.delete(id);
-      return 'rejected';
-    }
-    // The abort check, the reservation, the handoff marker, the notification write, and the
-    // completion flag share one lock with the sender's fallback. The handoff marker is written
-    // before the line. If the completion flag cannot be published, the sender sees that marker
-    // and does not start another leg. The record stays unread until ack, inbox read, or reply.
-    // A stream write still does not prove the client processed the line.
-    let heldExposure: ReturnType<typeof exposeBody> | null = null;
-    const committed = withChannelCommit(dropDir, id, () => {
-      if (channelAborted(dropDir, id) || channelNotified(dropDir, id) || channelPushHeld(dropDir, id)) {
-        return 'skip' as const;
-      }
-      // The seat can stop while the record is open. One re-check here, before the marker and
-      // the notification. The record was already read above; this does not open it again.
-      const staleNow = serving.alive?.();
-      if (staleNow !== undefined && staleNow !== null) return 'skip' as const;
-      // The exposure claim (rfc-event-comms §3, E6), immediately before the frame can carry the
-      // body: on an active root only its creator pushes the body; any other push carries a pointer.
-      const exposure = exposeBody({ dropDir: dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
-      heldExposure = exposure;
-      if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(dropDir, id)?.seq ?? null);
-      // A legacy body another carrier already handed over (a socket frame that won the race with
-      // this arrival) is not pushed again: the notification is the ID-only wake asking the seat to
-      // read the drop before acknowledging it. Stamped copies and owned exposures keep their paths.
-      const carriedBefore = exposure.kind === 'legacy'
-        && carrierDeliveryOf(dropDir, id, { to: serving.seat, root: serving.root, session: serving.session }, serving.home) !== null;
-      if (carriedBefore) push.content = carriedPointer(id, serving.seat);
-      // E7b: a stamped record's copy is numbered immediately before the line leaves; a history
-      // that cannot be written sends nothing now, and the redelivery pass offers it again.
-      // The Claude adapter §2.2: the copy carries a fresh offer token in its meta, kept beside the
-      // copy's number with this listener's key. The token is the only thing an ack can prove by.
-      let offer: string | null = null;
-      if (recordStampAt(dropDir, id) === true) {
-        offer = serving.listenerKey === undefined ? null : newOfferToken();
-        const n = takeCopyNumber(dropDir, id, 'channel', Date.now(), offer === null || serving.listenerKey === undefined ? undefined : { token: offer, listener: serving.listenerKey });
-        if (n === null) return 'skip' as const;
-        push.content = wrapCopy(push.content, id, n, offer === null ? undefined : channelAckLine(id));
-      }
-      const reserved = recordChannelPush(dropDir, {
-        v: 1,
-        kind: 'channel-push',
+    // One push reads the team, the registry and the key once (the run memo every CLI run has),
+    // not once per check: on a large registry each re-read was a file read and a parse.
+    enterRunMemo();
+    let memoOpen = true;
+    const closeMemo = (): void => {
+      if (!memoOpen) return;
+      memoOpen = false;
+      leaveRunMemo();
+    };
+    try {
+      // E7b revision 3: everything about this record sits in the seat folder of its own tree.
+      const dropDir = seatFolderOf(serving.dropDir, id);
+      if (legacyDropAt(join(dropDir, id))) return 'done';
+      // An earlier server may have pushed this id before this one started, and a sender whose own
+      // walk takes the message leaves a held marker at the same name: either marker says this id
+      // is not to be pushed, and a second notification is a duplicate wake.
+      if (channelPushHeld(dropDir, id) || channelNotified(dropDir, id) || channelAborted(dropDir, id)) return 'done';
+      // A record the seat already read, or already replied to, is not a channel message again. A
+      // stamped record is settled only by its recipient's confirmation (E7b, the strict rule).
+      if (recordStampAt(dropDir, id) !== false) {
+        const keyNow = messageKeyState(serving.home);
+        if (keyNow.kind === 'key' && stampedSettled(dropDir, id, { to: serving.seat, root: serving.root, session: serving.session, ...leadOf(serving) }, keyNow.key)) return 'done';
+      } else if (receiptHeld(
+        dropDir,
         id,
-        seat: serving.seat,
-        session: serving.session,
-        root: serving.root,
-        at: new Date().toISOString(),
-        meta: push.meta as { id: string; from: string; seat: string; team: string },
-        content_sha256: createHash('sha256').update(push.content).digest('hex'),
-        status: CHANNEL_PUSH_STATUS,
+        { to: serving.seat, root: serving.root, session: serving.session },
+        serving.home,
+        claimBindingIn(serving.root, serving.session, serving.seat, id),
+      )) return 'done';
+      const push = channelPushOf(serving, id);
+      if (push === null) {
+        // Not this seat's signed record. Remember the name and mtime once; a later write changes
+        // the mtime and is read again. A busy lock is the case that must not be remembered.
+        seen.delete(id);
+        return 'rejected';
+      }
+      // The abort check, the reservation, the handoff marker, the notification write, and the
+      // completion flag share one lock with the sender's fallback. The handoff marker is written
+      // before the line. If the completion flag cannot be published, the sender sees that marker
+      // and does not start another leg. The record stays unread until ack, inbox read, or reply.
+      // A stream write still does not prove the client processed the line.
+      // The commit below re-proves the seat on fresh reads: the memo ends before it.
+      closeMemo();
+      let heldExposure: ReturnType<typeof exposeBody> | null = null;
+      const committed = withChannelCommit(dropDir, id, () => {
+        if (channelAborted(dropDir, id) || channelNotified(dropDir, id) || channelPushHeld(dropDir, id)) {
+          return 'skip' as const;
+        }
+        // The seat can stop while the record is open. One re-check here, before the marker and
+        // the notification. The record was already read above; this does not open it again.
+        const staleNow = serving.alive?.();
+        if (staleNow !== undefined && staleNow !== null) return 'skip' as const;
+        // The exposure claim (rfc-event-comms §3, E6), immediately before the frame can carry the
+        // body: on an active root only its creator pushes the body; any other push carries a pointer.
+        const exposure = exposeBody({ dropDir: dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
+        heldExposure = exposure;
+        if (exposure.kind === 'pointer') push.content = exposurePointer(id, queuePlaceOf(dropDir, id)?.seq ?? null);
+        // A legacy body another carrier already handed over (a socket frame that won the race with
+        // this arrival) is not pushed again: the notification is the ID-only wake asking the seat to
+        // read the drop before acknowledging it. Stamped copies and owned exposures keep their paths.
+        const carriedBefore = exposure.kind === 'legacy'
+          && carrierDeliveryOf(dropDir, id, { to: serving.seat, root: serving.root, session: serving.session }, serving.home) !== null;
+        if (carriedBefore) push.content = carriedPointer(id, serving.seat);
+        // E7b: a stamped record's copy is numbered immediately before the line leaves; a history
+        // that cannot be written sends nothing now, and the redelivery pass offers it again.
+        // The Claude adapter §2.2: the copy carries a fresh offer token in its meta, kept beside the
+        // copy's number with this listener's key. The token is the only thing an ack can prove by.
+        let offer: string | null = null;
+        if (recordStampAt(dropDir, id) === true) {
+          offer = serving.listenerKey === undefined ? null : newOfferToken();
+          const n = takeCopyNumber(dropDir, id, 'channel', Date.now(), offer === null || serving.listenerKey === undefined ? undefined : { token: offer, listener: serving.listenerKey });
+          if (n === null) return 'skip' as const;
+          push.content = wrapCopy(push.content, id, n, offer === null ? undefined : channelAckLine(id));
+        }
+        const reserved = recordChannelPush(dropDir, {
+          v: 1,
+          kind: 'channel-push',
+          id,
+          seat: serving.seat,
+          session: serving.session,
+          root: serving.root,
+          at: new Date().toISOString(),
+          meta: push.meta as { id: string; from: string; seat: string; team: string },
+          content_sha256: createHash('sha256').update(push.content).digest('hex'),
+          status: CHANNEL_PUSH_STATUS,
+        });
+        if (!reserved || channelAborted(dropDir, id)) return 'skip' as const;
+        if (!recordChannelEmitted(dropDir, id, new Date().toISOString())) return 'skip' as const;
+        // The push marker keeps the meta without the token: no reader of the marker sees it.
+        write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: offer === null ? push : { content: push.content, meta: { ...push.meta, offer } } }));
+        const marked = serving.channelMark
+          ? serving.channelMark(dropDir, id)
+          : markChannelNotified(dropDir, id);
+        if (!marked) return 'uncertain' as const;
+        // E3: the frame was written; the read is sealed through this hand-over's own claim only.
+        const delivered = { dropDir: dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home, via: 'channel' };
+        if (exposure.kind === 'expose') exposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
+        else if (exposure.kind === 'legacy' && !carriedBefore) recordDeliveredBody(delivered);
+        return 'pushed' as const;
       });
-      if (!reserved || channelAborted(dropDir, id)) return 'skip' as const;
-      if (!recordChannelEmitted(dropDir, id, new Date().toISOString())) return 'skip' as const;
-      // The push marker keeps the meta without the token: no reader of the marker sees it.
-      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: offer === null ? push : { content: push.content, meta: { ...push.meta, offer } } }));
-      const marked = serving.channelMark
-        ? serving.channelMark(dropDir, id)
-        : markChannelNotified(dropDir, id);
-      if (!marked) return 'uncertain' as const;
-      // E3: the frame was written; the read is sealed through this hand-over's own claim only.
-      const delivered = { dropDir: dropDir, id, root: serving.root, session: serving.session, seat: serving.seat, home: serving.home, via: 'channel' };
-      if (exposure.kind === 'expose') exposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
-      else if (exposure.kind === 'legacy' && !carriedBefore) recordDeliveredBody(delivered);
-      return 'pushed' as const;
-    });
-    // A commit that returned before the frame was written exposed nothing: give the claim back.
-    if (committed === 'skip' && heldExposure !== null && (heldExposure as { kind: string }).kind === 'expose') {
-      (heldExposure as Extract<ReturnType<typeof exposeBody>, { kind: 'expose' }>).settle('no', () => false);
+      // A commit that returned before the frame was written exposed nothing: give the claim back.
+      if (committed === 'skip' && heldExposure !== null && (heldExposure as { kind: string }).kind === 'expose') {
+        (heldExposure as Extract<ReturnType<typeof exposeBody>, { kind: 'expose' }>).settle('no', () => false);
+      }
+      if (committed === 'busy') {
+        seen.delete(id);
+        scheduleRetry(id);
+        return 'retry';
+      }
+      gaveUp.delete(id);
+      const pending = retryTimer.get(id);
+      if (pending !== undefined) {
+        clearTimeout(pending);
+        retryTimer.delete(id);
+      }
+      retryCount.delete(id);
+      return 'done';
+    } finally {
+      closeMemo();
     }
-    if (committed === 'busy') {
-      seen.delete(id);
-      scheduleRetry(id);
-      return 'retry';
-    }
-    gaveUp.delete(id);
-    const pending = retryTimer.get(id);
-    if (pending !== undefined) {
-      clearTimeout(pending);
-      retryTimer.delete(id);
-    }
-    retryCount.delete(id);
-    return 'done';
   };
   /** Names already listed, with the mtime they had when they were first seen. A later pass
    *  lists the folder and stats each name; it parses only a name that is new or whose mtime
