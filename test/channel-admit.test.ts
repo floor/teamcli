@@ -19,7 +19,8 @@ import type { TeamFile } from '../src/file/types.ts';
 import { admitChannelDelivery } from '../src/mcp/channel-admit.ts';
 import { channelPushPath } from '../src/mcp/channel.ts';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
-import { runMcpServe, teamReadWitness } from '../src/mcp/serve.ts';
+import { keptTeamFiles, runMcpServe, teamReadWitness } from '../src/mcp/serve.ts';
+import { registryIdentityView, senderIdentity } from '../src/comms/identity.ts';
 import * as registryAgents from '../src/registry/agents.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
@@ -757,6 +758,35 @@ describe('the registry scan kept across pushes', () => {
 });
 
 describe('the team read kept across pushes', () => {
+  test('the persona guard keeps other teams\' reads, still sees an edit, and an invalid file names no one', () => {
+    const { base, home } = createHome();
+    const alpha = createTeam(base, home, 'alpha');
+    const beta = createTeam(base, home, 'beta');
+    writeFileSync(alpha.file, readFileSync(alpha.file, 'utf8').replace('    name: lead\n', '    name: lead\n    label: Wren · lead\n'));
+    const alphaTeam = readTeamConfig(alpha.root, { home });
+    if (!alphaTeam.ok) throw new Error('fixture team failed');
+    const leadId = alpha.lead.id;
+    const files = keptTeamFiles(home);
+    const nameNow = (): string => senderIdentity(
+      registryIdentityView(home, { root: alpha.root, team: alphaTeam.team }, files),
+      { kind: 'seat', seat: 'lead', id: leadId },
+    ).name;
+    expect(nameNow()).toBe('Wren');
+    // Another team's seat takes the word as its nickname: the kept read sees the edit.
+    const plain = readFileSync(beta.file, 'utf8');
+    const nicknamed = plain.replace('    name: worker\n', '    name: worker\n    nickname: Wren\n');
+    writeFileSync(beta.file, nicknamed);
+    expect(nameNow()).toBe('lead');
+    expect(nameNow()).toBe('lead');
+    // The same file failing validation names no one, though its text still carries the word.
+    writeFileSync(beta.file, nicknamed.replace('format: 1', 'format: 99'));
+    expect(readTeamConfig(beta.root, { home }).ok).toBe(false);
+    expect(nameNow()).toBe('Wren');
+    expect(files(beta.root)).toBeNull();
+    writeFileSync(beta.file, nicknamed);
+    expect(nameNow()).toBe('lead');
+  });
+
   test('its witness holds through state churn and moves with the team file, the registry and a landing', () => {
     const { base, home } = createHome();
     const local = createTeam(base, home, 'alpha');

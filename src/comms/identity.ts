@@ -213,9 +213,14 @@ function signedModelOf(agent: Agent): string | null {
 /**
  * The registry's identity view under `home`: agents by id, team records, and each team's own file
  * for the seat's label and display. Every read is lazy and kept for the life of the view, and a
- * read that fails is no answer, never an exception out of a display.
+ * read that fails is no answer, never an exception out of a display. `readFile`, when given, reads
+ * a team folder's validated file instead (a long-lived caller's kept reads); null is no file.
  */
-export function registryIdentityView(home: string, known?: { root: string; team: TeamFile }): IdentityView {
+export function registryIdentityView(
+  home: string,
+  known?: { root: string; team: TeamFile },
+  readFile?: (root: string) => TeamFile | null,
+): IdentityView {
   let teams: Readonly<Record<string, TeamRecord>> | null = null;
   // A caller that has just read a root's team file hands it in: the same read is not done again.
   const files = new Map<string, TeamFile | null>(known === undefined ? [] : [[known.root, known.team]]);
@@ -235,8 +240,12 @@ export function registryIdentityView(home: string, known?: { root: string; team:
     if (!files.has(root)) {
       let file: TeamFile | null = null;
       try {
-        const loaded = readTeamConfig(root, { home });
-        file = loaded.ok ? loaded.team : null;
+        if (readFile !== undefined) {
+          file = readFile(root);
+        } else {
+          const loaded = readTeamConfig(root, { home });
+          file = loaded.ok ? loaded.team : null;
+        }
       } catch {
         file = null;
       }
