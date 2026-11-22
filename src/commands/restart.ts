@@ -2317,6 +2317,9 @@ function hostOf(input: {
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,
     agentStatus: (_name, pane) => launch.agentStatus?.(session, pane) ?? null,
     processInfo: (_name, pane) => launch.processInfo?.(session, pane) ?? null,
+    // The launch's own birth reader, as `team up` and `team add` hand it on: absent, the run reads
+    // the process table itself.
+    ...(launch.processStartOf ? { processStartOf: launch.processStartOf } : {}),
     sleep: launch.sleep,
     now: () => input.now().getTime(),
     allow(name) {
