@@ -163,6 +163,22 @@ describe('a Codex seat set false carries every computer, browser and connector p
     expect(on.desktopControl).toBeUndefined();
   });
 
+  test('the plan: a Claude seat set false whose launch carries no settings file of this run is refused', () => {
+    const file = team('desktop_control: false\n');
+    const op = (launch: string, cliHooks?: Record<string, string>) => upPlan({
+      root: '/tmp/acme', session: SESSION, sessionRunning: true, watchAlive: true, watchLabel: 'Watch · acme',
+      stateDir: '/tmp/acme/.agents', team: file,
+      ...(cliHooks === undefined ? {} : { cliHooks }),
+      seats: [{ name: 'lead', cli: 'claude-code', launch, cwd: '/tmp/acme', label: 'lead', stopped: false, rules: 'Rules.', repairLine: 'repair' }],
+    }).map((step) => step.do).find((one) => one?.do === 'launch' || one?.do === 'refuse');
+    // Its own --settings: the file of this run is never installed, so the deny would not reach it.
+    expect(op(`claude --settings /tmp/own.json`)?.do).toBe('refuse');
+    // The hook install did not land for it: the plain line would start without the deny.
+    expect(op('claude', {})?.do).toBe('refuse');
+    // The file landed: the launch names it.
+    expect(op('claude', { lead: '/tmp/acme/lead.json' })?.do).toBe('launch');
+  });
+
   test('a recorded line without the pins is named; one with them, or a seat turned on, is not', () => {
     const pins = seatPins(codex(), false);
     expect(pinMismatch(pinnedRecordLine('codex', CLI, pins.features, pins.config), pins)).toBeNull();

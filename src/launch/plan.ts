@@ -14,11 +14,11 @@ import { sidebarRowsWord } from '../policy/types.ts';
 import type { SidebarIndicator } from '../settings/sidebar-policy.ts';
 import { profileFor } from '../profiles/index.ts';
 import type { Discovery, ResolveContext } from '../launchers/resolve.ts';
-import { cliWordList, launchCommandOrRefusal, namedResumeTarget, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, launchCommandOrRefusal, namedResumeTarget, pinnedRecordLine, resumeCarry, shellQuote, supportsCliHook } from '../profiles/profile.ts';
 import { resolvedCommand } from './resolve-flag.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
-import { cliWatcher, type CliWatcher } from './cli-hook.ts';
+import { cliWatcher, setsSettings, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
 import { discover } from '../launchers/resolve.ts';
@@ -1803,6 +1803,15 @@ export function upPlan(input: UpInput): Step[] {
       }
       baseLine = actual.line;
       if (!fromResolver) denyRecordLine = recorded.line;
+    }
+    // A Claude seat set `desktop_control: false` carries its deny list and connector switch only in
+    // the settings file this run installs. A line that names its own `--settings`, or a seat whose
+    // file did not land, would start with neither: that launch is refused, never run without them.
+    const desktopHook = input.cliHooks === undefined ? !setsSettings(profile.cli, baseLine) : input.cliHooks[seat.name] !== undefined;
+    if (wouldLaunch && !desktopControl && supportsCliHook(profile.cli) && !desktopHook) {
+      const why = 'its desktop_control is false, and its launch carries no settings file of this run to deny the computer, browser and connector tools (its line names its own --settings, or the file did not land)';
+      steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`, do: { do: 'refuse', seat: seat.name, why } });
+      continue;
     }
     const launcher = launchCommandOrRefusal(profile, baseLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
