@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import type { Caller } from '../caller.ts';
 import type { TeamFile } from '../file/types.ts';
 import { readStateFile, writeStateFile } from '../file-write.ts';
-import { linkSync, mkdirSync, renameSync, unlinkSync } from '../host/guarded-fs.ts';
+import { linkSync, mkdirSync, renameSync, rmdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import type { Io } from '../io.ts';
 import { readState } from '../state.ts';
 import { messageKeyOf, messageKeyState, signDomain, verifyDomain } from '../store/keys.ts';
@@ -29,6 +29,9 @@ import { idleNow } from './restore-relaunch.ts';
 
 /** How long a queued self-restart waits for its seat to come idle before it is given up. */
 export const SELF_RESTART_BOUND_MS = 30 * 60_000;
+
+/** How often the daemon's heartbeat looks for queued requests, at most. */
+export const SELF_RESTART_LOOK_MS = 1_000;
 
 const DOMAIN = 'team-self-restart-v1\n';
 
@@ -61,8 +64,15 @@ export function writeSelfRestartRequest(input: {
     pane: input.pane, launched: identity(input.launched), requested_at: input.now.toISOString(),
   };
   const request: SelfRestartRequest = { ...body, signature: signDomain(DOMAIN, body, messageKeyOf(input.home)) };
-  mkdirSync(folderOf(input.dir, input.session), { recursive: true });
-  writeStateFile(selfRestartPath(input.dir, input.session, input.seat), `${JSON.stringify(request, null, 2)}\n`);
+  // The daemon removes an emptied folder; a write that lost that race makes it again, once.
+  const write = (): void => {
+    mkdirSync(folderOf(input.dir, input.session), { recursive: true });
+    writeStateFile(selfRestartPath(input.dir, input.session, input.seat), `${JSON.stringify(request, null, 2)}\n`);
+  };
+  try { write(); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    write();
+  }
   return request;
 }
 
@@ -267,12 +277,17 @@ export async function runSelfRestarts(input: {
       report(request, `${seat}: self-restart failed (${refused?.message ?? `exit ${String(exit)}`})`);
     }
   }
+  // Empty folders go, so the daemon's next look is a single existence check.
+  for (const session of sessions) { try { rmdirSync(folderOf(dir, session)); } catch { /* not empty */ } }
+  try { rmdirSync(join(dir, 'self-restart')); } catch { /* not empty */ }
   return lines;
 }
 
 /** Whether the route's state folder holds any queued or interrupted request: one folder read per session, so
  *  the daemon's beat starts a pass only when there is something to run. */
 export function hasSelfRestartRequests(dir: string): boolean {
+  // The common case is one existence check: the folder is removed once its last request is.
+  if (!existsSync(join(dir, 'self-restart'))) return false;
   try {
     return readdirSync(join(dir, 'self-restart')).some((session) => {
       try { return readdirSync(folderOf(dir, session)).some((one) => one.endsWith('.json') || one.includes('.json.claimed-')); } catch { return false; }

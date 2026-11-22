@@ -74,6 +74,7 @@ const queue = (at = T0): void => {
 };
 const pass = (w: World) => runSelfRestarts({ home: base, root: base, dir, team: TEAM, sources: sourcesOf(w), caller: { kind: 'owner' }, deps: depsOf(w) });
 const queued = (): boolean => existsSync(selfRestartPath(dir, SESSION, 'lead'));
+const listing = (folder: string): string[] => (existsSync(folder) ? readdirSync(folder).sort() : []);
 
 describe('the daemon runs a queued self-restart', () => {
   test('waits while the seat works, holds unsent text, or shows a dialog, then restarts once with its conversation', async () => {
@@ -105,6 +106,8 @@ describe('the daemon runs a queued self-restart', () => {
     expect(lines).toEqual(['lead: restarted itself with its conversation conv-lead']);
     expect(queued()).toBe(false);
     expect(hasSelfRestartRequests(dir)).toBe(false);
+    // The emptied folder is removed, so the daemon's next look is one existence check.
+    expect(existsSync(join(dir, 'self-restart'))).toBe(false);
     await pass(w);
     expect(w.restarts).toHaveLength(1);
     expect(w.notices).toEqual([]);
@@ -211,7 +214,7 @@ describe('the daemon runs a queued self-restart', () => {
     w.status = 'idle';
     await pass(w);
     expect(w.notices.map((one) => one.body)).toEqual(['lead: an interrupted self-restart had begun stopping its seat; dropped, not run again: check the seat']);
-    expect(readdirSync(folder)).toEqual([]);
+    expect(listing(folder)).toEqual([]);
     expect(w.restarts).toEqual([]);
   });
 
@@ -230,7 +233,7 @@ describe('the daemon runs a queued self-restart', () => {
       } },
     });
     expect(seen[0]!.some((one) => /^lead\.json\.claimed-[0-9a-f]+\.stopping$/.test(one))).toBe(true);
-    expect(readdirSync(join(dir, 'self-restart', SESSION))).toEqual([]);
+    expect(listing(join(dir, 'self-restart', SESSION))).toEqual([]);
   });
 
   test('a lost conversation is reported as a failed continuity and dropped', async () => {

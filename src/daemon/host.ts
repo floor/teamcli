@@ -34,7 +34,7 @@ import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/inde
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
 import { runRestoreSweepInChild, runSelfRestartsInChild } from './restore/spawn.ts';
-import { hasSelfRestartRequests } from '../launch/self-restart.ts';
+import { hasSelfRestartRequests, SELF_RESTART_LOOK_MS } from '../launch/self-restart.ts';
 import { createRestoreAttachWatch, sessionsRunningMap, type RestorePending } from './restore/attach-watch.ts';
 import { restoreLifecycleProblem } from '../launch/restore-lifecycle.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
@@ -2814,8 +2814,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   };
   /** The self-restart pass in flight, if any: one at a time, never awaited by the beat. */
   let selfRestartRun: Promise<void> | null = null;
+  /** When the request folders were last looked at: once a second at most, never every beat. A
+   *  queued request waits for its seat to come idle anyway, so a second is no delay to it. */
+  let selfRestartLookedAt = 0;
   const selfRestartBeat = (): void => {
     if (closed || input.selfRestart === false || selfRestartRun !== null) return;
+    const lookAt = now().getTime();
+    if (lookAt - selfRestartLookedAt < SELF_RESTART_LOOK_MS) return;
+    selfRestartLookedAt = lookAt;
     const due = [...routeTeams.values()].filter((entry) => hasSelfRestartRequests(dirname(entry.handle)));
     if (due.length === 0) return;
     const runner = typeof input.selfRestart === 'function'
