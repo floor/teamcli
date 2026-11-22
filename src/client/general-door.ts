@@ -332,7 +332,9 @@ export function generalDoor(name: string, rest: string[], io: Io, now: Date = ne
   if (GENERAL_REFUSED_COMMANDS.has(name)) {
     const why = name === 'launchers'
       ? 'the owner, or a placed lead of this team, runs team launchers through its ordinary admission; a general grant never admits it'
-      : `only the owner runs team ${name}, from a terminal outside a team session; a general grant never admits it`;
+      : name === 'queues' || name === 'ping'
+        ? `team ${name} declines general grants: run it without --general, under its ordinary admission`
+        : `only the owner runs team ${name}, from a terminal outside a team session; a general grant never admits it`;
     return { kind: 'refused', why, json };
   }
   if (issuesGrants(name, rest)) return { kind: 'usage', why: 'team client general-grant issues grants and takes no --general (a holder issues with --via <grant.json> --key <client.key>)', json };
