@@ -1,7 +1,8 @@
-// A channel push re-proves its seat (`alive()`) only when a file the proof read has changed: the
-// team state, the team file. Unchanged files reuse the last passing proof, so a push does not
-// place its caller again; a moved pane, a seat restart or a stopped declaration proves again and
-// refuses. Fixtures only: synthetic folders, home and launch line.
+// A channel push re-proves its seat (`alive()`) on every use: the live placement and the current
+// declaration are read again each time (no file the process can witness shows a pane's terminal
+// placement, and a registry-backed team's declaration is its registry record), so a moved pane, a
+// stopped declaration or a registry-only stop refuses the next push. Fixtures only: synthetic
+// folders, home and launch line.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -19,6 +20,8 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { isRead, signRecord, stampedPayload, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
+import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
+import { sha256, writeStoredTeamConfig } from '../src/registry/team-config-store.ts';
 
 const SESSION = 'acme';
 const FLAG = '--dangerously-load-development-channels server:team-inbox';
@@ -224,7 +227,7 @@ async function pushed(feed: ReturnType<typeof queue>, n: number): Promise<number
 }
 
 describe('the seat proof a push makes', () => {
-  test('unchanged files reuse the passing proof; a moved pane proves again and refuses', async () => {
+  test('every push places its caller again; a moved pane refuses', async () => {
     const { at, feed, running, placed } = await servedCounting();
     try {
       stamped(at, IDS[0]!);
@@ -236,7 +239,7 @@ describe('the seat proof a push makes', () => {
       expect(await pushed(feed, 3)).toBe(3);
       stamped(at, IDS[3]!);
       expect(await pushed(feed, 4)).toBe(4);
-      expect(placed.count).toBe(proved);
+      expect(placed.count).toBeGreaterThan(proved);
       // The seat is restarted on another pane: the state names it, the proof runs and refuses.
       writeFileSync(join(at.root, '.agents', 'team.state.json'), stateText('pane-moved'));
       stamped(at, IDS[4]!);
@@ -250,7 +253,7 @@ describe('the seat proof a push makes', () => {
     }
   });
 
-  test('a state rewritten for fields the proof does not read keeps it; a restart on the same pane proves again and still pushes', async () => {
+  test('a state rewritten for fields the proof does not read, or by a restart on the same pane, still pushes', async () => {
     const { at, feed, running, placed } = await servedCounting();
     try {
       stamped(at, IDS[0]!);
@@ -263,7 +266,7 @@ describe('the seat proof a push makes', () => {
       renameSync(`${path}.tmp`, path);
       stamped(at, IDS[2]!);
       expect(await pushed(feed, 3)).toBe(3);
-      expect(placed.count).toBe(proved);
+      expect(placed.count).toBeGreaterThan(proved);
       // A restart on the same pane records its new launch: the proof runs again.
       writeFileSync(`${path}.tmp`, stateText('pane-lead', { launched: { cli: [424242] } }));
       renameSync(`${path}.tmp`, path);
@@ -298,5 +301,29 @@ describe('the seat proof a push makes', () => {
       await running;
       at.cleanup();
     }
+  });
+
+  test('a registry-only session change of a registry-backed team is refused on the next tool call', async () => {
+    await underRegistry(async () => {
+      const at = place();
+      intoRegistry(at.root, at.home);
+      const feed = queue();
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, testIo(at.root, seatCaller()), feed, { home: at.home });
+      try {
+        await until(() => existsSync(listenerPath(at.dropDir)));
+        expect((await tool(feed, 'c0', 'inbox_check')).isError).not.toBe(true);
+        expect((await tool(feed, 'c1', 'inbox_check')).isError).not.toBe(true);
+        // The registry's record moves the team to another session; no team file and no state changes.
+        const record = storedTeam(at.root, at.home)!;
+        const text = record.text.replace(`session: ${SESSION}\n`, 'session: elsewhere\n');
+        expect(text).not.toBe(record.text);
+        writeStoredTeamConfig(at.home, { ...record, text, text_sha256: sha256(text) });
+        expect((await tool(feed, 'c2', 'inbox_check')).isError).toBe(true);
+      } finally {
+        feed.end();
+        await running;
+        at.cleanup();
+      }
+    });
   });
 });

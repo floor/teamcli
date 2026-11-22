@@ -13,7 +13,7 @@ import { traceChildStep } from '../diagnostics/child-steps.ts';
 // (src/send/admit.ts).
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { isSeatId, updateState, withLock, type SeatState } from '../state.ts';
@@ -218,7 +218,8 @@ function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Ag
 }
 
 /** What a scan of the agents folder depends on, by stat only: the folder's own inode and mtime,
- *  and each agent file's name, inode, size, mtime and ctime (a mode change moves only the ctime).
+ *  and each agent file's name, inode, size, mtime and ctime (a mode change moves only the ctime),
+ *  each read through a link exactly as the parser's read follows it.
  *  Null when the folder cannot be read. */
 export function agentFolderStamp(dir: string, names: readonly string[]): string | null {
   try {
@@ -226,7 +227,8 @@ export function agentFolderStamp(dir: string, names: readonly string[]): string 
     let stamp = `${String(folder.ino)}:${String(folder.mtimeMs)}:${String(names.length)}`;
     for (const name of names) {
       try {
-        const one = lstatSync(join(dir, name));
+        // The file the parser reads: a link is followed, so an edit of its target moves the stamp.
+        const one = statSync(join(dir, name));
         stamp += `|${name}:${String(one.ino)}:${String(one.size)}:${String(one.mtimeMs)}:${String(one.ctimeMs)}`;
       } catch (error) {
         stamp += `|${name}:${(error as NodeJS.ErrnoException).code ?? 'error'}`;

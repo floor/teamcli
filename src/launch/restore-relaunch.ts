@@ -3,8 +3,8 @@
 //
 // The terminal host resumes a seat's conversation without its launch line, so the restore
 // re-tie records `channel_launch: false` and the seat's channel push reaches nothing. Here, after
-// the pass released its run lock, each such seat whose declared line carries the channel flag is
-// restarted with `team restart <seat> --resume <its conversation>` through the restart command
+// the pass released its run lock, each such seat whose launch carries the channel flag (its line
+// names it, or the launch planning puts it on) is restarted with `team restart <seat> --resume <its conversation>` through the restart command
 // itself, one at a time, only while the load guard lets a launch through and only when herdr
 // reads it idle with an empty prompt (no unsent text, no dialog). A working seat is left for a
 // later pass. A person's pane is never restarted, and neither is the entity's main orchestrator,
@@ -29,6 +29,7 @@ import { readScreen } from '../watch/screen.ts';
 import { launchLimit } from '../watch/machine.ts';
 import { CHANNEL_OVERDUE_MS, type ChannelUnproven } from '../queue/resend.ts';
 import { channelOptionProven } from './restore-channel.ts';
+import { channelLaunchFallback, claudeChannelSeat } from '../mcp/launch-config.ts';
 import type { UpSources } from '../commands/up.ts';
 
 /** One seat's restore mark: the launch identity it describes, since when, and what was done. */
@@ -120,6 +121,11 @@ export async function relaunchRestoredSeats(input: {
   };
   let loadHeld: string | null = null;
   const seats = team.seats.filter((seat): seat is Seat => seat.cli === 'claude-code' && seat.stopped !== true && seat.human !== true);
+  // The launch carries the channel flag by the planning's own rule (src/launch/plan.ts): a line
+  // that names it, or a Claude seat the plan puts it on — one that does not decline the channel
+  // and whose channel start has no fallback — whatever its raw recipe holds.
+  const carriesChannel = (seat: Seat): boolean => channelOptionProven(seat.launch)
+    || (claudeChannelSeat(seat) && channelLaunchFallback(team, seat, root, sources.home) === undefined);
   for (const seat of seats) {
     // Re-read right before each decision: the restart before it changed the state.
     const held = readState(dir).sessions[session]?.seats[seat.name];
@@ -133,7 +139,7 @@ export async function relaunchRestoredSeats(input: {
     // A pane whose live process is not the recorded launch (a resume the restart rebind could not
     // prove) runs no launch line either: its record says so, as the re-tie would have, so the
     // send walk, the reach check and this relaunch take it the same way.
-    if (held.channel_launch !== false && channelOptionProven(seat.launch)
+    if (held.channel_launch !== false && carriesChannel(seat)
       && seatProcessVerdict(held.launched, sources.launch?.processInfo?.(session, held.pane) ?? null) === 'replaced') {
       updateState(dir, (state) => {
         const one = state.sessions[session]?.seats[seat.name];
@@ -141,7 +147,7 @@ export async function relaunchRestoredSeats(input: {
       });
       held.channel_launch = readState(dir).sessions[session]?.seats[seat.name]?.channel_launch;
     }
-    const restored = held.channel_launch === false && channelOptionProven(seat.launch);
+    const restored = held.channel_launch === false && carriesChannel(seat);
     if (restored && own?.relaunched !== true) {
       if (own === undefined) {
         own = { launched: identity(held.launched), at: now().toISOString(), relaunched: false };
@@ -151,8 +157,13 @@ export async function relaunchRestoredSeats(input: {
         if (own.reported !== true) {
           const line = `${seat.name}: restored without its launch line, so its channel push is off; it runs in the owner's pane and is not restarted from here: the owner approves \`team restart ${seat.name} --resume ${held.agent_session}\``;
           lines.push(line);
-          if (team.orchestrator !== '') deps.notify({ lead: team.orchestrator, body: line, id: markNoticeId(root, session, seat.name, own.at) });
-          mark(seat.name, { ...own, reported: true });
+          // A notice that was not written stays owed: the mark keeps its instant, so the next
+          // pass writes it under the same id.
+          if (team.orchestrator === '' || deps.notify({ lead: team.orchestrator, body: line, id: markNoticeId(root, session, seat.name, own.at) })) {
+            mark(seat.name, { ...own, reported: true });
+          } else {
+            waits.push(`${seat.name}: its notice to the lead was not written; written on a later pass`);
+          }
         }
         continue;
       }
@@ -201,8 +212,11 @@ export async function relaunchRestoredSeats(input: {
     }
     const line = `${seat.name}: unreachable after restore: ${why}`;
     lines.push(line);
-    if (team.orchestrator !== '') deps.notify({ lead: team.orchestrator, body: line, id: markNoticeId(root, session, seat.name, own.at) });
-    mark(seat.name, { ...own, reported: true });
+    if (team.orchestrator === '' || deps.notify({ lead: team.orchestrator, body: line, id: markNoticeId(root, session, seat.name, own.at) })) {
+      mark(seat.name, { ...own, reported: true });
+    } else {
+      waits.push(`${seat.name}: its notice to the lead was not written; written on a later pass`);
+    }
   }
   if (changed) {
     try { writeMarks(dir, session, marks); } catch { lines.push('the restore reach marks could not be written'); }

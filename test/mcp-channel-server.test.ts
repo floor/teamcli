@@ -25,7 +25,7 @@ import { signRecord, verifyReceipt, type RecordPayload, type SignedReceipt } fro
 import * as keys from '../src/store/keys.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import { currentRunMemo } from '../src/run-memo.ts';
-import { markChannelNotified } from '../src/mcp/channel.ts';
+import { channelNotified, markChannelNotified } from '../src/mcp/channel.ts';
 import { retryHeldDrops, type RetryScene } from '../src/watch/retry.ts';
 import { paneShell, testIo } from './helpers.ts';
 import { seatListingDirs } from '../src/queue/mail-tree.ts';
@@ -315,6 +315,29 @@ describe('the push', () => {
       await until(() => notice(feed.replies).length >= 3);
       expect(notice(feed.replies)).toHaveLength(3);
       expect(gitRootReadCount()).toBe(reads);
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a launch flag dropped after the server started is read at the commit: no line and no notified marker', async () => {
+    const at = place();
+    try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      // A terminal-host resume re-tied the pane: the record now says the process carries no flag.
+      writeFileSync(
+        join(at.root, '.agents', 'team.state.json'),
+        `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { lead: { stage: 'ready', pane: 'pane-lead', channel_launch: false }, worker: { stage: 'ready', pane: 'pane-worker' } }, worktrees: {} } } })}\n`,
+      );
+      signed(at, PUSHED_ID, 'from a worker — admitted by: the owner\n\nflag dropped');
+      await until(() => notice(feed.replies).length >= 1, 100);
+      expect(notice(feed.replies)).toHaveLength(0);
+      expect(channelNotified(at.dropDir, PUSHED_ID)).toBe(false);
       feed.end();
       expect(await running).toBe(0);
     } finally {

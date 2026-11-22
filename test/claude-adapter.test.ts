@@ -773,6 +773,22 @@ describe('a seat the terminal host resumed without its launch line has no workin
       expect(offeredCopies(stampedOf(at), ID)).toEqual([]);
     }
   });
+
+  test('on a dark root too, a send walks no channel leg for a seat whose flag was dropped', () => {
+    for (const dropped of [false, true]) {
+      const at = place();
+      proven(at);
+      const state = readState(at.dir);
+      state.sessions[SESSION]!.seats[SEAT]!.launch_line = 'claude --dangerously-load-development-channels server:team-inbox';
+      writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
+      expect(deactivate(at.root, at.home).kind).toBe('dark');
+      if (dropped) resumedWithoutFlag(at);
+      const team = loadTeamFile(at.root, { home: at.home });
+      if (!team.ok) throw new Error('fixture team failed to load');
+      const legs = send.permittedEventLegs({ dir: at.dir, root: at.root, home: at.home, session: SESSION, seat: SEAT, team: team.team, now: () => new Date() });
+      expect(legs.channel).toBe(!dropped);
+    }
+  });
 });
 
 describe('a declared order is ignored for a Claude receiver on an active root', () => {

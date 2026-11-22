@@ -45,7 +45,7 @@ import { attributedBody, renderedIdentity } from '../send/sender-claim.ts';
 import { registryIdentityView } from '../comms/identity.ts';
 import { bodyWithReaderLine, existingRecordIdsIn, replyLine, takesReaderLine } from '../send/frame.ts';
 import { messageKeyState } from '../store/keys.ts';
-import { readState, readStateShared, type SeatState, type State } from '../state.ts';
+import { readState, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
 import { agentList, paneProcesses, paneRootPid } from '../herdr.ts';
 import { profileFor } from '../profiles/profile.ts';
@@ -92,7 +92,7 @@ import { channelAckLine, liveChannelCopy, takeCopyNumber, wrapCopy } from '../qu
 import { channelLaunchFallback, claudeChannelSeat } from './launch-config.ts';
 import { readClientThreadGrant } from '../client/records.ts';
 import { bundleAckGate, type BundleAckGate } from '../client/bundle-ack.ts';
-import { channelOfferStartedGivenUp, channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
+import { channelFlagDropped, channelOfferStartedGivenUp, channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
 import { heldAt } from '../held.ts';
@@ -618,6 +618,9 @@ function watchChannel(
         // the notification. The record was already read above; this does not open it again.
         const staleNow = serving.alive?.();
         if (staleNow !== undefined && staleNow !== null) return 'skip' as const;
+        // The launch flag is read now, not at startup: a seat whose record says its process runs
+        // without the channel flag cannot take this line, so no notified marker is written for it.
+        if (channelFlagDropped(serving.root, serving.session, serving.seat)) return 'skip' as const;
         // The exposure claim (rfc-event-comms §3, E6), immediately before the frame can carry the
         // body: on an active root only its creator pushes the body; any other push carries a pointer.
         const exposure = exposeBody({ dropDir: dropDir, root: serving.root, session: serving.session, seat: serving.seat, msgId: id }, 'channel', serving.home);
@@ -2029,37 +2032,6 @@ export async function runMcpServe(
     }
   };
   const brief: BriefRead = { claim: claimOf, ...(boundEpoch === undefined ? {} : { epoch: boundEpoch }) };
-  // What the seat's proof reads, and the pane this process names: the state's own words for the
-  // session (each seat's pane and launch, this seat's brief claim), the team file it read, and the
-  // pane in the environment. A seat restart or a moved pane changes those words, a stop or an
-  // edited declaration the team file. The state file itself is rewritten every few seconds for
-  // fields the proof never reads (heartbeats, presence), so its stat is not the witness: that made
-  // nearly every push re-prove (a placement walk with process and herdr reads, 100-300 ms under
-  // load). Any change, or a file that cannot be read, proves again.
-  let proven: string | null = null;
-  let provenTeamAt: string | null = null;
-  const witness = (): string => {
-    let words: string;
-    try {
-      const held = readStateShared(stateDir).sessions[team.session];
-      words = JSON.stringify(held === undefined ? null : [
-        Object.entries(held.seats ?? {}).map(([name, one]) => [name, one.pane, one.pane_shell, one.pane_shell_start, one.launched]),
-        held.briefs?.[seat.name],
-      ]);
-    } catch {
-      words = `unreadable:${String(performance.now())}`;
-    }
-    let teamAt = 'none';
-    if (provenTeamAt !== null) {
-      try {
-        const stat = statSync(provenTeamAt);
-        teamAt = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-      } catch {
-        // A team file that cannot be stated proves again.
-      }
-    }
-    return `${words}|${teamAt}|${io.env.HERDR_PANE_ID ?? ''}`;
-  };
   const proveAlive = (): string | null => {
     const now = placementOf(io, stateDir, team.session, seat.name);
     if (!now.ok) return now.why;
@@ -2079,7 +2051,6 @@ export async function runMcpServe(
     if (!file.ok) {
       return `the team file cannot be read now, so this server cannot prove its seat is still declared: ${file.errors[0]?.message ?? 'the team file could not be read'}`;
     }
-    provenTeamAt = file.path;
     return declarationRefusal(file.team, team.session, seat.name);
   };
   const serving: Serving = {
@@ -2101,19 +2072,11 @@ export async function runMcpServe(
     ...(channel ? { listenerKey: listenerKeyOf(listener) } : {}),
     // Re-proved on every use, not only at start: the seat may be stopped, replaced or relaunched
     // while this process lives, and a launcher-written config that names it again must not make
-    // the old process a reader of the new seat. The team file itself is read again: the
-    // declaration this server serves is the file's current one, and a seat it has stopped or
-    // dropped is no longer a seat this server may serve. A proof that passed stands until a file
-    // it read changes (`witness`): the check is the same, only how often it runs.
-    alive: () => {
-      const before = witness();
-      if (proven !== null && proven === before) return null;
-      proven = null;
-      const why = proveAlive();
-      // Kept only when the files it read are the ones witnessed before it ran.
-      if (why === null && provenTeamAt !== null && before === witness()) proven = before;
-      return why;
-    },
+    // the old process a reader of the new seat. The live placement is read again each time (no
+    // file this process can witness shows a pane's terminal placement), and so is the declaration:
+    // the team as it is read now, the registry record of a registry-backed team included, so a
+    // seat it has stopped, dropped or moved to another session is no longer one this server serves.
+    alive: proveAlive,
   };
   // Every push re-reads the team and re-proves the seat, and each read asks git for the root. The
   // daemon and the send host hold git's answer (bound to the folder's `.git` witness); a serving

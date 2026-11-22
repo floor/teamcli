@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,8 @@ import {
   withLock,
   writeAtomic,
 } from '../src/state.ts';
+
+const realReadFileSync = fs.readFileSync;
 
 let dir: string;
 beforeEach(() => {
@@ -319,6 +322,25 @@ describe('the shared read', () => {
     // The editing door still hands out its own copy.
     readState(dir).sessions.one!.seats.a!.stage = 'ready';
     expect(readStateShared(dir)).toBe(second);
+  });
+
+  test('the state kept is parsed from the bytes it is compared by (A, then B, then A again)', () => {
+    const text = (stage: string): string => JSON.stringify({ format: 1, sessions: { one: { ...emptySession(), seats: { a: { stage } } } } });
+    const path = join(dir, STATE_FILE);
+    writeFileSync(path, text('ready'));
+    // Every path read after the first sees B, as when B lands between two reads of A and A
+    // comes back into the same key before the last one.
+    let reads = 0;
+    const spy = spyOn(fs, 'readFileSync').mockImplementation(((file: unknown, ...rest: unknown[]) => {
+      if (file === path && (reads += 1) === 2) return text('named');
+      return (realReadFileSync as (...args: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.readFileSync);
+    try {
+      expect(readStateShared(dir).sessions.one?.seats.a?.stage).toBe('ready');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(readStateShared(dir).sessions.one?.seats.a?.stage).toBe('ready');
   });
 });
 

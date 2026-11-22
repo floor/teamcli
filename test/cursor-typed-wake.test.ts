@@ -231,6 +231,27 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
     expect(pane.enters).toBe(1);
   });
 
+  test('a direct-only send types no further key once the seat has moved off the pane the pass bound', async () => {
+    const made = cursorWorld();
+    let moved = false;
+    // The line is typed and drawn, then the seat moves to another pane before its Enter.
+    const drawn = (text: string): string => IDLE_TASK.replace('  → Add a follow-up', () => text.split('\n').map((row, at) => (at === 0 ? `  → ${row}` : `    ${row}`)).join('\n'));
+    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE_TASK : drawn(typed[typed.length - 1] ?? '')));
+    const type = pane.host.type;
+    pane.host.type = (at, text) => {
+      moved = true;
+      return type(at, text);
+    };
+    const host = fake(made, {
+      agents: () => [{ name: 'cursor', pane: moved ? 'pane-other' : 'pane-cursor', cli: 'cursor-agent' }],
+      typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1,
+    });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(run.result?.outcome).not.toBe('delivered');
+    expect(pane.typed).toHaveLength(1);
+    expect(pane.enters).toBe(0);
+  });
+
   test('a direct-only send whose recheck refuses types nothing into a cursor seat', async () => {
     const made = cursorWorld();
     const pane = wakeFake(() => IDLE_TASK);

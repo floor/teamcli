@@ -1,7 +1,7 @@
 import { currentRunMemo } from './run-memo.ts';
 import { hostedCommit } from './host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, readFileSync, statSync } from 'node:fs';
 import { linkSync, mkdirSync, openSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from './host/guarded-fs.ts';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
@@ -751,45 +751,74 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-function textOf(path: string): string | null {
+/** The file's bytes and identity from one open: the key is the opened file's own stat, so the
+ *  text, the key and the parse below all describe the same file, whatever a rename does to the
+ *  path in between. Absent: null. */
+function readKeyed(path: string): { key: string; changedNs: bigint; text: string } | null {
+  let fd: number;
   try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return null;
+    fd = openSync(path, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    return {
+      key: `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`,
+      changedNs: stat.mtimeNs > stat.ctimeNs ? stat.mtimeNs : stat.ctimeNs,
+      text: readFileSync(fd, 'utf8'),
+    };
+  } finally {
+    closeSync(fd);
   }
 }
 
 /** The state for a caller that only reads it, such as the presence pass polling every seat: one
- *  frozen object, parsed again only when the file changes. The file's inode, size and times are
- *  the key; a file changed within the racy margin of its read is also compared by its text, so a
- *  write the times cannot show is still seen. A caller that edits the state uses `readState` or
- *  `updateState`. */
+ *  frozen object, parsed again only when the file changes. The key is the opened file's inode,
+ *  size and times; a file changed within the racy margin of its read is also compared by its text,
+ *  so a write the times cannot show is still seen. The text compared, the key and the state parsed
+ *  come from one open of the file, so a cached state is never another version's. A caller that
+ *  edits the state uses `readState` or `updateState`. */
 export function readStateShared(dir: string): Readonly<State> {
   const path = join(dir, STATE_FILE);
-  let key = 'absent';
-  let changedNs: bigint | null = null;
-  try {
-    const stat = statSync(path, { bigint: true });
-    key = `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-    changedNs = stat.mtimeNs > stat.ctimeNs ? stat.mtimeNs : stat.ctimeNs;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
-  const racy = changedNs !== null && BigInt(Date.now()) * 1_000_000n - changedNs < RACY_NS;
   const hit = sharedStates.get(path);
-  if (hit?.key === key && !hit.racy) return hit.state;
-  // Stat before read: the text read is at least as new as the key, so a change after the stat
-  // only costs one more read on the next call.
-  const text = changedNs === null ? null : textOf(path);
-  if (hit?.key === key && text !== null && hit.text === text) {
-    sharedStates.set(path, { key, racy, text, state: hit.state });
+  // A settled entry is served on the path's stat alone: its key, text and state were taken from
+  // one open file, so an equal key names those very bytes.
+  if (hit !== undefined && !hit.racy) {
+    try {
+      const stat = statSync(path, { bigint: true });
+      if (hit.key === `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`) return hit.state;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (hit.key === 'absent') return hit.state;
+    }
+  }
+  const read = readKeyed(path);
+  const key = read === null ? 'absent' : read.key;
+  const racy = read !== null && BigInt(Date.now()) * 1_000_000n - read.changedNs < RACY_NS;
+  if (hit?.key === key && (!hit.racy || (read !== null && hit.text === read.text))) {
+    if (hit.racy) sharedStates.set(path, { key, racy, text: hit.text, state: hit.state });
     return hit.state;
   }
-  const state = deepFreeze(readState(dir));
-  // The text is kept only when the file still holds it after the parse: a write in between
-  // leaves nothing to compare, and the next call parses again.
-  const kept = text !== null && textOf(path) === text ? text : null;
-  sharedStates.set(path, { key, racy, text: kept, state });
+  if (read === null) {
+    const state = deepFreeze(readState(dir));
+    sharedStates.set(path, { key, racy, text: null, state });
+    return state;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(read.text) as unknown;
+  } catch {
+    // A truncated prefix from a writer that is not the atomic one: the ordinary read, with its
+    // retry, and nothing is kept to compare.
+    const state = deepFreeze(readState(dir));
+    sharedStates.set(path, { key: 'unkeyed', racy: true, text: null, state });
+    return state;
+  }
+  readStateCalls += 1;
+  const state = deepFreeze(stateOf(path, dir, parsed));
+  sharedStates.set(path, { key, racy, text: read.text, state });
   return state;
 }
 
@@ -805,6 +834,11 @@ export function readState(dir: string): State {
   } catch {
     throw new Error(`${path} is not valid JSON; move it aside and run the command again`);
   }
+  return stateOf(path, dir, parsed);
+}
+
+/** The state a parsed file holds, cleaned at the read door; a value that is no state throws. */
+function stateOf(path: string, dir: string, parsed: unknown): State {
   const state = parsed as Partial<State> | null;
   if (!state || typeof state !== 'object' || state.format !== 1 || typeof state.sessions !== 'object' || !state.sessions) {
     throw new Error(`${path} is not a team state of format 1; move it aside and run the command again`);
