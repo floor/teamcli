@@ -244,6 +244,8 @@ test('a branch that moves after its worktree is removed clears the recorded slot
   const bin = join(w.base, 'bin');
   mkdirSync(bin);
   const real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  // The shim's own commit names its identity: a CI runner has no git user configured, and an
+  // identity-less commit-tree would leave the branch where it was.
   writeFileSync(join(bin, 'git'), `#!/bin/sh
 real=${JSON.stringify(real)}
 if [ "$1" = worktree ] && [ "$2" = remove ]; then
@@ -251,7 +253,7 @@ if [ "$1" = worktree ] && [ "$2" = remove ]; then
   status=$?
   if [ "$status" -ne 0 ]; then exit "$status"; fi
   tree=$("$real" rev-parse 'HEAD^{tree}')
-  moved=$("$real" commit-tree "$tree" -m moved)
+  moved=$("$real" -c user.name=Test -c user.email=test@example.com commit-tree "$tree" -m moved)
   "$real" update-ref refs/heads/swap/swap-worker "$moved"
   exit 0
 fi
