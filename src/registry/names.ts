@@ -15,11 +15,14 @@
 // another seat already carries) is display alone and is not held apart — only the name a seat
 // can be addressed by is. A word equal to the seat's own name is not a nickname either: the
 // seat's name is unique in its team already, and every plain `team add` writes it.
+import { editedRecordText, withValue } from '../config/team-record.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
-import { namesUniqueFor, type NicknameScope } from '../entities.ts';
-import { seatNickname } from '../file/sections/seats.ts';
-import type { TeamFile } from '../file/types.ts';
+import { namesAutoFor, namesUniqueFor, type NamesAuto, type NicknameScope } from '../entities.ts';
+import { DAEMON_NAME, LEAD_NAME, labelPersona, SEAT_NAME, seatNickname } from '../file/sections/seats.ts';
+import type { Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
+import { parseYaml, toValue } from '../yaml.ts';
+import { NAME_POOL_DEFAULT, NAME_POOLS } from './name-pools.ts';
 import { readStoredTeamConfig, type StoredTeamConfig } from './team-config-store.ts';
 import { readTeams, teamIdOf, TeamsError, type TeamRecord } from './teams.ts';
 
@@ -256,4 +259,140 @@ export function nicknameTakenNotes(team: TeamFile, root: string, home: string | 
     notes.push(`seat "${seat.name}": its nickname "${nickname}" is also held by seat "${holder.seat}" of team "${holder.team}" — seat nicknames are unique ${where}; existing duplicates keep running, and only a nickname newly set is refused`);
   }
   return notes;
+}
+
+// Names handed out: a seat with no nickname takes the first free name of its entity's pool
+// (`names.pool`, src/registry/name-pools.ts) at `team add` and `team up`, while `names.auto` is
+// on, and `team names fill` names every such seat at once. The name is written as a manual one is
+// — the record's `nickname:` and the persona part of its `label:`, through the same validated
+// writer — so the next header, launch and roster read it like any other name.
+
+/** One seat's handed-out name: the nickname, and the label it now carries (`<Nickname> · <role>`). */
+export type NameAssignment = { seat: string; nickname: string; label: string };
+
+/** The entity's words on handing out names, defaults filled. */
+export function namesAutoOf(home: string | undefined, entity: string | null): NamesAuto {
+  return namesAutoFor(home, entity, NAME_POOL_DEFAULT);
+}
+
+/**
+ * Whether a seat goes by no name of its own: the file writes no `nickname:`, and its written
+ * label names no persona but the seat's own name. A seat with a name is never renamed. A human
+ * seat is a person, whose name is theirs, and a counted entry cannot carry one nickname, so
+ * neither is handed one.
+ */
+export function unnamedSeat(seat: Pick<Seat, 'name' | 'nickname' | 'label' | 'labelWritten' | 'human' | 'count'>): boolean {
+  if (seat.human === true || seat.count > 1 || seat.nickname !== undefined) return false;
+  const persona = labelPersona(seat);
+  return persona === null || persona === seat.name;
+}
+
+/** The label a named seat carries: the nickname, then the written label's part after its middle
+ *  dot, or the seat's role when the label has none. */
+function namedLabel(seat: Pick<Seat, 'role' | 'label' | 'labelWritten'>, nickname: string): string {
+  const at = seat.labelWritten === true ? seat.label.indexOf('·') : -1;
+  const rest = at < 0 ? '' : seat.label.slice(at + 1).trim();
+  return `${nickname} · ${rest === '' ? seat.role : rest}`;
+}
+
+/**
+ * The names a team's unnamed seats take, in file order, each the first name of the pool that is
+ * free: never a word the team already carries (a seat's name, nickname or label persona), never
+ * `lead` or `daemon`, and never one `taken` holds (the names an entity-wide fill handed out
+ * earlier in the same run). A name any team in the registry already carries is passed over while
+ * the pool has another; past that, the `names.unique` scope is the rule, as for a manual name.
+ * `only` limits the plan to those seats. A pool word that names no built-in pool plans nothing
+ * and says why; a pool with no name left names the first seat it could not name.
+ */
+export function autoNamePlan(input: {
+  home: string | undefined;
+  root: string;
+  team: TeamFile;
+  only?: readonly string[];
+  taken?: ReadonlySet<string>;
+}): { assignments: NameAssignment[]; problem: string | null } {
+  const { home, team } = input;
+  const config = namesAutoOf(home, team.entity);
+  const pool = config.pool.kind === 'list' ? config.pool.names : NAME_POOLS[config.pool.name];
+  if (pool === undefined) {
+    const known = Object.keys(NAME_POOLS).join(', ');
+    return { assignments: [], problem: `names.pool "${config.pool.kind === 'builtin' ? config.pool.name : ''}" is no built-in pool (${known}) and no list` };
+  }
+  const own = new Set<string>([LEAD_NAME, DAEMON_NAME, ...(input.taken ?? [])].map((word) => word.toLowerCase()));
+  for (const seat of team.seats) {
+    own.add(seat.name.toLowerCase());
+    if (seat.nickname !== undefined) own.add(seat.nickname.toLowerCase());
+    const persona = labelPersona(seat);
+    if (persona !== null) own.add(persona.toLowerCase());
+  }
+  const scope = namesUniqueFor(home, team.entity);
+  const teamId = teamIdOf(input.root);
+  const holders = home === undefined ? [] : nicknameHolders(home, teamId);
+  const project = home === undefined ? { id: null } : projectOf(home, null, team, input.root);
+  const ownTeam: NicknameOwner = { teamId, entity: team.entity, projectId: project.id };
+  const anywhere = new Set(holders.map((holder) => holder.nickname.toLowerCase()));
+  const inScope = new Set(holders.filter((holder) => withinScope(holder, ownTeam, scope)).map((holder) => holder.nickname.toLowerCase()));
+  const usable = pool.filter((name) => SEAT_NAME.test(name));
+  const assignments: NameAssignment[] = [];
+  for (const seat of team.seats) {
+    if (!unnamedSeat(seat) || (input.only !== undefined && !input.only.includes(seat.name))) continue;
+    const name = usable.find((word) => !own.has(word.toLowerCase()) && !anywhere.has(word.toLowerCase()))
+      ?? usable.find((word) => !own.has(word.toLowerCase()) && !inScope.has(word.toLowerCase()));
+    if (name === undefined) return { assignments, problem: `the name pool has no free name left for seat "${seat.name}"` };
+    own.add(name.toLowerCase());
+    assignments.push({ seat: seat.name, nickname: name, label: namedLabel(seat, name) });
+  }
+  return { assignments, problem: null };
+}
+
+/** The record text with each assignment written: the seat's `nickname:` and its `label:`, line
+ *  by line as `team config set` writes them, so the record's comments are kept. */
+export function withAutoNames(text: string, assignments: readonly NameAssignment[]): string {
+  let next = text;
+  for (const assignment of assignments) {
+    for (const [field, value] of [['nickname', assignment.nickname], ['label', assignment.label]] as const) {
+      const path = ['seats', assignment.seat, field];
+      const changed = withValue(toValue(parseYaml(next)), path, value);
+      if (!changed.ok || !changed.changed) continue;
+      next = editedRecordText(next, path, value, changed.root).text;
+    }
+  }
+  return next;
+}
+
+/**
+ * The launch's naming step, for `team add` and `team up`: while the entity's `names.auto` is on,
+ * the record text with every unnamed seat (or only the `only` seats) named, held to the same
+ * `names.unique` check a manual name is. The text comes back unchanged when there is nothing to
+ * name, auto is off, the text does not validate, or the plan or the check refuses — a launch is
+ * never stopped for want of a name; `problem` says why none was handed out.
+ */
+export function autoNamedText(input: {
+  home: string | undefined;
+  root: string;
+  text: string;
+  only?: readonly string[];
+}): { text: string; assignments: NameAssignment[]; problem: string | null } {
+  const unchanged = (problem: string | null) => ({ text: input.text, assignments: [] as NameAssignment[], problem });
+  const before = validateTeamFile(input.text, { ...(input.home !== undefined ? { home: input.home } : {}), root: input.root });
+  if (!before.ok) return unchanged(null);
+  if (!namesAutoOf(input.home, before.team.entity).auto) return unchanged(null);
+  const plan = autoNamePlan({ home: input.home, root: input.root, team: before.team, ...(input.only !== undefined ? { only: input.only } : {}) });
+  if (plan.assignments.length === 0) return unchanged(plan.problem);
+  const text = withAutoNames(input.text, plan.assignments);
+  const after = validateTeamFile(text, { ...(input.home !== undefined ? { home: input.home } : {}), root: input.root });
+  if (!after.ok) return unchanged(`the names did not validate: ${after.errors.map((problem) => problem.message).join('; ')}`);
+  const gate = nicknameChangeGate({ home: input.home, teamId: teamIdOf(input.root), root: input.root, before: before.team, after: after.team });
+  if (!gate.ok) return unchanged(gate.message);
+  return { text, assignments: plan.assignments, problem: plan.problem };
+}
+
+/** `team doctor`'s note: a seat with no name, while its entity writes `names.auto: off`. Nothing
+ *  while the word is on — the seat takes one at its next launch or `team names fill` — and
+ *  nothing for a team with no entity, which has no word to read. */
+export function unnamedSeatNotes(team: TeamFile, home: string | undefined): string[] {
+  if (team.entity === null || home === undefined || namesAutoOf(home, team.entity).auto) return [];
+  return team.seats
+    .filter((seat) => unnamedSeat(seat))
+    .map((seat) => `seat "${seat.name}" has no name, and names.auto is off: team names fill names it, or team config set seats.${seat.name}.nickname <name>`);
 }

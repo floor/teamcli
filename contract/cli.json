@@ -4791,6 +4791,105 @@
         },
         {
           "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "names",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--entity",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "fill",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team names fill [--dry-run] [--json]",
+            "team names fill --entity <name> [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "filling names writes the team's record through `team config edit`, which is the owner's (a charter or dev mode admits it as it admits that edit); a dry run reads and changes nothing"
+          }
+        }
+      ],
+      "usage": [
+        "team names fill [--dry-run] [--json]",
+        "team names fill --entity <name> [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "with no subcommand it only prints its usage; fill carries its own gate"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--json",
           "repeatable": false,
           "takesValue": false

@@ -2288,6 +2288,61 @@ Usage:
 
 None.
 
+## `names`
+
+Hidden: no
+
+Usage:
+
+    team names fill [--dry-run] [--json]
+    team names fill --entity <name> [--dry-run] [--json]
+
+### Who may run it
+
+`any-caller` — with no subcommand it only prints its usage; fill carries its own gate
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `fill`
+
+Hidden: no
+
+Usage:
+
+    team names fill [--dry-run] [--json]
+    team names fill --entity <name> [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — filling names writes the team's record through `team config edit`, which is the owner's (a charter or dev mode admits it as it admits that edit); a dry run reads and changes nothing
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--entity` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `next`
 
 Hidden: no

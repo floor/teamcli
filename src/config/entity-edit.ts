@@ -30,6 +30,8 @@ import { ownerRequestDoor } from '../client/owner-action-step.ts';
 import { checkedRootPath, ENTITY_ROOT_KEY, ENTITY_WORKTREES_KEY, entitiesPath, lockedEntities, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { isEntityName } from '../file/sections/entity.ts';
+import { SEAT_NAME } from '../file/sections/seats.ts';
+import { NAME_POOL_DEFAULT, NAME_POOLS } from '../registry/name-pools.ts';
 import { cleanedIo, type Io } from '../io.ts';
 import { composedRulesOf, formatComposedRules } from '../launch/rules.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
@@ -40,6 +42,13 @@ import { parseYaml, toValue, YamlError, type YamlNode, type YamlValue } from '..
 import type { ConfigSources } from '../commands/config.ts';
 
 const NAMES_KEY = 'names.unique';
+/** The entity's two words on handing out seat nicknames (src/registry/names.ts:autoNamePlan). */
+const NAMES_AUTO_KEY = 'names.auto';
+const NAMES_POOL_KEY = 'names.pool';
+/** The three keys of the entity's `names:` map, each written as `<entity>: names: <key>:`. */
+function isNamesKey(key: EntityKey | null): key is typeof NAMES_KEY | typeof NAMES_AUTO_KEY | typeof NAMES_POOL_KEY {
+  return key === NAMES_KEY || key === NAMES_AUTO_KEY || key === NAMES_POOL_KEY;
+}
 const REMINDERS_KEY = 'reminders';
 const RULES_KEY = 'rules';
 const ROOT_KEY = ENTITY_ROOT_KEY;
@@ -56,11 +65,13 @@ function folderLabel(key: EntityKey | null): string {
  *  take (`isEntityName` starts with a letter or a digit), so the view cannot shadow an entity
  *  called `composed`, and `composed.rules` stays that entity's own stored rules. */
 const COMPOSED_PATH = '@composed.rules';
-type EntityKey = typeof NAMES_KEY | typeof REMINDERS_KEY | typeof RULES_KEY | typeof ROOT_KEY | typeof WORKTREES_KEY;
+type EntityKey = typeof NAMES_KEY | typeof NAMES_AUTO_KEY | typeof NAMES_POOL_KEY | typeof REMINDERS_KEY | typeof RULES_KEY | typeof ROOT_KEY | typeof WORKTREES_KEY;
 const FORM: Record<EntityKey, string> = {
   [ROOT_KEY]: `team config set <entity>.${ROOT_KEY} <folder> [--dry-run]`,
   [WORKTREES_KEY]: `team config set <entity>.${WORKTREES_KEY} <folder> [--dry-run]`,
   [NAMES_KEY]: `team config set <entity>.${NAMES_KEY} <word>`,
+  [NAMES_AUTO_KEY]: `team config set <entity>.${NAMES_AUTO_KEY} on|off`,
+  [NAMES_POOL_KEY]: `team config set <entity>.${NAMES_POOL_KEY} <pool>|[<name>, …]`,
   [REMINDERS_KEY]: `team config set <entity>.${REMINDERS_KEY} <yaml list>`,
   [RULES_KEY]: `team config set <entity>.${RULES_KEY} <yaml list> [--dry-run]`,
 };
@@ -189,15 +200,15 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     key === RULES_KEY && (entityName.startsWith('project.') || entityName.startsWith('projects.'));
   const targetName = isProjectRules ? entityName.replace(/^projects?\./, '') : entityName;
   let why: string | null = args.error ?? null;
-  if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${REMINDERS_KEY}, ${RULES_KEY}, ${ROOT_KEY}, or ${WORKTREES_KEY}`;
+  if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${NAMES_AUTO_KEY}, ${NAMES_POOL_KEY}, ${REMINDERS_KEY}, ${RULES_KEY}, ${ROOT_KEY}, or ${WORKTREES_KEY}`;
   if (why === null && isFolderKey(key) && isProjectRules) why = `a ${folderLabel(key)} is an entity's, not a project's: ${FORM[key]}`;
   if (why === null && verb !== 'get' && path === COMPOSED_PATH) {
     why = `${COMPOSED_PATH} is a view of the rules in force, not a stored value: it takes no set or unset; \`team config get ${COMPOSED_PATH}\` reads it`;
   }
   if (why === null && verb === 'unset' && !isFolderKey(key)) {
     why =
-      key === NAMES_KEY
-        ? `an entity's word has no unset: ${FORM[NAMES_KEY]} with the word you want (${NICKNAME_SCOPE_DEFAULT} is the default)`
+      isNamesKey(key)
+        ? `an entity's word has no unset: ${FORM[key]} with the word you want (${key === NAMES_KEY ? NICKNAME_SCOPE_DEFAULT : key === NAMES_AUTO_KEY ? 'on' : NAME_POOL_DEFAULT} is the default)`
         : key === RULES_KEY
           ? `rules have no unset: ${FORM[RULES_KEY]} with an empty list ([] clears them)`
           : `an entity's reminders have no unset: ${FORM[REMINDERS_KEY]} with an empty list ([] clears them)`;
@@ -223,6 +234,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   // same for every caller, and nothing is written whatever the caller's standing. A reminder list
   // is judged for shape here and for content by the daemon's own parser after the file is read.
   let word: NicknameScope | null = null;
+  // The `names.auto` word or the `names.pool` value, as it is written.
+  let namesValue: YamlValue | null = null;
   let list: YamlValue[] | null = null;
   // The folder as the owner writes it (`~/…` stays `~/…` in the file), and the path it reads as here.
   let folder: { written: string; path: string } | null = null;
@@ -252,6 +265,23 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       return 1;
     }
     word = rawValue as NicknameScope;
+  } else if (key === NAMES_AUTO_KEY || key === NAMES_POOL_KEY) {
+    if (verb === 'set') {
+      const value = key === NAMES_AUTO_KEY ? (rawValue as string).trim() : parseValue(rawValue as string);
+      const problem = key === NAMES_AUTO_KEY
+        ? (value === 'on' || value === 'off' ? null : `"${rawValue as string}" is not a names.auto word: use on or off`)
+        : typeof value === 'string'
+          ? (Object.hasOwn(NAME_POOLS, value) ? null : `"${value}" is no built-in pool: use ${Object.keys(NAME_POOLS).join(', ')}, or a YAML list of names`)
+          : Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string' && SEAT_NAME.test(item) && item !== 'lead' && item !== 'daemon')
+            ? null
+            : 'a names.pool list is one or more names, each letters, digits, ".", "_" and "-", never lead or daemon';
+      if (problem !== null) {
+        refuse(io, json, 'config', { id: 'config.entity.names-value', message: `${problem}; nothing was written`, repair: null });
+        // exit: config.entity.names-value
+        return 1;
+      }
+      namesValue = value;
+    }
   } else if (key === RULES_KEY && verb === 'set') {
     const value = parseValue(rawValue as string);
     if (
@@ -365,6 +395,12 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
         // A word the reader refuses is what the file says, not what is in force: say so.
         if (!checked.ok) io.stderr(`team config: ${checked.why}: a team that writes {root} is refused until it is set again\n`);
       }
+    } else if (key === NAMES_AUTO_KEY || key === NAMES_POOL_KEY) {
+      const sub = key.slice('names.'.length);
+      const got = getAt(record, hasEntitiesWrapper(record) ? ['entities', entityName, 'names', sub] : [entityName, 'names', sub]);
+      if (!got.found) return noValue(io, json, `entity "${entityName}" writes no ${key} in ${file}`);
+      if (json) writeJson(io, 'team.config-value', { format: 1, path: `${entityName}.${key}`, value: got.value, source: 'entity' });
+      else io.stdout(shownValue(got.value));
     } else {
       const lookupPath = hasEntitiesWrapper(record)
         ? ['entities', entityName, 'names', 'unique']
@@ -430,7 +466,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     if (detached !== undefined) return detachedRefused(io, json, detached);
     if (!isOwner(caller)) {
       const actionLabel =
-        key === NAMES_KEY
+        isNamesKey(key)
           ? "sets an entity's word"
           : isFolderKey(key)
             ? `sets an entity's ${folderLabel(key)}`
@@ -554,11 +590,11 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     // The record nests the word (`<entity>: names: unique:`), while a reminder or rules list sits
     // directly under the entity.
     const recordPath =
-      key === NAMES_KEY
-        ? [...entryLookup, 'names', 'unique']
+      isNamesKey(key)
+        ? [...entryLookup, 'names', key.slice('names.'.length)]
         : [...entryLookup, key as string];
     const value: YamlValue | undefined =
-      key === NAMES_KEY ? (word as string) : isFolderKey(key) ? folder?.written : (list as YamlValue[]);
+      key === NAMES_KEY ? (word as string) : isNamesKey(key) ? (namesValue as YamlValue) : isFolderKey(key) ? folder?.written : (list as YamlValue[]);
     const changed = withValue(record, recordPath, value);
     if (!changed.ok) {
       return {
@@ -630,6 +666,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     const shown =
       key === NAMES_KEY
         ? (word as string)
+        : isNamesKey(key)
+          ? (Array.isArray(namesValue) ? `${String(namesValue.length)} name${namesValue.length === 1 ? '' : 's'}` : String(namesValue))
         : isFolderKey(key)
           ? folder === null ? 'removed' : folder.written === folder.path ? folder.path : `${folder.written} (${folder.path})`
           : `${String(count)} ${itemLabel}${count === 1 ? '' : 's'}`;
@@ -680,6 +718,8 @@ function problemKey(problem: { entity: string | null; name: string | null; why: 
 function entityKeyOf(path: string | undefined): EntityKey | null {
   if (path === undefined) return null;
   if (path.endsWith(`.${NAMES_KEY}`)) return NAMES_KEY;
+  if (path.endsWith(`.${NAMES_AUTO_KEY}`)) return NAMES_AUTO_KEY;
+  if (path.endsWith(`.${NAMES_POOL_KEY}`)) return NAMES_POOL_KEY;
   if (path.endsWith(`.${ROOT_KEY}`) && path.length > ROOT_KEY.length + 1) return ROOT_KEY;
   if (path.endsWith(`.${WORKTREES_KEY}`) && path.length > WORKTREES_KEY.length + 1) return WORKTREES_KEY;
   if (path.endsWith(`.${REMINDERS_KEY}`)) return REMINDERS_KEY;

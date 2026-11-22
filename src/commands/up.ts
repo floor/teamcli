@@ -20,6 +20,8 @@ import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
+import { readTeamText, writeTeamText } from '../file/team-text.ts';
+import { autoNamedText } from '../registry/names.ts';
 import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
 import { importForUp } from '../file/team-import.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -4254,6 +4256,51 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     });
     // exit: up.run-lock
     return 1;
+  }
+  // A seat with no name takes the first free one of its entity's pool before it launches: the
+  // record is written as a manual name is (src/registry/names.ts:autoNamedText), and this run's
+  // labels and session names read it. Only the team's own record, on an admitted run past every
+  // refusal: a delegated, client, retie or restore run, or one aimed at another file, writes no
+  // record, and a name that cannot be handed out never stops the launch.
+  if (delegated === null && clientUp === null && !retie && internal?.restore !== true && args.values.file === undefined) {
+    const file = join(root, TEAM_FILE);
+    let current: string | null = null;
+    try {
+      current = readTeamText(file, { home: sources.home });
+    } catch {}
+    const named = current === null ? null : autoNamedText({ home: sources.home, root, text: current, ...(scoped ? { only: [...scopedSeats] } : {}) });
+    if (named !== null && current !== null && named.assignments.length > 0) {
+      const wrote = writeTeamText(file, named.text, {
+        home: sources.home, command: 'up', ...(sources.now !== undefined ? { now: sources.now } : {}),
+        audit: { caller, rule: ownerToken || ownerSeat ? 'owner-seat' : 'owner-or-leads' },
+      });
+      if (wrote.ok) {
+        const byName = new Map(named.assignments.map((assignment) => [assignment.seat, assignment]));
+        team = {
+          ...team,
+          seats: team.seats.map((seat) => {
+            const assignment = byName.get(seat.name);
+            return assignment === undefined ? seat : { ...seat, nickname: assignment.nickname, label: assignment.label, labelWritten: true as const };
+          }),
+        };
+        for (const planned of seats) {
+          const seat = team.seats.find((one) => one.name === planned.name);
+          if (seat === undefined || !byName.has(seat.name)) continue;
+          planned.label = workspaceLabel(seat);
+          planned.sessionName = seatSessionName(seat, {
+            team: teamIdOf(root),
+            teamName: team.project,
+            mode: senderNameModeFor({ home: sources.home, root, seat: seat.name, file: team }),
+            seats: team.seats,
+          });
+        }
+        for (const assignment of named.assignments) stderrLine(`team up: ${plainText(assignment.seat)} is named ${plainText(assignment.nickname)}\n`);
+      } else {
+        stderrLine(`team up: no name handed out: ${plainText(wrote.errors.map((problem) => problem.message).join('; '))}\n`);
+      }
+    } else if (named?.problem) {
+      stderrLine(`team up: no name handed out: ${plainText(named.problem)}\n`);
+    }
   }
   const refreshAddresses = (): void => {
     // Refresh existing live seats before the launch pass. A reboot can leave a null or old

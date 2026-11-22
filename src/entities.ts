@@ -330,6 +330,44 @@ export function namesUniqueFor(home: string | undefined, entity: string | null):
   return declaredNamesUnique(home).get(entity) ?? NICKNAME_SCOPE_DEFAULT;
 }
 
+/** Where a team draws the nicknames it hands out: a built-in pool's word, or the entity's own
+ *  list, in its written order. */
+export type NamePool = { kind: 'builtin'; name: string } | { kind: 'list'; names: string[] };
+
+/** The entity's words on handing out nicknames: whether it does, and from which pool. */
+export type NamesAuto = { auto: boolean; pool: NamePool };
+
+/**
+ * One entity's `names.auto` and `names.pool` words — `<entity>: { names: { auto: on | off,
+ * pool: <pool> | [<name>, …] } }` — with the defaults where the entry writes none: auto on, and
+ * the `greek-myth` pool; auto is off for a team with no entity. Like `names.unique`, a word the
+ * file does not spell declares nothing and the default stands: `auto` reads only `on` or `off`
+ * (or a YAML boolean), `pool` only a non-empty word or a list of words (the picker skips an item
+ * no nickname can be).
+ */
+export function namesAutoFor(home: string | undefined, entity: string | null, defaultPool: string): NamesAuto {
+  const fallback: NamesAuto = { auto: true, pool: { kind: 'builtin', name: defaultPool } };
+  // A team that names no entity has no entry to read, as for `names.unique`: no launch names its
+  // seats (an explicit `team names fill` still does, from the default pool).
+  if (home === undefined || entity === null) return { ...fallback, auto: false };
+  const entry = entityEntries(home).find((candidate) => candidate.key === entity);
+  if (entry === undefined || entry.value.kind !== 'map') return fallback;
+  const names = entry.value.entries.find((candidate) => candidate.key === 'names');
+  if (names === undefined || names.value.kind !== 'map') return fallback;
+  const field = (key: string) => (names.value.kind === 'map' ? names.value.entries.find((candidate) => candidate.key === key)?.value : undefined);
+  const auto = field('auto');
+  const autoWord = auto?.kind === 'scalar' ? (typeof auto.value === 'boolean' ? (auto.value ? 'on' : 'off') : String(auto.value ?? '').trim()) : '';
+  const pool = field('pool');
+  let read: NamePool = fallback.pool;
+  if (pool?.kind === 'scalar' && typeof pool.value === 'string' && pool.value.trim() !== '') {
+    read = { kind: 'builtin', name: pool.value.trim() };
+  } else if (pool?.kind === 'seq') {
+    const listed = pool.items.flatMap((item) => (item.kind === 'scalar' && typeof item.value === 'string' ? [item.value.trim()] : []));
+    read = { kind: 'list', names: listed.filter((name) => name !== '') };
+  }
+  return { auto: autoWord !== 'off', pool: read };
+}
+
 /** One entity's `lead:` word: a seat name, none, or why the entry's word does not read. */
 export type EntityLead = { ok: true; lead: string | null } | { ok: false; why: string };
 

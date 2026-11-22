@@ -49,6 +49,14 @@ into — and its sidebar is rewritten from the file either way. A seat the file 
 is a human's own pane: the plan skips it — nothing is launched into it or typed into it; left as
 it is — and it does not count as short of ready.
 
+A seat of an entity's team that has no name is named before the launch, while the entity's
+`names.auto` is on (the default): the first free name of its `names.pool`, written into the team's
+record as `nickname: <Name>` and `label: "<Name> · <role>"`, and said as
+`team up: <seat> is named <Name>` on stderr. The seat's workspace title and session name read it in
+the same run. Only an admitted run past every refusal names a seat, and only `<seat...>` when the run
+names seats; a dry run, a delegated or client run, `--retie`, a restore and a run aimed with
+`--file` name nobody. See [Names handed out](../team-file.md#names-handed-out).
+
 A Claude seat whose launch enables the `team-inbox` development channel starts in its own
 `<lobby>/<seat>/` folder, including a lead seat. The lobby must already be registered and trusted.
 After the launch claim exists and before workspace creation and Claude startup, TeamCLI writes

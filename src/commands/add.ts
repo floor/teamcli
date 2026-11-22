@@ -83,6 +83,7 @@ import { registerInbox } from '../mcp/register.ts';
 import { channelLaunchFallback, channelLobbyFolder } from '../mcp/launch-config.ts';
 import { withoutChannel } from '../mcp/channel.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { autoNamedText } from '../registry/names.ts';
 
 export type AddSources = {
   /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
@@ -946,6 +947,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     };
   }
 
+  // A seat with no name takes the first free one of its entity's pool, written into the same edit
+  // (src/registry/names.ts:autoNamedText) and held to the same `names.unique` check a manual name
+  // is. A delegated add writes nothing, so it hands out none; a name that cannot be handed out
+  // never stops the add.
+  // The name is said once the record carries it, below.
+  let namedLine: string | null = null;
+  if (delegatePane === null) {
+    const named = autoNamedText({ home: sources.home, root, text: built.edited, only: [built.name] });
+    const assignment = named.assignments[0];
+    if (assignment !== undefined) {
+      built.edited = named.text;
+      built.seat = { ...built.seat, nickname: assignment.nickname, label: assignment.label, labelWritten: true };
+      namedLine = `team add: ${plainLine(assignment.seat)} is named ${plainLine(assignment.nickname)}\n`;
+    } else if (named.problem !== null) out.stderr(`team add: no name handed out: ${plainText(named.problem)}\n`);
+  }
   const prepared = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
   if (!prepared.ok) {
     if (json) {
@@ -1369,6 +1385,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         // exit: add.locked
         return 2;
       }
+      if (namedLine !== null) out.stderr(namedLine);
       const parsed = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
       // The amendment re-signs from the command's own one snapshot, read at its gate.
       // A client's roster change is the owner's to approve: the approval record is left as it was.

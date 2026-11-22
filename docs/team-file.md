@@ -619,6 +619,43 @@ and a record that writes none keeps every approval it had. The name is shown in 
 `team status --all` (the `NICKNAME` column, and the `nickname` field of their JSON) and in
 `team send --list`.
 
+### Names handed out
+
+Every seat of an entity's team has a name: a seat whose record writes no `nickname` (and whose
+written label names nobody but the seat itself) is handed one. Three words in the entity's entry
+of the owner's `entities.yaml` decide how, each set with
+[`team config set <entity>.names.<key>`](commands/config.md):
+
+```yaml
+acme:
+  names:
+    unique: entity     # how far apart nicknames stay: entity (default), project, team or off
+    auto: on           # on (default): a seat with no name is named at team add and team up
+    pool: greek-myth   # where names come from: a built-in pool, or a list
+    # pool: [Ada, Grace, Linus]
+```
+
+- `auto: on` (the default) names a seat at its [`team add`](commands/add.md) (and
+  `team seat add`) and, for every seat with no name, at [`team up`](commands/up.md), before it
+  launches. `off` hands out none at a launch; [`team doctor`](commands/doctor.md) then notes each
+  seat with no name, and [`team names fill`](commands/names.md) still names them when asked.
+- `pool` is `greek-myth` (the built-in pool, about 150 short names of heroes, seers, nymphs, muses,
+  titans and gods; the default) or a YAML list of names, read in its written order. Each name takes
+  the nickname's characters; `lead` and `daemon` are never handed out.
+- The name is the first in the pool, in order, that no seat of the team carries (as a name, a
+  nickname or a label's persona). A name another registered team already carries is passed over
+  while the pool has another; past that, `unique` is the rule, as for a name set by hand. The
+  seats are named in file order, so the same registry always hands out the same names.
+- The name is written as a manual one is — `nickname: <Name>` and `label: "<Name> · <role>"`,
+  keeping the part after a written label's middle dot — through the same validated writer, and
+  checked against `unique` like any new nickname. A seat that has a nickname, or a label naming
+  someone, is never renamed. A `human` seat and a counted entry are not named. The lead is named
+  like any seat: "never lead" is the word `lead`, which no nickname takes.
+- A run that cannot hand out a name says why on stderr and goes on: a launch never waits for a
+  name. A delegated add, a client or restore run, `team up --retie` and a run aimed with
+  `--file` write no record, so they name nobody.
+- A team that names no entity has no entry to read, so no launch names its seats.
+
 A name's trailing digits are its number, read as a number rather than as text: `builder-9` sorts
 before `builder-10` and `builder-100`, and the next free one is the next integer. Two seats of one
 role whose names carry one number at different widths — `builder-1` and `builder-01` — are one seat

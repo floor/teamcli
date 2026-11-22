@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { unnamedSeatNotes } from '../registry/names.ts';
 import { permittedEventLegs } from './send.ts';
 import { channelUnproven } from '../queue/resend.ts';
 import { unreachableAfterRestore } from '../launch/restore-relaunch.ts';
@@ -865,6 +866,8 @@ export function doctorFindings(
     text: `the file, line ${warning.line}: ${warning.message}`,
   }));
   findings.push(...seatNameFindings(team, session));
+  // A seat with no name, while the entity hands none out: a note, never a miss.
+  findings.push(...unnamedSeatNotes(team, sources.home).map((text): Finding => ({ level: 'note', text })));
 
   findings.push(
     ...approvalFindings(standing),

@@ -665,3 +665,35 @@ describe('team add --request validates the whole add before recording a request 
     expect(made.creates).toEqual([]);
   });
 });
+
+describe('a seat of an entity team is named at its add', () => {
+  /** The team as an entity's: the owner's entities file declares it, with the scene's names words. */
+  function asEntityTeam(names: string): void {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(home, '.config', 'team', 'entities.yaml'), `acme:\n  roots:\n    - ${home}\n${names}`);
+    approve(teamText().replace('project: acme\n', 'project: acme\nentity: acme\n').replace('  - ~/.config/team/lobby\n', '  - ~/.config/team/lobbies/acme\n'));
+  }
+
+  test('the copy takes the first free pool name, written as nickname and label, and launches under it', async () => {
+    asEntityTeam('  names:\n    pool: [skip, Ada, Zed]\n');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['apprentice', '--like', 'builder'], io, sources(made)), io.out + io.err).toBe(0);
+    // `skip` is another seat's nickname in this team, so the list's next name is taken.
+    expect(io.err).toContain('team add: apprentice is named Ada\n');
+    const text = readFileSync(teamPath(), 'utf8');
+    expect(text).toContain('    name: apprentice\n    label: "Ada · implementer"\n');
+    expect(text).toContain('    nickname: Ada\n');
+    expect(made.creates).toEqual(['Ada · implementer']);
+  });
+
+  test('names.auto: off hands out no name, and a seat that has one keeps it', async () => {
+    asEntityTeam('  names:\n    auto: off\n');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['apprentice', '--like', 'builder'], io, sources(made)), io.out + io.err).toBe(0);
+    expect(io.err).not.toContain('is named');
+    expect(readFileSync(teamPath(), 'utf8')).not.toContain('nickname: Ada');
+    expect(made.creates).toEqual(['apprentice']);
+  });
+});
