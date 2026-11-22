@@ -3444,6 +3444,14 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       note(walkAttempt('typed', 'unreachable', false, host.now(), startedAt, { reason: found.reason }));
       return unreachable(io, dir, who, to.seat, found.reason, host, report);
     }
+    // The launch this wake is for, bound before any screen of the pane is read: every key is
+    // refused once the state names another launch (an in-place relaunch), so no key acts on screen
+    // evidence an earlier launch drew.
+    const launchOf = (): string => {
+      const held = seatStateOf(to.dir, to.session, to.seat);
+      return JSON.stringify([held?.pane, held?.launched, held?.pane_shell, held?.pane_shell_start, held?.agent_session]);
+    };
+    const boundLaunch = launchOf();
     const paneProcs = host.processInfo(to.session, found.pane);
     // The usage wall already read this pane. A second look would be a second read of the same box.
     const preScreen = preflightLive.ok && preflightLive.pane === found.pane
@@ -3520,6 +3528,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
           // recorded shell and CLI still in front of the pane, at their recorded births. A pane
           // that kept the seat's name and id but holds a replacement takes no key.
           if (host.keyOwner === undefined) return { ok: false, why: `${to.seat}: its pane's launch identity cannot be read` };
+          if (launchOf() !== boundLaunch) return { ok: false, why: `${to.seat}: its launch changed since the wake read its pane` };
           const proof = typedPaneProof(readState(to.dir).sessions[to.session]?.seats[to.seat], to.seat, here.pane, to.session, host.keyOwner);
           if (!proof.ok) return { ok: false, why: `${to.seat}: ${proof.why}` };
         } catch {
