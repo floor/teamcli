@@ -637,8 +637,9 @@ acme:
 ```
 
 - `auto: on` (the default) names a seat at its [`team add`](commands/add.md) (and
-  `team seat add`) and, for every seat with no name, at [`team up`](commands/up.md), before it
-  launches. `off` hands out none at a launch; [`team doctor`](commands/doctor.md) then notes each
+  `team seat add`), and at [`team up`](commands/up.md) every unnamed seat of the team gets a
+  name, whether or not this run starts it (a stopped or already running seat too; with
+  `team up <seat...>`, every unnamed seat it names), before anything launches. `off` hands out none at a launch; [`team doctor`](commands/doctor.md) then notes each
   seat with no name, and [`team names fill`](commands/names.md) still names them when asked.
 - `pool` is `greek-myth` (the built-in pool, about 150 short names of heroes, seers, nymphs, muses,
   titans and gods; the default) or a YAML list of names, read in its written order. Each name takes

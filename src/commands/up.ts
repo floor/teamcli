@@ -4258,13 +4258,14 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     // exit: up.run-lock
     return 1;
   }
-  // A seat with no name takes the first free one of its entity's pool before it launches: the
-  // record is written as a manual name is (src/registry/names.ts:autoNamedText), and this run's
-  // labels and session names read it. Only the team's own record, on an admitted run past every
-  // refusal: a delegated, client, retie or restore run, or one aimed at another file, writes no
-  // record, and a name that cannot be handed out never stops the launch.
-  // No lock, read or registry re-read at all unless the entity hands out names and a seat this
-  // run starts has none: an ordinary up pays nothing for the step.
+  // At team up, every unnamed seat of the team gets a name, whether or not this run starts it —
+  // a stopped or already running seat too (with `<seat...>`, every unnamed seat the run names):
+  // the first free name of its entity's pool, written as a manual name is
+  // (src/registry/names.ts:autoNamedText), and this run's labels and session names read it. Only
+  // the team's own record, on an admitted run past every refusal: a delegated, client, retie or
+  // restore run, or one aimed at another file, writes no record, and a name that cannot be handed
+  // out never stops the launch. No lock, read or registry re-read at all unless the entity hands
+  // out names and a seat in scope has none: an ordinary up pays nothing for the step.
   if (delegated === null && clientUp === null && !retie && internal?.restore !== true && args.values.file === undefined
     && namesAutoOf(sources.home, team.entity).auto
     && team.seats.some((seat) => unnamedSeat(seat) && (!scoped || scopedSeats.has(seat.name)))) {

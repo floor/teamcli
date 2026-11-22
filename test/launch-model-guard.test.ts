@@ -331,6 +331,29 @@ describe('up and add under the entity model rule', () => {
     expect(approvalDifferencesOf(standing, loaded.team, home)).toEqual([]);
   });
 
+  test('up names every unnamed seat of the team, also a stopped seat this run does not start', async () => {
+    setRule(home, ALLOWED);
+    // The worker is stopped: this up starts the lead alone.
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('    name: worker\n', '    name: worker\n    stopped: true\n'));
+    const made = world();
+    const io = testIo(root, OWNER);
+    const code = await runUp([], io, {
+      sessionRunning: () => made.session === 'running',
+      sessionState: () => made.session,
+      agents: () => [],
+      home,
+      now: () => NOW,
+      launch: made.launch,
+    });
+    expect(code, io.out + io.err).toBe(0);
+    expect(made.labels).toEqual(['Perseus · coordinator']);
+    expect(io.err).toContain('team up: worker is named Jason\n');
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('    nickname: Jason\n');
+    expect(text).toContain('    label: "Jason · implementer"\n');
+  });
+
   test('up judges the line a restored seat will run, not the file\'s own', async () => {
     // The file's worker names an allowed lab; the registry's recorded launch — the line a fresh
     // launch of this restored seat runs — names a refused one. The rule's word follows the line.
