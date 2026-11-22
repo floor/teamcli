@@ -170,7 +170,7 @@ order in force. The registry names the policy on each row so the two can be told
 | `nickname` | seat | unique in the team, never `lead` | unset | — | at once |
 | `delivery_order` | seat | delivery legs, tighten only | the team's order, else `typed, drop` | `delivery-order` | at once |
 | `human` | seat | true or false | false | — | at once |
-| `desktop_control` | team, seat | true or false | false | — | the CLI's next start: a restart that resumes |
+| `desktop_control` | team, seat | true or false | true | — | the CLI's next start: a restart that resumes |
 
 `restart that resumes` is what `team restart` does for a CLI that keeps its session: the value is
 handed to the CLI at its next start. `at once` is a value TeamCLI reads on its next command with no
@@ -201,7 +201,7 @@ $ team config keys ; echo "exit $?"
   nickname         seat        unique in the team, never lead                                   -            -               at once
   delivery_order   seat        delivery legs, tighten only                                      typed, drop  delivery-order  at once
   human            seat        true or false                                                    false        -               at once
-  desktop_control  team, seat  true or false                                                    false        -               restart that resumes
+  desktop_control  team, seat  true or false                                                    true         -               restart that resumes
 exit 0
 ```
 
@@ -212,7 +212,7 @@ lists only it:
 ```console
 $ team config keys team ; echo "exit $?"
   KEY              LEVELS      ALLOWED        DEFAULT  GOVERNED BY  APPLIES
-  desktop_control  team, seat  true or false  false    -            restart that resumes
+  desktop_control  team, seat  true or false  true     -            restart that resumes
 exit 0
 ```
 
@@ -294,7 +294,7 @@ $ team config keys seat --json ; echo "exit $?"
       ],
       "type": "boolean",
       "allowed": "true or false",
-      "default": false,
+      "default": true,
       "governed_by": null,
       "applies": "restart-resume"
     }

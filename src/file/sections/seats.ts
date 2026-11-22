@@ -122,7 +122,7 @@ export const seats: Section = {
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there' },
-        desktop_control: { type: 'boolean', $comment: 'whether this seat may control the computer (computer use, the user\'s browser, desktop apps); wins over the team\'s desktop_control, and off when neither writes one' },
+        desktop_control: { type: 'boolean', $comment: 'whether this seat may control the computer (computer use, the user\'s browser, desktop apps); wins over the team\'s desktop_control, and on when neither writes one' },
         channel: {
           enum: ['off', 'on'],
           $comment: 'the team-inbox channel for a claude-code seat: omitted or on is the default, and off leaves the launch and the seat\'s MCP pair alone',

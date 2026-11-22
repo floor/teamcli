@@ -98,8 +98,6 @@ describe('the launch and the managed Codex endpoint', () => {
     await executePlan(launchStep({ dir: STATE_DIR }), 'acme', host);
     // A bare line names no config of its own: the endpoint gets the profile's feature pins.
     expect(seen).toEqual({ dir: STATE_DIR, session: 'acme', seat: 'coder', cwd: '/seat/folder', config: [
-      '-c', 'features.computer_use=false', '-c', 'features.browser_use=false',
-        '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false', '-c', 'features.browser_use_full_cdp_access=false', '-c', 'mcp_servers.cua_repl.command=/usr/bin/false', '-c', 'mcp_servers.cua_repl.enabled=false', '-c', 'mcp_servers.node_repl.command=/usr/bin/false', '-c', 'mcp_servers.node_repl.enabled=false', '-c', 'plugins.computer-use@openai-bundled.enabled=false', '-c', 'plugins.unified-computer-use@openai-bundled.enabled=false', '-c', 'plugins.browser@openai-bundled.enabled=false',
     ], pane: 'p1' });
     expect(calls).toEqual(['managed', `paneRun:codex --remote ${URL}`]);
     expect(said.join('')).not.toContain('managed Codex endpoint');

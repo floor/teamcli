@@ -975,42 +975,45 @@ sender_name: nickname
 
 ## `desktop_control`
 
-Whether a seat may control the computer: computer use, the user's browser, and desktop apps.
-Off by default. A team turns it on only for the seat that needs it, on that seat; a team-level
-word is the default for every seat that writes none, and a seat's own word always wins.
+Whether a seat may control the computer: computer use, the user's browser, desktop apps, and the
+connectors that act under the user's own accounts (ChatGPT apps, claude.ai connectors). On by
+default, as seats have always run. Set it `false` for a seat that must not touch the user's apps,
+on that seat, or on the team for every seat that writes none; a seat's own word always wins.
 
 ```yaml
 seats:
-  - role: implementer
-    name: helper
+  - role: reviewer
+    name: checker
     cli: codex
     launch: codex -m gpt-6.1-sol
-    desktop_control: true
+    desktop_control: false
 ```
 
 - The word is `true` or `false`. Any other value is `desktop_control must be true or false`.
 - The word in force is read nearest first: a signed seat setting (`team settings set <seat>
-  desktop_control true`), the seat's own key, a signed setting at a wider level, this file's
-  top-level `desktop_control`, then `false`. A signed chain that does not verify declares
-  nothing, so the seat stays off. `team settings <seat>` shows the value and where it comes from.
+  desktop_control false`), the seat's own key, a signed setting at a wider level, this file's
+  top-level `desktop_control`, then `true`. `team settings <seat>` shows the value and where it
+  comes from.
 - It is read at launch: a change takes the seat's next start (`team restart <seat>`).
+- On, nothing is placed: the seat runs with the user's own configuration.
 - Off, a Codex seat's launch line, its recorded recipe and the start words of the app-server
   TeamCLI runs for it carry `-c features.<name>=false` for `computer_use`, `browser_use`,
-  `browser_use_external`, `in_app_browser` and `browser_use_full_cdp_access`, and turn off the
-  computer and browser MCP servers a desktop app registers in the user's Codex config
-  (`cua_repl`, `node_repl`) and the bundled computer-use and browser plugins
-  (`-c plugins.<id>.enabled=false`). Each server is pinned as
+  `browser_use_external`, `in_app_browser`, `browser_use_full_cdp_access` and `apps` (the
+  ChatGPT apps and connectors, whose tools act under the user's ChatGPT account). They also turn
+  off the computer and browser MCP servers a desktop app registers in the user's Codex config
+  (`cua_repl`, `node_repl`), the connectors' `codex_apps` server, and the bundled computer-use
+  and browser plugins (`-c plugins.<id>.enabled=false`). Each server is pinned as
   `-c mcp_servers.<name>.command=/usr/bin/false -c mcp_servers.<name>.enabled=false`: Codex
   refuses `enabled=false` alone for a server its config does not hold, and the pair is accepted
   whether the server is absent or a local (stdio) server. A server of that name with a `url`
   transport makes Codex refuse the pair, and the seat does not start.
-- Off, a Claude Code seat's settings file denies `mcp__computer-use`, `mcp__claude-in-chrome`
-  and `mcp__Claude_Browser`. A seat whose launch line names its own `--settings` gets no
-  settings file from TeamCLI, and no deny.
-- On, none of these is placed: the seat runs with the user's own configuration.
-- `team check` (and `team doctor`) names a running seat whose recorded launch line lacks a pin
-  its setting asks for, with `team restart <seat>` as the repair, and a seat whose managed
-  app-server was started without them.
+- Off, a Claude Code seat's settings file denies `mcp__computer-use`, `mcp__claude-in-chrome`,
+  `mcp__Claude_Browser` and every claude.ai connector tool (`mcp__claude_ai_*`), and sets
+  `disableClaudeAiConnectors`. A seat whose launch line names its own `--settings` gets no
+  settings file from TeamCLI, and none of this.
+- `team check` (and `team doctor`, as a missing item) names a running seat set `false` whose
+  recorded launch line lacks those pins, with `team restart <seat>` as the repair, and a seat
+  whose managed app-server was started without them. A seat on the default is never named.
 - A per-seat difference holds where a seat's turns run under its own configuration: a Codex seat
   on the app-server TeamCLI starts for it (the `codex-daemon` policy, on by default) or launched
   with `--no-daemon`. A Codex seat that attaches to the machine's shared background server runs

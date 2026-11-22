@@ -19,7 +19,7 @@ const TABLE = [
   "  nickname         seat        unique in the team, never lead                                   -            -               at once",
   "  delivery_order   seat        delivery legs, tighten only                                      typed, drop  delivery-order  at once",
   "  human            seat        true or false                                                    false        -               at once",
-  "  desktop_control  team, seat  true or false                                                    false        -               restart that resumes",
+  "  desktop_control  team, seat  true or false                                                    true         -               restart that resumes",
 ].join('\n') + '\n';
 
 describe('team config keys', () => {
@@ -42,7 +42,7 @@ describe('team config keys', () => {
     expect(result.code).toBe(0);
     expect(result.out).toBe([
       '  KEY              LEVELS      ALLOWED        DEFAULT  GOVERNED BY  APPLIES',
-      '  desktop_control  team, seat  true or false  false    -            restart that resumes',
+      '  desktop_control  team, seat  true or false  true     -            restart that resumes',
     ].join('\n') + '\n');
   });
 
@@ -91,7 +91,7 @@ describe('team config keys', () => {
       levels: ['team', 'seat'],
       type: 'boolean',
       allowed: 'true or false',
-      default: false,
+      default: true,
       governed_by: null,
       applies: 'restart-resume',
     });

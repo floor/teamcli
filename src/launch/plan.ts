@@ -134,9 +134,10 @@ export type Op =
       grokSandbox?: GrokSandbox;
       /** Verified team policy, regenerated and checked before each Cursor/Grok launch. */
       cursorCommandDeny?: Exclude<GrokCommandDeny, 'off'>;
-      /** The seat may control the computer: its managed app-server starts without the
-       *  profile's computer and browser pins. Absent: off, and the server carries them. */
-      desktopControl?: true;
+      /** The seat may not control the computer: its managed app-server starts with the
+       *  profile's computer, browser and connector pins. Absent: on, the default, and the server
+       *  carries none of them. */
+      desktopControl?: false;
       /**
        * The command is the declarative launcher's argv and is run as given. The launch does
        * not mint a session, attach an endpoint, or rewrite a sandbox flag onto it.
@@ -482,8 +483,8 @@ export interface UpSeat {
    *  resolves it from the signed policy chain (`entity -> project -> team -> seat`). */
   codexDaemon?: CodexDaemonValue;
   /** The seat's resolved `desktop_control` (src/settings/desktop-control.ts). When omitted,
-   *  `upPlan` reads it from the team file and the signed settings chain; off unless a word turns
-   *  it on. */
+   *  `upPlan` reads it from the team file and the signed settings chain; on unless a word sets
+   *  it false. */
   desktopControl?: boolean;
   /** For a seat whose rules travel as a first message: the file its rules are written to and the
    *  one line typed in its pane. Absent when the path can't be typed safely. */
@@ -1004,7 +1005,7 @@ export function codexEndpointConfig(command: string): string[] {
  * team's even for a line whose pins a wrapper script adds where no reader can see them, and an
  * attached TUI — which runs its turns under the server's configuration — gets that set too.
  */
-export function codexEndpointStartConfig(command: string, desktopControl = false): string[] {
+export function codexEndpointStartConfig(command: string, desktopControl = true): string[] {
   return withPinnedConfig(codexEndpointConfig(command), seatPins(profileFor('codex'), desktopControl));
 }
 
@@ -1518,8 +1519,9 @@ export function upPlan(input: UpInput): Step[] {
         session,
       });
     }
-    // Whether this seat may control the computer: off unless the seat's own word, or the team's
-    // under it, turns it on. Off, its launch carries the profile's computer and browser pins.
+    // Whether this seat may control the computer: on unless the seat's own word, or the team's
+    // under it, sets it false. Off, its launch carries the profile's computer, browser and
+    // connector pins.
     const desktopControl = seat.desktopControl ?? seatDesktopControl({
       team: input.team,
       seat: seat.name,
@@ -1977,7 +1979,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), ...(channelFallback === undefined ? {} : { channelNotice: channelFallback }), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...((fromResolver && !shippedLaunch) || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...((fromResolver && !shippedLaunch) || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }), ...(profile.cli === 'cursor' && commandDeny !== 'off' ? { cursorCommandDeny: commandDeny } : {}), ...(desktopControl ? { desktopControl: true as const } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), ...(channelFallback === undefined ? {} : { channelNotice: channelFallback }), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...((fromResolver && !shippedLaunch) || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...((fromResolver && !shippedLaunch) || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }), ...(profile.cli === 'cursor' && commandDeny !== 'off' ? { cursorCommandDeny: commandDeny } : {}), ...(desktopControl ? {} : { desktopControl: false as const }) },
       });
     }
     const rules = profile.rulesMode;

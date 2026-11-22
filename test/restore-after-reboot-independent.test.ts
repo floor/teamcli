@@ -404,13 +404,9 @@ test('a Codex seat on the incompatible-feature dialog is relaunched and no optio
     pane === AFTER ? FEATURE_SCREEN : 'ready\n'
   ));
   expect(await runUp(['--dry-run'], dry, planned), `${dry.out}\n${dry.err}`).toBe(0);
-  const pins = seatPinWords(seatPins(profileFor('codex'), false));
-  // Dialog recovery relaunches without the retired fixed false pair, with the current pins.
-  expect(pins).toEqual([
-    '-c', 'features.computer_use=false', '-c', 'features.browser_use=false',
-    '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false', '-c', 'features.browser_use_full_cdp_access=false', '-c', 'mcp_servers.cua_repl.command=/usr/bin/false', '-c', 'mcp_servers.cua_repl.enabled=false', '-c', 'mcp_servers.node_repl.command=/usr/bin/false', '-c', 'mcp_servers.node_repl.enabled=false', '-c', 'plugins.computer-use@openai-bundled.enabled=false', '-c', 'plugins.unified-computer-use@openai-bundled.enabled=false', '-c', 'plugins.browser@openai-bundled.enabled=false',
-  ]);
-  for (let at = 1; at < pins.length; at += 2) expect(dry.out).toContain(pins[at]!);
+  // A seat on the default desktop_control carries no pins: the relaunch is the seat's own line,
+  // without the retired fixed false pair.
+  expect(seatPinWords(seatPins(profileFor('codex'), true))).toEqual([]);
   expect(dry.out).toContain('closed without choosing a dialog option; launched again with the coordination flag');
   expect(dry.out).not.toContain('features.mcp_oauth_refresh_coordination=false');
   expect(dry.out).not.toContain('send-keys');

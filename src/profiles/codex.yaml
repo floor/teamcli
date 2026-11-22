@@ -18,8 +18,8 @@ unattended:
 # Current recipes remove that historical pin: a fixed override can differ from the shared server.
 # Old recorded recipes shed that exact pair through currentCodexRecipe before relaunch.
 #
-# No seat drives the user's desktop or browser unless its `desktop_control` says so: those carry
-# signed-in accounts. These four are the switches, measured on codex-cli 0.167.0 in a scratch
+# A seat whose `desktop_control` is false drives neither the user's desktop nor browser: those
+# carry signed-in accounts. These four are the switches, measured on codex-cli 0.167.0 in a scratch
 # CODEX_HOME: `codex features list` printed `computer_use`, `browser_use`,
 # `browser_use_external` and `in_app_browser` as `stable true`, and the same command with
 # `-c features.<name>=false` for each printed them `false`.
@@ -30,16 +30,22 @@ unattended:
 # must hold the same set, or a TUI that meets it shows the incompatible-settings dialog.
 #
 # `browser_use_full_cdp_access` is the fifth switch (codex-cli 0.167.0, scratch CODEX_HOME:
-# `stable true`, and `false` under `-c features.browser_use_full_cdp_access=false`).
+# `stable true`, and `false` under `-c features.browser_use_full_cdp_access=false`). `apps` is
+# the ChatGPT apps and connectors switch: the built-in `codex_apps` MCP server whose tools act
+# under the signed-in ChatGPT account (`mcp__codex_apps__*`). Same measurement: `apps  stable
+# true`, and `false` under `-c features.apps=false`; `codex_apps` is not in the user's config and
+# needs a ChatGPT login to list tools, so its removal was not seen in a scratch home.
 features:
   - computer_use=false
   - browser_use=false
   - browser_use_external=false
   - in_app_browser=false
   - browser_use_full_cdp_access=false
-# The team's `desktop_control` setting, per seat, off by default. Off: the five feature pins
-# above, and the `config` pairs below ride the seat's line and its managed app-server's start
-# words. On: the feature pins named here are lifted and no `config` pair is placed.
+  - apps=false
+# The team's `desktop_control` setting, per seat, on by default. On: the feature pins named here
+# are lifted and no `config` pair is placed, so the seat runs with the user's own configuration.
+# Set false: the six feature pins above and the `config` pairs below ride the seat's line and its
+# managed app-server's start words.
 #
 # The computer-control tools also come from MCP servers a desktop app registers in the user's
 # Codex config (`cua_repl`, `node_repl`) and from bundled plugins. Measured on codex-cli 0.167.0
@@ -62,6 +68,7 @@ desktop_control:
     - browser_use_external
     - in_app_browser
     - browser_use_full_cdp_access
+    - apps
   config:
     - mcp_servers.cua_repl.command=/usr/bin/false
     - mcp_servers.cua_repl.enabled=false
@@ -70,6 +77,10 @@ desktop_control:
     - plugins.computer-use@openai-bundled.enabled=false
     - plugins.unified-computer-use@openai-bundled.enabled=false
     - plugins.browser@openai-bundled.enabled=false
+    # The connectors' server by name too, as the stub pair above: accepted with no such server
+    # configured (`codex mcp list --json` printed `codex_apps` `enabled: false`).
+    - mcp_servers.codex_apps.command=/usr/bin/false
+    - mcp_servers.codex_apps.enabled=false
 rules:
   launch_prompt: positional
 # The delivery class a run measured: a seat whose app-server endpoint the runtime hosts takes a

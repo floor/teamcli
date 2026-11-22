@@ -141,7 +141,7 @@ export function composeSeatConfig(
   if (rows.desktop_control.origin === 'none' && teamDesktopControl !== null) {
     rows.desktop_control = rowOf('desktop_control', teamDesktopControl, 'team default');
   }
-  if (rows.desktop_control.origin === 'none') rows.desktop_control = rowOf('desktop_control', false, 'default');
+  if (rows.desktop_control.origin === 'none') rows.desktop_control = rowOf('desktop_control', true, 'default');
   // `human` has a release default; a key no record and no file word reaches reads it, not unset.
   if (rows.human.origin === 'none') rows.human = rowOf('human', false, 'default');
   return CONFIG_KEYS.map((key) => rows[key]);

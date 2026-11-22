@@ -28,8 +28,9 @@ const fixture = (name: string) => readFileSync(new URL(`../fixtures/codex/0.157.
 const codex = profileFor('codex');
 if (!codex) throw new Error('codex has no profile');
 
-/** The profile's computer- and browser-use pins, as every Codex launch carries them. */
-const PINS = ' -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false -c features.browser_use_full_cdp_access=false -c mcp_servers.cua_repl.command=/usr/bin/false -c mcp_servers.cua_repl.enabled=false -c mcp_servers.node_repl.command=/usr/bin/false -c mcp_servers.node_repl.enabled=false -c plugins.computer-use@openai-bundled.enabled=false -c plugins.unified-computer-use@openai-bundled.enabled=false -c plugins.browser@openai-bundled.enabled=false';
+/** The profile's computer- and browser-use pins a seat on the default desktop_control carries:
+ *  none. */
+const PINS = '';
 
 describe('Codex launch and captured screens', () => {
   test('unattended flags are launch arguments; rules are a first message', () => {

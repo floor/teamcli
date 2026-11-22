@@ -706,7 +706,7 @@
           },
           "desktop_control": {
             "type": "boolean",
-            "$comment": "whether this seat may control the computer (computer use, the user's browser, desktop apps); wins over the team's desktop_control, and off when neither writes one"
+            "$comment": "whether this seat may control the computer (computer use, the user's browser, desktop apps); wins over the team's desktop_control, and on when neither writes one"
           },
           "channel": {
             "enum": [
@@ -870,7 +870,7 @@
     },
     "desktop_control": {
       "type": "boolean",
-      "$comment": "whether the team's seats may control the computer (computer use, the user's browser, desktop apps): off when omitted; a seat's own desktop_control wins, so a team turns it on only for the seat that needs it"
+      "$comment": "whether the team's seats may control the computer (computer use, the user's browser, desktop apps, connectors acting under the user's accounts): on when omitted; a seat's own desktop_control wins, so false keeps a seat or a team off the user's apps"
     },
     "messaging": {
       "type": "object",

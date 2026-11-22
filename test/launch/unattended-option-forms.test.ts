@@ -19,7 +19,7 @@ const launched = (profile: ReturnType<typeof profileFor>, line: string): string 
 
 /** The profile's computer- and browser-use pins, as every Codex launch carries them: after the
  *  options, before the CLI's own `--`. */
-const PIN_CONFIG = seatPinWords(seatPins(codex, false));
+const PIN_CONFIG = seatPinWords(seatPins(codex, true));
 const PINS = PIN_CONFIG.map((word) => ` ${word}`).join('');
 const pinned = (line: string): string => {
   const at = line.indexOf(' -- ');

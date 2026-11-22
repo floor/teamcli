@@ -98,15 +98,16 @@ export const CONFIG_REGISTRY: Readonly<Record<ConfigKey, ConfigSpec>> = {
     fallback: false,
     applies: 'at-once',
   },
-  // Whether the seat may control the computer: computer use, the user's browser, desktop apps.
-  // Off by default; a team turns it on for the one seat that needs it, and the seat's own word
-  // wins over the team's. Read at launch, so a change takes the seat's next launch.
+  // Whether the seat may control the computer: computer use, the user's browser, desktop apps and
+  // the connectors acting under the user's accounts. On by default; a team or a seat sets it false
+  // for a seat that must not touch the user's apps, and the seat's own word wins over the team's.
+  // Read at launch, so a change takes the seat's next launch.
   desktop_control: {
     key: 'desktop_control',
     levels: ['team', 'seat'],
     type: 'boolean',
     allowed: 'true or false',
-    fallback: false,
+    fallback: true,
     applies: 'restart-resume',
   },
 };

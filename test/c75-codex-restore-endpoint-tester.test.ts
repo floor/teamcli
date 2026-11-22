@@ -824,4 +824,31 @@ describe('a seat launched in a workspace the run creates, resuming its conversat
       expect(said(io)).toContain('after the wait for its conversation; nothing launched');
     });
   }
+
+  // A reading that settles a moment later — a process beside the shell that ends, or a process
+  // read the host could not give — is taken again before the seat is left out: one reading after
+  // the wait left a restarted seat out whose new pane was a bare shell an instant later.
+  const settling: [string, () => { shell: number; foreground: number[] }][] = [
+    ['a process beside the new shell that ends', () => ({ shell: 500, foreground: [500, 777] })],
+    ['a process read the host could not give', () => ({ shell: 500, foreground: [] })],
+  ];
+  for (const [name, first] of settling) {
+    test(`${name}: read again, then launched there, resumed`, async () => {
+      setup();
+      record();
+      let reads = 0;
+      const settled = { shell: 500, foreground: [500] };
+      const flaky = {
+        get shell() { return 500; },
+        get foreground() { reads += 1; return reads <= 3 ? first().foreground : settled.foreground; },
+      };
+      const made = sources({ gone: true, threadWait: [{ free: true, waitedMs: 30_000 }], duringWait: (w) => w.setProcess(flaky) });
+      const io = testIo(root, { kind: 'owner' });
+      await runUp([], io, made.sources);
+      const runs = made.trace.runs.filter((run) => run.pane === 'fixture-pane-made');
+      expect(runs, said(io)).toHaveLength(1);
+      expect(runs[0]?.command).toContain(`resume ${THREAD}`);
+      expect(said(io)).not.toContain('after the wait for its conversation');
+    });
+  }
 });

@@ -1953,12 +1953,12 @@ function labelDrifts(
 // process's command line, and a record that holds no line says unknown rather than a guess. The
 // repair is the relaunch that writes the pinned line; a seat the state does not record was not
 // left running by this session and is not named.
-function featureDifferences(team: TeamFile, state: SessionState, desktopOf: (seat: string) => boolean = () => false): Difference[] {
+function featureDifferences(team: TeamFile, state: SessionState, desktopOf: (seat: string) => boolean = () => true): Difference[] {
   const out: Difference[] = [];
   for (const seat of team.seats) {
     if (seat.stopped) continue;
-    // The seat's own pins: with `desktop_control` off (the default) every feature pin and the
-    // profile's computer and browser config pairs; on, the ones the profile lifts are not asked.
+    // The seat's own pins: on, the default, the ones the profile lifts are not asked (for Codex,
+    // none is); set false, every feature pin and the computer, browser and connector pairs.
     const pins = seatPins(profileFor(seat.cli), desktopOf(seat.name));
     if (pins.features.length === 0 && pins.config.length === 0) continue;
     const held = state.seats[seat.name];
@@ -2041,7 +2041,7 @@ function unmanagedCodexServerDifferences(
   session: string,
   continuityIds: ReadonlyMap<string, string | null> | undefined,
   sources: CheckSources,
-  desktopOf: (seat: string) => boolean = () => false,
+  desktopOf: (seat: string) => boolean = () => true,
 ): Difference[] {
   const out: Difference[] = [];
   if (live !== null && !live.running) return out;

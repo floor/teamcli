@@ -198,7 +198,7 @@ export type Seat = {
   /**
    * The seat's own word on whether it may control the computer (computer use, the user's
    * browser, desktop apps), when the file writes `desktop_control`. Absent otherwise, so a file
-   * that writes none keeps the digest it had; the team's word, then off, stands under it.
+   * that writes none keeps the digest it had; the team's word, then on, stands under it.
    */
   desktopControl?: boolean;
   /**
@@ -335,7 +335,7 @@ export type TeamFile = {
   senderName: SenderNameMode | null;
   /**
    * The file's own word on whether its seats may control the computer, or null/absent when it
-   * writes none: off is the default. A seat's own word wins over it. Non-owner and additive, as
+   * writes none: on is the default. A seat's own word wins over it. Non-owner and additive, as
    * `sender_name` is: a file written before it keeps its digests.
    */
   desktopControl?: boolean | null;

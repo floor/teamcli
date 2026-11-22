@@ -741,9 +741,10 @@ function personaFindings(team: TeamFile, root: string, home: string): Finding[] 
 // record that holds no line says unknown rather than a guess. A seat the state does not record
 // was not left running by this session and is not named.
 //
-// The pins follow the seat's `desktop_control` word. A seat with it off (the default) whose line
-// lacks the computer and browser pins is a miss, not a warning: it may be driving the user's
-// desktop or browser. It never blocks the relaunch that repairs it (`blocksLaunch`).
+// The pins follow the seat's `desktop_control` word. A seat on the default (on) is asked for none
+// of the pins the setting lifts. A seat set false whose line lacks the computer, browser and
+// connector pins is a miss, not a warning: it may be driving the user's apps. It never blocks the
+// relaunch that repairs it (`blocksLaunch`).
 function featureFindings(team: TeamFile, dir: string, session: string, home?: string, root?: string): Finding[] {
   const recorded = readState(dir).sessions[session]?.seats ?? {};
   const findings: Finding[] = [];
