@@ -8,7 +8,7 @@
 // dry run reads the record and plans, and writes nothing. It runs whatever `names.auto` says: the
 // word decides only whether a launch names a seat, and asking for a fill is asking for names.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -31,9 +31,11 @@ fill names every seat of this team that has no nickname: each takes the first na
 entity's names.pool (greek-myth unless the entity names another pool or lists its own names) that
 no seat of the team carries, passing over a name another registered team already carries while the
 pool has another, and never one the entity's names.unique word refuses. The seat's nickname is
-written, and its label becomes "<Nickname> · <role>", keeping the part after a written label's
-middle dot. A seat that has a nickname, or a label naming someone else, keeps it; a human seat and a
-counted entry get none. One line per seat: "<team>: <seat> → <Nickname>". --dry-run prints the
+written, and its label becomes "<Nickname> · <role>": the part after a written label's middle
+dot, or a label with no dot whole ("Gemini tester" becomes "<Nickname> · Gemini tester"). A seat
+is named when it has a nickname or a label "<Name> · <role>", and keeps it; a label with no dot is
+a description, not a name. A human seat and a counted entry get none. A registered team whose
+folder is gone is "<team>: its record is gone; skipped". One line per seat: "<team>: <seat> → <Nickname>". --dry-run prints the
 same lines under "dry run: nothing was written" and writes nothing. --entity <name> fills every
 registered team of that entity, in order, so no two take one name.
 
@@ -51,6 +53,8 @@ type TeamFill = {
   assignments: NameAssignment[];
   written: boolean;
   problem: string | null;
+  /** The team's folder is gone: nothing was read or written. */
+  skipped?: true;
 };
 
 export const names: Command = (argv, io) => runNames(argv, io);
@@ -72,7 +76,7 @@ export async function runNames(argv: string[], rawIo: Io, sources: ConfigSources
   const dry = args.flags.has('dry-run');
   const home = sources.home ?? homedir();
   const env = sources.env ?? process.env;
-  let roots: string[];
+  let roots: Array<{ root: string; team: string | null }>;
   const entity = args.values.entity;
   if (entity !== undefined) {
     let teams: ReturnType<typeof readTeams>;
@@ -86,8 +90,8 @@ export async function runNames(argv: string[], rawIo: Io, sources: ConfigSources
     }
     roots = Object.values(teams)
       .filter((record) => record.entity === entity && record.lifecycle !== 'archived')
-      .map((record) => record.root)
-      .sort();
+      .map((record) => ({ root: record.root, team: record.project }))
+      .sort((a, b) => (a.root < b.root ? -1 : a.root > b.root ? 1 : 0));
     if (roots.length === 0) {
       refuse(io, json, 'names', { id: 'names.no-team', message: `entity "${entity}" has no registered team`, repair: null });
       // exit: names.no-team
@@ -99,13 +103,25 @@ export async function runNames(argv: string[], rawIo: Io, sources: ConfigSources
       refuse(io, json, 'names', { id: 'names.unreadable', message: binding.message, repair: null });
       return 2; // exit: names.unreadable
     }
-    roots = [binding.kind === 'bound' ? binding.team.root : findRoot(io.cwd) ?? resolve(io.cwd)];
+    roots = [binding.kind === 'bound'
+      ? { root: binding.team.root, team: binding.team.project }
+      : { root: findRoot(io.cwd) ?? resolve(io.cwd), team: null }];
   }
 
   const taken = new Set<string>();
   const fills: TeamFill[] = [];
   let failed = false;
-  for (const root of roots) {
+  for (const { root, team } of roots) {
+    // A registered team whose folder is gone has no record to name: said, and skipped.
+    if (!existsSync(root)) {
+      const name = team ?? root;
+      fills.push({ team: name, root, assignments: [], written: false, problem: null, skipped: true });
+      if (!json) {
+        if (dry && fills.length === 1) io.stdout('dry run: nothing was written\n');
+        io.stdout(`${name}: its record is gone; skipped\n`);
+      }
+      continue;
+    }
     const fill = dry ? planFill(root, home, env, taken) : await writeFill(root, rawIo, io, sources, taken);
     for (const assignment of fill.assignments) taken.add(assignment.nickname.toLowerCase());
     fills.push(fill);
@@ -126,6 +142,7 @@ export async function runNames(argv: string[], rawIo: Io, sources: ConfigSources
         written: fill.written,
         assignments: fill.assignments.map((assignment) => ({ seat: assignment.seat, nickname: assignment.nickname, label: assignment.label })),
         problem: fill.problem,
+        ...(fill.skipped ? { skipped: true } : {}),
       })),
     });
   }

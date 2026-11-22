@@ -276,22 +276,26 @@ export function namesAutoOf(home: string | undefined, entity: string | null): Na
 }
 
 /**
- * Whether a seat goes by no name of its own: the file writes no `nickname:`, and its written
- * label names no persona but the seat's own name. A seat with a name is never renamed. A human
- * seat is a person, whose name is theirs, and a counted entry cannot carry one nickname, so
- * neither is handed one.
+ * Whether a seat goes by no name of its own. A seat is named when the file writes its
+ * `nickname:`, or a written label of the form `<Name> · <role>` whose name part is not the seat's
+ * own name. A label with no middle dot ("Gemini tester") is a description, not a name. A seat
+ * with a name is never renamed. A human seat is a person, whose name is theirs, and a counted
+ * entry cannot carry one nickname, so neither is handed one.
  */
 export function unnamedSeat(seat: Pick<Seat, 'name' | 'nickname' | 'label' | 'labelWritten' | 'human' | 'count'>): boolean {
   if (seat.human === true || seat.count > 1 || seat.nickname !== undefined) return false;
+  if (seat.labelWritten !== true || !seat.label.includes('·')) return true;
   const persona = labelPersona(seat);
   return persona === null || persona === seat.name;
 }
 
 /** The label a named seat carries: the nickname, then the written label's part after its middle
- *  dot, or the seat's role when the label has none. */
-function namedLabel(seat: Pick<Seat, 'role' | 'label' | 'labelWritten'>, nickname: string): string {
-  const at = seat.labelWritten === true ? seat.label.indexOf('·') : -1;
-  const rest = at < 0 ? '' : seat.label.slice(at + 1).trim();
+ *  dot — or, for a label with no dot, the label whole as a description — or the seat's role when
+ *  the label says nothing more than the seat's name. */
+function namedLabel(seat: Pick<Seat, 'name' | 'role' | 'label' | 'labelWritten'>, nickname: string): string {
+  const written = seat.labelWritten === true ? seat.label.trim() : '';
+  const at = written.indexOf('·');
+  const rest = at >= 0 ? written.slice(at + 1).trim() : written === seat.name ? '' : written;
   return `${nickname} · ${rest === '' ? seat.role : rest}`;
 }
 

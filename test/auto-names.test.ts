@@ -129,6 +129,22 @@ describe('autoNamePlan', () => {
     expect(planFor(world, 'a').assignments).toEqual([{ seat: 'builder', nickname: POOL[0]!, label: `${POOL[0]!} · implementer` }]);
   });
 
+  test('a label with no middle dot is a description: the seat is named and the label kept after the dot', () => {
+    const world = place({
+      a: teamText('alpha', 'acme', [
+        NAMED('orchestrator', 'lead', 'Quill').replace('    nickname: Quill\n', '    nickname: Quill\n    leads: true\n'),
+        SEAT('tester', 'tester-gemini', ['    label: Gemini tester\n']),
+        SEAT('tester', 'tester-grok', ['    label: Grok tester (via Cursor)\n']),
+        SEAT('implementer', 'builder', ['    label: builder\n']),
+      ]),
+    });
+    expect(planFor(world, 'a').assignments).toEqual([
+      { seat: 'tester-gemini', nickname: POOL[0]!, label: `${POOL[0]!} · Gemini tester` },
+      { seat: 'tester-grok', nickname: POOL[1]!, label: `${POOL[1]!} · Grok tester (via Cursor)` },
+      { seat: 'builder', nickname: POOL[2]!, label: `${POOL[2]!} · implementer` },
+    ]);
+  });
+
   test('passes over a name another team carries, inside the entity and beyond it', () => {
     const world = place({
       a: teamText('alpha', 'acme', [LEAD, NAMED('implementer', 'worker', POOL[0]!)]),
@@ -233,6 +249,11 @@ describe('team names fill', () => {
     const io = testIo(world.roots.a!, { kind: 'owner' });
     expect(await runNames(['fill', '--entity', 'acme', '--dry-run'], io, sourcesOf(world)), io.err).toBe(0);
     expect(io.out).toBe(`dry run: nothing was written\nalpha: checker → ${POOL[0]!}\nbeta: checker → ${POOL[1]!}\n`);
+    // A registered team whose folder is gone is said and skipped, never an error.
+    rmSync(world.roots.b!, { recursive: true, force: true });
+    const gone = testIo(world.roots.a!, { kind: 'owner' });
+    expect(await runNames(['fill', '--entity', 'acme', '--dry-run'], gone, sourcesOf(world)), gone.err).toBe(0);
+    expect(gone.out).toBe(`dry run: nothing was written\nalpha: checker → ${POOL[0]!}\nbeta: its record is gone; skipped\n`);
     const none = testIo(world.roots.a!, { kind: 'owner' });
     expect(await runNames(['fill', '--entity', 'nobody'], none, sourcesOf(world))).toBe(1);
     expect(none.err).toBe('team names: entity "nobody" has no registered team\n');

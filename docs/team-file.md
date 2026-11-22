@@ -621,8 +621,9 @@ and a record that writes none keeps every approval it had. The name is shown in 
 
 ### Names handed out
 
-Every seat of an entity's team has a name: a seat whose record writes no `nickname` (and whose
-written label names nobody but the seat itself) is handed one. Three words in the entity's entry
+Every seat of an entity's team has a name: a seat whose record writes no `nickname`, and whose
+label is not of the form `<Name> · <role>`, is handed one. A label with no middle dot
+(`Gemini tester`) is a description, not a name. Three words in the entity's entry
 of the owner's `entities.yaml` decide how, each set with
 [`team config set <entity>.names.<key>`](commands/config.md):
 
@@ -647,9 +648,10 @@ acme:
   while the pool has another; past that, `unique` is the rule, as for a name set by hand. The
   seats are named in file order, so the same registry always hands out the same names.
 - The name is written as a manual one is — `nickname: <Name>` and `label: "<Name> · <role>"`,
-  keeping the part after a written label's middle dot — through the same validated writer, and
-  checked against `unique` like any new nickname. A seat that has a nickname, or a label naming
-  someone, is never renamed. A `human` seat and a counted entry are not named. The lead is named
+  keeping the part after a written label's middle dot, or a label with no dot whole
+  (`Gemini tester` becomes `<Name> · Gemini tester`) — through the same validated writer, and
+  checked against `unique` like any new nickname. A seat that has a nickname, or a label
+  `<Name> · <role>` whose name part is not its own seat name, is never renamed. A `human` seat and a counted entry are not named. The lead is named
   like any seat: "never lead" is the word `lead`, which no nickname takes.
 - A run that cannot hand out a name says why on stderr and goes on: a launch never waits for a
   name. A delegated add, a client or restore run, `team up --retie` and a run aimed with
