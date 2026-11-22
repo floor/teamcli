@@ -1805,9 +1805,11 @@ export function upPlan(input: UpInput): Step[] {
       if (!fromResolver) denyRecordLine = recorded.line;
     }
     // A Claude seat set `desktop_control: false` carries its deny list and connector switch only in
-    // the settings file this run installs. A line that names its own `--settings`, or a seat whose
-    // file did not land, would start with neither: that launch is refused, never run without them.
-    const desktopHook = input.cliHooks === undefined ? !setsSettings(profile.cli, baseLine) : input.cliHooks[seat.name] !== undefined;
+    // the settings file this run installs, and the file rides only a line that names no
+    // `--settings` of its own (src/profiles/profile.ts). The line read is the one that launches —
+    // a launcher's resolved command included — so a resolved line with its own settings, or a seat
+    // whose file did not land, would start with neither: that launch is refused, never run without them.
+    const desktopHook = !setsSettings(profile.cli, baseLine) && (input.cliHooks === undefined || input.cliHooks[seat.name] !== undefined);
     if (wouldLaunch && !desktopControl && supportsCliHook(profile.cli) && !desktopHook) {
       const why = 'its desktop_control is false, and its launch carries no settings file of this run to deny the computer, browser and connector tools (its line names its own --settings, or the file did not land)';
       steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`, do: { do: 'refuse', seat: seat.name, why } });

@@ -326,4 +326,26 @@ describe('the seat proof a push makes', () => {
       }
     });
   });
+
+  test('an explicit team file that is a link is judged by the file it names: a target edit is refused on the next tool call', async () => {
+    const at = place();
+    // The team file the server is started with is a link to the real file elsewhere.
+    const target = join(at.root, 'team-target.yaml');
+    const link = join(at.root, '.agents', 'team.yaml');
+    renameSync(link, target);
+    symlinkSync(target, link);
+    const feed = queue();
+    const running = runMcpServe({ seat: 'lead', session: SESSION, file: link }, testIo(at.root, seatCaller()), feed, { home: at.home });
+    try {
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      expect((await tool(feed, 'c0', 'inbox_check')).isError).not.toBe(true);
+      expect((await tool(feed, 'c1', 'inbox_check')).isError).not.toBe(true);
+      writeFileSync(target, readFileSync(target, 'utf8').replace(`session: ${SESSION}\n`, 'session: elsewhere\n'));
+      expect((await tool(feed, 'c2', 'inbox_check')).isError).toBe(true);
+    } finally {
+      feed.end();
+      await running;
+      at.cleanup();
+    }
+  });
 });

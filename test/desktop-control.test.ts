@@ -19,6 +19,7 @@ import { DESKTOP_PIN_GAP, featureSettings, pinMismatch, seatPins, seatPinWords }
 import { codexEndpointStartConfig, upPlan } from '../src/launch/plan.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand, pinnedRecordLine } from '../src/profiles/profile.ts';
+import { loadTeamLaunchers } from '../src/launch/resolve-flag.ts';
 import { resolveDesktopControl } from '../src/settings/desktop-control.ts';
 import { emptySession, updateState, type SeatState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
@@ -177,6 +178,25 @@ describe('a Codex seat set false carries every computer, browser and connector p
     expect(op('claude', {})?.do).toBe('refuse');
     // The file landed: the launch names it.
     expect(op('claude', { lead: '/tmp/acme/lead.json' })?.do).toBe('launch');
+  });
+
+  test('the plan: a Claude seat set false whose launcher resolves to its own --settings is refused, the hook file planned or not', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'team-desktop-launcher-'));
+    const root = join(scratch, 'repo');
+    mkdirSync(join(root, '.agents', 'launchers'), { recursive: true });
+    writeFileSync(join(root, '.agents', 'launchers', 'own-settings.yaml'), 'format: 1\nname: own-settings\nkind: custom\nargv:\n  - claude\n  - --settings\n  - /fixture/own.json\n', { mode: 0o600 });
+    const steps = upPlan({
+      root, session: SESSION, sessionRunning: true, watchAlive: true, watchLabel: 'Watch · acme',
+      stateDir: join(root, '.agents'), team: team('desktop_control: false\n'),
+      resolveLaunch: true, launcherDiscovery: loadTeamLaunchers(root),
+      // The hook file was planned from the bare recipe `claude`; the resolved line drops it.
+      cliHooks: { lead: join(root, 'lead-settings.json') },
+      seats: [{ name: 'lead', cli: 'claude-code', launch: 'claude', launcher: 'own-settings', cwd: root, label: 'lead', stopped: false, rules: 'Rules.', repairLine: 'repair' }],
+    });
+    const op = steps.map((step) => step.do).find((one) => one?.do === 'launch' || one?.do === 'refuse');
+    rmSync(scratch, { recursive: true, force: true });
+    expect(op?.do).toBe('refuse');
+    expect(op?.do === 'refuse' ? op.why : '').toContain('desktop_control is false');
   });
 
   test('a recorded line without the pins is named; one with them, or a seat turned on, is not', () => {

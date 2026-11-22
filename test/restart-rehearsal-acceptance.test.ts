@@ -89,7 +89,7 @@ trust:
 workspace:
   mode: shared
 seats:
-${seat('boss', 'coordinator')}${seat('lead2', 'operator')}${seat('worker-a', 'implementer')}${seat('worker-b', 'implementer')}${seat('busy', 'implementer')}${seat('drafty', 'implementer')}`;
+${seat('boss', 'coordinator', '    cwd: boss\n')}${seat('lead2', 'operator')}${seat('worker-a', 'implementer')}${seat('worker-b', 'implementer')}${seat('busy', 'implementer')}${seat('drafty', 'implementer')}`;
 }
 
 let base: string;
@@ -109,6 +109,8 @@ beforeEach(() => {
   mkdirSync(dir, { recursive: true, mode: 0o755 });
   mkdirSync(home, { recursive: true, mode: 0o700 });
   execFileSync('git', ['init', '-q'], { cwd: root });
+  // The orchestrator starts in its own folder, so its channel start needs no project pair.
+  mkdirSync(join(root, 'boss'), { mode: 0o755 });
   writeFileSync(teamFile, teamText(root));
 });
 
@@ -563,11 +565,12 @@ describe('a machine restart, rehearsed: every Claude seat ends with a working pu
     expect(readdirSync(seatMailDirIn(dir, SESSION, 'boss', 'stamped')).some((one) => one.endsWith(SEND_TAIL))).toBe(true);
   });
 
-  test('a seat the rebind could not prove is still taken; a restart without the flag is not called one through the line', async () => {
+  test('a seat the rebind could not prove is still taken; a seat whose launch would fall back without the channel is not restarted', async () => {
     mkdirSync(join(base, 'sockets'), { recursive: true });
     // boss and worker-a come back with no readable process birth: the rebind refuses both, and
     // their records still name the pre-restart launch with the channel flag on. lead2's folder
-    // has no channel pair, so its restart launches without the flag.
+    // has no channel pair, so the planning would launch it without the flag: restoring it would
+    // close its conversation for a launch that still has no channel.
     const w = makeWorld(['boss', 'worker-a']);
     messageKeyOf(home);
     expect(activate(root, { home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
@@ -578,7 +581,7 @@ describe('a machine restart, rehearsed: every Claude seat ends with a working pu
     const first = await sweep(w);
     if (first.kind !== 'ran') throw new Error(JSON.stringify(first));
     // The seat whose rebind failed is relaunched like the others, with its own conversation.
-    expect(restartsOf(w)).toEqual(['lead2', 'worker-a', 'worker-b']);
+    expect(restartsOf(w)).toEqual(['worker-a', 'worker-b']);
     expect(w.ran.find((run) => run.command.includes('--name worker-a '))?.command).toContain(`${FLAG} --resume conv-worker-a `);
     expect(held('worker-a')?.channel_launch).toBe(true);
     // The orchestrator the rebind could not prove: not restarted, the owner named the restart,
@@ -587,18 +590,11 @@ describe('a machine restart, rehearsed: every Claude seat ends with a working pu
     expect(held('boss')?.channel_launch).toBe(false);
     const orchestrator = await sendTo(w, 'boss');
     expect(orchestrator.legs.find((leg) => leg.leg === 'channel')).toEqual({ leg: 'channel', state: 'skipped', reason: send.CHANNEL_FLAG_DROPPED });
-    // lead2 restarted, but its new process carries no channel flag: not said as through its line.
-    expect(held('lead2')?.channel_launch).toBe(false);
-    expect(first.summary.line).not.toContain('lead2: relaunched through its launch line');
-    expect(first.summary.line).toContain('lead2: restarted with its conversation conv-lead2, but its new process carries no channel flag');
-    // The reach check takes it from there: past the bound it is said once as unreachable, and it
-    // is not restarted again.
+    // lead2 keeps its conversation: not restarted on this pass or a later one, and not said.
+    expect(first.summary.line).not.toContain('lead2:');
     w.clock += CHANNEL_OVERDUE_MS + 1_000;
     const late = await sweep(w);
     if (late.kind !== 'ran') throw new Error(JSON.stringify(late));
-    expect(late.summary.line).toContain('lead2: unreachable after restore: not started from its launch line');
-    await sweep(w);
-    expect(noticesFor(w, 'lead2: unreachable after restore')).toHaveLength(1);
-    expect(restartsOf(w).filter((one) => one === 'lead2')).toHaveLength(1);
+    expect(restartsOf(w).filter((one) => one === 'lead2')).toHaveLength(0);
   });
 });

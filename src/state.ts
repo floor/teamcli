@@ -802,7 +802,9 @@ export function readStateShared(dir: string): Readonly<State> {
     return hit.state;
   }
   if (read === null) {
-    const state = deepFreeze(readState(dir));
+    // The empty state of the absence this read observed: a second look at the path could find a
+    // file created since and keep its state under the absent key.
+    const state = deepFreeze<State>({ format: 1, sessions: sessionMap() });
     sharedStates.set(path, { key, racy, text: null, state });
     return state;
   }
