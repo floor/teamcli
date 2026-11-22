@@ -28,6 +28,7 @@ import { currentRunMemo } from '../src/run-memo.ts';
 import { markChannelNotified } from '../src/mcp/channel.ts';
 import { retryHeldDrops, type RetryScene } from '../src/watch/retry.ts';
 import { paneShell, testIo } from './helpers.ts';
+import { seatListingDirs } from '../src/queue/mail-tree.ts';
 
 const SESSION = 'acme';
 const FLAG = '--dangerously-load-development-channels server:team-inbox';
@@ -356,6 +357,32 @@ describe('the push', () => {
       expect(await running).toBe(0);
     } finally {
       keySpy.mockRestore();
+      at.cleanup();
+    }
+  });
+
+  test('a record in a stamped folder created after the server started is pushed by the folder watch, not the next pass', async () => {
+    const at = place();
+    try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      const stamped = seatListingDirs(at.dropDir)[1]!;
+      expect(existsSync(stamped)).toBe(false);
+      // Both passes are set longer than this stretch: only a watch can deliver inside it.
+      const running = runMcpServe({ seat: 'lead', session: SESSION, fallbackMs: 60_000, namesMs: 60_000 }, io, feed, { home: at.home });
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      const record = signRecord({
+        kind: 'message', id: PUSHED_ID, to: 'lead', to_id: at.leadId, root: realpathSync(at.root), session: SESSION,
+        at: '2026-10-22T09:00:00.000Z', body: 'from a worker — admitted by: the owner\n\nfirst into a new folder',
+        from: 'worker', from_id: at.workerId, rule: 'the owner', thread: PUSHED_ID,
+      }, at.home);
+      mkdirSync(stamped, { recursive: true, mode: 0o700 });
+      writeFileSync(join(stamped, PUSHED_ID), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+      await until(() => notice(feed.replies).length >= 1, 400);
+      expect(notice(feed.replies).map((one) => one.params.meta.id)).toEqual([PUSHED_ID]);
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
       at.cleanup();
     }
   });

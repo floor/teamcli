@@ -91,6 +91,7 @@ import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { channelAckLine, liveChannelCopy, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { channelLaunchFallback, claudeChannelSeat } from './launch-config.ts';
 import { readClientThreadGrant } from '../client/records.ts';
+import { bundleAckGate, type BundleAckGate } from '../client/bundle-ack.ts';
 import { channelOfferStartedGivenUp, channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
@@ -121,6 +122,9 @@ export type ServeOptions = {
   /** The no-bus inbox pass interval. The command leaves it unset. A scene sets it longer than
    *  its own stretch, so only the folder watch can deliver inside that stretch. */
   fallbackMs?: number;
+  /** The names-only pass interval. The command leaves it unset (250 ms); a scene sets it longer
+   *  than its stretch, as it does `fallbackMs`. */
+  namesMs?: number;
   /** The re-send scheduler's pass interval (E7b). The command leaves it unset (30 s). */
   redeliverMs?: number;
 };
@@ -484,7 +488,7 @@ function watchChannel(
   serving: Serving,
   write: (line: string) => void,
   notice?: () => boolean,
-  options: { follow?: typeof followBus; fallbackMs?: number; safetyMs?: number; retryMinMs?: number; retryMaxMs?: number; redeliverMs?: number } = {},
+  options: { follow?: typeof followBus; fallbackMs?: number; namesMs?: number; safetyMs?: number; retryMinMs?: number; retryMaxMs?: number; redeliverMs?: number } = {},
 ): () => void {
   const seen = new Set<string>();
   let primed = false;
@@ -496,6 +500,10 @@ function watchChannel(
   let redeliverTimer: ReturnType<typeof setInterval> | null = null;
   /** One watch per folder of the seat (src/queue/mail-tree.ts): the stamped one once it stands. */
   const folders = new Map<string, FSWatcher>();
+  /** A watch on the nearest existing folder above a seat folder that does not exist yet (the
+   *  stamped tree of a fresh root), keyed by the missing folder: its creation arms the folder at
+   *  once, so the first pushes do not wait for the names pass and the next tick to arm it. */
+  const awaiting = new Map<string, FSWatcher>();
   let subscription: BusFollow | null = null;
   /** Busy commits retried off the main wait. Five tries, then one logged give-up. The id stays
    *  unseen, so a later names pass tries it again once the lock is gone. */
@@ -518,6 +526,8 @@ function watchChannel(
     retryTimer.clear();
     for (const watcher of folders.values()) watcher.close();
     folders.clear();
+    for (const watcher of awaiting.values()) watcher.close();
+    awaiting.clear();
     subscription?.close();
     subscription = null;
   };
@@ -862,8 +872,45 @@ function watchChannel(
     if (stopped) return;
     for (const at of seatListingDirs(serving.dropDir)) {
       if (folders.has(at)) continue;
-      if (at !== serving.dropDir && heldAt(at).kind !== 'folder') continue;
+      if (at !== serving.dropDir && heldAt(at).kind !== 'folder') {
+        awaitFolder(at);
+        continue;
+      }
       armOne(at);
+      const waiter = awaiting.get(at);
+      if (waiter !== undefined) {
+        awaiting.delete(at);
+        waiter.close();
+      }
+    }
+  };
+  /** Watches the nearest existing folder above `at` (at most the tree's own folder, three levels
+   *  up). Any change there arms again and lists the names once, so a record that landed before the
+   *  new folder's watch opened is still read now. */
+  const awaitFolder = (at: string): void => {
+    if (stopped || awaiting.has(at)) return;
+    let parent = dirname(at);
+    for (let up = 0; up < 2 && heldAt(parent).kind !== 'folder'; up += 1) parent = dirname(parent);
+    if (heldAt(parent).kind !== 'folder') return;
+    try {
+      const watcher = watch(parent, () => {
+        if (stopped || awaiting.get(at) !== watcher) return;
+        awaiting.delete(at);
+        watcher.close();
+        armFolder();
+        namesPass();
+      });
+      watcher.on('error', () => {
+        if (awaiting.get(at) === watcher) awaiting.delete(at);
+        try {
+          watcher.close();
+        } catch {
+          // The watch is already closed.
+        }
+      });
+      awaiting.set(at, watcher);
+    } catch {
+      // No watch: the names pass and the next tick still arm the folder.
     }
   };
   const armOne = (at: string): void => {
@@ -903,7 +950,7 @@ function watchChannel(
   const namesEvery = (): void => {
     if (stopped) return;
     if (namesTimer !== null) clearInterval(namesTimer);
-    namesTimer = setInterval(namesPass, CHANNEL_TICK_MS);
+    namesTimer = setInterval(namesPass, options.namesMs ?? CHANNEL_TICK_MS);
   };
   // The watch is open before the prime, so a file that lands during the listing is queued and
   // parsed once the prime finishes. The prime itself pushes nothing that was already there.
@@ -1017,18 +1064,23 @@ function ackTool(args: unknown, serving: Serving): unknown {
   }
   // A client's record on a plain grant is acknowledged by the seat it is addressed to (checked
   // above), as any message is: the receipt is that seat's own read and grants the client nothing.
-  // A bundle grant's ack is the command's (`team ack`), under its grant's own checks.
+  // A bundle grant's record is admitted by the gate `team ack` runs, and written under its lock.
+  let bundle: Extract<BundleAckGate, { ok: true }> | null = null;
   if (payload.from_client !== undefined) {
     const origin = readClientThreadGrant(serving.home, payload.from_client.grant_id);
     if (!origin.ok) return toolError(`message ${id}: its client grant does not verify: ${origin.why}`);
-    if (origin.kind !== 'grant') return toolError(`message ${id} was written under a client bundle grant; acknowledge it with team ack ${id}`);
+    if (origin.kind === 'bundle') {
+      const gate = bundleAckGate(serving.home, { grant: origin.grant, signature: origin.signature }, payload, serving.root, serving.session, serving.seat, () => new Date());
+      if (!gate.ok) return toolError(`message ${id}: ${gate.why}`);
+      bundle = gate;
+    }
   }
   if (isGeneralBriefRecord(payload)) return toolError(`message ${id} is the general seat brief; it is read by the seat's own turn-start reader`);
   // The record is verified now; the declaration is looked at again immediately before the receipt
   // is written, so a seat stopped while its record was being read acknowledges nothing.
   const staleNow = serving.alive?.();
   if (staleNow !== undefined && staleNow !== null) return toolError(staleNow);
-  const outcome = publishRecordRead({
+  const publish = () => publishRecordRead({
     dropDir: dropDir,
     id,
     to: serving.seat,
@@ -1041,6 +1093,14 @@ function ackTool(args: unknown, serving: Serving): unknown {
     lead: serving.team.orchestrator,
     ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
   });
+  let outcome: ReturnType<typeof publishRecordRead>;
+  if (bundle === null) {
+    outcome = publish();
+  } else {
+    const settled = bundle.under(publish);
+    if (!settled.ok) return toolError(`${id}: not acknowledged: ${settled.why}`);
+    outcome = settled.value;
+  }
   if (outcome.kind === 'held') {
     return toolError(`${id}: not acknowledged: the ${outcome.status} receipt name is held by a file that does not verify for this message`);
   }
@@ -2062,6 +2122,7 @@ export async function runMcpServe(
   const stopChannel = channel
     ? watchChannel(serving, streams.write, notice, {
       ...(options.fallbackMs === undefined ? {} : { fallbackMs: options.fallbackMs }),
+      ...(options.namesMs === undefined ? {} : { namesMs: options.namesMs }),
       ...(options.redeliverMs === undefined ? {} : { redeliverMs: options.redeliverMs }),
     })
     : null;
