@@ -55,7 +55,7 @@ export const READS: Record<string, string> = {
   'src/send/push-adapters/relay-runtime.ts#runtimeRelayCapabilities relay.capabilities': 'relay capabilities: a pure table lookup',
   'src/send/session-cli.ts#originRepoOf node:child_process.spawnSync': 'git remote read',
   // The host's and the client's own bookkeeping, not a hosted line's effect.
-  'src/host/client.ts#tryHost node:net.connect': 'runs in the client process, never in a hosted line',
+  'src/host/client.ts#tryHost Bun.connect': 'runs in the client process, never in a hosted line',
   'src/host/run.ts#runHostedLine process.chdir': "the host sets the client's cwd for the line and restores its own",
   'src/host/server.ts#liveListener node:net.connect': "the host's own stale-socket probe, before any request",
   'src/host/server.ts#startSendHost node:net.createServer': "the host's own socket, before any request",

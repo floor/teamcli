@@ -529,6 +529,35 @@ test('two teams on the same folder are refused and both are named', () => {
   }
 });
 
+test('a kept team file parse follows each edit: a seat cwd added, removed and a file made unreadable', () => {
+  const base = fixtureBase('team-binding-kept-parse-');
+  const home = join(base, 'home');
+  const root = join(base, 'team');
+  const desk = join(base, 'desk');
+  try {
+    for (const folder of [home, root, desk]) mkdirSync(folder, { recursive: true });
+    writeTeam(root, 'kept', 'kept-session', null);
+    register(home, root, 'kept', 'kept-session', ['lead']);
+    expect(teamBinding(home, desk).kind).toBe('unbound');
+    expect(teamBinding(home, desk, 'extra-seat').kind).toBe('unbound');
+    // The seat's cwd now names the desk: the same binding asked again sees it.
+    writeTeam(root, 'kept', 'kept-session', desk);
+    const bound = teamBinding(home, desk);
+    expect(bound.kind).toBe('bound');
+    if (bound.kind === 'bound') expect(bound.team.project).toBe('kept');
+    expect(teamBinding(home, join(desk, '.')).kind).toBe('bound');
+    // Back to no cwd, then a file that does not parse: the desk is no place either way.
+    writeTeam(root, 'kept', 'kept-session', null);
+    expect(teamBinding(home, desk).kind).toBe('unbound');
+    writeTeam(root, 'kept', 'kept-session', desk);
+    expect(teamBinding(home, desk).kind).toBe('bound');
+    writeFileSync(join(root, '.agents', 'team.yaml'), 'seats: [not: valid\n');
+    expect(teamBinding(home, desk).kind).toBe('unbound');
+  } finally {
+    discard(base);
+  }
+});
+
 test('a seat cwd of the shared lobby binds nothing there', () => {
   const base = fixtureBase('team-binding-shared-lobby-cwd-');
   const home = join(base, 'home');

@@ -286,6 +286,9 @@ type Serving = {
   team: TeamFile;
   /** The team file as it stands now; admission must not use the startup snapshot. */
   loadTeam: () => TeamFile | null;
+  /** Another team folder's validated team file, kept across pushes (`keptTeamFiles`); null when
+   *  it fails. Absent, the identity view reads each file afresh. */
+  teamFileOf?: (root: string) => TeamFile | null;
   /** True when this seat's launch carries the development channel naming this server. */
   channel: boolean;
   brief?: BriefRead;
@@ -423,7 +426,7 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   // registry's by id. No other name is handed to the renderer.
   // One registry view for the whole render, seeded with the team just read: each render built its
   // own (a team file load and the seat overrides apiece), three per push, ~30 ms on a live registry.
-  const view = registryIdentityView(serving.home, { root: serving.root, team });
+  const view = registryIdentityView(serving.home, { root: serving.root, team }, serving.teamFileOf);
   const identity = renderedIdentity(payload.from, { record: payload, home: serving.home, view });
   const leadingClaim = /^from ([^\n]*?) — admitted by: ([^\n]*)\n\n?/;
   const envelope = leadingClaim.exec(payload.body);
@@ -1775,16 +1778,10 @@ export async function runMcpServe(
   });
   // Every push reads the team (its proof, its admission, its lead): ~10 ms a read on a live
   // registry. A passing read is kept while every file it depends on stands as it was by stat.
-  let keptTeam: { witness: string; loaded: Extract<LoadResult, { ok: true }> } | null = null;
-  const readTeam = (): LoadResult => {
-    const before = keptTeam === null ? null : teamReadWitness(keptTeam.loaded, host.home);
-    if (keptTeam !== null && before === keptTeam.witness) return structuredClone(keptTeam.loaded);
-    const loaded = readTeamFresh();
-    // Kept only when the files the earlier read named stood still across this one.
-    const after = loaded.ok ? teamReadWitness(loaded, host.home) : null;
-    keptTeam = loaded.ok && after !== null && (before === null || before === after) ? { witness: after, loaded: structuredClone(loaded) } : null;
-    return loaded;
-  };
+  const readTeam = keptTeamRead(readTeamFresh, host.home);
+  // The persona guard reads every other registered team's file on each push: each is kept the
+  // same way, one kept read per team folder, for the life of the process.
+  const teamFileOf = keptTeamFiles(host.home);
   type Admitted = {
     loaded: Extract<LoadResult, { ok: true }>;
     team: TeamFile;
@@ -2037,6 +2034,7 @@ export async function runMcpServe(
       const file = readTeam();
       return file.ok ? file.team : null;
     },
+    teamFileOf,
     channel,
     brief,
     ...(host.channelMark === undefined ? {} : { channelMark: host.channelMark }),
@@ -2108,6 +2106,42 @@ export async function runMcpServe(
 /** The installed identity a pinned build stands for: its version and packed commit. */
 function installIdentityOf(build: BuildIdentity): InstallIdentity {
   return { version: build.version, head: build.head };
+}
+
+/**
+ * A team read kept while every file it depends on stands as it was by stat (`teamReadWitness`):
+ * the fresh read runs again only once one of them moves. A failed read is never kept, and a read
+ * is kept only when the files the earlier read named stood still across it. Each answer is a
+ * copy: no caller can change what the next one is given.
+ */
+export function keptTeamRead(readFresh: () => LoadResult, home: string): () => LoadResult {
+  let kept: { witness: string; loaded: Extract<LoadResult, { ok: true }> } | null = null;
+  return () => {
+    const before = kept === null ? null : teamReadWitness(kept.loaded, home);
+    if (kept !== null && before === kept.witness) return structuredClone(kept.loaded);
+    const loaded = readFresh();
+    const after = loaded.ok ? teamReadWitness(loaded, home) : null;
+    kept = loaded.ok && after !== null && (before === null || before === after) ? { witness: after, loaded: structuredClone(loaded) } : null;
+    return loaded;
+  };
+}
+
+/**
+ * Each team folder's validated team file under `home`, one kept read (`keptTeamRead`) per folder:
+ * the identity view's reader for other teams. A file that fails validation answers null, as a
+ * fresh read does, and is read again on the next ask.
+ */
+export function keptTeamFiles(home: string): (root: string) => TeamFile | null {
+  const readers = new Map<string, () => LoadResult>();
+  return (root) => {
+    let read = readers.get(root);
+    if (read === undefined) {
+      read = keptTeamRead(() => readTeamConfig(root, { home }), home);
+      readers.set(root, read);
+    }
+    const loaded = read();
+    return loaded.ok ? loaded.team : null;
+  };
 }
 
 /**

@@ -212,6 +212,8 @@ const MUTABLE: Record<string, string> = {
   'src/profiles/trust-answer.ts: captures': 'constant',
   'src/registry/agents.ts: parsedAgentFiles': 'content',
   'src/registry/agents.ts: keptScans': 'content',
+  'src/registry/binding.ts: parsedTeamFiles': 'content',
+  'src/registry/teams.ts: parsedTeamsFiles': 'content',
   'src/registry/locks.ts: held': 'process',
   'src/run-memo.ts: activeMemo': 'reset',
   'src/run-memo.ts: activeDepth': 'reset',
