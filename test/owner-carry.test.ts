@@ -360,7 +360,7 @@ describe('refusals', () => {
     const changes: Array<(f: OwnerAnswerFile) => void> = [
       (f) => { f.answer.owner_seat_answer.choice = 'once'; },
       (f) => { f.answer.owner_seat_answer.params_sha256 = 'b'.repeat(64); },
-      (f) => { f.answer.signature = `${f.answer.signature.slice(0, -2)}00`; },
+      (f) => { const last = f.answer.signature.slice(-1); f.answer.signature = `${f.answer.signature.slice(0, -1)}${last === '0' ? '1' : '0'}`; },
       (f) => { f.answer.signature = cryptoSign('sha256', Buffer.from('anything'), { key: other.privateKey, dsaEncoding: 'der' }).toString('hex'); },
       (f) => { f.answer.signer = 'phone'; },
       (f) => { f.answer.owner_seat_answer.team = 'other'; },

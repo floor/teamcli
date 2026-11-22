@@ -201,8 +201,9 @@ test('every command is a general-grant op or explicitly refused, never both', ()
     expect(Number((GENERAL_OPS as readonly string[]).includes(name)) + Number(GENERAL_REFUSED_COMMANDS.has(name))).toBe(1);
   }
   // Launcher migration keeps its ordinary owner/own-team lead gate, outside general grants; git
-  // and gh act with the entity's own GitHub token, which no grant holder is.
-  expect([...GENERAL_REFUSED_COMMANDS]).toEqual(['start', 'launchers', 'git', 'gh']);
+  // and gh act with the entity's own GitHub token, which no grant holder is; queues' state-changing
+  // verbs are the owner's, and ping's sends run where no grant rides along.
+  expect([...GENERAL_REFUSED_COMMANDS]).toEqual(['start', 'launchers', 'git', 'gh', 'queues', 'ping']);
   expect(GENERAL_OPS as readonly string[]).not.toContain('start');
 });
 
