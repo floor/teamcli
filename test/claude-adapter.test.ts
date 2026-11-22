@@ -27,7 +27,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { clearedFile, leadAckReceiptAt, signReceiptPayload, signRecord, stampedPayload, stampedSettled, stampedSettlement, writeRecord, type RecordPayload } from '../src/send/record.ts';
-import { adapterPointerLine, deliverTypedWake, type TypedWakeResult } from '../src/send/typed-wake.ts';
+import { pointerLine, deliverTypedWake, type TypedWakeResult } from '../src/send/typed-wake.ts';
 import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { typedWakeMaxFor } from '../src/send/readable-wake.ts';
 import { messageKeyState } from '../src/store/keys.ts';
@@ -190,12 +190,13 @@ function pass(at: Place, now: Date, lines: string[], options: { status?: string;
   };
 }
 
-function expectPointer(line: string | undefined, id: string, copy: number): void {
+function expectPointer(line: string | undefined, seat: string = SEAT, count = 1): void {
   expect(line).toBeDefined();
-  const ref = id.slice(0, 8);
-  expect(line).toStartWith(`team 1 new message from Wren · lead@acme · Model S 6.2 (copy ${String(copy)}${copy > 1 ? ', a re-send' : ''}) — read it with: team show ${ref}, then team ack ${ref}`);
+  // One line for every waiting message: the count, the seat's own read, no sender, no id.
+  expect(line).toMatch(new RegExp(`^team: ${String(count)} unread messages? waiting — read them all with: team drops --read --seat ${seat} \\[w:[^\\]]+\\]$`));
   expect(Buffer.byteLength(line ?? '', 'utf8')).toBeLessThanOrEqual(typedWakeMaxFor('claude-code'));
   expect(line).not.toContain('the secret body');
+  expect(line).not.toContain('Wren');
   expect(line).not.toContain('\n');
 }
 
@@ -209,7 +210,7 @@ describe('F1: a listener that declares the channel but never proves it', () => {
     // The record's newest offer went by the channel and the seat is unproven: due at once.
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 1_000), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expectPointer(lines[0], ID, 2);
+    expectPointer(lines[0]);
     expect(settled(at, ID)).toBe(false);
     expect(attemptLedger(stampedOf(at), ID).attempts).toBe(1);
   });
@@ -261,7 +262,7 @@ describe('activation and the first guarded pointer', () => {
         home: at.home,
         hosted: hostedLoop(),
       })).toBe(0);
-      expectPointer(lines[0], ID, 1);
+      expectPointer(lines[0]);
       expect(entered).toBe(true);
       expect(attemptLedger(stampedOf(at), ID).attempts).toBe(1);
     });
@@ -549,7 +550,7 @@ describe('activation and the first guarded pointer', () => {
         wait: async () => {},
       }, pane, line, cli, { ...options, settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 });
       await wakeUnreadDrops(scene, { unreadAfter: 600 });
-      expectPointer(lines[0], ID, 1);
+      expectPointer(lines[0]);
       expect(entered).toBe(!changeParent);
       if (changeParent) expect(JSON.parse(readFileSync(wakeTryPath(dropOf(at), ID), 'utf8')).reason).toBeString();
     }
@@ -570,7 +571,7 @@ describe('F2: a proven channel that drops notifications', () => {
     expect(unproven(at)).toBe('overdue offer');
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expectPointer(lines[0], ID, 2);
+    expectPointer(lines[0]);
   });
 });
 
@@ -586,7 +587,7 @@ describe('F3: the push stalls before any copy is written', () => {
     expect(unproven(at)).toBe('overdue offer');
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expectPointer(lines[0], ID, 1);
+    expectPointer(lines[0]);
   });
 });
 
@@ -605,7 +606,7 @@ describe('F3b: the send\'s channel leg gave up before any push', () => {
     const lines: string[] = [];
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expectPointer(lines[0], ID, 1);
+    expectPointer(lines[0]);
     // Past the 90 s deadline, still unsettled: no channel offer was ever in flight, so the seat
     // stays proven (the health scan never counts it), and the next pointer waits its backoff.
     age(at, ID, CHANNEL_OVERDUE_MS + 1_000);
@@ -681,7 +682,7 @@ describe('F9: a pointer typed, then a crash', () => {
     const lines: string[] = [];
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 1_000), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expectPointer(lines[0], ID, 1);
+    expectPointer(lines[0]);
     // The next pass, inside the backoff from the pointer's attempt: nothing.
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 2_000), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
@@ -692,7 +693,7 @@ describe('F9: a pointer typed, then a crash', () => {
     age(at, ID, 121_000);
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(2);
-    expectPointer(lines[1], ID, 2);
+    expectPointer(lines[1]);
   });
 });
 
@@ -705,7 +706,7 @@ describe('F10: a seat working when an attempt is due', () => {
     expect(lines).toEqual([]);
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 2_000), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expectPointer(lines[0], ID, 1);
+    expectPointer(lines[0]);
   });
 });
 
@@ -814,7 +815,7 @@ describe('round 1: a lead\'s pointer goes through the guarded typed seam', () =>
     // `pass` binds raw writers that throw: the pointer can only arrive through the seam.
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 1_000), lines, { seat: 'lead' }), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toStartWith(`team 1 new message from lead (copy 1) — read it with: team show ${ID.slice(0, 8)}`);
+    expectPointer(lines[0], 'lead');
   });
 });
 
@@ -841,29 +842,33 @@ describe('round 1: a pointer needs a positively active floor and an enforcing at
 });
 
 describe('round 1: the pointer fits the Claude typed bound and reads the body', () => {
-  test('long ASCII and multibyte identities stay inside the bound with room for the token', async () => {
+  test('the pointer carries no sender text, fits the bound with room for the token, and refuses a line that cannot fit', async () => {
     const max = typedWakeMaxFor('claude-code');
-    for (const name of ['x'.repeat(200), '名'.repeat(200), '🙂'.repeat(200)]) {
-      const line = adapterPointerLine({ name, address: `${'a'.repeat(60)}@${'b'.repeat(60)}`, model: 'm'.repeat(64) }, ID.slice(0, 8), 2, max);
+    for (const count of [1, 2, 9999]) {
+      const line = pointerLine(count, SEAT, max);
       expect(line).not.toBeNull();
+      expect(line).toBe(`team: ${String(count)} unread message${count === 1 ? '' : 's'} waiting — read them all with: team drops --read --seat ${SEAT}`);
       expect(Buffer.byteLength(`${line} [w:abcd]`, 'utf8')).toBeLessThanOrEqual(max);
       // The real typed helper does not refuse it for its size.
       const result = await deliverTypedWake({ read: async () => null, wait: async () => {}, type: () => false, enter: () => false }, 'pane', `${line} [w:abcd]`, 'claude-code', {});
       expect(result.reason).not.toContain('does not fit');
     }
+    expect(pointerLine(1, 'x'.repeat(max), max)).toBeNull();
   });
 
-  test('a retired sender is named by its signed spelling; team show <ref> serves the body and leaves it pending', async () => {
+  test('a retired sender is never typed; the pointer\'s read serves the body with its ack line and settles nothing', async () => {
     const at = place();
     stampedTo(at, SEAT, ID, 'agt_0000000000ff');
     const lines: string[] = [];
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 1_000), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toStartWith(`team 1 new message from lead (copy 1) — read it with: team show ${ID.slice(0, 8)}, then team ack ${ID.slice(0, 8)}`);
-    const { runShow } = await import('../src/commands/show.ts');
+    expectPointer(lines[0]);
+    expect(lines[0]).not.toContain('agt_0000000000ff');
+    const { runDrops } = await import('../src/commands/drops.ts');
     const io = testIo(at.root, { kind: 'seat', name: SEAT, pane: `pane-${SEAT}`, session: SESSION });
-    expect(await runShow([ID.slice(0, 8)], io, { home: at.home, now: () => new Date() })).toBe(0);
+    expect(await runDrops(['--read', '--seat', SEAT], io, { home: at.home })).toBe(0);
     expect(io.out).toContain(`the secret body of ${ID}`);
+    expect(io.out).toContain(`team ack ${ID}`);
     expect(settled(at, ID)).toBe(false);
   });
 });
@@ -884,11 +889,11 @@ describe('round 1: a silent channel stays unproven after a pointer', () => {
     expect(unproven(at)).toBe('overdue offer');
     const NEXT = '3e4f5a6b-0000-4000-8000-0000000ad003';
     stamped(at, NEXT);
-    // One pointer line per seat per pass: the older record's (its newest offer went by the
-    // channel), then the new one's.
+    // One pointer line per seat per pass, counting every waiting message.
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 1_000), lines), { unreadAfter: 600 });
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 2_000), lines), { unreadAfter: 600 });
-    expect(lines.some((line) => line.includes(`team show ${NEXT.slice(0, 8)}`))).toBe(true);
+    // One line covers both waiting messages: the older record and the new one.
+    expect(lines.some((line) => line.startsWith(`team: 2 unread messages waiting — read them all with: team drops --read --seat ${SEAT}`))).toBe(true);
   });
 });
 
@@ -943,7 +948,7 @@ describe('round 3: the protected panes are found by role and read again at every
     const lines: string[] = [];
     await wakeUnreadDrops(pass(at, new Date(Date.now() + 1_000), lines, { seat: 'lead' }), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toStartWith(`team 1 new message from lead (copy 1) — read it with: team show ${ID.slice(0, 8)}`);
+    expectPointer(lines[0], 'lead');
   });
 
   test('a pane protected between the reservation and the first key takes no key', async () => {
@@ -979,7 +984,7 @@ describe('round 2: an overdue record stays owed a pointer when another message p
     const lines: string[] = [];
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expectPointer(lines[0], ID, 2);
+    expectPointer(lines[0]);
   });
 });
 
@@ -999,7 +1004,7 @@ describe('round 3: an overdue record\'s pointer keeps its own clock', () => {
     const lines: string[] = [];
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain(`team show ${ID.slice(0, 8)}`);
+    expect(lines[0]).toContain(`team drops --read --seat ${SEAT}`);
   });
 });
 
@@ -1075,7 +1080,7 @@ describe('round 4: an unproven seat\'s pointers keep the pointer clock', () => {
     expect(readMessage({ dropDir: dropOf(at), root: at.root, session: SESSION, seat: SEAT }, ID, at.home).ok).toBe(true);
     await wakeUnreadDrops(pass(at, new Date(), lines), { unreadAfter: 600 });
     expect(lines).toHaveLength(2);
-    expect(lines[1]).toContain(`team show ${ID.slice(0, 8)}`);
+    expect(lines[1]).toContain(`team drops --read --seat ${SEAT}`);
   });
 });
 

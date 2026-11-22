@@ -450,7 +450,7 @@ describe('FLO-1469 independent verification', () => {
       ).toBe(0);
 
       expect(lines).toHaveLength(1);
-      expect(lines[0]).toContain(`team show ${MSG_ID.slice(0, 8)}`);
+      expect(lines[0]).toContain(`team drops --read --seat ${SEAT}`);
       expect(entered).toBe(true);
       expect(attemptLedger(seatMailDirIn(at.dir, SESSION, SEAT, 'stamped'), MSG_ID).attempts).toBe(1);
     });

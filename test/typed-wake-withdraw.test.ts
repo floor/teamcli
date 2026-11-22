@@ -10,7 +10,7 @@ import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts'
 import { boxHoldsText } from '../src/launch/deliver.ts';
 
 const IDLE = readFileSync(join(import.meta.dir, 'fixtures', 'claude-code', '2.1.326', 'idle.txt'), 'utf8');
-const LINE = 'team 1 new message from Atlas (copy 1) — read it with: team show f0ab4c65, then team ack f0ab4c65 [w:8bc6]';
+const LINE = 'team: 1 unread message waiting — read them all with: team drops --read --seat helper [w:8bc6]';
 const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, ackSettleMs: 1, verifyMs: 1, reportLine: true as const };
 
 /** A Claude pane: its composer text and whether a turn runs. `busyAfterType` starts a turn the

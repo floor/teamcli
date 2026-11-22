@@ -1,4 +1,3 @@
-import { encodeIdentity } from '../comms/identity.ts';
 import { typedWakeMaxFor } from './readable-wake.ts';
 // The typed wake: one line, one acknowledgement. A profile that declares `typed_wake: screen`
 // lets a send put one trigger line into a composer two reads showed as the empty idle prompt.
@@ -839,38 +838,18 @@ async function walkTypedWake(
 export const POINTER_TOKEN_RESERVE = 16;
 
 /**
- * The Claude adapter's typed pointer (§2.4): one line with no body, no subject and no
- * sender-written text — the sender's identity (each field one line, src/comms/identity.ts), the
- * copy it stands for, and the two commands that read the body and settle it, by the id's short
- * prefix (`ref`, which `team show` and `team ack` take). A copy after the first says it is a
- * re-send.
+ * The typed pointer a stamped record's re-send types (E7b; the Claude adapter's §2.4): one line
+ * for every message waiting at the seat, never one per message. It carries no body, no subject
+ * and nothing a sender wrote — only the count, the seat's own name and fixed words — so a message
+ * cannot put words into the seat's prompt. The command it names serves every waiting body, each
+ * ending with its own `team reply` / `team ack` line, so the seat clears its backlog in one turn.
  *
- *   team 1 new message from <name> · <address> · <model> (copy <n>[, a re-send]) — read it with: team show <ref>, then team ack <ref>
+ *   team: <n> unread message[s] waiting — read them all with: team drops --read --seat <seat>
  *
- * The line fits `max` UTF-8 bytes with room for the attempt token: the model is dropped first,
- * then the address, then the name is cut at a character boundary. Null when not even that fits.
+ * Null when the line does not fit `max` UTF-8 bytes with room for the attempt token.
  */
-export function adapterPointerLine(
-  identity: { name: string; address?: string; model?: string },
-  ref: string,
-  copy: number,
-  max: number,
-): string | null {
-  const shown = encodeIdentity(identity);
-  const which = copy <= 1 ? `copy ${String(copy)}` : `copy ${String(copy)}, a re-send`;
-  const line = (who: string): string => `team 1 new message from ${who} (${which}) — read it with: team show ${ref}, then team ack ${ref}`;
-  const room = max - POINTER_TOKEN_RESERVE;
-  const fits = (text: string): boolean => Buffer.byteLength(text, 'utf8') <= room;
-  const candidates = [
-    [shown.name, shown.address, shown.model],
-    [shown.name, shown.address],
-    [shown.name],
-  ].map((parts) => parts.filter((part): part is string => part !== undefined).join(' · '));
-  for (const who of candidates) if (fits(line(who))) return line(who);
-  const chars = Array.from(shown.name);
-  for (let n = chars.length - 1; n >= 1; n -= 1) {
-    const cut = `${chars.slice(0, n).join('')}…`;
-    if (fits(line(cut))) return line(cut);
-  }
-  return null;
+export function pointerLine(count: number, seat: string, max: number): string | null {
+  const line = `team: ${String(count)} unread message${count === 1 ? '' : 's'} waiting — read them all with: team drops --read --seat ${seat}`;
+  if (line.includes('\n') || Buffer.byteLength(line, 'utf8') > max - POINTER_TOKEN_RESERVE) return null;
+  return line;
 }

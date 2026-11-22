@@ -49,7 +49,6 @@ import { recordStampAt } from '../send/record.ts';
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
 import { readTeamConfig } from '../file/team-config.ts';
-import { existingRecordIdsIn, shortIdPrefix } from '../send/frame.ts';
 import { typedWakeMaxFor } from '../send/readable-wake.ts';
 import { floorState, socketSuppressed } from '../queue/floor.ts';
 
@@ -86,8 +85,7 @@ import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from 
 import { appendHistory, readHistory, type HistoryEntry } from '../send/history.ts';
 import { dropMessage, readTriggerLine, socketWakeHint } from '../send/native.ts';
 import { logLine } from '../log.ts';
-import { adapterPointerLine, deliverLeadTypedWake, type TypedWakeHost } from '../send/typed-wake.ts';
-import { renderedIdentity } from '../send/sender-claim.ts';
+import { deliverLeadTypedWake, pointerLine, type TypedWakeHost } from '../send/typed-wake.ts';
 import { DEFAULT_WATCH_WAKE_TRIES } from '../profiles/profile.ts';
 import {
   markWake as mark,
@@ -111,12 +109,11 @@ import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutco
 import { deactivate, floorPass } from '../queue/floor.ts';
 import { clearStranded, noteReachedPointer, noteStrandedPointer, strandedSeats } from '../queue/stranded.ts';
 import { channelOfferGivenUp, channelOwnsSeat, channelUnproven, claudeAdapterRoot, overdueChannelRecords, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
-import { copyHistory, liveChannelCopy, noteAttemptOutcome, takeExactCopyNumber, withdrawAttempt } from '../queue/handover.ts';
+import { liveChannelCopy, noteAttemptOutcome, withdrawAttempt } from '../queue/handover.ts';
 import { liveFloorActors } from '../queue/floor-actors.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { readState } from '../state.ts';
 import { typedPaneProof } from '../launch/identity.ts';
-import { composeMessageLine } from '../settings/message-display.ts';
 import { readScreen } from './screen.ts';
 import { seatDropDir, seatMailDirIn } from '../queue/mail-tree.ts';
 import { liveRecordPath, seatFolderOf } from '../send/drop-folder.ts';
@@ -191,13 +188,20 @@ export function wakeLinesPath(dropDir: string): string {
   return join(dropDir, '.wake-lines.json');
 }
 
-function typedLinesOf(dropDir: string): number[] {
+/** The record as written: the instants of the typed lines, and the instant the cap last held a
+ *  line back (`held`), when it did since the last typed line. */
+function wakeLinesOf(dropDir: string): { at: number[]; held: number | null } {
   try {
-    const parsed = JSON.parse(readFileSync(wakeLinesPath(dropDir), 'utf8')) as { at?: unknown };
-    return Array.isArray(parsed.at) ? parsed.at.filter((one): one is number => typeof one === 'number' && Number.isFinite(one)) : [];
+    const parsed = JSON.parse(readFileSync(wakeLinesPath(dropDir), 'utf8')) as { at?: unknown; held?: unknown };
+    const at = Array.isArray(parsed.at) ? parsed.at.filter((one): one is number => typeof one === 'number' && Number.isFinite(one)) : [];
+    return { at, held: typeof parsed.held === 'number' && Number.isFinite(parsed.held) ? parsed.held : null };
   } catch {
-    return [];
+    return { at: [], held: null };
   }
+}
+
+function typedLinesOf(dropDir: string): number[] {
+  return wakeLinesOf(dropDir).at;
 }
 
 /** How many lines the retry typed into this seat's pane in the hour before `nowMs`. */
@@ -205,15 +209,25 @@ function typedLinesWithinHour(dropDir: string, nowMs: number): number {
   return typedLinesOf(dropDir).filter((at) => at > nowMs - 60 * 60_000 && at <= nowMs).length;
 }
 
-/** Records one typed line; only the last hour is kept. Best effort: an unwritable record only
- *  loosens the cap, it never blocks a wake. */
-function noteTypedLine(dropDir: string, nowMs: number): void {
+/** Records one typed line, or (`held`) a line the cap held back; only the last hour is kept,
+ *  and a typed line ends the hold. Best effort: an unwritable record only loosens the cap, or
+ *  leaves the hold unsaid, and never blocks a wake. */
+function noteTypedLine(dropDir: string, nowMs: number, held = false): void {
   const kept = typedLinesOf(dropDir).filter((at) => at > nowMs - 60 * 60_000 && at <= nowMs);
+  const record = held ? { at: kept, held: nowMs } : { at: [...kept, nowMs] };
   try {
-    writeFileSync(wakeLinesPath(dropDir), `${JSON.stringify({ at: [...kept, nowMs] })}\n`, { mode: 0o600 });
+    writeFileSync(wakeLinesPath(dropDir), `${JSON.stringify(record)}\n`, { mode: 0o600 });
   } catch {
     // The cap reads what it can.
   }
+}
+
+/** The words the reports add when the hourly cap held this seat's wake line back within the last
+ *  hour and no line was typed since; empty otherwise. The cap is a storm guard, never a silence. */
+function capHeldWords(dropDir: string, nowMs: number): string {
+  const held = wakeLinesOf(dropDir).held;
+  if (held === null || !(held > nowMs - 60 * 60_000 && held <= nowMs)) return '';
+  return `; the hourly cap of ${String(WAKE_LINES_PER_HOUR)} typed wake lines held a wake line back at ${new Date(held).toISOString()}`;
 }
 
 /** The first slow retry, once the profile's fast bound is spent; each later one doubles. */
@@ -480,17 +494,32 @@ function sendLinesOf(scene: RetryScene, home: string): Map<string, HistoryEntry>
   return lines;
 }
 
-/** The time of the first typed wake history records as delivered, per message id. Read once per
- *  report, and only when a notice is due. */
+/** The history note of a re-send's typed pointer whose line was written and submitted. */
+const POINTER_RESENT_NOTE = 'not acknowledged; re-sent on the typed (the pointer)';
+
+/** The time of the newest typed wake history records as delivered, per message id: a typed wake
+ *  line, or a re-send's pointer line. Read once per report, and only when a notice is due. */
 function deliveredTypedWakesOf(scene: RetryScene, home: string): Map<string, string> {
   const woken = new Map<string, string>();
   const read = readHistory(scene.team.project, scene.root, home);
   if (!read.ok) return woken;
   for (const entry of read.entries) {
-    if (woken.has(entry.id)) continue;
-    if (entry.outcome === 'delivered (typed wake)') woken.set(entry.id, entry.ts);
+    const typed = entry.outcome === 'delivered (typed wake)' || (entry.via === 'typed' && entry.note === POINTER_RESENT_NOTE);
+    if (!typed) continue;
+    const seen = woken.get(entry.id);
+    if (seen === undefined || Date.parse(entry.ts) > Date.parse(seen)) woken.set(entry.id, entry.ts);
   }
   return woken;
+}
+
+/** The newest delivered typed wake among `ids`, from the map above; undefined when none. */
+function newestWakeOf(woken: Map<string, string>, ids: Iterable<string>): string | undefined {
+  let newest: string | undefined;
+  for (const id of ids) {
+    const at = woken.get(id);
+    if (at !== undefined && (newest === undefined || Date.parse(at) > Date.parse(newest))) newest = at;
+  }
+  return newest;
 }
 
 /** Every leg name a history line's `via` can carry in this build: the catalogue's legs and the
@@ -858,17 +887,6 @@ async function resendStampedDrops(scene: RetryScene, seat: Seat, key: KeyObject,
   return requested;
 }
 
-/** The pointer a re-send's typed wake carries: the message and its delivery number, and the read
- *  that shows the numbered body. */
-function resendPointerHint(dropDir: string, id: string): { hint: string; copy: number } | null {
-  // The number the pointer names is the next one in the history; it is taken, exactly, only in the
-  // proven first-key step (`takeExactCopyNumber`). An unreadable history types no pointer.
-  const seen = copyHistory(dropDir, id);
-  if (seen === 'unknown') return null;
-  const n = seen.copies + 1;
-  return { hint: `message ${id} · delivery ${String(n)}: run team drops`, copy: n };
-}
-
 /**
  * The positive proof the shared typed path asks immediately before every key, under the seat lock
  * (every typed wake the watch types, re-sends included): the seat's recorded pane is this pane;
@@ -985,7 +1003,6 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // E7b (R3.4): the one re-send scheduler, for every stamped record of the seat that is not
     // settled, through the seat's current adapter. The ladders below never see a stamped record.
     const requested = scene.resendStamped === undefined ? new Map<string, number>() : await resendStampedDrops(scene, seat, key.key, nowMs);
-    const pointerCopies = new Map<string, number | null>();
     /** Requests whose wake put a key into the pane but not the pointer line. */
     const keysOnly = new Set<string>();
     // The Claude adapter's seat: its pointer is the attempt, and no walk goes on after it.
@@ -996,7 +1013,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       settleRequested = async () => {
         for (const [id, attempt] of requested) {
           if (keysOnly.has(id)) {
-            noteAttemptOutcome(seatDir, id, attempt, { copy: pointerCopies.get(id) ?? null, via: null });
+            noteAttemptOutcome(seatDir, id, attempt, { copy: null, via: null });
             continue;
           }
           if (adapterSeat) {
@@ -1015,33 +1032,35 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         requested.clear();
       };
     }
-    /** The pointer line naming `id` was written with its token: that attempt is a re-send now, and
-     *  only that one (a batch's other requests are settled when the loop moves on). */
-    const confirmRequested = (id: string, at: string): void => {
-      {
+    /** The pointer line was written with its token: it names every message waiting at the seat,
+     *  so each request it covers is a re-send now. The pointer carries no copy: the read it names
+     *  numbers each copy as it serves the body. A request for a message read since the folder was
+     *  listed is not among `ids`: it is settled when the loop moves on. */
+    const confirmRequested = (ids: readonly string[], at: string): void => {
+      const seatDir = seatMailDirIn(scene.dir, scene.session, seat.name);
+      for (const id of ids) {
         const attempt = requested.get(id);
-        if (attempt === undefined) return;
+        if (attempt === undefined) continue;
         requested.delete(id);
-        const seatDir = seatMailDirIn(scene.dir, scene.session, seat.name);
-        const copy = pointerCopies.get(id) ?? null;
-        noteAttemptOutcome(seatDir, id, attempt, { copy, via: 'typed' });
+        noteAttemptOutcome(seatDir, id, attempt, { copy: null, via: 'typed' });
         const payload = payloadOf(seatDir, id, home);
         if (payload !== null) {
           appendHistory(scene.team.project, scene.root, home, {
             ts: at, from: payload.from, to: seat.name, body: payload.body, id, thread: payload.thread,
-            outcome: 'awaiting receipt', note: 'not acknowledged; re-sent on the typed (the pointer)', via: 'typed',
+            outcome: 'awaiting receipt', note: POINTER_RESENT_NOTE, via: 'typed',
           });
         }
-        scene.say(`${seat.name}: message ${id} is not acknowledged; offered again on the typed (${copy === null ? 'no copy was carried' : `delivery ${String(copy)}`})`, false);
+        scene.say(`${seat.name}: message ${id} is not acknowledged; offered again on the typed (one pointer line for every waiting message)`, false);
       }
     };
-    /** What a typed wake that carried a request's pointer did: the line written (the re-send),
-     *  only other keys (counted, fenced), or no key at all (settled by the walk going on). */
-    const settleTypedRequest = (id: string | null, typed: { typed: boolean; tries: number; lineWritten?: true } | null | undefined, tokened: boolean, at: string): void => {
-      if (id === null || !requested.has(id) || typed === null || typed === undefined) return;
+    /** What a typed wake that carried the pointer did: the line written (the re-send of every
+     *  request it covers), only other keys (counted, fenced), or no key at all (settled by the walk
+     *  going on). */
+    const settleTypedRequest = (ids: readonly string[], typed: { typed: boolean; tries: number; lineWritten?: true } | null | undefined, tokened: boolean, at: string): void => {
+      if (ids.length === 0 || typed === null || typed === undefined) return;
       // The pointer line written and submitted (an Enter, or the agent prompt), with its token.
-      if (typed.lineWritten === true && typed.tries > 0 && tokened) confirmRequested(id, at);
-      else if (typed.typed) keysOnly.add(id);
+      if (typed.lineWritten === true && typed.tries > 0 && tokened) confirmRequested(ids, at);
+      else if (typed.typed) for (const id of ids) keysOnly.add(id);
     };
     // The seat's own retry, read from its profile and its file word. Off keeps today's
     // drop-file typed leg, whose writer refuses in every real binding.
@@ -1247,44 +1266,29 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const audited = wakeable.map((message) => ({ message, payload: payloadOf(dropDir, message.id, home) }))
         .find((one) => one.payload !== null);
       if (audited === undefined || audited.payload === null) continue;
+      // A re-send's wake (E7b) is the pointer only: one line for every message waiting at the
+      // seat, with the count and the read that serves them all (`pointerLine`), never a line per
+      // message and never a word a sender wrote. Every request the pass holds for a message still
+      // waiting is carried by it.
+      const pointerIds = requested.has(audited.message.id)
+        ? wakeable.filter((one) => requested.has(one.id)).map((one) => one.id)
+        : [];
+      const batch = pointerIds.length > 0;
+      // The Claude adapter's pointer (§2.4) is that same line, typed under its own guards below.
+      const adapterPointer = adapterSeat && batch;
       // The wake's header names the sender the signed record carries, resolved through this
       // home's registries. A sender that cannot be pinned is not typed nameless: the message
       // stays unread, its reservations are never taken, and the report pass says why.
-      // A re-send's wake (E7b) is the pointer only: the message, its delivery number, `team drops`.
-      const pointerFor = requested.has(audited.message.id) ? audited.message.id : null;
-      const pointer = pointerFor === null ? null : resendPointerHint(dropDir, pointerFor);
-      if (pointerFor !== null && pointer === null) continue;
-      if (pointerFor !== null && pointer !== null) pointerCopies.set(pointerFor, pointer.copy);
-      /** The pointer's number, taken exactly as the line names it, inside the proven first-key
-       *  step: a rival that took it first refuses the key. */
-      const takePointer = (): boolean => pointerFor === null || pointer === null || takeExactCopyNumber(dropDir, pointerFor, 'pointer', pointer.copy);
-      // The Claude adapter's pointer (§2.4) is built from the verified record alone: its one
-      // identity (the signed spelling when the registry cannot name the sender) and the copy.
-      const adapterPointer = adapterSeat && pointerFor !== null && pointer !== null;
-      // The wake's header names the sender the signed record carries, resolved through this
-      // home's registries. A sender that cannot be pinned is not typed nameless: the message
-      // stays unread, its reservations are never taken, and the report pass says why.
-      const sender = adapterPointer ? null : wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now, wordsNow());
-      if (!adapterPointer && sender === null) continue;
+      const sender = batch ? null : wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now, wordsNow());
+      if (!batch && sender === null) continue;
       // A socket delivery's re-wake names the message the frame carried: answer it or ack it
       // (ADR `message-path`, D3). Any other message keeps the profile's read sentence.
-      const wakeHint = pointer !== null
-        ? pointer.hint
-        : linesNow().get(audited.message.id)?.via === 'socket' ? socketWakeHint(audited.message.id) : undefined;
-      // A re-send's pointer never renders a wake template (no subject, no summary): only the
-      // sender as the registry names it, then the message, its delivery number and `team drops`.
-      const line = adapterPointer && pointer !== null
-        ? adapterPointerLine(
-          renderedIdentity(audited.payload.from, { record: audited.payload, home }),
-          shortIdPrefix(audited.message.id, existingRecordIdsIn(dropDir)),
-          pointer.copy,
-          typedWakeMaxFor(seat.cli),
-        )
+      const wakeHint = linesNow().get(audited.message.id)?.via === 'socket' ? socketWakeHint(audited.message.id) : undefined;
+      const line = batch
+        ? pointerLine(freshNow.length, seat.name, typedWakeMaxFor(seat.cli))
         : sender === null
           ? null
-          : pointer !== null
-            ? composeMessageLine(`${sender.name ?? sender.seat} —`, pointer.hint)
-            : readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
+          : readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
       if (line === null) continue;
       // The typed retry submits a box that already holds exactly its line, and leaves every
       // other draft. A lead's draft is the exception the delivery below can keep: it copies
@@ -1349,14 +1353,14 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
               dropPath: liveRecordPath(dropDir, message.id),
               seatDir: join(scene.dir, 'seats', seat.name),
               log: (kept) => logLine(join(scene.root, '.agents'), 'watch', seat.name, kept, scene.now),
-              // The shared typed path's proof before every key; the pointer's number and the
-              // attempt's `emitted` before the first.
+              // The shared typed path's proof before every key; the attempt's `emitted` before
+              // the first.
               beforeEachKey: () => paneStillSeats(scene, seat.name, pane),
-              beforeFirstKey: () => (leadHandle === null || leadHandle.emit()) && takePointer(),
+              beforeFirstKey: () => leadHandle === null || leadHandle.emit(),
               reportLine: true,
             });
         if (typed !== null) leadHandle?.settle(typed);
-        settleTypedRequest(pointerFor, typed, leadLine !== line, at);
+        settleTypedRequest(pointerIds, typed, leadLine !== line, at);
         if (!pushed && (typed === null || !typed.typed)) {
           for (const id of reserved) release(wakePath(dropDir, id));
           continue;
@@ -1406,8 +1410,11 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       if ((retry !== null || adapterPointer) && !preserveDraft) {
         // One pane takes at most `WAKE_LINES_PER_HOUR` typed lines from this retry, whatever
         // number of messages wait: the slow retries must never flood a seat's box.
+        // A line held back is recorded, so the unread reports say the cap held it.
         if (scene.sources.typedWake !== undefined && typedLinesWithinHour(dropDir, nowMs) >= WAKE_LINES_PER_HOUR) {
           for (const id of reserved) release(wakePath(dropDir, id));
+          noteTypedLine(dropDir, nowMs, true);
+          scene.say(`${seat.name}: the hourly cap of ${String(WAKE_LINES_PER_HOUR)} typed wake lines is reached; no wake line was typed this pass, ${String(freshNow.length)} unread message${freshNow.length === 1 ? ' waits' : 's wait'}`, false);
           continue;
         }
         // The wake-attempt fence (rfc-event-comms §5, E6): an attempt whose keys may have landed
@@ -1453,9 +1460,9 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
             return false;
           }
         };
-        // The shared typed path's proof before every key; the pointer's number and the attempt's
-        // `emitted` before the first. An adapter pointer also asks the floor and its protection
-        // again at every key, under the seat lock this pass holds.
+        // The shared typed path's proof before every key; the attempt's `emitted` before the
+        // first. An adapter pointer also asks the floor and its protection again at every key,
+        // under the seat lock this pass holds.
         let refusal: string | undefined;
         let ownership: string | undefined;
         let typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, {
@@ -1467,7 +1474,6 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           },
           beforeFirstKey: () => {
             if (handle !== null && !handle.emit()) { refusal = 'the wake attempt could not be emitted'; return false; }
-            if (!takePointer()) { refusal = 'the pointer copy could not be reserved'; return false; }
             return true;
           },
           reportLine: true,
@@ -1484,7 +1490,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         } else if (typed?.delivered === true) {
           clearUnrecognisedScreen(dropDir);
         }
-        settleTypedRequest(pointerFor, typed, typedLine !== line, at);
+        settleTypedRequest(pointerIds, typed, typedLine !== line, at);
         if (typed?.typed === true) noteTypedLine(dropDir, nowMs);
         if (typed === undefined) {
           // No seam bound: nothing was attempted, so nothing is spent and no attempt is counted.
@@ -2174,12 +2180,14 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
     // This report types nothing, but a wake the send or a retry already delivered is named: a
     // notice saying only "no wake line was typed" read as "the seat was never woken" when the
     // send's own typed wake had landed minutes before (2026-11-17, an agy seat whose turn ran
-    // 3 min after the wake).
+    // 3 min after the wake). Every waiting message is asked, not only the oldest: one pointer
+    // line covers them all, and the history names whichever message it was written for. A line
+    // the hourly cap held back is said too.
     deliveredWakes ??= deliveredTypedWakesOf(scene, home);
-    const woken = deliveredWakes.get(oldest.id);
-    const typedWord = woken === undefined
-      ? 'no wake line was typed'
-      : `a typed wake was delivered at ${woken} and the seat has not read it since; this report typed nothing`;
+    const woken = newestWakeOf(deliveredWakes, unreadIds);
+    const typedWord = (woken === undefined
+      ? 'no wake line was typed for any of them'
+      : `a typed wake was delivered at ${woken} and the seat has not read it since; this report typed nothing`) + capHeldWords(dropDir, nowMs);
     // The screen words end in "no wake reached it": true of this pass, false of the message once
     // a delivered wake is known, so the clause goes and only what the pass saw stays.
     const word = woken === undefined ? reason.word : reason.word.replace(/, no wake reached it$/, '');
@@ -2454,6 +2462,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
     return nowMs - Date.parse(since) < reading.stuckAfterSeconds * 1000;
   };
   let blockedHistoryIds: Set<string> | null = null;
+  let deliveredWakes: Map<string, string> | undefined;
   const hasBlockedHistory = (id: string): boolean => {
     if (blockedHistoryIds === null) {
       const historyRead = readHistory(scene.team.project, scene.root, home);
@@ -2528,17 +2537,22 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
       if (!reserve(reportedPath(dropDir, message.id), { id: message.id, at, state: 'reserved' })) continue;
       const minutes = Math.max(1, Math.round(age / 60_000));
       const tried = woke === null ? wakeTryOf(dropDir, message.id) : null;
-      const wakeWords = woke === null
+      // A re-send's pointer gives its marker back before the next attempt: the history still
+      // names the line it typed, so "no wake line was typed" is said only when none was.
+      const pointed = woke === null ? (deliveredWakes ??= deliveredTypedWakesOf(scene, home)).get(message.id) : undefined;
+      const wakeWords = (woke === null
         ? tried !== null && tried.typed
           ? `a typed wake was tried ${String(tried.tries)} time${tried.tries === 1 ? '' : 's'} and none was confirmed`
-          : 'no wake line was typed'
+          : pointed !== undefined
+            ? `a typed wake was delivered at ${pointed} and the seat has not read it since`
+            : 'no wake line was typed'
         : woke.state === 'reserved'
           ? woke.evidence === 'webhook'
             ? `a webhook wake was posted at ${woke.at} and its answer was not read`
             : `a wake was attempted at ${woke.at} and its outcome is unconfirmed`
           : woke.evidence === 'webhook'
             ? `its webhook adapter took the wake at ${woke.at}`
-            : `its wake line was sent at ${woke.at}`;
+            : `its wake line was sent at ${woke.at}`) + capHeldWords(dropDir, nowMs);
       const where = `the drop is at ${liveRecordPath(dropDir, message.id)}`;
       // The record's state word matches the send-side one written when a walk stored a message
       // without waking the seat: `queued, not woken`. A sender reading either line finds the
