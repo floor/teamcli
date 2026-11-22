@@ -172,7 +172,11 @@ describe('a marked managed launch never runs without its endpoint', () => {
       managed: (input) => { seen = input; return { kind: 'up', url: URL, started: true }; },
     });
     await executePlan(launchSteps({ dir: STATE_DIR }), 'acme', host);
-    expect(seen).toEqual({ dir: STATE_DIR, session: 'acme', seat: 'coder', cwd: '/seat/folder', config: [], pane: 'p1' });
+    // A bare line names no config of its own: the endpoint gets the profile's feature pins.
+    expect(seen).toEqual({ dir: STATE_DIR, session: 'acme', seat: 'coder', cwd: '/seat/folder', config: [
+      '-c', 'features.computer_use=false', '-c', 'features.browser_use=false',
+        '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false',
+    ], pane: 'p1' });
     expect(calls).toEqual(['managed', `paneRun:codex --remote ${URL}`]);
     expect(calls[1]).not.toContain('--no-daemon');
     expect(said.join('')).not.toContain('left out');

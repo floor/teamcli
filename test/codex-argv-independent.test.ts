@@ -18,8 +18,9 @@ import { launchCommandOrRefusal } from '../src/profiles/profile.ts';
 const PROFILE = profileFor('codex')!;
 const RULES = 'Read the rules file before your first answer (pair 5e1d0a9c).';
 /** The words the profile adds to a line that sets none of them itself. */
-// Codex launches omit the obsolete OAuth refresh override after the dialog fix.
-const ADDED = ['-a', 'never', '-s', 'danger-full-access', '--no-alt-screen'];
+// Codex launches omit the obsolete OAuth refresh override after the dialog fix, and carry the
+// profile's computer- and browser-use pins after the unattended defaults.
+const ADDED = ['-a', 'never', '-s', 'danger-full-access', '--no-alt-screen', ...PROFILE.features.flatMap((pair) => ['-c', `features.${pair}`])];
 
 const roots: string[] = [];
 /** A folder holding a fake codex that logs its argv, one argument per line. */

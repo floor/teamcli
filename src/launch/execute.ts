@@ -23,7 +23,7 @@ import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict,
 import { paneInOwnWorktree, restoreProof, type RestoreWorktree } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
 import { appendOnLaunchLine } from './cli-scope.ts';
-import { codexCommandHasFlag, codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
+import { codexCommandHasFlag, codexEndpointStartConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from './codex-endpoint.ts';
 import {
   closeTarget,
@@ -1818,7 +1818,7 @@ export async function executePlan(
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
-            : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointConfig(op.command), ...(here ? { pane: here.pane } : {}), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
+            : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointStartConfig(op.command), ...(here ? { pane: here.pane } : {}), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
           if (read.kind === 'up') {
             const attached = remoteCodexCommand(command);
             command = appendOnLaunchLine(attached, `--remote ${shellQuote(read.url)}`, 'codex').line;

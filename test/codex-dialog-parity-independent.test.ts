@@ -109,8 +109,11 @@ describe('the recorded recipe sheds exactly the retired pair', () => {
     expect(currentCodexRecipe(RECIPE_UNSAFE)).toBeNull();
   });
 
-  test('the profile pins no feature any more, and the record line sheds the pair', () => {
-    expect(pinnedWords(profileFor('codex')?.features ?? [])).toEqual([]);
+  test('the profile pins only computer and browser use off, and the record line sheds the pair', () => {
+    expect(pinnedWords(profileFor('codex')?.features ?? [])).toEqual([
+      '-c', 'features.computer_use=false', '-c', 'features.browser_use=false',
+      '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false',
+    ]);
     expect(pinnedRecordLine('codex', RECIPE_OLD, [])).toBe('codex -m gpt-6.1-sol');
   });
 

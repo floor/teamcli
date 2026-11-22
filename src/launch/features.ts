@@ -19,6 +19,30 @@ export function pinnedWords(features: readonly string[]): string[] {
   return features.flatMap((pair) => ['-c', `features.${pair}`]);
 }
 
+/** One `--enable <FEATURE>` / `--disable <FEATURE>` word (spaced or `=`-joined) as the feature
+ *  pair it stands for, or null for any other word. `codex --help` (0.167.0) documents each as
+ *  "Equivalent to `-c features.<name>=true`" and "... `=false`". `took` is whether the name was
+ *  the next word. */
+export function featureToggle(word: string, next: string | undefined): { name: string; value: boolean; took: boolean } | null {
+  const joined = /^--(enable|disable)=([A-Za-z0-9_]+)$/.exec(word);
+  if (joined !== null) return { name: joined[2]!, value: joined[1] === 'enable', took: false };
+  if ((word === '--enable' || word === '--disable') && next !== undefined && /^[A-Za-z0-9_]+$/.test(next)) {
+    return { name: next, value: word === '--enable', took: true };
+  }
+  return null;
+}
+
+/** A Codex app-server's start words with the profile's pinned feature set made effective: each
+ *  pin whose last value in `config` is absent or the other value is appended as
+ *  `-c features.<pair>`, after every word already there, so the CLI's last-wins rule makes it the
+ *  server's value. A config that already ends on every pin is returned unchanged. The server a
+ *  seat's TUI attaches to runs its turns under its own configuration, so this is the one place
+ *  the team's set reaches it, and the reuse and check comparisons read the same words. */
+export function withPinnedFeatures(config: readonly string[], features: readonly string[]): string[] {
+  const gaps = featureGaps('', features, config);
+  return gaps.length === 0 ? [...config] : [...config, ...pinnedWords(gaps)];
+}
+
 /** The CLI's decoded words for a recorded line: the caller's own reading when it has one (the
  *  launch scope, `cliWordList`), else the same reader applied to the line on its own. Null when
  *  the line cannot be decoded — a line no shell scope proves carries no readable pin. */
@@ -27,8 +51,9 @@ function decodedFor(line: string, words: readonly string[] | null | undefined): 
 }
 
 /** One feature name's effective value on a launch line, read the way the CLI reads its own
- *  words. Only `-c`/`--config` pairs are read — the spelling the profile pins and the one the
- *  seat's own config words already use — with the last pair for a name winning. A bare `--`
+ *  words. `-c`/`--config` pairs are read — the spelling the profile pins and the one the seat's
+ *  own config words already use — and `--enable`/`--disable`, the CLI's own shorthand for the
+ *  same pair, with the last word for a name winning. A bare `--`
  *  ends option parsing, as it does for the CLI: a word after it is positional, and a
  *  config-shaped prompt word names no feature. `words` is the line already decoded by the
  *  launch scope; when it is omitted the line is decoded here, and an unreadable line names no
@@ -40,6 +65,12 @@ export function featureSettings(line: string, words?: readonly string[] | null):
   for (let i = 0; i < decoded.length; i++) {
     const word = decoded[i]!;
     if (word === '--') break;
+    const toggle = featureToggle(word, decoded[i + 1]);
+    if (toggle !== null) {
+      if (toggle.took) i++;
+      settings.set(toggle.name, toggle.value);
+      continue;
+    }
     const inline = /^--config=(.*)$/.exec(word);
     const value = word === '-c' || word === '--config' ? decoded[i + 1] : inline?.[1];
     if (value === undefined) continue;

@@ -405,8 +405,12 @@ test('a Codex seat on the incompatible-feature dialog is relaunched and no optio
   ));
   expect(await runUp(['--dry-run'], dry, planned), `${dry.out}\n${dry.err}`).toBe(0);
   const pins = pinnedWords(profileFor('codex')?.features ?? []);
-  // Dialog recovery relaunches without the retired fixed false pair.
-  expect(pins).toEqual([]);
+  // Dialog recovery relaunches without the retired fixed false pair, with the current pins.
+  expect(pins).toEqual([
+    '-c', 'features.computer_use=false', '-c', 'features.browser_use=false',
+    '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false',
+  ]);
+  for (let at = 1; at < pins.length; at += 2) expect(dry.out).toContain(pins[at]!);
   expect(dry.out).toContain('closed without choosing a dialog option; launched again with the coordination flag');
   expect(dry.out).not.toContain('features.mcp_oauth_refresh_coordination=false');
   expect(dry.out).not.toContain('send-keys');
