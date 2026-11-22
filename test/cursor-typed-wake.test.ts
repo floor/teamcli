@@ -1,7 +1,8 @@
 // The cursor typed wake, read on the captured 2026.10.22 frames in
 // test/fixtures/cursor/2026.10.22/: the empty idle box, a draft in the box, and the `Working`
 // frame. No CLI runs and no key leaves the process.
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import * as stateModule from '../src/state.ts';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend, sendDirect } from '../src/commands/send.ts';
@@ -304,6 +305,32 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
     expect(run.result?.outcome).not.toBe('delivered');
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
+  });
+
+  test('each key judges one snapshot of the record: a relaunch recorded between two reads takes no key', async () => {
+    const made = cursorWorld();
+    const live = { pane: 'pane-cursor', foreground: [222] };
+    const pane = drawingWake();
+    const host = fake(made, { ...launched(made, live), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    // After the line is typed the seat is relaunched in place. A read made on behalf of the launch
+    // comparison still sees the old record; any later read sees the new one, which the pane matches.
+    let relaunched = false;
+    typedThen(pane, () => { relaunched = true; live.foreground = [444]; });
+    const realRead = stateModule.readState;
+    const spy = spyOn(stateModule, 'readState').mockImplementation((at: string) => {
+      const state = realRead(at);
+      const seat = state.sessions.acme?.seats.cursor;
+      if (!relaunched || seat === undefined || (new Error().stack ?? '').includes('launchOf')) return state;
+      seat.launched = { shell: 111, cli: [444] };
+      return state;
+    });
+    try {
+      const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+      expect(run.result?.outcome).not.toBe('delivered');
+      expect(pane.enters).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test('a direct-only send types no further key once the declaration stops the seat', async () => {
