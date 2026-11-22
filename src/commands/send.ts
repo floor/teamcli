@@ -361,8 +361,9 @@ export type DirectSendResult = {
 
 /**
  * The watch's idle dispatch uses this hook. With it set, the send walks only routes that reach a
- * live receiver without a keystroke — the typed and native legs type, and the drop leg is a
- * stored copy rather than a wake, so none of the three is attempted. The walk's ending is
+ * live receiver: the event legs, and the profile-gated typed wake for a seat whose profile
+ * declares one (its guarded seam, rechecked before every key). The native leg and the drop leg
+ * (a stored copy rather than a wake) are not attempted. The walk's ending is
  * handed back as a result instead of only an exit code. Admission, the delivery order and every
  * remaining route's rules are the same ones an ordinary send runs.
  */
@@ -508,8 +509,8 @@ export type SendHost = {
   /** The build this process runs, compared against a live inbox listener's marker. Left out
    *  (a test's host), the retired inbox name's receipt wait keeps the liveness-only check. */
   build?: () => BuildIdentity;
-  /** The direct-only ending hook: when set, the typed leg is never walked and the ending is
-   *  reported once. The watch's idle dispatch is its caller. */
+  /** The direct-only ending hook: when set, only wake legs are walked (the typed one only where
+   *  the profile declares it) and the ending is reported once. The watch's idle dispatch is its caller. */
   direct?: DirectSendHook;
   /** The watch's own sender principal, set only by the internal `sendWatchDirect`. Absent, the
    *  caller is placed from the ordinary sources (`io.caller`, `io.callerSources`, ancestry). */
@@ -734,7 +735,6 @@ function classWords(read: ClassRead, seat: string, wake?: WakeOutcome): string {
   if (read.cls === 'push' && read.webhookOnly) return WEBHOOK_QUEUED_WORDS;
   return deliveryWords(read.cls, seat, {
     ...(read.human ? { human: true } : {}),
-    ...(!read.human && (profileFor(read.cli)?.typedWake ?? null) !== null ? { typedWake: true } : {}),
     ...(read.watchWake ? { watchWake: true } : {}),
     ...(!read.human && (profileFor(read.cli)?.typedWake ?? null) === null && (profileFor(read.cli)?.sessionCli ?? null) !== null ? { sessionOnly: true } : {}),
     ...(wake === undefined ? {} : { wake }),
@@ -2084,15 +2084,18 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
   } = plan;
   if (channelSkip === CHANNEL_FLAG_DROPPED) report.channelNote = CHANNEL_FLAG_DROPPED;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
-  // reaches a live receiver without a keystroke stays. The typed and native legs type, and the
-  // drop leg is a stored copy rather than a wake, so none of the three is attempted. A
-  // functional headless route would stay if this build carried one. Every remaining leg keeps
-  // its own rules, and the order's own words decide whether the receiver offers it. A watch
-  // principal makes the walk direct by itself: the watch's own send never falls back to a route
-  // that types or stores, whatever hook its caller built.
+  // reaches a live receiver stays. The native leg types and the drop leg is a stored copy rather
+  // than a wake, so neither is attempted. The profile-gated typed wake stays when the plan walks
+  // it (`walkingTyped`: the profile declares `typed_wake`, the pane is not a person's, the order
+  // keeps `typed`): it is the one guarded seam (src/send/typed-wake.ts) — empty composer only,
+  // never over a draft — and it is the seat's only wake while it is idle. Every remaining leg
+  // keeps its own rules. A watch principal makes the walk direct by itself, whatever hook its
+  // caller built.
   const DIRECT_WAKE_LEGS: readonly WalkLeg[] = ['socket', 'headless-resume'];
   const directWalk = host.direct !== undefined || host.watch !== undefined;
-  const declaredWalk: readonly WalkLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  const declaredWalk: readonly WalkLeg[] = directWalk
+    ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg) || (leg === 'typed' && walkingTyped))
+    : chosen;
   // The walk is the cascade exactly as resolved: a live MCP inbox server standing beside the
   // seat no longer splices a leg into it. MCP push is not a wake (ADR D1); the inbox is the
   // store's reader, and the record is already stored there for it to read.
@@ -3336,7 +3339,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     // another team's record and a `--wait` run are reached directly as before, and so is a daemon
     // that answers `direct: true` (it runs no wake child, and staged and typed nothing): the walk
     // below is then this process's, exactly once.
-    const handoff = !to.cross && compose === null && typedWake !== null && !wait && trigger !== null;
+    // A direct walk types here, behind its own recheck: its caller reads the wake's real ending.
+    const handoff = !directWalk && !to.cross && compose === null && typedWake !== null && !wait && trigger !== null;
     // E7b revision 3 (carrier 2): a stamped record's body is never handed to the daemon. Its
     // record is already staged in the stamped tree, and this process (the installed build, level 3)
     // walks its legs itself, so no request carrying the body can reach an older daemon.
@@ -3467,8 +3471,18 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
         continue;
       }
+      // A direct-only caller's authority is rechecked before the wake and before each key it
+      // types: a refusal ends the walk with nothing more typed.
+      const typedGuard = guardRefusal(directGuard);
+      if (typedGuard !== null) {
+        failures.push(`typed: refused: ${typedGuard.why}`);
+        markLeg('typed', 'refused', typedGuard.why);
+        note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: typedGuard.why }));
+        break;
+      }
       await ensureEpisode();
-      const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note, true, stagedWrittenOf());
+      const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note, true, stagedWrittenOf(),
+        directGuard === undefined ? undefined : () => guardRefusal(directGuard) === null);
       if (wake.delivered) {
         markLeg('typed', 'attempted');
         return delivered(io, to.seat, report, 'typed wake', 'typed');
@@ -5411,6 +5425,8 @@ async function deliverTypedWakeSeat(
    *  cascade): this leg then records nothing. A send leaves it true. */
   writeHistory = true,
   staged?: RecordWritten | null,
+  /** A direct-only caller's recheck, asked before every key the wake types. */
+  beforeEachKey?: () => boolean,
 ): Promise<{ delivered: true } | { delivered: false; reason: string; typed: boolean }> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
@@ -5445,6 +5461,7 @@ async function deliverTypedWakeSeat(
         receipt: () => host.wakeReceipt!({ dropDir, id: payload.id, seat: seatName, root, session, home: host.home }),
       }),
       draftFile: join(dropDir, `${payload.id}.draft`),
+      ...(beforeEachKey === undefined ? {} : { beforeEachKey }),
     });
     if (!wake.delivered) {
       settleLegBody(typedBody, wake.typed ? 'unknown' : 'no');
@@ -7266,6 +7283,7 @@ function classWithout(
       endpoint: lost.endpoint === true ? false : read.evidence.endpoint,
       ...(read.evidence.human ? { human: true } : {}),
       ...(webhookStanding ? { webhook: true } : {}),
+      ...(read.evidence.typedWake ? { typedWake: true } : {}),
     }),
     // The adapter is the only reason left for `push` when no direct route stands: a failed
     // socket or queue leaves it, and its wake belongs to the bus that announces the record.

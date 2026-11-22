@@ -386,7 +386,7 @@ describe('bindCodexSeatThread', () => {
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('another agent for this seat');
     expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OLD_THREAD);
-    expect(deliveryOf(w).class).toBe('pull-on-turn');
+    expect(deliveryOf(w).class).toBe('typed-wake'); // no queue; its typed wake
   });
 
   test('an endpoint recorded inside another seat\'s run folder is not read or bound', async () => {
@@ -405,7 +405,7 @@ describe('bindCodexSeatThread', () => {
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('not the one its launch owns');
     expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OLD_THREAD);
-    expect(deliveryOf(w).class).toBe('pull-on-turn');
+    expect(deliveryOf(w).class).toBe('typed-wake'); // no queue; its typed wake
   });
 
   test('an endpoint two seats both record is refused as ambiguous', async () => {
@@ -427,7 +427,7 @@ describe('bindCodexSeatThread', () => {
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('another seat records the same Codex endpoint');
     expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OLD_THREAD);
-    expect(deliveryOf(w).class).toBe('pull-on-turn');
+    expect(deliveryOf(w).class).toBe('typed-wake'); // no queue; its typed wake
   });
 
   // The named path has no state write of its own, so nothing but a fence can stop it from writing
@@ -535,7 +535,7 @@ describe('bindCodexSeatThread', () => {
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('names another thread');
     expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OTHER_THREAD);
-    expect(deliveryOf(w).class).toBe('pull-on-turn');
+    expect(deliveryOf(w).class).toBe('typed-wake'); // no queue; its typed wake
   });
 
   // The same incarnation can record a different endpoint — the same seat relaunched under the
@@ -564,7 +564,7 @@ describe('bindCodexSeatThread', () => {
     expect(after?.agent_session).toBeUndefined();
     expect(after?.codex_endpoint?.url).toBe(replaced.url);
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBeUndefined();
-    expect(deliveryOf(w).class).toBe('pull-on-turn');
+    expect(deliveryOf(w).class).toBe('typed-wake'); // no queue; its typed wake
   });
 
   // A clear is a later writer's word exactly like a recorded conversation: the record must still
@@ -587,7 +587,7 @@ describe('bindCodexSeatThread', () => {
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('lost its conversation');
     expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session ?? null).toBeNull();
-    expect(deliveryOf(w).class).toBe('pull-on-turn');
+    expect(deliveryOf(w).class).toBe('typed-wake'); // no queue; its typed wake
   });
 
   // The named path keeps the same rule: the state still names its thread, but the record's own
@@ -609,6 +609,6 @@ describe('bindCodexSeatThread', () => {
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('lost its conversation');
     expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBe(OLD_THREAD);
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session ?? null).toBeNull();
-    expect(deliveryOf(w).class).toBe('pull-on-turn');
+    expect(deliveryOf(w).class).toBe('typed-wake'); // no queue; its typed wake
   });
 });

@@ -214,6 +214,7 @@
                 "enum": [
                   "push",
                   "between-turns",
+                  "typed-wake",
                   "pull-on-turn",
                   "none"
                 ]
@@ -242,6 +243,10 @@
                   "integer",
                   "null"
                 ]
+              },
+              "legacy_unsigned": {
+                "type": "integer",
+                "minimum": 1
               }
             }
           }

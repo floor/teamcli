@@ -2786,7 +2786,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   // and proves nothing (a socket that is not listening here), so the restart says exactly that
   // (pull-only), and the class a send prints must say the same: the runtime queue is addressed by
   // the conversation the records bind, and an endpoint alone never wakes anybody.
-  test('a restart whose new pane and endpoint name no thread ends pull-only, and the class claims no wake', async () => {
+  test('a restart whose new pane and endpoint name no thread is no queue, and the class falls to its typed wake', async () => {
     const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
     updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
     const BOUND = 'prs_fedcba987654';
@@ -2838,8 +2838,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       declared: { cli: 'codex', launch: 'codex -m gpt-6.1-sol' },
       state: seat,
     });
-    expect(delivery.class).toBe('pull-on-turn');
-    expect(delivery.words).toBe('queued; worker reads it at its next turn, and nothing here gives it one (pull-only)');
+    // No queue takes the message; the profile's typed wake is what reaches the seat.
+    expect(delivery.class).toBe('typed-wake');
     expect(delivery.evidence.endpoint).toBe(false);
     expect(delivery.evidence.conversation).toBe(false);
     // The run says which read proved nothing, so a reader can tell an unreadable endpoint from a

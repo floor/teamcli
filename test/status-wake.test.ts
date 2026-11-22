@@ -98,8 +98,8 @@ function read(over: {
   });
 }
 
-test('a seat with no endpoint and no listener is unwakeable, and its cell is flagged', () => {
-  const wake = read();
+test('a seat with no adapter, no endpoint and no typed wake is unwakeable, and its cell is flagged', () => {
+  const wake = read({ declared: { cli: 'claude-code', launch: 'claude' } });
   expect(wake).toEqual({
     class: 'pull-on-turn',
     wakeable: false,
@@ -113,13 +113,21 @@ test('a seat with no endpoint and no listener is unwakeable, and its cell is fla
   expect(wakeCell(wake)).toBe('!pull-on-turn');
 });
 
-test('an endpoint with no bound conversation keeps the seat unwakeable, and the cell says why', () => {
+test('a seat whose profile declares a typed wake is wakeable, and its cell names the class', () => {
+  for (const cli of ['cursor', 'gemini', 'grok', 'antigravity', 'codex']) {
+    const wake = read({ declared: { cli, launch: cli } });
+    expect(`${cli} ${wakeCell(wake)} ${String(wake.wakeable)}`).toBe(`${cli} typed-wake true`);
+  }
+});
+
+test('an endpoint with no bound conversation is no queue, and the cell says why', () => {
   // The registry names the thread, and the state copy names none: exactly the records a
   // sessionless launch leaves, and the gap a send must not read as a wake.
   record(THREAD);
   const wake = read({ state: state() });
-  expect(wake).toMatchObject({ class: 'pull-on-turn', wakeable: false, endpoint: true, conversation: false });
-  expect(wakeCell(wake)).toBe('!pull-on-turn (endpoint, no bound conversation)');
+  // The queue cannot be handed a pointer; the profile's typed wake is the seat's wake.
+  expect(wake).toMatchObject({ class: 'typed-wake', wakeable: true, endpoint: true, conversation: false });
+  expect(wakeCell(wake)).toBe('typed-wake (endpoint, no bound conversation)');
 });
 
 test('an endpoint with a bound conversation is walked between turns', () => {
@@ -143,8 +151,8 @@ test('a live listener and an unread drop are shown beside the class', () => {
     `${JSON.stringify({ id: DROP, from: 'lead', ts: new Date(NOW.getTime() - 5 * 60_000).toISOString() })}\n`,
   );
   const wake = read();
-  expect(wake).toMatchObject({ class: 'pull-on-turn', wakeable: false, listener: true, unread: 1, oldest_unread_seconds: 300 });
-  expect(wakeCell(wake)).toBe('!pull-on-turn (inbox, unread 5m)');
+  expect(wake).toMatchObject({ class: 'typed-wake', wakeable: true, listener: true, unread: 1, oldest_unread_seconds: 300 });
+  expect(wakeCell(wake)).toBe('typed-wake (inbox, unread 5m)');
 });
 
 test('a human seat is never woken, whatever its records say', () => {

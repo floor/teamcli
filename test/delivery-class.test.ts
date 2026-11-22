@@ -86,9 +86,18 @@ describe('the launch refines the declared class', () => {
     expect(CLASS_OF({ human: true, endpoint: true })).toBe('none');
   });
 
-  test('only push and between-turns reach an idle seat', () => {
+  test('a declared typed wake makes a seat no adapter reaches typed-wake; an adapter still wins', () => {
+    expect(CLASS_OF({ declared: 'pull-on-turn', watcher: 'inbox', typedWake: true })).toBe('typed-wake');
+    expect(CLASS_OF({ declared: 'none', watcher: 'none', typedWake: true })).toBe('typed-wake');
+    expect(CLASS_OF({ typedWake: true, socket: true })).toBe('push');
+    expect(CLASS_OF({ declared: 'between-turns', typedWake: true, endpoint: true })).toBe('between-turns');
+    expect(CLASS_OF({ human: true, typedWake: true })).toBe('none');
+  });
+
+  test('push, between-turns and typed-wake reach an idle seat', () => {
     expect(wakeableWhileIdle('push')).toBe(true);
     expect(wakeableWhileIdle('between-turns')).toBe(true);
+    expect(wakeableWhileIdle('typed-wake')).toBe(true);
     expect(wakeableWhileIdle('pull-on-turn')).toBe(false);
     expect(wakeableWhileIdle('none')).toBe(false);
   });
@@ -103,11 +112,9 @@ describe('the plain words', () => {
     // A person's pane is never typed into; a profile that declares the typed wake says the one
     // way an idle seat can still be reached.
     expect(deliveryWords('none', 'helper', { human: true })).toBe('queued; helper has no way to be woken while idle');
-    expect(deliveryWords('none', 'helper', { typedWake: true })).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn');
-    // The watch's typed retry is a wake of its own name: a profile that turns it on says so, and
-    // one that turns it off keeps the send-time sentence exactly.
-    expect(deliveryWords('none', 'helper', { typedWake: true, watchWake: true })).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn');
-    expect(deliveryWords('none', 'helper', { typedWake: true, watchWake: false })).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn');
+    expect(deliveryWords('typed-wake', 'helper')).toBe('woken by a typed wake into its empty composer; a busy or drafted composer keeps the message in its bus inbox');
+    // The watch's typed retry is a wake of its own name: a profile that turns it on says so.
+    expect(deliveryWords('typed-wake', 'helper', { watchWake: true })).toBe('woken by a typed wake into its empty composer, and by the watch\'s typed retry once a message passes its unread window; a busy or drafted composer keeps the message in its bus inbox');
     // A watch retry without the typed wake it retries is not a route, and is never said.
     expect(deliveryWords('none', 'helper', { watchWake: true })).toBe('queued; nothing wakes helper while it is idle; a person or a restart must give it a turn');    // A seat that takes mail only as a new remote session reads no inbox: the words say so, and
     // never that a restart would give it a turn.
@@ -122,6 +129,10 @@ describe('the plain words', () => {
       .toBe(`queued; the typed wake did not run (the session lists more than one agent with this name); ${pull}`);
     // No attempt at all keeps the sentence it always had: nothing claims a wake the run did not make.
     expect(deliveryWords('pull-on-turn', 'helper')).toBe(`queued; ${pull}`);
+    expect(deliveryWords('typed-wake', 'helper', { wake: { attempted: true, reason: 'the composer holds a draft; nothing was typed' } }))
+      .toBe('queued; the typed wake failed (the composer holds a draft; nothing was typed); helper reads it at its next turn, and nothing retries the wake; a person or a restart must give it a turn');
+    expect(deliveryWords('typed-wake', 'helper', { watchWake: true, wake: { attempted: true, woke: true, reason: 'working' } }))
+      .toBe('queued; the typed wake woke it (working); helper reads it at its next turn');
   });
 });
 
@@ -431,8 +442,8 @@ describe('a seat read from its records', () => {
     });
     expect(noThread.evidence.endpoint).toBe(false);
     expect(noThread.evidence.conversation).toBe(false);
-    expect(noThread.class).toBe('pull-on-turn');
-    expect(noThread.words).toBe('queued; helper reads it at its next turn, and nothing here gives it one (pull-only)');
+    // Its profile's typed wake still reaches it.
+    expect(noThread.class).toBe('typed-wake');
     const rebound = read({
       declared: { cli: 'codex', launch: 'codex' },
       state: {
@@ -441,7 +452,7 @@ describe('a seat read from its records', () => {
       },
     });
     expect(rebound.evidence.endpoint).toBe(false);
-    expect(rebound.class).toBe('pull-on-turn');
+    expect(rebound.class).toBe('typed-wake');
   });
 
   test('a codex seat whose records name different conversations is read at its next turn', () => {
@@ -478,7 +489,7 @@ describe('a seat read from its records', () => {
     // adapter refuses them and the class must not claim the wake either.
     expect(disagreeing.evidence.endpoint).toBe(false);
     expect(disagreeing.evidence.conversation).toBe(false);
-    expect(disagreeing.class).toBe('pull-on-turn');
+    expect(disagreeing.class).toBe('typed-wake');
     const agreeing = read({
       declared: { cli: 'codex', launch: 'codex' },
       state: {
@@ -491,13 +502,13 @@ describe('a seat read from its records', () => {
     expect(agreeing.class).toBe('between-turns');
   });
 
-  test('a codex seat with no endpoint falls to its inbox: pull-on-turn, never between-turns', () => {
+  test('a codex seat with no endpoint falls to its typed wake, never between-turns', () => {
     const read_ = read({
       declared: { cli: 'codex', launch: 'codex' },
       state: { cli: 'codex', watcher: 'inbox' },
     });
     expect(read_.evidence.endpoint).toBe(false);
-    expect(read_.class).toBe('pull-on-turn');
+    expect(read_.class).toBe('typed-wake');
   });
 
   test('a launch line with no recorded watcher derives it, and a CLI with no inbox derives none', () => {
@@ -509,7 +520,8 @@ describe('a seat read from its records', () => {
       declared: { cli: 'muse', launch: 'muse --yolo' },
     });
     expect(`${nothing.evidence.watcherFrom} ${nothing.evidence.watcher}`).toBe('derived none');
-    expect(nothing.class).toBe('none');
+    // Muse reads no inbox, and its typed wake still gives it the turn.
+    expect(nothing.class).toBe('typed-wake');
   });
 
   test('a jules seat says it takes mail only as a new remote session; a gemini seat names its typed wake', () => {
@@ -528,23 +540,36 @@ describe('a seat read from its records', () => {
     expect(gemini.words).not.toContain('remote session');
   });
 
-  test('a CLI with no inbox or adapter is none, and a person’s pane is none', () => {
+  test('a cursor, gemini, grok or antigravity seat is woken by its typed wake while idle', () => {
+    for (const cli of ['cursor', 'gemini', 'grok', 'antigravity']) {
+      const seat = read({ declared: { cli, launch: cli }, state: { cli, watcher: 'inbox' } });
+      expect(`${cli} ${seat.class} ${String(wakeableWhileIdle(seat.class))}`).toBe(`${cli} typed-wake true`);
+      expect(seat.evidence.declared).toBe('pull-on-turn');
+    }
+    // A seat with no adapter, no queue and no typed wake is still not wakeable.
+    const jules = read({ declared: { cli: 'jules', launch: 'jules' }, state: { cli: 'jules', watcher: 'none' } });
+    expect(wakeableWhileIdle(jules.class)).toBe(false);
+    const claude = read({ declared: { cli: 'claude-code', launch: 'claude' }, state: { cli: 'claude-code', watcher: 'hook' } });
+    expect(`${claude.class} ${String(wakeableWhileIdle(claude.class))}`).toBe('pull-on-turn false');
+  });
+
+  test('a CLI with no inbox but a typed wake is typed-wake, and a person’s pane is none', () => {
     const muse = read({
       declared: { cli: 'muse', launch: 'muse --yolo' },
       state: { cli: 'muse', watcher: 'none' },
     });
-    expect(muse.class).toBe('none');
+    expect(muse.class).toBe('typed-wake');
     // Muse declares the typed wake, and its profile turns the watch's retry on with it.
     expect(muse.evidence.typedWake).toBe(true);
     expect(muse.evidence.watchWake).toBe(true);
-    expect(muse.words).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn');
+    expect(muse.words).toBe('woken by a typed wake into its empty composer, and by the watch\'s typed retry once a message passes its unread window; a busy or drafted composer keeps the message in its bus inbox');
     // The seat's own word wins over its profile's: `watch_wake: off` keeps the send-time sentence.
     const off = read({
       declared: { cli: 'muse', launch: 'muse --yolo', watchWake: false },
       state: { cli: 'muse', watcher: 'none' },
     });
     expect(off.evidence.watchWake).toBe(false);
-    expect(off.words).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn');
+    expect(off.words).toBe('woken by a typed wake into its empty composer; a busy or drafted composer keeps the message in its bus inbox');
     const human = read({
       declared: { cli: 'claude-code', launch: 'claude', human: true },
       state: { cli: 'claude-code', watcher: 'hook' },

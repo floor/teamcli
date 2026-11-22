@@ -86,7 +86,7 @@ export const UNREAD_AFTER_PULL_SECONDS = 60;
  *  and `team check` — reads it through this one function. */
 export function unreadWindowSeconds(declared: number | null, cls: DeliveryClass): number {
   if (declared !== null) return declared;
-  return wakeableWhileIdle(cls) ? UNREAD_AFTER_WAKEABLE_SECONDS : UNREAD_AFTER_PULL_SECONDS;
+  return wakeableWhileIdle(cls) && cls !== 'typed-wake' ? UNREAD_AFTER_WAKEABLE_SECONDS : UNREAD_AFTER_PULL_SECONDS;
 }
 
 /**

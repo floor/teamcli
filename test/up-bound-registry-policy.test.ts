@@ -562,10 +562,9 @@ test('a reviewer seat whose CLI cannot be woken while it is idle is warned about
   expect(dry.out).toContain(`  skip ${WORKER}: already ready; left as it is`);
 });
 
-test('a pull-on-turn reviewer is warned about, not only a CLI whose profile has no route', async () => {
-  // grok's profile declares pull-on-turn: its MCP inbox serves it at its turns, but no adapter
-  // wakes it while it is idle. Its declared class is not `none`, so the declared-word warning
-  // never saw it.
+test('a reviewer whose profile declares a typed wake is not warned about', async () => {
+  // grok's profile declares pull-on-turn and a typed wake: no adapter wakes it, but the typed
+  // wake into its empty composer does, so it is a typed-wake seat and time-bound work reaches it.
   mkdirSync(join(dirname(root), 'own-checker'), { recursive: true });
   const reviewer = `  - role: reviewer
     name: checker
@@ -582,9 +581,7 @@ test('a pull-on-turn reviewer is warned about, not only a CLI whose profile has 
   const made = makeWorld({ screen: IDLE_A });
   const dry = testIo(root, { kind: 'owner' });
   expect(await runUp(['--dry-run'], dry, made.sources)).toBe(0);
-  expect(dry.out).toContain(
-    '! checker is a reviewer seat and grok cannot be woken while it is idle; time-bound work is never dispatched to it\n',
-  );
+  expect(dry.out).not.toContain('checker is a reviewer seat');
   expect(dry.out).toContain(`  skip ${WORKER}: already ready; left as it is`);
 });
 
@@ -630,9 +627,9 @@ test('a Claude reviewer launched with the development channel is not warned abou
   expect(dry.out).not.toContain('checker is a reviewer seat');
 });
 
-test('a Codex reviewer with no managed endpoint is warned about', async () => {
+test('a Codex reviewer with no managed endpoint falls to its typed wake and is not warned about', async () => {
   // The profile declares between-turns, but that class needs the runtime's own queue: without a
-  // managed endpoint planned, the launch leaves a pull-on-turn seat.
+  // managed endpoint planned, the profile's typed wake is the seat's wake.
   const reviewer = `  - role: reviewer
     name: checker
     label: checker
@@ -647,9 +644,7 @@ test('a Codex reviewer with no managed endpoint is warned about', async () => {
   const made = makeWorld({ screen: IDLE_A });
   const dry = testIo(root, { kind: 'owner' });
   expect(await runUp(['--dry-run'], dry, made.sources)).toBe(0);
-  expect(dry.out).toContain(
-    '! checker is a reviewer seat and codex cannot be woken while it is idle; time-bound work is never dispatched to it\n',
-  );
+  expect(dry.out).not.toContain('checker is a reviewer seat');
 });
 
 test('a reviewer kept from a launch with no push adapter is warned about from its record', async () => {

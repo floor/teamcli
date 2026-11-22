@@ -855,14 +855,18 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     const pace = watchPaceOf({ team, root, home: sources.home, standing, now });
     const declared = declaredUnreadAfter(watchInForceWithPace(standing, team, pace), pace);
     for (const [name, reading] of compactReadings) {
-      if (reading.wake.wakeable) continue;
+      // A typed wake can find the composer busy, so its seat's stall is still reported.
+      if (reading.wake.wakeable && reading.wake.class !== 'typed-wake') continue;
       const row = team.seats.find((one) => one.name === name);
       if (row?.human === true) continue;
       const windowSeconds = unreadWindowSeconds(declared, reading.wake.class);
       const age = reading.wake.oldest_unread_seconds;
       if (age === null || age < windowSeconds) continue;
-      const waits = reading.words.replace(/^queued; /, '');
-      const retry = reading.watchWake ? " the watch's typed retry has not delivered for it;" : '';
+      const typed = reading.wake.class === 'typed-wake';
+      const waits = typed
+        ? 'no typed wake has delivered it yet; a busy or drafted composer keeps it in the bus inbox'
+        : reading.words.replace(/^queued; /, '');
+      const retry = reading.watchWake && !typed ? " the watch's typed retry has not delivered for it;" : '';
       const count = reading.wake.unread === null ? '' : `${String(reading.wake.unread)} unread; `;
       const holding = holdsText.has(name) ? 'its input box reads as holding text; nothing is typed there; ' : '';
       comparison.notes.push(`${name}: queued, not woken — ${count}${holding}its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window;${retry} ${waits}`);

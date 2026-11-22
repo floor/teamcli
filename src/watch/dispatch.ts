@@ -4,7 +4,8 @@
 // cannot disagree with `status` about who is idle or what is takeable. One attempt is spent per
 // seat per idle episode, refusals included; the episode ends only when a later reading no longer
 // counts the seat. A seat whose class cannot be woken while it is idle — pull-on-turn, or
-// nothing at all — is spent no attempt: the work push would be a wake that never lands, so the
+// nothing at all — is spent no attempt (a `typed-wake` seat is woken through its guarded typed
+// wake): the work push would be a wake that never lands, so the
 // seat is left to read its queue at its next turn. The old typed work nudge is suppressed for
 // every episode this dispatcher owns, whether or not a direct route is wired: a seat the
 // dispatcher cannot reach is told nothing rather than typed at by a second path.
