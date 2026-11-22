@@ -21,7 +21,7 @@ const RULES = 'Read the rules file before your first answer (pair 5e1d0a9c).';
 /** The words the profile adds to a line that sets none of them itself. */
 // Codex launches omit the obsolete OAuth refresh override after the dialog fix, and carry the
 // profile's computer- and browser-use pins after the unattended defaults.
-const ADDED = ['-a', 'never', '-s', 'danger-full-access', '--no-alt-screen', ...seatPinWords(seatPins(PROFILE, false))];
+const ADDED = ['-a', 'never', '-s', 'danger-full-access', '--no-alt-screen', ...seatPinWords(seatPins(PROFILE, true))];
 
 const roots: string[] = [];
 /** A folder holding a fake codex that logs its argv, one argument per line. */

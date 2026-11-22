@@ -40,8 +40,9 @@ import { seatPins, seatPinWords } from '../src/launch/features.ts';
 
 const claude = profileFor('claude-code')!;
 const codex = profileFor('codex')!;
-/** The profile's computer- and browser-use pins, as the CLI receives them on every launch. */
-const PIN_ARGV = seatPinWords(seatPins(codex, false));
+/** The profile's computer- and browser-use pins a seat on the default desktop_control carries:
+ *  none. */
+const PIN_ARGV = seatPinWords(seatPins(codex, true));
 const antigravity = profileFor('antigravity')!;
 const HOOK = '/synthetic/hook.json';
 const RULES = 'Rules for this session';
@@ -220,7 +221,7 @@ describe("a delimiter inside a quoted script is the CLI's, not the outer shell's
       const options = argv.slice(0, at);
       expect(options).toContain('--no-alt-screen');
       // The profile's feature pins stand before the delimiter; the retired pair does not.
-      expect(options.slice(-PIN_ARGV.length)).toEqual(PIN_ARGV);
+      expect(options.slice(options.length - PIN_ARGV.length)).toEqual(PIN_ARGV);
       expect(options).not.toContain('features.mcp_oauth_refresh_coordination=false');
       expect(options).toContain('-a');
       expect(options).toContain('never');

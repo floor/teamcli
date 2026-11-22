@@ -147,15 +147,15 @@ describe('the row order', () => {
 });
 
 describe('desktop_control', () => {
-  test('off by default when neither the seat nor the team writes one', () => {
+  test('on by default when neither the seat nor the team writes one', () => {
     const found = row(BARE, null, 'desktop_control');
-    expect(found.value).toBe(false);
+    expect(found.value).toBe(true);
     expect(found.origin).toBe('default');
   });
 
   test('the team file\'s word stands under a seat that writes none', () => {
-    const found = composeSeatConfig(BARE, null, {}, true).find((entry) => entry.key === 'desktop_control')!;
-    expect(found.value).toBe(true);
+    const found = composeSeatConfig(BARE, null, {}, false).find((entry) => entry.key === 'desktop_control')!;
+    expect(found.value).toBe(false);
     expect(found.origin).toBe('team default');
   });
 

@@ -27,10 +27,10 @@ describe('the approved minimum', () => {
     for (const level of ['entity', 'project'] as const) expect(configKeysAt(level)).toEqual([]);
   });
 
-  test('desktop_control is a boolean, off by default, read at the next launch', () => {
+  test('desktop_control is a boolean, on by default, read at the next launch', () => {
     expect(CONFIG_REGISTRY.desktop_control.type).toBe('boolean');
     expect(CONFIG_REGISTRY.desktop_control.allowed).toBe('true or false');
-    expect(CONFIG_REGISTRY.desktop_control.fallback).toBe(false);
+    expect(CONFIG_REGISTRY.desktop_control.fallback).toBe(true);
     expect(CONFIG_REGISTRY.desktop_control.applies).toBe('restart-resume');
     expect(CONFIG_REGISTRY.desktop_control.governedBy).toBeUndefined();
   });

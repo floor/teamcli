@@ -173,7 +173,7 @@ describe('a seat with a conversation and a turn', () => {
       + '  nickname         Reviewer          team file   at once\n'
       + '  delivery_order   mcp-inbox, typed  team order  at once\n'
       + '  human            false             default     at once\n'
-      + '  desktop_control  false             default     restart that resumes\n'
+      + '  desktop_control  true              default     restart that resumes\n'
       + '\n'
       + '  FIELD         VALUE\n'
       + '  project       acme\n'
@@ -210,7 +210,7 @@ describe('a seat with neither', () => {
       + '  nickname         -                 unset       at once\n'
       + '  delivery_order   mcp-inbox, typed  team order  at once\n'
       + '  human            false             default     at once\n'
-      + '  desktop_control  false             default     restart that resumes\n'
+      + '  desktop_control  true              default     restart that resumes\n'
       + '\n'
       + '  FIELD         VALUE\n'
       + '  project       acme\n'
@@ -252,7 +252,7 @@ describe('--json', () => {
         { key: 'nickname', value: 'Reviewer', source: 'team file', applies: 'at-once' },
         { key: 'delivery_order', value: ['mcp-inbox', 'typed'], source: 'team default', applies: 'at-once' },
         { key: 'human', value: false, source: 'default', applies: 'at-once' },
-      { key: 'desktop_control', value: false, source: 'default', applies: 'restart-resume' },
+      { key: 'desktop_control', value: true, source: 'default', applies: 'restart-resume' },
       ],
       status: {
         name: 'lead',

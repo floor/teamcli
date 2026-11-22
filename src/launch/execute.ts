@@ -690,6 +690,11 @@ export type ExecuteOptions = {
 };
 
 /** Runs a plan. Steps carry the operation beside the command the dry run prints. */
+/** How often, and how far apart, the pane is proven again after a Codex conversation wait when
+ *  a reading that can settle failed: about two seconds in all. */
+const POST_WAIT_REPROOF_TRIES = 4;
+const POST_WAIT_REPROOF_MS = 500;
+
 export async function executePlan(
   steps: readonly Step[],
   session: string,
@@ -1613,20 +1618,39 @@ export async function executePlan(
           if (target !== null) {
             const targetPane = target.pane;
             const targetSpace = target.workspace;
-            const panesNow = targetSpace === undefined ? null : host.workspacePanes?.(session, targetSpace) ?? null;
-            const agentsNow = host.agentList?.(session) ?? null;
-            const processAfter = host.processInfo?.(session, targetPane) ?? null;
-            const why = targetSpace !== undefined && (panesNow === null || !panesNow.includes(targetPane))
-              ? 'its pane is no longer listed in its workspace'
-              : agentsNow === null
-                ? 'its pane could not be checked against the agent list'
-                : agentsNow.some((agent) => agent.pane === targetPane && agent.name !== null && agent.name !== op.seat)
-                  ? 'its pane is named for another seat'
-                  : !paneHoldsOnlyShell(processAfter)
-                    ? 'its pane no longer holds only its shell'
-                    : !bareShellEmptyPrompt(host.paneText?.(session, targetPane) ?? null)
-                      ? 'its shell prompt is not empty'
-                      : null;
+            const prove = (): { why: string | null; settles: boolean } => {
+              const panesNow = targetSpace === undefined ? null : host.workspacePanes?.(session, targetSpace) ?? null;
+              const agentsNow = host.agentList?.(session) ?? null;
+              const processAfter = host.processInfo?.(session, targetPane) ?? null;
+              if (targetSpace !== undefined && (panesNow === null || !panesNow.includes(targetPane))) {
+                return { why: 'its pane is no longer listed in its workspace', settles: false };
+              }
+              if (agentsNow === null) return { why: 'its pane could not be checked against the agent list', settles: true };
+              if (agentsNow.some((agent) => agent.pane === targetPane && agent.name !== null && agent.name !== op.seat)) {
+                return { why: 'its pane is named for another seat', settles: false };
+              }
+              // A reading the host could not give is said as such, never as a process beside the
+              // shell; both are read again below before the seat is left out.
+              if (processAfter === null || processAfter.foreground.length === 0) {
+                return { why: 'its pane\'s processes could not be read', settles: true };
+              }
+              if (!paneHoldsOnlyShell(processAfter)) return { why: 'its pane no longer holds only its shell', settles: true };
+              if (!bareShellEmptyPrompt(host.paneText?.(session, targetPane) ?? null)) {
+                return { why: 'its shell prompt is not empty', settles: true };
+              }
+              return { why: null, settles: false };
+            };
+            // One reading after a wait of up to two minutes, on a loaded host, left a seat out
+            // whose fresh pane was a bare shell a moment later (a restart that launched nothing).
+            // A reading that can settle — a process read, a foreground job finishing, the prompt
+            // redrawing — is taken again a few times, briefly, before the seat is left out. A
+            // pane gone from its workspace or named for another seat is final at once.
+            let proof = prove();
+            for (let attempt = 0; proof.why !== null && proof.settles && attempt < POST_WAIT_REPROOF_TRIES; attempt++) {
+              await host.sleep(POST_WAIT_REPROOF_MS);
+              proof = prove();
+            }
+            const why = proof.why;
             if (why !== null) {
               held = true;
               dropped.add(op.seat);
@@ -1818,7 +1842,7 @@ export async function executePlan(
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
-            : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointStartConfig(op.command, op.desktopControl === true), ...(here ? { pane: here.pane } : {}), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
+            : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointStartConfig(op.command, op.desktopControl !== false), ...(here ? { pane: here.pane } : {}), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
           if (read.kind === 'up') {
             const attached = remoteCodexCommand(command);
             command = appendOnLaunchLine(attached, `--remote ${shellQuote(read.url)}`, 'codex').line;

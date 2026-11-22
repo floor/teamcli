@@ -193,8 +193,8 @@ function ready(w: World, seats: readonly Ready[]): void {
         pane: seat.pane,
         workspace: 'fixture-workspace',
         cli: seat.cli ?? 'claude-code',
-        // A current launch's record: a Codex seat's line carries its profile's pinned features.
-        launch_line: seat.cli === 'codex' ? `${seat.launch} -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false -c features.browser_use_full_cdp_access=false -c mcp_servers.cua_repl.command=/usr/bin/false -c mcp_servers.cua_repl.enabled=false -c mcp_servers.node_repl.command=/usr/bin/false -c mcp_servers.node_repl.enabled=false -c plugins.computer-use@openai-bundled.enabled=false -c plugins.unified-computer-use@openai-bundled.enabled=false -c plugins.browser@openai-bundled.enabled=false` : seat.launch,
+        // A current launch's record: a Codex seat on the default desktop_control carries no pins.
+        launch_line: seat.launch,
       };
     }
   });

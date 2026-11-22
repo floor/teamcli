@@ -1,5 +1,6 @@
-// No Codex seat drives the owner's desktop or browser. The profile pins the four switches off
-// (`computer_use`, `browser_use`, `browser_use_external`, `in_app_browser`), and the pin reaches
+// A Codex seat whose `desktop_control` is false drives neither the user's desktop, browser nor
+// connectors. The profile pins the six switches off (`computer_use`, `browser_use`,
+// `browser_use_external`, `in_app_browser`, `browser_use_full_cdp_access`, `apps`), and the pin reaches
 // both places a seat's turns are configured: the TUI's own launch line and the managed
 // app-server's start words, because an attached TUI runs its turns under the server's
 // configuration. The reuse check and `team check` read the same words, so a server started
@@ -17,13 +18,16 @@ import type { CodexEndpointRecord } from '../src/daemon/presence/endpoint-record
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { shortSocketBase } from './helpers.ts';
 
-const OFF = ['computer_use=false', 'browser_use=false', 'browser_use_external=false', 'in_app_browser=false', 'browser_use_full_cdp_access=false'];
+const OFF = ['computer_use=false', 'browser_use=false', 'browser_use_external=false', 'in_app_browser=false', 'browser_use_full_cdp_access=false', 'apps=false'];
 const CONFIG_OFF = [
   'mcp_servers.cua_repl.command=/usr/bin/false', 'mcp_servers.cua_repl.enabled=false',
   'mcp_servers.node_repl.command=/usr/bin/false', 'mcp_servers.node_repl.enabled=false',
   'plugins.computer-use@openai-bundled.enabled=false', 'plugins.unified-computer-use@openai-bundled.enabled=false',
   'plugins.browser@openai-bundled.enabled=false',
+  'mcp_servers.codex_apps.command=/usr/bin/false', 'mcp_servers.codex_apps.enabled=false',
 ];
+/** The words a launch takes for a seat whose `desktop_control` is false. */
+const SET_FALSE = { desktopControl: false } as const;
 const OFF_WORDS = [...OFF.flatMap((pair) => ['-c', `features.${pair}`]), ...CONFIG_OFF.flatMap((pair) => ['-c', pair])];
 const SESSION = 'acme';
 const SEAT = 'coder';
@@ -43,16 +47,16 @@ function effective(words: readonly string[]): Record<string, boolean | undefined
   return Object.fromEntries(OFF.map((pair) => [pair.split('=')[0]!, settings.get(pair.split('=')[0]!)]));
 }
 
-const ALL_OFF = { computer_use: false, browser_use: false, browser_use_external: false, in_app_browser: false, browser_use_full_cdp_access: false };
+const ALL_OFF = { computer_use: false, browser_use: false, browser_use_external: false, in_app_browser: false, browser_use_full_cdp_access: false, apps: false };
 
-describe('the profile pins computer and browser use off', () => {
-  test('the codex profile carries the five off pairs', () => {
+describe('a seat set false pins computer, browser and connector use off', () => {
+  test('the codex profile carries the six off pairs', () => {
     expect(codex().features).toEqual(OFF);
   });
 
   test('a seat launch line carries the pins, plain, wrapped and resumed', () => {
     for (const line of ['codex -m gpt-6.1-sol', 'zsh /w/as-floor.sh codex -m gpt-6.1-sol', 'codex -m gpt-6.1-sol resume 01a1']) {
-      const command = launchCommand(codex(), line, 'Rules.');
+      const command = launchCommand(codex(), line, 'Rules.', null, undefined, undefined, SET_FALSE);
       for (const pair of OFF) expect(command).toContain(`-c features.${pair}`);
       expect(effective(OFF_WORDS)).toEqual(ALL_OFF);
       expect(Object.fromEntries(OFF.map((pair) => [pair.split('=')[0]!, featureSettings(command).get(pair.split('=')[0]!)]))).toEqual(ALL_OFF);
@@ -60,7 +64,7 @@ describe('the profile pins computer and browser use off', () => {
   });
 
   test('a line that turns one on is overridden by the pin, which comes last', () => {
-    const command = launchCommand(codex(), 'codex -m gpt-6.1-sol -c features.computer_use=true --enable browser_use', 'Rules.');
+    const command = launchCommand(codex(), 'codex -m gpt-6.1-sol -c features.computer_use=true --enable browser_use', 'Rules.', null, undefined, undefined, SET_FALSE);
     expect(featureSettings(command).get('computer_use')).toBe(false);
     expect(featureSettings(command).get('browser_use')).toBe(false);
   });
@@ -91,23 +95,23 @@ describe('--enable and --disable read as the feature pairs they stand for', () =
   });
 });
 
-describe('the managed app-server starts with the team set', () => {
-  test('a line with no pins of its own still gives the server all four', () => {
-    expect(codexEndpointStartConfig('zsh /w/as-floor.sh codex -m gpt-6.1-sol -a never')).toEqual([
+describe('the managed app-server of a seat set false starts with the set', () => {
+  test('a line with no pins of its own still gives the server all of them', () => {
+    expect(codexEndpointStartConfig('zsh /w/as-floor.sh codex -m gpt-6.1-sol -a never', false)).toEqual([
       '-c', 'approval_policy="never"',
       ...OFF_WORDS,
     ]);
   });
 
   test('a launch command already carrying the pins is not given them twice', () => {
-    const command = launchCommand(codex(), 'codex -m gpt-6.1-sol', 'Rules.');
-    const config = codexEndpointStartConfig(command);
+    const command = launchCommand(codex(), 'codex -m gpt-6.1-sol', 'Rules.', null, undefined, undefined, SET_FALSE);
+    const config = codexEndpointStartConfig(command, false);
     expect(config.filter((word) => word === 'features.computer_use=false')).toHaveLength(1);
     expect(effective(config)).toEqual(ALL_OFF);
   });
 
   test('a line that turns one on gets the pin after it', () => {
-    const config = codexEndpointStartConfig('codex -c features.computer_use=true --enable browser_use');
+    const config = codexEndpointStartConfig('codex -c features.computer_use=true --enable browser_use', false);
     expect(effective(config)).toEqual(ALL_OFF);
     expect(withPinnedFeatures(['-c', 'features.computer_use=true'], ['computer_use=false'])).toEqual([
       '-c', 'features.computer_use=true', '-c', 'features.computer_use=false',
@@ -120,7 +124,7 @@ describe('the managed app-server starts with the team set', () => {
       stateDir: '/tmp/acme/.agents',
       seats: [{
         name: SEAT, cli: 'codex', launch: 'zsh /w/as-floor.sh codex -m gpt-6.1-sol', cwd: '/tmp/acme', label: SEAT,
-        stopped: false, rules: 'Rules.', repairLine: 'repair', codexDaemon: 'on',
+        stopped: false, rules: 'Rules.', repairLine: 'repair', codexDaemon: 'on', desktopControl: false,
       }],
     });
     const at = plan.findIndex((step) => step.do?.do === 'launch');
@@ -169,7 +173,7 @@ describe('the managed app-server starts with the team set', () => {
         const session = (state.sessions[SESSION] ??= emptySession());
         session.seats[SEAT] = { stage: 'ready', pane: 'p1', workspace: 'w1', presence_binding: BINDING, codex_endpoint: prior };
       });
-      const needed = codexEndpointStartConfig('codex -a never');
+      const needed = codexEndpointStartConfig('codex -a never', false);
       // The reuse comparison treats the pins as the team's settings: the old record and the old
       // live command line both fall short of them.
       expect(sameEndpointConfig(old, needed)).toBe(false);

@@ -595,10 +595,10 @@ export function launchCommandOrRefusal(
   // `-c` for one key took the last value in both orders), so the pin is the seat's effective
   // value whichever its config file holds, and every seat of the CLI presents the same set to
   // the one background server they share.
-  // A seat's `desktop_control` word decides which of them it carries: off, the default, carries
-  // every feature pin and the profile's computer and browser config pairs; on lifts the ones the
-  // profile names (src/launch/desktop-control.ts).
-  options.push(...seatPinWords(seatPins(profile, runtimePolicies?.desktopControl === true)));
+  // A seat's `desktop_control` word decides which of them it carries: on, the default, lifts the
+  // pins the profile names; off carries every feature pin and the profile's computer, browser and
+  // connector config pairs (src/launch/desktop-control.ts).
+  options.push(...seatPinWords(seatPins(profile, runtimePolicies?.desktopControl !== false)));
   // A first-message seat's rules line rides the launch as the CLI's initial prompt, last, so it
   // is never typed into the pane. It is positional: it stays after the line's own `--`, where a
   // message-mode CLI reads its prompt, never among the options before the delimiter.

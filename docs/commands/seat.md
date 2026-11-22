@@ -127,7 +127,7 @@ $ team seat claude-keeper ; echo "exit $?"
   nickname         agamemnon    team file  at once
   delivery_order   typed, drop  default    at once
   human            false        default    at once
-  desktop_control  false        default    restart that resumes
+  desktop_control  true         default    restart that resumes
 
   FIELD         VALUE
   project       beacon
@@ -198,7 +198,7 @@ $ team seat claude-keeper --json ; echo "exit $?"
     },
     {
       "key": "desktop_control",
-      "value": false,
+      "value": true,
       "source": "default",
       "applies": "restart-resume"
     }
