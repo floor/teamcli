@@ -1,9 +1,11 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commands } from '../src/cli.ts';
+import { readTeams } from '../src/registry/teams.ts';
 import { testIo } from './helpers.ts';
 
 // A command run outside a git repository used to say "run team from a project, or pass
@@ -16,6 +18,44 @@ import { testIo } from './helpers.ts';
 // Two faces cannot run here: the conformance adapter speaks a stdin RPC protocol, not a
 // terminal, and `team init` is the command that makes a project where none is — it runs as a
 // terminal-less owner and stops at that refusal before writing anything.
+
+// The census runs every command in process, and a command that reaches the machine reads
+// `homedir()`, which Bun fixes when the process starts: no scratch HOME set here reaches it, and
+// the census once left a registry row per run in the machine's own registry. So this file runs
+// itself again in a child whose HOME is a scratch folder, and the census runs only there; this
+// process checks that the child passed and that the machine's registry gained no row of its.
+const CHILD = process.env.TEAM_NO_FILE_OFFER_CHILD === '1';
+
+describe.skipIf(CHILD)('the census runs under a scratch home', () => {
+  test('the census passes in a child whose HOME is a scratch folder, and the real registry gains no row', () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'team-no-file-offer-home-')));
+    try {
+      const ours = (): string[] => {
+        try {
+          return Object.entries(readTeams(homedir()))
+            .filter(([, team]) => team.root.includes('team-no-file-offer-'))
+            .map(([id]) => id)
+            .sort();
+        } catch {
+          return [];
+        }
+      };
+      const before = ours();
+      const run = spawnSync(process.execPath, ['test', fileURLToPath(import.meta.url)], {
+        cwd: fileURLToPath(new URL('..', import.meta.url)),
+        env: { ...process.env, HOME: home, TEAM_NO_FILE_OFFER_CHILD: '1' },
+        encoding: 'utf8',
+        timeout: 240_000,
+      });
+      if (run.status !== 0) console.error(`${run.stdout}${run.stderr}`);
+      expect(run.status).toBe(0);
+      expect(`${run.stdout}${run.stderr}`).toMatch(/ [1-9][0-9]* pass/);
+      expect(ours()).toEqual(before);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 250_000);
+});
 
 type ContractNode = {
   name: string;
@@ -109,7 +149,7 @@ const REACHED = [
 
 const reached = new Set<string>();
 
-describe('outside a checkout, the sentence offers --file only where the contract lists it', () => {
+describe.skipIf(!CHILD)('outside a checkout, the sentence offers --file only where the contract lists it', () => {
   const cases = contract.commands
     .flatMap((command) => nodes(command, [command.name]))
     .filter(
