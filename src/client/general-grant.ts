@@ -16,8 +16,11 @@ export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
 // Migration can write the owner's shared launcher home and script stubs. Its ordinary
 // own-team lead admission does not make it a delegable general-grant operation.
 // git and gh act on GitHub with the entity's own token: a client holding a general grant is not
-// the entity's seat, so neither ever runs through a grant.
-export const GENERAL_REFUSED_COMMANDS: ReadonlySet<string> = new Set(['start', 'launchers', 'git', 'gh']);
+// the entity's seat, so neither ever runs through a grant. queues changes the root's delivery
+// floor, whose state-changing verbs are the owner's alone: no general grant runs it. ping runs
+// its sends as child commands in the caller's own environment, where no grant rides along, so a
+// grant never runs it either.
+export const GENERAL_REFUSED_COMMANDS: ReadonlySet<string> = new Set(['start', 'launchers', 'git', 'gh', 'queues', 'ping']);
 // Every command's op: the first nine since 0.5.6, then (0.5.8) every other command the dispatcher's
 // general door admits, so a listed grant may name any of them. `abandon` is `down --abandon`'s.
 // A command added later is covered by the wildcard at once, and by name once it is listed here
