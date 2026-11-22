@@ -283,6 +283,29 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
     expect(pane.enters).toBe(0);
   });
 
+  test('a direct-only send types no key once an in-place relaunch replaced the launch it read the screen of', async () => {
+    const made = cursorWorld();
+    const live = { pane: 'pane-cursor', foreground: [222] };
+    const relaunch = (): void => {
+      // The same seat, pane and CLI, a new launch: the state and the pane agree on it.
+      const path = join(made.dir, 'team.state.json');
+      const state = JSON.parse(readFileSync(path, 'utf8'));
+      state.sessions.acme.seats.cursor.launched = { shell: 111, cli: [444] };
+      writeFileSync(path, JSON.stringify(state));
+      live.foreground = [444];
+    };
+    let relaunched = false;
+    const pane = wakeFake((read, enters, typed) => {
+      if (!relaunched) { relaunched = true; relaunch(); }
+      return enters > 0 ? WORKING : read < 2 ? IDLE_TASK : drawn(typed[typed.length - 1] ?? '');
+    });
+    const host = fake(made, { ...launched(made, live), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(run.result?.outcome).not.toBe('delivered');
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
   test('a direct-only send types no further key once the declaration stops the seat', async () => {
     const made = cursorWorld();
     const pane = drawingWake();

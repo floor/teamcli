@@ -443,12 +443,33 @@ describe('a seat nothing can wake while it is idle', () => {
     );
     // The pane shows Cursor's own empty idle box (the captured 2026.10.22 frame).
     const cursorIdle = readFileSync(join(import.meta.dir, 'fixtures', 'cursor', '2026.10.22', 'idle.txt'), 'utf8');
-    const result = await dispatchIdleWork(input({ push, team: teamOf(typed), live: live({ 'worker-2': { screen: cursorIdle } }) }));
+    // Its launch recorded the shell anchors the typed wake proves the pane by.
+    const anchored = stateAt(new Date(NOW - 10 * MIN).toISOString());
+    anchored.seats['worker-2'] = { ...anchored.seats['worker-2']!, pane_shell: 111, pane_shell_start: 5 };
+    const result = await dispatchIdleWork(input({ push, state: anchored, team: teamOf(typed), live: live({ 'worker-2': { screen: cursorIdle } }) }));
     expect(calls.map((one) => `${one.seat} ${one.cli}`)).toEqual(['worker-2 cursor']);
     expect(result.pushed).toEqual([{ seat: 'worker-2', ok: true, outcome: 'delivered' }]);
     const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
     expect(idleClaimOf(state, 'worker-1')).toBeUndefined();
     expect(idleClaimOf(state, 'worker-2')).toBeDefined();
+  });
+
+  test('a typed-wake seat whose record has no shell anchors is held: no push and no attempt spent', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'delivered' };
+    };
+    const typed = PULL_CREW.replace(
+      `name: worker-2\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "${WIN}"\n    launch: claude`,
+      'name: worker-2\n    cli: cursor\n    vendor: test\n    model: Grok\n    version: "4.7"\n    launch: cursor',
+    );
+    const cursorIdle = readFileSync(join(import.meta.dir, 'fixtures', 'cursor', '2026.10.22', 'idle.txt'), 'utf8');
+    await dispatchIdleWork(input({ push, team: teamOf(typed), live: live({ 'worker-2': { screen: cursorIdle } }) }));
+    expect(calls).toEqual([]);
+    const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
+    expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
   });
 
   test('an accepted socket whose recorded address does not stand is no wake either', async () => {

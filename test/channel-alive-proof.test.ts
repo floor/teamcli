@@ -348,4 +348,30 @@ describe('the seat proof a push makes', () => {
       at.cleanup();
     }
   });
+
+  test('a sender the linked team file no longer declares is not pushed: channel admission reads the roster fresh', async () => {
+    const at = place();
+    expect(activate(at.root, { home: at.home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+    const target = join(at.root, 'team-target.yaml');
+    const link = join(at.root, '.agents', 'team.yaml');
+    renameSync(link, target);
+    symlinkSync(target, link);
+    const feed = queue();
+    const running = runMcpServe({ seat: 'lead', session: SESSION, file: link }, testIo(at.root, seatCaller()), feed, { home: at.home });
+    try {
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      stamped(at, IDS[0]!);
+      expect(await pushed(feed, 1)).toBe(1);
+      // The worker leaves the roster in the file the link names; its registry record stays live.
+      const text = readFileSync(target, 'utf8');
+      writeFileSync(target, text.slice(0, text.indexOf('  - role: worker')));
+      stamped(at, IDS[1]!);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(notice(feed.replies).length).toBe(1);
+    } finally {
+      feed.end();
+      await running;
+      at.cleanup();
+    }
+  });
 });

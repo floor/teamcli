@@ -2063,8 +2063,10 @@ export async function runMcpServe(
     dropDir,
     home: host.home,
     team,
+    // Fresh, as the seat proof reads it: channel admission authorizes the sender against the
+    // roster as it is now, never a kept read that could hold an old one.
     loadTeam: () => {
-      const file = readTeam();
+      const file = readTeamFresh();
       return file.ok ? file.team : null;
     },
     teamFileOf,

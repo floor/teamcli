@@ -252,4 +252,17 @@ describe('a restored Claude seat comes back through its launch line', () => {
     expect(w.restarts).toEqual([]);
     expect(out).toEqual({ lines: [], pending: null });
   });
+
+  test('a replaced pane loses its stale channel flag even when the seat is not eligible for a relaunch', async () => {
+    const seats = [{ name: 'worker', channel: true }];
+    restoredState(seats);
+    const w = world();
+    w.status['w0:p1'] = 'idle';
+    const sources = sourcesOf(w);
+    // Another process is in front of the recorded shell: the resume the rebind could not prove.
+    (sources.launch as unknown as { processInfo: () => unknown }).processInfo = () => ({ shell: 700, foreground: [999] });
+    await relaunchRestoredSeats({ root: base, dir, session: SESSION, team: team(seats, null, ['src/**']), sources, caller: { kind: 'owner' }, deps: depsOf(w) });
+    expect(w.restarts).toEqual([]);
+    expect(JSON.parse(readFileSync(join(dir, 'team.state.json'), 'utf8')).sessions[SESSION].seats.worker.channel_launch).toBe(false);
+  });
 });

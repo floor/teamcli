@@ -177,6 +177,10 @@ function scopeOf(input: IdleWorkInput): string {
  *  live reading's own name for the seat. A pass with no live agent for the seat, or one whose
  *  reading carries no processes map, keeps the conservative rule. A seat the pass holds no
  *  record for falls to the class its file row declares. */
+function shellAnchored(state: IdleDispatchInput['state']['seats'][string] | undefined): boolean {
+  return state?.pane_shell !== undefined && state.pane_shell_start !== undefined;
+}
+
 function deliveryClassOf(input: IdleDispatchInput, seat: string) {
   const declared = input.team.seats.find((one) => one.name === seat);
   const state = input.state.seats[seat];
@@ -325,6 +329,10 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
     // that never lands and the episode's one attempt would be gone with it. A claim of this
     // episode was followed above, so a wake already sent is still settled and announced.
     if (!wakeableWhileIdle(deliveryClassOf(input, seat))) continue;
+    // A typed wake proves the pane's launch by its shell anchors before each key
+    // (src/launch/identity.ts `typedPaneProof`): a record without them refuses every key, so the
+    // seat is held, with no attempt spent, until a launch records them.
+    if (deliveryClassOf(input, seat) === 'typed-wake' && !shellAnchored(input.state.seats[seat])) continue;
     const captured = captureIdleClaim(input.dir, {
       session: input.team.session,
       seat,
