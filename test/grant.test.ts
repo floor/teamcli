@@ -126,7 +126,7 @@ function io(caller: Caller, cwd = '/grant'): Io {
 /** The state folder the gate reads, with a pane recorded for each named seat. An absent pane
  *  string records the seat with no pane. */
 function stateDir(sessions: Record<string, Record<string, string | undefined>>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'team-grant-state-'));
+  const dir = mkdtempSync(join(tmpdir(), 'team-gr-state-'));
   const body = {
     format: 1,
     sessions: Object.fromEntries(Object.entries(sessions).map(([session, seats]) => [
@@ -164,7 +164,7 @@ function ask(
   return grantGate({
     act,
     io: io(caller),
-    home: mkdtempSync(join(tmpdir(), 'team-grant-home-')),
+    home: mkdtempSync(join(tmpdir(), 'team-gr-home-')),
     sources: {
       load,
       standing: () => standingOf(approved, dropGrant),
@@ -200,7 +200,7 @@ describe('the grant gate', () => {
       text: 'the file grants nothing',
     });
     const dir = stateDir(placed);
-    const home = mkdtempSync(join(tmpdir(), 'team-grant-home-'));
+    const home = mkdtempSync(join(tmpdir(), 'team-gr-home-'));
     const loaded = teamOf(GRANTED);
     const sources = {
       load: (): LoadResult => ({ ok: true, team: loaded, root: '/grant/root', path: join(dir, 'team.yaml'), warnings: [], text: GRANTED }),
@@ -239,7 +239,7 @@ describe('the grant gate', () => {
 
   test('dev mode stands the live file in for the approval alone, and never for approve', () => {
     const dir = stateDir(placed);
-    const home = mkdtempSync(join(tmpdir(), 'team-grant-home-'));
+    const home = mkdtempSync(join(tmpdir(), 'team-gr-home-'));
     const path = join(dir, 'team.yaml');
     const load = (text: string) => (): LoadResult => ({ ok: true, team: teamOf(text), root: '/grant/root', path, warnings: [], text });
     const sources = { load: load(GRANTED), standing: (): Standing => ({ kind: 'none' }) };
@@ -354,10 +354,10 @@ describe('the grant gate', () => {
   });
 
   test('with no injected load, the read is the working folder\'s own file', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'team-grant-live-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'team-gr-live-'));
     mkdirSync(join(cwd, '.agents'));
     writeFileSync(join(cwd, '.agents', 'team.yaml'), BASE);
-    const home = mkdtempSync(join(tmpdir(), 'team-grant-home-'));
+    const home = mkdtempSync(join(tmpdir(), 'team-gr-home-'));
     expect(grantGate({
       act: 'up',
       io: { ...io(seat('lead', 'alpha', 'acme')), cwd },

@@ -122,7 +122,7 @@ function approveOnDisk() {
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'team-effort-drift-'));
+  dir = mkdtempSync(join(tmpdir(), 'team-e9-drift-'));
   mkdirSync(join(dir, '.agents'));
   file = join(dir, '.agents', 'team.yaml');
   writeFileSync(file, example);
@@ -219,7 +219,7 @@ describe('effort drift', () => {
   });
 
   test('team check reports the same effort drift', () => {
-    const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-effort-check-')));
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-e9-check-')));
     const root = join(base, 'acme-web');
     const home = join(base, 'home');
     mkdirSync(join(root, '.agents'), { recursive: true });

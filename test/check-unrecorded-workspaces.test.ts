@@ -212,7 +212,7 @@ function installSyntheticHost(sessions: Record<string, SyntheticSession>): HostT
 }
 
 function makeWorld(): { base: string; root: string; dir: string; home: string } {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-unrecorded-ws-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-chk-unrec-')));
   tempDirs.push(base);
   const root = join(base, 'acme');
   const dir = join(root, '.agents');
