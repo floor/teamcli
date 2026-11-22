@@ -21,11 +21,11 @@
 // environment leaves it unset (sops looks elsewhere by default on some systems). sops itself is
 // looked for on PATH, then in the places a user install puts it, because a service manager starts
 // a process with a PATH that often holds none of them.
-import { accessSync, constants, statSync } from 'node:fs';
+import { accessSync, constants, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { realSecretRun, SECRET_NAME } from './run.ts';
-import { SECRET_ABSENT, type SecretLookup, type SecretName, type SecretRead, type SecretStore, type SecretStoreOptions } from './store.ts';
+import { SECRET_ABSENT, systemProbeAllowed, type SecretLookup, type SecretName, type SecretRead, type SecretStore, type SecretStoreOptions } from './store.ts';
 
 /** The decrypt's deadline: at expiry it is terminated and the read fails. */
 export const STORE_TIMEOUT_MS = 10_000;
@@ -92,6 +92,14 @@ function realIsFile(path: string): boolean {
   }
 }
 
+function realReadText(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 function realIsExecutable(path: string): boolean {
   if (!realIsFile(path)) return false;
   try {
@@ -110,6 +118,7 @@ export function linuxSecretStore(options: SecretStoreOptions = {}): SecretStore 
   const isFile = options.isFile ?? realIsFile;
   const isExecutable = options.isExecutable ?? realIsExecutable;
   const run = options.runner ?? realSecretRun;
+  const readText = options.readText ?? (systemProbeAllowed(env) ? realReadText : null);
 
   /** The encrypted file: the override when it is set, else the entity's own under the home. */
   const storeFile = (): Found<{ path: string }> => {
@@ -141,7 +150,21 @@ export function linuxSecretStore(options: SecretStoreOptions = {}): SecretStore 
     return named !== undefined && named !== '' ? named : join(home, '.config', 'sops', 'age', 'keys.txt');
   };
 
-  return {
+  const store: SecretStore = {
+    holds(asked: SecretName): boolean | null {
+      // The encrypted file keeps every entry's name in the clear beside its encrypted value, so
+      // presence is read from the file's own lines: nothing is decrypted and no value is held. An
+      // entry counts only where a launch line can also look it up (the tool and the key are here).
+      const { name } = genericOf(asked);
+      const entry = envNameOf(name);
+      if (!entry.ok || readText === null) return null;
+      const file = storeFile();
+      if (!file.ok) return file.reason === NOT_SET_UP ? false : null;
+      if (!store.lookupCommand(asked).ok) return null;
+      const text = readText(file.path);
+      if (text === null) return null;
+      return text.split('\n').some((line) => line.startsWith(`${entry.env}=`));
+    },
     async read(asked: SecretName): Promise<SecretRead> {
       const { name, prefix } = genericOf(asked);
       const entry = envNameOf(name);
@@ -188,4 +211,5 @@ export function linuxSecretStore(options: SecretStoreOptions = {}): SecretStore 
       };
     },
   };
+  return store;
 }

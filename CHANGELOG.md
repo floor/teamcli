@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A Claude Code seat on Anthropic signs in with no session login on a machine whose secret store holds the entry `CLAUDE_CODE_OAUTH_TOKEN` (the long-lived token `claude setup-token` prints): its launch line takes `CLAUDE_CODE_OAUTH_TOKEN={secret:CLAUDE_CODE_OAUTH_TOKEN}`, filled with the store's lookup like a provider key, so the value reaches that seat's shell only and never a record, status, log or plan. The store is asked whether it holds the entry by name alone (the Keychain lookup without `-w`; the encrypted file's entry names, nothing decrypted). A seat on another provider, or a line that sets its own Anthropic credential or endpoint, never takes it. The advised policy `claude-auth` (`store`, the default, or `login`; entity, project or team) turns it off. `team doctor`, where no session login is found, says the seats sign in from the store, or names `claude setup-token` and the entry to keep it under. See [Headless Claude sign-in](docs/team-file.md#headless-claude-sign-in).
+
 ## [0.5.22] - 2026-11-22
 
 0.5.20 and 0.5.21 were never published to npm: this release carries the 0.5.21 section below as well as this one.

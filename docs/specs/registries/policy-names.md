@@ -29,6 +29,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `shared-checkout-hygiene` | Shared checkout working rules. | present at 0.5.0 | `src/policy/types.ts` | Canonical kebab-case; aliases normalize at load. |
 | `pane-conduct` | Conduct before sending a key into a pane. | present at 0.5.0 | `src/policy/types.ts` | Canonical kebab-case; aliases normalize at load. |
 | `seat-numbering` | Width and separator of seat-number prefixes. | present at 0.5.0 | `src/policy/types.ts` | Canonical kebab-case; aliases normalize at load. |
+| `claude-auth` | How a Claude Code seat on Anthropic signs in: the store's subscription token or the session login. | not yet released | `src/policy/types.ts`, `src/settings/claude-auth.ts` | Canonical kebab-case; aliases normalize at load. |
 | `board` | Project’s decision-making terms as advised text. | present at 0.5.0 | `src/policy/types.ts` | Canonical kebab-case; aliases normalize at load. |
 | `review-terms` | Project’s review terms as advised text. | present at 0.5.0 | `src/policy/types.ts` | Canonical kebab-case; aliases normalize at load. |
 

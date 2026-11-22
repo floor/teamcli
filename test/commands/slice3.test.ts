@@ -484,7 +484,7 @@ describe('team doctor', () => {
       'MISS  install `claude`: it is not on the PATH (claude-code: claude-coordinator-acme, deepseek-acme, deepseek-acme-2)\n',
     );
     const out = await doctor({ loggedIn: () => false, onPath: () => false });
-    expect(out.out).toContain('MISS  log in to claude-code: `claude auth login`\n');
+    expect(out.out).toContain('MISS  log in to claude-code: `claude auth login`; on a machine with no browser, run `claude setup-token` and keep the token in the system\'s secret store as CLAUDE_CODE_OAUTH_TOKEN\n');
     expect(out.out).toContain('MISS  deepseek-acme: its launch line starts `team-deepseek`, which is not on the PATH\n');
     expect(out.out).toContain('MISS  deepseek-acme-2: its launch line starts `team-deepseek`, which is not on the PATH\n');
     expect(out.out).toContain(

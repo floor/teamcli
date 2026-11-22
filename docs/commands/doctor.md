@@ -167,6 +167,14 @@ team doctor: nothing missing, 0 warnings
 exit 0
 ```
 
+Where Claude Code has no session login and the team runs Claude Code seats on Anthropic, the
+login line reads the machine's secret store for the entry `CLAUDE_CODE_OAUTH_TOKEN`, by name only:
+held, it is `ok  claude-code: no session login; its Anthropic seats sign in with the secret
+store's CLAUDE_CODE_OAUTH_TOKEN`; not held, the `MISS` names `claude auth login` and, for a
+machine with no browser, `claude setup-token` with the token kept under that entry. The policy
+`claude-auth login` keeps the plain login line. See
+[Headless Claude sign-in](../team-file.md#headless-claude-sign-in).
+
 `--jules` reads the Jules CLI's own three questions the same way — installed, logged in with GitHub
 linked, and this project's repository connected to it — and no herdr, session, machine or seat CLI:
 

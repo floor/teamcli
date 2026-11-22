@@ -26,6 +26,8 @@ import { accountKeyCommand, shippedEnv, shippedLauncher } from '../launchers/shi
 import { launchAccountFor, type LaunchAccount } from '../launchers/accounts.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { fillSecretWords, hasSecretWord } from './secret-words.ts';
+import { anthropicClaudeSeat, claudeAuthInForce, withClaudeToken } from '../settings/claude-auth-policy.ts';
+import { CLAUDE_TOKEN_ENTRY } from '../settings/claude-auth.ts';
 import { identityFor } from '../commands/git.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
 import { getRelativeDirOps } from '../send/drop-retention.ts';
@@ -1770,20 +1772,31 @@ export function upPlan(input: UpInput): Step[] {
         }
       }
     }
+    // The entity's own secrets: a store that keeps one file per entity opens this team's.
+    const entity = input.team?.entity;
+    const seatStore = (): SecretStore | null => input.secretStore !== undefined
+      ? input.secretStore
+      : systemSecretStore({
+        ...(input.home === undefined ? {} : { home: input.home }),
+        ...(typeof entity === 'string' && entity !== '' ? { entity } : {}),
+      });
+    // A Claude Code seat on Anthropic signs in from the store's subscription token when the store
+    // holds one and `claude-auth` is `store` (src/settings/claude-auth-policy.ts): its line takes
+    // the entry's secret word, filled below like any other, so only the seat's shell reads the
+    // value. The store is asked whether it holds the entry by name; its value is never read here.
+    const vendor = seat.vendor ?? input.team?.seats.find((one) => one.name === seat.name)?.vendor;
+    if (wouldLaunch && input.home !== undefined && input.team !== undefined && anthropicClaudeSeat({ cli: profile.cli, vendor })) {
+      const auth = claudeAuthInForce({ home: input.home, root: input.root, team: input.team });
+      const held = auth === 'store' ? seatStore()?.holds?.(CLAUDE_TOKEN_ENTRY) ?? null : null;
+      baseLine = withClaudeToken(baseLine, { cli: profile.cli, vendor, auth, held });
+    }
     // A provider key the seat's own line names (`NAME={secret:<entry>}`, the profile's vendor
     // word a swap wrote) is filled with the machine's secret store's lookup here, before any
     // workspace is made: a store with no lookup for it refuses the seat rather than starting it
     // against the provider with an empty key. A line that names none is left byte for byte, and
     // the seat's record keeps the line as its file writes it.
     if (hasSecretWord(baseLine)) {
-      // The entity's own secrets: a store that keeps one file per entity opens this team's.
-      const entity = input.team?.entity;
-      const store = input.secretStore !== undefined
-        ? input.secretStore
-        : systemSecretStore({
-          ...(input.home === undefined ? {} : { home: input.home }),
-          ...(typeof entity === 'string' && entity !== '' ? { entity } : {}),
-        });
+      const store = seatStore();
       const filled = fillSecretWords(baseLine, store);
       if (!filled.ok) {
         const why = `its provider key cannot be read: ${filled.why}`;
